@@ -8,6 +8,7 @@ export type TokenEntry = {
 }
 
 export type Config = {
+  mode: 'standalone' | 'sub2api'
   server: {
     port: number
     tls: {
@@ -18,10 +19,14 @@ export type Config = {
   upstream: {
     url: string
   }
+  providers: {
+    anthropic: boolean
+  }
   auth: {
+    gateway_token?: string
     tokens: TokenEntry[]
   }
-  oauth: {
+  oauth?: {
     access_token?: string
     refresh_token: string
     expires_at?: number
@@ -54,14 +59,33 @@ export function loadConfig(configPath?: string): Config {
   const filePath = configPath || resolve(process.cwd(), 'config.yaml')
   const raw = readFileSync(filePath, 'utf-8')
   const config = parse(raw) as Config
+  config.mode = config.mode ?? 'standalone'
+  config.providers = {
+    ...config.providers,
+    anthropic: config.providers?.anthropic ?? true,
+  }
+  config.auth = {
+    ...config.auth,
+    tokens: config.auth?.tokens ?? [],
+  }
+
+  if (!['standalone', 'sub2api'].includes(config.mode)) {
+    throw new Error('config: mode must be either "standalone" or "sub2api"')
+  }
 
   if (!config.identity?.device_id || config.identity.device_id.includes('0000000000')) {
     throw new Error('config: identity.device_id must be set to a real 64-char hex value. Run: npm run generate-identity')
   }
-  if (!config.auth?.tokens?.length) {
+  const hasLegacyTokens = config.auth.tokens.length > 0
+  const hasGatewayToken = !!config.auth.gateway_token
+
+  if (config.mode === 'standalone' && !hasLegacyTokens) {
     throw new Error('config: auth.tokens must have at least one entry')
   }
-  if (!config.oauth?.refresh_token) {
+  if (config.mode === 'sub2api' && !hasGatewayToken && !hasLegacyTokens) {
+    throw new Error('config: sub2api mode requires auth.gateway_token or auth.tokens gateway token')
+  }
+  if (config.mode === 'standalone' && !config.oauth?.refresh_token) {
     throw new Error('config: oauth.refresh_token is required. Do a browser OAuth login on the admin machine, then copy the refresh token from ~/.claude/.credentials.json')
   }
 
