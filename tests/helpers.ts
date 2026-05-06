@@ -54,9 +54,9 @@ export function baseConfig(overrides: Partial<Config> = {}): Config {
       is_running_with_bun: false,
       is_ci: false,
       is_claude_ai_auth: true,
-      version: '2.1.81',
-      version_base: '2.1.81',
-      build_time: '2026-03-20T21:26:18Z',
+      version: '2.1.119',
+      version_base: '2.1.119',
+      build_time: '2026-04-23T19:08:52Z',
       deployment_environment: 'unknown-darwin',
       vcs: 'git',
     },
@@ -106,7 +106,9 @@ identity:
   email: "canonical@example.com"
 env:
   platform: darwin
-  version: "2.1.81"
+  version: "2.1.119"
+  version_base: "2.1.119"
+  build_time: "2026-04-23T19:08:52Z"
 prompt_env:
   platform: darwin
   shell: zsh

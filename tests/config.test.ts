@@ -1,4 +1,5 @@
 import { strict as assert } from 'assert'
+import { readFileSync } from 'fs'
 import { loadConfig } from '../src/config.js'
 import { configYaml, finish, test, writeConfigYaml } from './helpers.js'
 
@@ -47,6 +48,16 @@ test('rejects invalid mode', () => {
 mode: transparent
 `))
   assert.throws(() => loadConfig(path), /mode/)
+})
+
+test('config.example documents Phase 0 mode/auth/provider and stable persona defaults', () => {
+  const example = readFileSync(new URL('../config.example.yaml', import.meta.url), 'utf-8')
+  assert.match(example, /^mode: standalone$/m)
+  assert.match(example, /^providers:\n  anthropic: true$/m)
+  assert.match(example, /gateway_token:/)
+  assert.match(example, /version: "2\.1\.119"/)
+  assert.match(example, /version_base: "2\.1\.119"/)
+  assert.match(example, /build_time: "2026-04-23T19:08:52Z"/)
 })
 
 await finish()
