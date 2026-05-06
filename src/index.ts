@@ -11,8 +11,10 @@ try {
 
   log('info', 'CC Gateway starting...')
 
-  // Initialize OAuth — uses existing access token if valid, only refreshes when expired
-  await initOAuth(config.oauth)
+  // Initialize OAuth only when the gateway owns the upstream credential.
+  if (config.mode === 'standalone') {
+    await initOAuth(config.oauth!)
+  }
 
   startProxy(config)
 } catch (err) {

@@ -325,8 +325,18 @@ function randomInRange(min: number, max: number): number {
 export function rewriteHeaders(
   headers: Record<string, string | string[] | undefined>,
   config: Config,
+  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; stripGatewayControlHeaders?: boolean } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
+  const connectionTokens = new Set<string>()
+  const connectionHeader = headers.connection
+  const connectionValue = Array.isArray(connectionHeader) ? connectionHeader.join(', ') : connectionHeader
+  if (connectionValue) {
+    for (const token of connectionValue.split(',')) {
+      const normalized = token.trim().toLowerCase()
+      if (normalized) connectionTokens.add(normalized)
+    }
+  }
 
   for (const [key, value] of Object.entries(headers)) {
     if (!value) continue
@@ -334,7 +344,23 @@ export function rewriteHeaders(
     const lower = key.toLowerCase()
 
     // Skip hop-by-hop headers and auth (gateway injects the real OAuth token)
-    if (['host', 'connection', 'proxy-authorization', 'proxy-connection', 'transfer-encoding', 'authorization', 'x-api-key'].includes(lower)) {
+    if (options.stripGatewayControlHeaders && lower.startsWith('x-cc-')) {
+      continue
+    }
+
+    if (connectionTokens.has(lower)) {
+      continue
+    }
+
+    if (['host', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto'].includes(lower)) {
+      continue
+    }
+
+    if (lower === 'authorization' && options.upstreamAuth !== 'oauth') {
+      continue
+    }
+
+    if (lower === 'x-api-key' && options.upstreamAuth !== 'apikey') {
       continue
     }
 

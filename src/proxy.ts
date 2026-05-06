@@ -1,10 +1,10 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
-import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http'
+import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
 import { readFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import type { Config } from './config.js'
-import { authenticate, initAuth } from './auth.js'
+import { authenticate, authenticateGateway, initAuth } from './auth.js'
 import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
@@ -42,6 +42,15 @@ export function startProxy(config: Config) {
   return server
 }
 
+type AccountContext = {
+  provider: string
+  accountId?: string
+  tokenType: 'oauth' | 'apikey'
+  accountEmail?: string
+  accountUuid?: string
+  organizationUuid?: string
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -49,19 +58,21 @@ async function handleRequest(
   upstream: URL,
 ) {
   const method = req.method || 'GET'
-  const path = req.url || '/'
+  const target = normalizeRequestTarget(req.url || '/')
+  const path = target.path
   const clientIp = req.socket.remoteAddress || 'unknown'
 
   log('info', `← ${method} ${path} from ${clientIp}`)
 
   // Health check - no auth required
   if (path === '/_health') {
-    const oauthOk = !!getAccessToken()
+    const oauthOk = config.mode === 'sub2api' ? true : !!getAccessToken()
     const status = oauthOk ? 200 : 503
     res.writeHead(status, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       status: oauthOk ? 'ok' : 'degraded',
-      oauth: oauthOk ? 'valid' : 'expired/refreshing',
+      mode: config.mode,
+      oauth: config.mode === 'sub2api' ? 'not_used' : (oauthOk ? 'valid' : 'expired/refreshing'),
       canonical_device: config.identity.device_id.slice(0, 8) + '...',
       canonical_platform: config.env.platform,
       upstream: config.upstream.url,
@@ -72,7 +83,7 @@ async function handleRequest(
 
   // Dry-run verification - shows what would be rewritten (auth required)
   if (path === '/_verify') {
-    const clientName = authenticate(req)
+    const clientName = authenticateForMode(req, config)
     if (!clientName) {
       res.writeHead(401, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Unauthorized' }))
@@ -85,23 +96,36 @@ async function handleRequest(
   }
 
   // Authenticate client (proxy-level auth)
-  const clientName = authenticate(req)
+  const clientName = authenticateForMode(req, config)
   if (!clientName) {
     res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Unauthorized - provide client token via x-api-key header' }))
+    res.end(JSON.stringify({ error: config.mode === 'sub2api' ? 'Unauthorized - provide gateway token via x-cc-gateway-token header' : 'Unauthorized - provide client token via x-api-key header' }))
     log('warn', `Unauthorized request: ${method} ${path}`)
     return
   }
 
   log('info', `Client "${clientName}" → ${method} ${path}`)
 
-  // Get the real OAuth token (managed by gateway)
-  const oauthToken = getAccessToken()
-  if (!oauthToken) {
-    res.writeHead(503, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
-    log('error', 'No valid OAuth token available')
-    return
+  let accountContext: AccountContext | null = null
+  let oauthToken: string | null = null
+
+  if (config.mode === 'sub2api') {
+    const parsed = parseAccountContext(req, config)
+    if ('error' in parsed) {
+      res.writeHead(parsed.status, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: parsed.error }))
+      return
+    }
+    accountContext = parsed.context
+  } else {
+    // Get the real OAuth token (managed by gateway)
+    oauthToken = getAccessToken()
+    if (!oauthToken) {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'OAuth token not available - gateway is refreshing' }))
+      log('error', 'No valid OAuth token available')
+      return
+    }
   }
 
   // Collect request body
@@ -124,17 +148,23 @@ async function handleRequest(
   const rewrittenHeaders = rewriteHeaders(
     req.headers as Record<string, string | string[] | undefined>,
     config,
+    config.mode === 'sub2api'
+      ? { upstreamAuth: accountContext!.tokenType, stripGatewayControlHeaders: true }
+      : {},
   )
 
-  // Inject the real OAuth token via x-api-key (Anthropic uses this header for both
-  // API keys and OAuth tokens, distinguished by prefix: sk-ant-api03- vs sk-ant-oat01-)
-  rewrittenHeaders['x-api-key'] = oauthToken
+  if (oauthToken) {
+    // Inject the real OAuth token via x-api-key (Anthropic uses this header for both
+    // API keys and OAuth tokens, distinguished by prefix: sk-ant-api03- vs sk-ant-oat01-)
+    rewrittenHeaders['x-api-key'] = oauthToken
+  }
 
   // Forward to upstream
-  const upstreamUrl = new URL(path, upstream)
+  const upstreamUrl = buildFixedUpstreamUrl(target, upstream)
 
   const agent = getProxyAgent()
-  const proxyReq = httpsRequest(
+  const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
+  const proxyReq = requestFn(
     upstreamUrl,
     {
       method,
@@ -175,6 +205,77 @@ async function handleRequest(
 
   proxyReq.write(body)
   proxyReq.end()
+}
+
+function authenticateForMode(req: IncomingMessage, config: Config): string | null {
+  return config.mode === 'sub2api' ? authenticateGateway(req) : authenticate(req)
+}
+
+function parseAccountContext(req: IncomingMessage, config: Config): { context: AccountContext } | { status: number; error: string } {
+  const provider = readHeader(req, 'x-cc-provider')
+  if (!provider) {
+    return { status: 400, error: 'Missing x-cc-provider' }
+  }
+  if (provider !== 'anthropic') {
+    return { status: 403, error: `Unsupported provider: ${provider}` }
+  }
+  if (!config.providers.anthropic) {
+    return { status: 403, error: 'Provider disabled: anthropic' }
+  }
+
+  const tokenType = readHeader(req, 'x-cc-token-type')
+  if (!tokenType) {
+    return { status: 400, error: 'Missing x-cc-token-type' }
+  }
+  if (!['oauth', 'apikey'].includes(tokenType)) {
+    return { status: 400, error: `Unsupported x-cc-token-type: ${tokenType}` }
+  }
+  const normalizedTokenType = tokenType as 'oauth' | 'apikey'
+  if (normalizedTokenType === 'oauth' && !readHeader(req, 'authorization')) {
+    return { status: 400, error: 'Missing authorization for oauth token type' }
+  }
+  if (normalizedTokenType === 'apikey' && !readHeader(req, 'x-api-key')) {
+    return { status: 400, error: 'Missing x-api-key for apikey token type' }
+  }
+
+  return {
+    context: {
+      provider,
+      accountId: readHeader(req, 'x-cc-account-id'),
+      tokenType: normalizedTokenType,
+      accountEmail: readHeader(req, 'x-cc-account-email'),
+      accountUuid: readHeader(req, 'x-cc-account-uuid'),
+      organizationUuid: readHeader(req, 'x-cc-organization-uuid'),
+    },
+  }
+}
+
+function readHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name]
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+
+type RequestTarget = {
+  path: string
+  pathname: string
+  search: string
+}
+
+function normalizeRequestTarget(reqUrl: string): RequestTarget {
+  const parsed = new URL(reqUrl, 'http://cc-gateway.local')
+  return {
+    path: `${parsed.pathname}${parsed.search}`,
+    pathname: parsed.pathname,
+    search: parsed.search,
+  }
+}
+
+function buildFixedUpstreamUrl(target: RequestTarget, upstream: URL): URL {
+  const upstreamUrl = new URL(upstream.toString())
+  upstreamUrl.pathname = target.pathname
+  upstreamUrl.search = target.search
+  return upstreamUrl
 }
 
 /**
