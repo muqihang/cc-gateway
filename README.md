@@ -51,6 +51,7 @@ CC Gateway is a reverse proxy that sits between Claude Code and the Anthropic AP
 - **Instant startup** — gateway uses your existing access token on launch. No network call until the token actually expires
 - **Proxy-aware** — supports `HTTPS_PROXY` / `HTTP_PROXY` env vars for outbound connections (Clash, V2Ray, etc.)
 - **Telemetry leak prevention** — strips `baseUrl` and `gateway` fields that would reveal proxy usage in analytics events
+- **Sub2API-ready credential boundary** — `sub2api` mode authenticates with `x-cc-gateway-token` while preserving the selected account's upstream `authorization` or `x-api-key`
 
 ## Quick Start
 
@@ -142,7 +143,9 @@ ccg help                  Show help
 | **Process** | `constrainedMemory` (physical RAM) | → canonical value |
 | | `rss`, `heapTotal`, `heapUsed` | → randomized in realistic range |
 | **Headers** | `User-Agent` | → canonical CC version |
-| | `x-api-key` | → real OAuth token (injected by gateway) |
+| | `x-api-key` | standalone: → gateway OAuth token; sub2api: preserve selected API key |
+| | `authorization` | standalone: stripped; sub2api OAuth: preserve selected Bearer token |
+| | `x-cc-*` | sub2api gateway control headers → stripped before upstream |
 | | `x-anthropic-billing-header` | → stripped |
 | **Prompt text** | `Platform`, `Shell`, `OS Version` | → canonical values |
 | | `Working directory` | → canonical path |
@@ -152,6 +155,12 @@ ccg help                  Show help
 | | `gateway` (provider detection) | → stripped |
 
 ## Deployment
+
+### Gateway Modes
+
+`mode: standalone` is the default and keeps the original behavior: CC Gateway owns OAuth refresh and injects the upstream credential.
+
+`mode: sub2api` is for server-side integration where another service has already selected the account. In this mode CC Gateway authenticates the caller with `x-cc-gateway-token`, preserves the selected upstream credential (`authorization` for OAuth or `x-api-key` for API key accounts), and strips all `x-cc-*` control headers before forwarding. The Sub2API adapter is a separate integration step and is not enabled by these scripts.
 
 ### Local (development)
 
@@ -233,20 +242,22 @@ Client machines                        CC Gateway                    Anthropic
 
 | Layer | Mechanism | What it prevents |
 |-------|-----------|-----------------|
-| Launcher env vars | `ANTHROPIC_BASE_URL` + `DISABLE_NONESSENTIAL` + `ATTRIBUTION_HEADER=false` | CC voluntarily routes to gateway, disables side channels, skips billing hash |
+| Launcher env vars | `ANTHROPIC_BASE_URL` + `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` + `CLAUDE_CODE_ATTRIBUTION_HEADER=false` | CC voluntarily routes to gateway, disables side channels, skips billing hash |
 | Clash (optional) | Domain-based REJECT rules | Any accidental or future direct connections to Anthropic |
 | Gateway | Body + header + prompt rewriting | All 40+ fingerprint dimensions normalized to one device |
 
 ## OAuth Lifecycle
 
-The gateway manages the full OAuth token lifecycle:
+In `standalone` mode, the gateway manages the full OAuth token lifecycle:
 
 1. **Startup** — uses the existing access token from your keychain. Zero network calls.
 2. **Auto-refresh** — 5 minutes before expiry, the gateway silently refreshes via `platform.claude.com`.
 3. **Continuous** — refresh tokens rotate automatically. The gateway runs indefinitely without admin intervention.
 4. **Failure recovery** — if a refresh fails, retries every 30 seconds. Only a refresh token expiry (rare, months) requires re-running `extract-token.sh`.
 
-Clients never contact `platform.claude.com`. They send requests to the gateway with their client token; the gateway injects the real OAuth token before forwarding upstream.
+Standalone clients never contact `platform.claude.com`. They send requests to the gateway with their client token; the gateway injects the real OAuth token before forwarding upstream.
+
+In `sub2api` mode, CC Gateway does not refresh or inject OAuth. The upstream credential must already be selected and attached by the caller, and CC Gateway only rewrites identity while preserving that credential.
 
 ## Clash Rules
 

@@ -22,9 +22,9 @@ const config: Config = {
     is_running_with_bun: false,
     is_ci: false,
     is_claude_ai_auth: true,
-    version: '2.1.81',
-    version_base: '2.1.81',
-    build_time: '2026-03-20T21:26:18Z',
+    version: '2.1.119',
+    version_base: '2.1.119',
+    build_time: '2026-04-23T19:08:52Z',
     deployment_environment: 'unknown-darwin',
     vcs: 'git',
   },
@@ -115,7 +115,7 @@ test('rewrites working directory path', () => {
 
 test('strips billing header from system prompt (string format)', () => {
   const body = {
-    system: 'x-anthropic-billing-header: cc_version=2.1.81.a1b; cc_entrypoint=cli; cch=00000;\nOther content here.',
+    system: 'x-anthropic-billing-header: cc_version=2.1.119.a1b; cc_entrypoint=cli; cch=00000;\nOther content here.',
     messages: [],
   }
   const result = JSON.parse(
@@ -129,7 +129,7 @@ test('strips billing header from system prompt (string format)', () => {
 test('strips billing header from system prompt (array format)', () => {
   const body = {
     system: [
-      { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.81.a1b; cc_entrypoint=cli;' },
+      { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.119.a1b; cc_entrypoint=cli;' },
       { type: 'text', text: 'Platform: linux\nShell: bash' },
     ],
     messages: [],
@@ -265,7 +265,7 @@ test('rewrites User-Agent to canonical version', () => {
     { 'user-agent': 'claude-code/2.0.50 (external, cli)', 'x-app': 'cli' },
     config,
   )
-  assert.equal(headers['user-agent'], 'claude-code/2.1.81 (external, cli)')
+  assert.equal(headers['user-agent'], 'claude-code/2.1.119 (external, cli)')
   assert.equal(headers['x-app'], 'cli')
 })
 
@@ -296,7 +296,7 @@ test('strips x-api-key header (gateway injects real token)', () => {
 
 test('strips x-anthropic-billing-header', () => {
   const headers = rewriteHeaders(
-    { 'x-anthropic-billing-header': 'cc_version=2.1.81.a1b; cc_entrypoint=cli;' },
+    { 'x-anthropic-billing-header': 'cc_version=2.1.119.a1b; cc_entrypoint=cli;' },
     config,
   )
   assert.equal(headers['x-anthropic-billing-header'], undefined)
