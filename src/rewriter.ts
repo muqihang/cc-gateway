@@ -1,18 +1,19 @@
 import { createHash, randomBytes } from 'crypto'
 import type { Config } from './config.js'
 import { log } from './logger.js'
+import { canonicalPersonaHeaders, type AccountIdentityRecord } from './policy.js'
 
-// ── CCH hash algorithm (reverse-engineered from cli.js) ──
-const CCH_SALT = '59cf53e54c78'
-const CCH_POSITIONS = [4, 7, 20]
+// 3-hex cc_version suffix helper (reverse-engineered from cli.js).
+const CC_VERSION_SALT = '59cf53e54c78'
+const CC_VERSION_POSITIONS = [4, 7, 20]
 
-// Fallback for non-message requests where no user message exists
+// Fallback cc_version suffix for non-message requests where no user message exists
 const FALLBACK_HASH = randomBytes(2).toString('hex').slice(0, 3)
 
-function computeCCH(firstUserMessageText: string, version: string): string {
-  const chars = CCH_POSITIONS.map(i => firstUserMessageText[i] || '0').join('')
+function computeCCVersionSuffix(firstUserMessageText: string, version: string): string {
+  const chars = CC_VERSION_POSITIONS.map(i => firstUserMessageText[i] || '0').join('')
   return createHash('sha256')
-    .update(`${CCH_SALT}${chars}${version}`)
+    .update(`${CC_VERSION_SALT}${chars}${version}`)
     .digest('hex')
     .slice(0, 3)
 }
@@ -40,7 +41,12 @@ function extractFirstUserMessage(messages: any[]): string {
  * 1. /v1/messages - rewrite metadata.user_id JSON blob
  * 2. /api/event_logging/batch - rewrite event_data identity/env/process fields
  */
-export function rewriteBody(body: Buffer, path: string, config: Config): Buffer {
+export function rewriteBody(
+  body: Buffer,
+  path: string,
+  config: Config,
+  options: { accountIdentity?: AccountIdentityRecord; sessionId?: string } = {},
+): Buffer {
   const text = body.toString('utf-8')
 
   let parsed: unknown
@@ -52,7 +58,7 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
   }
 
   if (path.startsWith('/v1/messages')) {
-    rewriteMessagesBody(parsed, config)
+    rewriteMessagesBody(parsed, config, options.accountIdentity, options.sessionId)
   } else if (path.includes('/event_logging/batch')) {
     rewriteEventBatch(parsed, config)
   } else if (path.includes('/policy_limits') || path.includes('/settings')) {
@@ -71,12 +77,18 @@ export function rewriteBody(body: Buffer, path: string, config: Config): Buffer 
  * 3. Compute hash from rewritten message (so it matches what server sees)
  * 4. Rewrite system prompt billing header using computed hash
  */
-function rewriteMessagesBody(body: any, config: Config) {
+function rewriteMessagesBody(body: any, config: Config, accountIdentity?: AccountIdentityRecord, sessionId?: string) {
   // Rewrite metadata.user_id
   if (body?.metadata?.user_id) {
     try {
-      const userId = JSON.parse(body.metadata.user_id)
-      userId.device_id = config.identity.device_id
+      const parsed = JSON.parse(body.metadata.user_id)
+      const userId = accountIdentity
+        ? {
+            device_id: accountIdentity.device_id,
+            account_uuid: accountIdentity.account_uuid_hash,
+            session_id: sessionId || parsed.session_id,
+          }
+        : { ...parsed, device_id: config.identity.device_id }
       body.metadata.user_id = JSON.stringify(userId)
       log('debug', `Rewrote metadata.user_id device_id`)
     } catch {
@@ -105,8 +117,8 @@ function rewriteMessagesBody(body: any, config: Config) {
 
   // Step 3: Compute hash from rewritten message + canonical version
   const version = String(config.env.version)
-  const hash = firstUserText ? computeCCH(firstUserText, version) : FALLBACK_HASH
-  log('debug', `Computed CCH: ${hash} (from ${firstUserText.length} char message)`)
+  const hash = firstUserText ? computeCCVersionSuffix(firstUserText, version) : FALLBACK_HASH
+  log('debug', `Computed cc_version suffix: ${hash} (from ${firstUserText.length} char message)`)
 
   // Step 4: Strip billing header block from system prompt (cache optimization).
   // If client set CLAUDE_CODE_ATTRIBUTION_HEADER=false, the block won't exist.
@@ -325,9 +337,12 @@ function randomInRange(min: number, max: number): number {
 export function rewriteHeaders(
   headers: Record<string, string | string[] | undefined>,
   config: Config,
-  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; stripGatewayControlHeaders?: boolean } = {},
+  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; stripGatewayControlHeaders?: boolean; sharedPool?: boolean; route?: string } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
+  if (options.sharedPool) {
+    return rewriteSharedPoolHeaders(headers, config, options)
+  }
   const connectionTokens = new Set<string>()
   const connectionHeader = headers.connection
   const connectionValue = Array.isArray(connectionHeader) ? connectionHeader.join(', ') : connectionHeader
@@ -376,4 +391,39 @@ export function rewriteHeaders(
   }
 
   return out
+}
+
+
+function rewriteSharedPoolHeaders(
+  headers: Record<string, string | string[] | undefined>,
+  config: Config,
+  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; route?: string },
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  const route = options.route === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
+  const selectedAuthHeader = readHeaderValue(headers, 'authorization')
+  const selectedApiKey = readHeaderValue(headers, 'x-api-key')
+  if (options.upstreamAuth === 'oauth' && selectedAuthHeader) {
+    out.authorization = selectedAuthHeader
+  } else if (options.upstreamAuth === 'apikey' && selectedApiKey) {
+    out['x-api-key'] = selectedApiKey
+  }
+
+  const canonical = canonicalPersonaHeaders(config, route, readHeaderValue(headers, 'x-claude-code-session-id'))
+  for (const [key, value] of Object.entries(canonical)) {
+    out[key] = value
+  }
+
+  const contentType = readHeaderValue(headers, 'content-type')
+  if (contentType) out['content-type'] = contentType
+  return out
+}
+
+function readHeaderValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+  const target = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target || value === undefined) continue
+    return Array.isArray(value) ? value.join(', ') : value
+  }
+  return undefined
 }

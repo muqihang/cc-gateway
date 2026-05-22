@@ -7,6 +7,23 @@ export type TokenEntry = {
   token: string
 }
 
+export type AccountIdentityConfig = {
+  device_id: string
+  account_uuid_hash: string
+  email_hash?: string
+  account_hash?: string
+  persona_variant: string
+  session_policy: 'preserve_downstream_session_id' | 'gateway_generated'
+  policy_version: string
+}
+
+export type EgressBucketConfig = {
+  enabled: boolean
+  proxy_url: string
+  proxy_identity_hash?: string
+  allowed_account_ids?: string[]
+}
+
 export type Config = {
   mode: 'standalone' | 'sub2api'
   server: {
@@ -49,6 +66,13 @@ export type Config = {
     heap_total_range: [number, number]
     heap_used_range: [number, number]
   }
+  shared_pool?: {
+    max_body_bytes?: number
+    billing_cch_mode?: 'strip' | 'sign'
+    signing_enabled?: boolean
+  }
+  account_identities?: Record<string, AccountIdentityConfig>
+  egress_buckets?: Record<string, EgressBucketConfig>
   logging: {
     level: 'debug' | 'info' | 'warn' | 'error'
     audit: boolean

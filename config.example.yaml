@@ -61,10 +61,10 @@ env:
   is_running_with_bun: false
   is_ci: false
   is_claude_ai_auth: true
-  # Canonical persona: npm stable as of 2026-05-06.
-  version: "2.1.119"
-  version_base: "2.1.119"
-  build_time: "2026-04-23T19:08:52Z"
+  # Canonical shared-pool persona for this gap-closure round: Claude Code 2.1.146.
+  version: "2.1.146"
+  version_base: "2.1.146"
+  build_time: "2026-05-21T00:00:00Z"
   deployment_environment: unknown-darwin
   vcs: git
 
@@ -83,6 +83,35 @@ process:
   rss_range: [300000000, 500000000]  # 300-500MB realistic range
   heap_total_range: [40000000, 80000000]
   heap_used_range: [100000000, 200000000]
+
+# Shared-pool Anthropic boundary. In sub2api mode these maps are required:
+# missing account identity or missing/disabled/unknown egress bucket fails closed.
+shared_pool:
+  max_body_bytes: 2097152
+  # Default is strip. sign remains disabled until manually approved evidence gates pass.
+  billing_cch_mode: strip
+  signing_enabled: false
+
+# Per selected upstream account identity, keyed by x-cc-account-id. Store hashes for
+# logs/safe deliverables; do not put raw emails/account UUIDs here.
+account_identities:
+  example-account-id:
+    device_id: "1111111111111111111111111111111111111111111111111111111111111111"
+    account_uuid_hash: "sha256:<redacted>"
+    email_hash: "sha256:<redacted>"
+    account_hash: "sha256:<redacted>"
+    persona_variant: "claude-code-2.1.146-macos-local"
+    session_policy: preserve_downstream_session_id
+    policy_version: "2.1.146"
+
+# Per-account/bucket egress isolation. The legacy openai_gateway_egress_bucket fallback
+# is intentionally not consumed by CC Gateway shared-pool routing.
+egress_buckets:
+  example-bucket:
+    enabled: false
+    proxy_url: "http://user:pass@proxy.example:8080"
+    proxy_identity_hash: "sha256:<redacted>"
+    allowed_account_ids: ["example-account-id"]
 
 # Logging
 logging:

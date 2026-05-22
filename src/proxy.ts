@@ -1,6 +1,7 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
 import { readFileSync } from 'fs'
+import { createHash } from 'crypto'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import type { Config } from './config.js'
@@ -9,6 +10,17 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
+import {
+  getSharedPoolMaxBodyBytes,
+  normalizeSharedPoolSessionId,
+  resolveAccountIdentity,
+  resolveEgressBucket,
+  runDisabledSigningPipelineSkeleton,
+  selectSharedPoolRoute,
+  type AccountIdentityRecord,
+  type EgressBucketResolution,
+} from './policy.js'
+import { redactRequestPath, redactSensitiveText } from './redaction.js'
 
 export function startProxy(config: Config) {
   initAuth(config)
@@ -34,12 +46,42 @@ export function startProxy(config: Config) {
 
   server.listen(config.server.port, () => {
     log('info', `CC Gateway listening on ${useTls ? 'https' : 'http'}://0.0.0.0:${config.server.port}`)
-    log('info', `Upstream: ${config.upstream.url}`)
+    log('info', `Upstream: ${redactSensitiveText(config.upstream.url)}`)
     log('info', `Canonical device_id: ${config.identity.device_id.slice(0, 8)}...`)
     log('info', `Authorized clients: ${config.auth.tokens.map(t => t.name).join(', ')}`)
   })
 
   return server
+}
+
+function writeControlPlaneError(res: ServerResponse, status: number, code: string, message: string) {
+  const body = JSON.stringify({
+    type: 'error',
+    error: {
+      type: 'cc_gateway_control_plane',
+      code,
+      message: redactSensitiveText(message),
+    },
+  })
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'X-CC-Gateway-Error-Kind': 'control-plane',
+    'X-CC-Gateway-Error-Code': code,
+  })
+  res.end(body)
+}
+
+function proxyAgentCacheKey(account: AccountContext, upstreamUrl: URL, egress: EgressBucketResolution): string {
+  const parts = [
+    account.provider,
+    account.accountId || '-',
+    egress.bucketId,
+    egress.proxyIdentityHash,
+    upstreamUrl.protocol,
+    upstreamUrl.host,
+    createHash('sha256').update(upstreamUrl.href).digest('hex').slice(0, 12),
+  ]
+  return parts.join('|')
 }
 
 type AccountContext = {
@@ -49,6 +91,8 @@ type AccountContext = {
   accountEmail?: string
   accountUuid?: string
   organizationUuid?: string
+  egressBucket?: string
+  policyVersion?: string
 }
 
 async function handleRequest(
@@ -60,12 +104,13 @@ async function handleRequest(
   const method = req.method || 'GET'
   const target = normalizeRequestTarget(req.url || '/')
   const path = target.path
+  const safePath = redactRequestPath(path)
   const clientIp = req.socket.remoteAddress || 'unknown'
 
-  log('info', `← ${method} ${path} from ${clientIp}`)
+  log('info', `← ${method} ${safePath} from ${clientIp}`)
 
   // Health check - no auth required
-  if (path === '/_health') {
+  if (target.pathname === '/_health') {
     const oauthOk = config.mode === 'sub2api' ? true : !!getAccessToken()
     const status = oauthOk ? 200 : 503
     res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -75,14 +120,14 @@ async function handleRequest(
       oauth: config.mode === 'sub2api' ? 'not_used' : (oauthOk ? 'valid' : 'expired/refreshing'),
       canonical_device: config.identity.device_id.slice(0, 8) + '...',
       canonical_platform: config.env.platform,
-      upstream: config.upstream.url,
+      upstream: redactSensitiveText(config.upstream.url),
       clients: config.auth.tokens.map(t => t.name),
     }))
     return
   }
 
   // Dry-run verification - shows what would be rewritten (auth required)
-  if (path === '/_verify') {
+  if (target.pathname === '/_verify') {
     const clientName = authenticateForMode(req, config)
     if (!clientName) {
       res.writeHead(401, { 'Content-Type': 'application/json' })
@@ -98,25 +143,54 @@ async function handleRequest(
   // Authenticate client (proxy-level auth)
   const clientName = authenticateForMode(req, config)
   if (!clientName) {
-    res.writeHead(401, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: config.mode === 'sub2api' ? 'Unauthorized - provide gateway token via x-cc-gateway-token header' : 'Unauthorized - provide client token via x-api-key header' }))
-    log('warn', `Unauthorized request: ${method} ${path}`)
+    if (config.mode === 'sub2api') {
+      writeControlPlaneError(res, 401, 'missing_gateway_token', 'Unauthorized - provide gateway token via x-cc-gateway-token header')
+    } else {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Unauthorized - provide client token via x-api-key header' }))
+    }
+    log('warn', `Unauthorized request: ${method} ${safePath}`)
     return
   }
 
-  log('info', `Client "${clientName}" → ${method} ${path}`)
+  log('info', `Client "${clientName}" → ${method} ${safePath}`)
 
   let accountContext: AccountContext | null = null
+  let accountIdentity: AccountIdentityRecord | null = null
+  let egress: EgressBucketResolution | null = null
   let oauthToken: string | null = null
+  let routePolicy: ReturnType<typeof selectSharedPoolRoute> | null = null
 
   if (config.mode === 'sub2api') {
+    routePolicy = selectSharedPoolRoute(method, target.pathname, target.search)
+    if (routePolicy.action === 'block') {
+      writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported route: ${safePath}`)
+      return
+    }
+
     const parsed = parseAccountContext(req, config)
     if ('error' in parsed) {
-      res.writeHead(parsed.status, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: parsed.error }))
+      writeControlPlaneError(res, parsed.status, parsed.code, parsed.error)
       return
     }
     accountContext = parsed.context
+
+    accountIdentity = resolveAccountIdentity(config, accountContext.accountId)
+    if (!accountIdentity) {
+      writeControlPlaneError(res, 403, 'missing_account_identity', 'Missing per-account identity for selected upstream account')
+      return
+    }
+    if (accountIdentity.policy_version !== accountContext.policyVersion) {
+      writeControlPlaneError(res, 403, 'identity_policy_version_mismatch', 'Account identity policy version mismatch')
+      return
+    }
+
+    const resolvedEgress = resolveEgressBucket(config, accountContext.egressBucket, accountContext.accountId)
+    if ('error' in resolvedEgress) {
+      writeControlPlaneError(res, 403, resolvedEgress.error, 'Egress bucket is not eligible for the selected upstream account')
+      return
+    }
+    egress = resolvedEgress
   } else {
     // Get the real OAuth token (managed by gateway)
     oauthToken = getAccessToken()
@@ -128,19 +202,65 @@ async function handleRequest(
     }
   }
 
-  // Collect request body
-  const chunks: Buffer[] = []
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
+    await drainRequestWithinLimit(req, getSharedPoolMaxBodyBytes(config), res)
+    if (!res.writableEnded) {
+      res.writeHead(204, { 'X-CC-Gateway-Event-Policy': 'suppress' })
+      res.end()
+      if (config.logging.audit) audit(clientName, method, safePath, 204)
+    }
+    return
   }
-  let body = Buffer.concat(chunks)
+
+  const bodyResult = await readRequestBody(req, config.mode === 'sub2api' ? getSharedPoolMaxBodyBytes(config) : undefined)
+  if ('error' in bodyResult) {
+    writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
+    return
+  }
+  let body = bodyResult.body
+
+  let parsedBody: unknown = null
+  if (config.mode === 'sub2api' && body.length > 0) {
+    try {
+      parsedBody = JSON.parse(body.toString('utf-8'))
+    } catch {
+      parsedBody = null
+    }
+  }
+  const sessionId = accountIdentity ? normalizeSharedPoolSessionId(parsedBody, readHeader(req, 'x-claude-code-session-id'), accountIdentity) : undefined
+  if (config.mode === 'sub2api' && !sessionId) {
+    writeControlPlaneError(res, 400, 'session_binding_failed', 'Unable to bind X-Claude-Code-Session-Id to metadata.user_id')
+    return
+  }
+  if (parsedBody && body.length > 0) {
+    body = Buffer.from(JSON.stringify(parsedBody), 'utf-8')
+  }
+
+  const billingMode = (config as any).shared_pool?.billing_cch_mode || 'strip'
+  if (config.mode === 'sub2api') {
+    const retryContract = verifyRetryFinalOutputContract(req, billingMode)
+    if (!retryContract.ok) {
+      writeControlPlaneError(res, retryContract.status, retryContract.code, retryContract.message)
+      return
+    }
+  }
+  if (config.mode === 'sub2api' && billingMode === 'sign') {
+    const signing = runDisabledSigningPipelineSkeleton(config, body)
+    const code = signing.ok ? 'signing_verifier_failed' : signing.code
+    writeControlPlaneError(res, 403, code, 'Manual signing mode is disabled until evidence gates are approved')
+    return
+  }
+  if (config.mode === 'sub2api' && billingMode !== 'strip') {
+    writeControlPlaneError(res, 403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
+    return
+  }
 
   // Rewrite identity fields in body
   if (body.length > 0) {
     try {
-      body = rewriteBody(body, path, config) as Buffer<ArrayBuffer>
+      body = rewriteBody(body, target.pathname, config, { accountIdentity: accountIdentity ?? undefined, sessionId }) as Buffer<ArrayBuffer>
     } catch (err) {
-      log('error', `Body rewrite failed for ${path}: ${err}`)
+      log('error', `Body rewrite failed for ${safePath}: ${redactSensitiveText(String(err))}`)
     }
   }
 
@@ -149,9 +269,21 @@ async function handleRequest(
     req.headers as Record<string, string | string[] | undefined>,
     config,
     config.mode === 'sub2api'
-      ? { upstreamAuth: accountContext!.tokenType, stripGatewayControlHeaders: true }
+      ? { upstreamAuth: accountContext!.tokenType, stripGatewayControlHeaders: true, sharedPool: true, route: target.pathname }
       : {},
   )
+
+  if (sessionId && config.mode === 'sub2api') {
+    rewrittenHeaders['X-Claude-Code-Session-Id'] = sessionId
+  }
+
+  if (config.mode === 'sub2api') {
+    const verifier = verifySharedPoolFinalOutput(rewrittenHeaders, body)
+    if (!verifier.ok) {
+      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
+      return
+    }
+  }
 
   if (oauthToken) {
     // Inject the real OAuth token via x-api-key (Anthropic uses this header for both
@@ -162,7 +294,16 @@ async function handleRequest(
   // Forward to upstream
   const upstreamUrl = buildFixedUpstreamUrl(target, upstream)
 
-  const agent = getProxyAgent()
+  const agentKey = config.mode === 'sub2api' && accountContext && egress
+    ? proxyAgentCacheKey(accountContext, upstream, egress)
+    : 'default'
+  const agent = config.mode === 'sub2api' && egress
+    ? getProxyAgent(agentKey, egress.proxyUrl)
+    : getProxyAgent(agentKey)
+  if (config.mode === 'sub2api' && !agent) {
+    writeControlPlaneError(res, 403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
+    return
+  }
   const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
   const proxyReq = requestFn(
     upstreamUrl,
@@ -187,19 +328,24 @@ async function handleRequest(
       proxyRes.pipe(res)
 
       if (config.logging.audit) {
-        audit(clientName, method, path, status)
+        audit(clientName, method, safePath, status)
       }
     },
   )
 
   proxyReq.on('error', (err) => {
-    log('error', `Upstream error: ${err.message}`)
+    const safeMessage = redactSensitiveText(err.message)
+    log('error', `Upstream error: ${safeMessage}`)
     if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Bad gateway', detail: err.message }))
+      if (config.mode === 'sub2api') {
+        writeControlPlaneError(res, 502, 'egress_proxy_failure', 'Configured egress proxy failed before upstream response')
+      } else {
+        res.writeHead(502, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Bad gateway', detail: safeMessage }))
+      }
     }
     if (config.logging.audit) {
-      audit(clientName, method, path, 502)
+      audit(clientName, method, safePath, 502)
     }
   })
 
@@ -207,45 +353,131 @@ async function handleRequest(
   proxyReq.end()
 }
 
+
+function verifySharedPoolFinalOutput(headers: Record<string, string>, body: Buffer): { ok: true } | { ok: false; code: string } {
+  const headerKeys = Object.keys(headers).map((key) => key.toLowerCase())
+  if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'strip_verifier_failed' }
+  const bodyText = body.toString('utf-8')
+  if (/x-anthropic-billing-header/i.test(bodyText) || /\bcch=/i.test(bodyText)) {
+    return { ok: false, code: 'strip_verifier_failed' }
+  }
+  try {
+    const parsed = JSON.parse(bodyText)
+    const userIdRaw = parsed?.metadata?.user_id
+    if (typeof userIdRaw !== 'string') return { ok: false, code: 'session_binding_failed' }
+    const userId = JSON.parse(userIdRaw)
+    const allowed = ['account_uuid', 'device_id', 'session_id']
+    if (!allowed.every((key) => typeof userId[key] === 'string')) return { ok: false, code: 'session_binding_failed' }
+    if (Object.keys(userId).some((key) => !allowed.includes(key))) return { ok: false, code: 'identity_verifier_failed' }
+  } catch {
+    return { ok: false, code: 'identity_verifier_failed' }
+  }
+  return { ok: true }
+}
+
+function verifyRetryFinalOutputContract(
+  req: IncomingMessage,
+  billingMode: string,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const retryAttempt = readHeader(req, 'x-cc-retry-attempt')
+  if (!retryAttempt || retryAttempt === '0') return { ok: true }
+
+  const finalOutputReentered = readBooleanHeader(req, 'x-cc-retry-final-output-reentered')
+  const previousBillingMode = readHeader(req, 'x-cc-retry-previous-billing-cch-mode')
+  if (previousBillingMode && previousBillingMode !== billingMode) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'retry_billing_mode_changed',
+      message: 'Retry billing/CCH mode changed; refusing silent downgrade or unsigned fallback',
+    }
+  }
+
+  if (readBooleanHeader(req, 'x-cc-retry-body-mutated') && !finalOutputReentered) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'retry_body_mutation_without_reentry',
+      message: 'Body-mutating retry must re-enter final-output pipeline',
+    }
+  }
+
+  if (readBooleanHeader(req, 'x-cc-retry-header-policy-changed') && !finalOutputReentered) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'retry_policy_changed_without_reentry',
+      message: 'Retry with changed header policy or signing gates must re-enter final-output pipeline',
+    }
+  }
+
+  return { ok: true }
+}
+
+function readBooleanHeader(req: IncomingMessage, name: string): boolean {
+  const value = readHeader(req, name)
+  return value === '1' || value?.toLowerCase() === 'true'
+}
+
 function authenticateForMode(req: IncomingMessage, config: Config): string | null {
   return config.mode === 'sub2api' ? authenticateGateway(req) : authenticate(req)
 }
 
-function parseAccountContext(req: IncomingMessage, config: Config): { context: AccountContext } | { status: number; error: string } {
+function parseAccountContext(req: IncomingMessage, config: Config): { context: AccountContext } | { status: number; code: string; error: string } {
   const provider = readHeader(req, 'x-cc-provider')
   if (!provider) {
-    return { status: 400, error: 'Missing x-cc-provider' }
+    return { status: 400, code: 'missing_provider', error: 'Missing x-cc-provider' }
   }
   if (provider !== 'anthropic') {
-    return { status: 403, error: `Unsupported provider: ${provider}` }
+    return { status: 403, code: 'unsupported_provider', error: `Unsupported provider: ${provider}` }
   }
   if (!config.providers.anthropic) {
-    return { status: 403, error: 'Provider disabled: anthropic' }
+    return { status: 403, code: 'provider_disabled', error: 'Provider disabled: anthropic' }
   }
 
   const tokenType = readHeader(req, 'x-cc-token-type')
   if (!tokenType) {
-    return { status: 400, error: 'Missing x-cc-token-type' }
+    return { status: 400, code: 'missing_token_type', error: 'Missing x-cc-token-type' }
   }
   if (!['oauth', 'apikey'].includes(tokenType)) {
-    return { status: 400, error: `Unsupported x-cc-token-type: ${tokenType}` }
+    return { status: 400, code: 'unsupported_token_type', error: `Unsupported x-cc-token-type: ${tokenType}` }
   }
   const normalizedTokenType = tokenType as 'oauth' | 'apikey'
   if (normalizedTokenType === 'oauth' && !readHeader(req, 'authorization')) {
-    return { status: 400, error: 'Missing authorization for oauth token type' }
+    return { status: 400, code: 'missing_authorization', error: 'Missing authorization for oauth token type' }
   }
   if (normalizedTokenType === 'apikey' && !readHeader(req, 'x-api-key')) {
-    return { status: 400, error: 'Missing x-api-key for apikey token type' }
+    return { status: 400, code: 'missing_api_key', error: 'Missing x-api-key for apikey token type' }
+  }
+
+  const accountId = readHeader(req, 'x-cc-account-id')
+  if (!accountId) {
+    return { status: 400, code: 'missing_account_id', error: 'Missing x-cc-account-id' }
+  }
+
+  const egressBucket = readHeader(req, 'x-cc-egress-bucket')
+  if (!egressBucket) {
+    return { status: 400, code: 'missing_egress_bucket', error: 'Missing x-cc-egress-bucket' }
+  }
+
+  const policyVersion = readHeader(req, 'x-cc-policy-version')
+  if (!policyVersion) {
+    return { status: 400, code: 'missing_policy_version', error: 'Missing x-cc-policy-version' }
+  }
+  if (policyVersion !== config.env.version) {
+    return { status: 403, code: 'policy_version_mismatch', error: `Policy version mismatch: ${policyVersion}` }
   }
 
   return {
     context: {
       provider,
-      accountId: readHeader(req, 'x-cc-account-id'),
+      accountId,
       tokenType: normalizedTokenType,
       accountEmail: readHeader(req, 'x-cc-account-email'),
       accountUuid: readHeader(req, 'x-cc-account-uuid'),
       organizationUuid: readHeader(req, 'x-cc-organization-uuid'),
+      egressBucket,
+      policyVersion,
     },
   }
 }
@@ -278,6 +510,30 @@ function buildFixedUpstreamUrl(target: RequestTarget, upstream: URL): URL {
   return upstreamUrl
 }
 
+async function readRequestBody(req: IncomingMessage, maxBytes?: number): Promise<{ body: Buffer } | { error: 'body_too_large' }> {
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of req) {
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+    total += buffer.length
+    if (maxBytes !== undefined && total > maxBytes) {
+      for await (const _ of req) {
+        // Drain remaining bytes so the client receives the control-plane response.
+      }
+      return { error: 'body_too_large' }
+    }
+    chunks.push(buffer)
+  }
+  return { body: Buffer.concat(chunks) }
+}
+
+async function drainRequestWithinLimit(req: IncomingMessage, maxBytes: number, res: ServerResponse): Promise<void> {
+  const result = await readRequestBody(req, maxBytes)
+  if ('error' in result) {
+    writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
+  }
+}
+
 /**
  * Build a sample payload showing what the rewriter produces.
  * Used by /_verify endpoint for admin validation.
@@ -295,7 +551,7 @@ function buildVerificationPayload(config: Config) {
     system: [
       {
         type: 'text',
-        text: `x-anthropic-billing-header: cc_version=${config.env.version}.a1b; cc_entrypoint=cli;`,
+        text: `x-anthropic-billing-header: cc_version=${config.env.version}.a1b;`,
       },
       {
         type: 'text',

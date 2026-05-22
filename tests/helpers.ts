@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
+import { createConnection } from 'net'
 import { mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -157,6 +158,27 @@ export async function startFakeUpstream(handler?: (req: IncomingMessage, res: Se
   await listen(server)
   const { port } = server.address() as AddressInfo
   return { server, captured, url: `http://127.0.0.1:${port}` }
+}
+
+
+export async function startFakeConnectProxy() {
+  const connectTargets: string[] = []
+  const server = createServer()
+  server.on('connect', (req, clientSocket, head) => {
+    const target = req.url || ''
+    connectTargets.push(target)
+    const [host, portText] = target.split(':')
+    const upstreamSocket = createConnection(Number(portText), host, () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+      if (head.length) upstreamSocket.write(head)
+      upstreamSocket.pipe(clientSocket)
+      clientSocket.pipe(upstreamSocket)
+    })
+    upstreamSocket.on('error', () => clientSocket.destroy())
+  })
+  await listen(server)
+  const { port } = server.address() as AddressInfo
+  return { server, connectTargets, url: `http://127.0.0.1:${port}` }
 }
 
 export function listen(server: Server): Promise<void> {

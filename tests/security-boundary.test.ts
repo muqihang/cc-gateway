@@ -1,22 +1,48 @@
 import { strict as assert } from 'assert'
 import { request as httpRequest } from 'http'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 
 console.log('\ntests/security-boundary.test.ts')
 
-test('fixed upstream ignores inbound Host and Forwarded routing headers', async () => {
-  const upstream = await startFakeUpstream()
-  const gateway = startProxy(baseConfig({
+const ccGatewayHeaders = {
+  'x-cc-account-id': 'account-a',
+  'x-cc-egress-bucket': 'bucket-a',
+  'x-cc-policy-version': '2.1.119',
+}
+
+function sub2apiConfig(upstreamUrl: string, proxyUrl: string) {
+  return baseConfig({
     mode: 'sub2api',
-    upstream: { url: upstream.url },
+    upstream: { url: upstreamUrl },
     auth: { gateway_token: 'gateway-token', tokens: [] },
     oauth: undefined,
-  } as any))
+    account_identities: {
+      'account-a': {
+        device_id: 'b'.repeat(64),
+        account_uuid_hash: 'sha256:account-uuid',
+        email_hash: 'sha256:email',
+        account_hash: 'sha256:account-a',
+        persona_variant: 'claude-code-2.1.146-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.119',
+      },
+    },
+    egress_buckets: {
+      'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'sha256:proxy-a', allowed_account_ids: ['account-a'] },
+    },
+  } as any)
+}
+
+test('fixed upstream ignores inbound Host and Forwarded routing headers', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
 
   try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: {
+        ...ccGatewayHeaders,
         host: 'attacker.example',
         forwarded: 'host=attacker.example;proto=https',
         'x-forwarded-host': 'attacker.example',
@@ -36,17 +62,14 @@ test('fixed upstream ignores inbound Host and Forwarded routing headers', async 
   } finally {
     await close(gateway)
     await close(upstream.server)
+    await close(proxy.server)
   }
 })
 
 test('absolute-form URL still uses fixed upstream and route-sensitive body rewriting', async () => {
   const upstream = await startFakeUpstream()
-  const gateway = startProxy(baseConfig({
-    mode: 'sub2api',
-    upstream: { url: upstream.url },
-    auth: { gateway_token: 'gateway-token', tokens: [] },
-    oauth: undefined,
-  } as any))
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
 
   try {
     const body = JSON.stringify({
@@ -63,8 +86,9 @@ test('absolute-form URL still uses fixed upstream and route-sensitive body rewri
         host: '127.0.0.1',
         port: (gateway.address() as any).port,
         method: 'POST',
-        path: 'http://attacker.example/v1/messages',
+        path: 'http://attacker.example/v1/messages?beta=true',
         headers: {
+          ...ccGatewayHeaders,
           'content-type': 'application/json',
           'content-length': String(Buffer.byteLength(body)),
           'x-cc-gateway-token': 'gateway-token',
@@ -84,13 +108,14 @@ test('absolute-form URL still uses fixed upstream and route-sensitive body rewri
 
     assert.equal(response.status, 200, response.body)
     assert.equal(upstream.captured.length, 1)
-    assert.equal(upstream.captured[0].url, '/v1/messages')
+    assert.equal(upstream.captured[0].url, '/v1/messages?beta=true')
     const upstreamBody = JSON.parse(upstream.captured[0].body)
     const userId = JSON.parse(upstreamBody.metadata.user_id)
-    assert.equal(userId.device_id, 'a'.repeat(64))
+    assert.equal(userId.device_id, 'b'.repeat(64))
   } finally {
     await close(gateway)
     await close(upstream.server)
+    await close(proxy.server)
   }
 })
 
