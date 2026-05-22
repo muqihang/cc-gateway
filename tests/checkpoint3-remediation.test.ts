@@ -458,6 +458,27 @@ test('signing mode skeleton is disabled unless manually approved gates are prese
   }
 })
 
+test('rollback to billing_cch_mode disabled fails closed without native fallback', async () => {
+  const upstream = await startFakeUpstream()
+  const config = sharedConfig()
+  config.shared_pool = { billing_cch_mode: 'disabled' } as any
+  const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: sharedHeaders,
+      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'billing_cch_mode_disabled')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+  }
+})
+
 
 test('redacted log paths hide all query values including beta', async () => {
   const upstream = await startFakeUpstream()
@@ -528,7 +549,7 @@ test('invalid gateway token emits stable control-plane wire contract', async () 
   }
 })
 
-test('approved signing skeleton still fails closed at verifier placeholder and never downgrades to strip', async () => {
+test('approved signing rejects downstream CCH material and never downgrades to strip', async () => {
   const upstream = await startFakeUpstream()
   const config = sharedConfig()
   config.shared_pool = {
@@ -541,17 +562,52 @@ test('approved signing skeleton still fails closed at verifier placeholder and n
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedHeaders,
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'literal cch=12345 must not be trusted' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'signing_verifier_failed')
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'signing_untrusted_billing_input')
     assert.equal(response.json?.error?.type, 'cc_gateway_control_plane')
-    assert.equal(response.json?.error?.code, 'signing_verifier_failed')
+    assert.equal(response.json?.error?.code, 'signing_untrusted_billing_input')
     assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)
     await close(upstream.server)
+  }
+})
+
+test('approved sign-primary mode generates billing CCH and forwards only after verifier passes', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig()
+  config.shared_pool = {
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+  } as any
+  config.egress_buckets!['bucket-a'].proxy_url = proxy.url
+  const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: sharedHeaders,
+      body: {
+        metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from sign lane' }] }],
+      },
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    const forwarded = upstream.captured[0]
+    assert.match(forwarded.body, /x-anthropic-billing-header: cc_version=2\.1\.146\.[a-f0-9]{3}; cc_entrypoint=cli; cch=[a-f0-9]{5};/)
+    assert.ok(!forwarded.body.includes('cch=00000;'), forwarded.body)
+    assert.equal(forwarded.headers['user-agent'], 'claude-cli/2.1.146 (external, sdk-cli)')
+    assert.equal(forwarded.headers['x-claude-code-session-id'], 'session-old')
+    assert.equal(proxy.connectTargets.length, 1)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
   }
 })
 

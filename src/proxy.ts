@@ -15,8 +15,9 @@ import {
   normalizeSharedPoolSessionId,
   resolveAccountIdentity,
   resolveEgressBucket,
-  runDisabledSigningPipelineSkeleton,
+  runSigningPipeline,
   selectSharedPoolRoute,
+  verifySignedCCH,
   type AccountIdentityRecord,
   type EgressBucketResolution,
 } from './policy.js'
@@ -244,13 +245,12 @@ async function handleRequest(
       return
     }
   }
-  if (config.mode === 'sub2api' && billingMode === 'sign') {
-    const signing = runDisabledSigningPipelineSkeleton(config, body)
-    const code = signing.ok ? 'signing_verifier_failed' : signing.code
-    writeControlPlaneError(res, 403, code, 'Manual signing mode is disabled until evidence gates are approved')
+
+  if (config.mode === 'sub2api' && billingMode === 'disabled') {
+    writeControlPlaneError(res, 403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
     return
   }
-  if (config.mode === 'sub2api' && billingMode !== 'strip') {
+  if (config.mode === 'sub2api' && !['strip', 'sign'].includes(billingMode)) {
     writeControlPlaneError(res, 403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
     return
   }
@@ -277,7 +277,19 @@ async function handleRequest(
     rewrittenHeaders['X-Claude-Code-Session-Id'] = sessionId
   }
 
-  if (config.mode === 'sub2api') {
+  if (config.mode === 'sub2api' && billingMode === 'sign') {
+    const signing = runSigningPipeline(config, body)
+    if (!signing.ok) {
+      writeControlPlaneError(res, 403, signing.code, 'Manual signing mode is disabled or signer verification failed')
+      return
+    }
+    body = signing.body
+    const verifier = verifySignedCCH(body)
+    if (!verifier.ok) {
+      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool signing verifier failed')
+      return
+    }
+  } else if (config.mode === 'sub2api') {
     const verifier = verifySharedPoolFinalOutput(rewrittenHeaders, body)
     if (!verifier.ok) {
       writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')

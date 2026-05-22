@@ -68,8 +68,9 @@ export type Config = {
   }
   shared_pool?: {
     max_body_bytes?: number
-    billing_cch_mode?: 'strip' | 'sign'
+    billing_cch_mode?: 'strip' | 'sign' | 'disabled'
     signing_enabled?: boolean
+    signing_evidence_gates_approved?: boolean
   }
   account_identities?: Record<string, AccountIdentityConfig>
   egress_buckets?: Record<string, EgressBucketConfig>

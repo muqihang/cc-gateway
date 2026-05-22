@@ -93,19 +93,210 @@ export function selectSharedPoolRoute(method: string, pathname: string, search =
 
 
 export type SigningPipelineResult =
-  | { ok: false; code: 'signing_mode_disabled' | 'signing_evidence_gates_unapproved' | 'signing_verifier_failed' }
-  | { ok: true; body: Buffer }
+  | {
+    ok: false
+    code:
+      | 'signing_mode_disabled'
+      | 'signing_evidence_gates_unapproved'
+      | 'signing_invalid_json'
+      | 'signing_untrusted_billing_input'
+      | 'signing_placeholder_missing'
+      | 'signing_verifier_failed'
+  }
+  | { ok: true; body: Buffer; cch: string; ccVersionSuffix: string }
 
-export function runDisabledSigningPipelineSkeleton(config: Config, body: Buffer): SigningPipelineResult {
+const CC_VERSION_SALT = '59cf53e54c78'
+const CC_VERSION_POSITIONS = [4, 7, 20]
+const BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
+const CCH_SEED = 0x4d659218e32a3268n
+const CCH_MASK = 0xfffffn
+const UINT64_MASK = 0xffffffffffffffffn
+const PRIME64_1 = 0x9e3779b185ebca87n
+const PRIME64_2 = 0xc2b2ae3d27d4eb4fn
+const PRIME64_3 = 0x165667b19e3779f9n
+const PRIME64_4 = 0x85ebca77c2b2ae63n
+const PRIME64_5 = 0x27d4eb2f165667c5n
+
+export function runSigningPipeline(config: Config, body: Buffer): SigningPipelineResult {
   const sharedPool = (config as any).shared_pool || {}
   if (!sharedPool.signing_enabled) return { ok: false, code: 'signing_mode_disabled' }
   if (!sharedPool.signing_evidence_gates_approved) return { ok: false, code: 'signing_evidence_gates_unapproved' }
 
-  // Future approved path must normalize -> serialize -> place cch=00000 -> compute
-  // 5-hex CCH -> replace -> verify -> forbid post-sign mutation. Until final
-  // design is explicitly approved, the skeleton remains fail-closed here.
-  void body
-  return { ok: false, code: 'signing_verifier_failed' }
+  let parsed: any
+  try {
+    parsed = JSON.parse(body.toString('utf-8'))
+  } catch {
+    return { ok: false, code: 'signing_invalid_json' }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'signing_invalid_json' }
+
+  const cleaned = removeExistingBillingMaterial(parsed)
+  if (!cleaned.ok) return { ok: false, code: cleaned.code }
+
+  const version = String(config.env.version)
+  const firstUserText = extractFirstUserText(parsed.messages)
+  const ccVersionSuffix = computeCCVersionSuffix(firstUserText, version)
+  const billingHeader = `${BILLING_HEADER_PREFIX} cc_version=${version}.${ccVersionSuffix}; cc_entrypoint=cli; cch=00000;`
+  prependBillingHeader(parsed, billingHeader)
+
+  const placeholderBody = Buffer.from(JSON.stringify(parsed), 'utf-8')
+  if (!placeholderBody.includes(Buffer.from('cch=00000;'))) return { ok: false, code: 'signing_placeholder_missing' }
+  const cch = computeCCH5Hex(placeholderBody)
+  const signed = Buffer.from(placeholderBody.toString('utf-8').replace('cch=00000;', `cch=${cch};`), 'utf-8')
+  const verifier = verifySignedCCH(signed)
+  if (!verifier.ok || verifier.cch !== cch) return { ok: false, code: 'signing_verifier_failed' }
+  return { ok: true, body: signed, cch, ccVersionSuffix }
+}
+
+export function computeCCVersionSuffix(firstUserText: string, cliVersion: string): string {
+  const chars = CC_VERSION_POSITIONS.map((i) => firstUserText[i] || '0').join('')
+  return createHash('sha256')
+    .update(`${CC_VERSION_SALT}${chars}${cliVersion}`)
+    .digest('hex')
+    .slice(0, 3)
+}
+
+export function verifySignedCCH(body: Buffer): { ok: true; cch: string } | { ok: false; code: 'signing_placeholder_missing' | 'signing_verifier_failed' } {
+  const text = body.toString('utf-8')
+  const match = text.match(/x-anthropic-billing-header:[^"\n]*\bcch=([a-f0-9]{5});/)
+  if (!match) return { ok: false, code: 'signing_placeholder_missing' }
+  const normalized = Buffer.from(text.replace(match[0], match[0].replace(`cch=${match[1]};`, 'cch=00000;')), 'utf-8')
+  const expected = computeCCH5Hex(normalized)
+  if (expected !== match[1]) return { ok: false, code: 'signing_verifier_failed' }
+  return { ok: true, cch: expected }
+}
+
+function extractFirstUserText(messages: any): string {
+  if (!Array.isArray(messages)) return ''
+  const firstUser = messages.find((message: any) => message?.role === 'user')
+  if (!firstUser) return ''
+  if (typeof firstUser.content === 'string') {
+    return firstUser.content.includes('<system-reminder>') ? '' : firstUser.content
+  }
+  if (Array.isArray(firstUser.content)) {
+    const block = firstUser.content.find((item: any) => {
+      return item?.type === 'text' && typeof item.text === 'string' && !item.text.includes('<system-reminder>')
+    })
+    return block?.text || ''
+  }
+  return ''
+}
+
+function removeExistingBillingMaterial(body: any): { ok: true } | { ok: false; code: 'signing_untrusted_billing_input' } {
+  if (Array.isArray(body.system)) {
+    const kept: any[] = []
+    for (const item of body.system) {
+      const text = typeof item === 'string' ? item : item?.text
+      if (typeof text === 'string' && isBillingHeaderText(text)) continue
+      kept.push(item)
+    }
+    body.system = kept
+  } else if (typeof body.system === 'string') {
+    body.system = body.system
+      .split(/\r?\n/)
+      .filter((line: string) => !isBillingHeaderText(line))
+      .join('\n')
+  }
+
+  if (containsCCHMarker(body)) return { ok: false, code: 'signing_untrusted_billing_input' }
+  return { ok: true }
+}
+
+function isBillingHeaderText(text: string): boolean {
+  return text.trimStart().toLowerCase().startsWith(BILLING_HEADER_PREFIX)
+}
+
+function containsCCHMarker(value: any): boolean {
+  if (typeof value === 'string') return /\bcch=[a-f0-9]{5}\b/i.test(value) || /x-anthropic-billing-header:/i.test(value)
+  if (Array.isArray(value)) return value.some(containsCCHMarker)
+  if (value && typeof value === 'object') return Object.values(value).some(containsCCHMarker)
+  return false
+}
+
+function prependBillingHeader(body: any, header: string) {
+  const billingBlock = { type: 'text', text: header }
+  if (Array.isArray(body.system)) {
+    body.system = [billingBlock, ...body.system]
+    return
+  }
+  if (typeof body.system === 'string' && body.system.trim() !== '') {
+    body.system = [billingBlock, { type: 'text', text: body.system }]
+    return
+  }
+  body.system = [billingBlock]
+}
+
+function computeCCH5Hex(bodyWithPlaceholder: Buffer): string {
+  const digest = xxh64(bodyWithPlaceholder, CCH_SEED)
+  return (digest & CCH_MASK).toString(16).padStart(5, '0')
+}
+
+function xxh64(input: Buffer, seed: bigint): bigint {
+  let offset = 0
+  const len = input.length
+  let acc: bigint
+
+  if (len >= 32) {
+    const limit = len - 32
+    let v1 = u64(seed + PRIME64_1 + PRIME64_2)
+    let v2 = u64(seed + PRIME64_2)
+    let v3 = u64(seed)
+    let v4 = u64(seed - PRIME64_1)
+    while (offset <= limit) {
+      v1 = xxh64Round(v1, input.readBigUInt64LE(offset)); offset += 8
+      v2 = xxh64Round(v2, input.readBigUInt64LE(offset)); offset += 8
+      v3 = xxh64Round(v3, input.readBigUInt64LE(offset)); offset += 8
+      v4 = xxh64Round(v4, input.readBigUInt64LE(offset)); offset += 8
+    }
+    acc = u64(rotl64(v1, 1n) + rotl64(v2, 7n) + rotl64(v3, 12n) + rotl64(v4, 18n))
+    acc = xxh64MergeRound(acc, v1)
+    acc = xxh64MergeRound(acc, v2)
+    acc = xxh64MergeRound(acc, v3)
+    acc = xxh64MergeRound(acc, v4)
+  } else {
+    acc = u64(seed + PRIME64_5)
+  }
+
+  acc = u64(acc + BigInt(len))
+
+  while (offset + 8 <= len) {
+    const lane = xxh64Round(0n, input.readBigUInt64LE(offset))
+    acc = u64(rotl64(acc ^ lane, 27n) * PRIME64_1 + PRIME64_4)
+    offset += 8
+  }
+
+  if (offset + 4 <= len) {
+    acc = u64(rotl64(acc ^ (BigInt(input.readUInt32LE(offset)) * PRIME64_1), 23n) * PRIME64_2 + PRIME64_3)
+    offset += 4
+  }
+
+  while (offset < len) {
+    acc = u64(rotl64(acc ^ (BigInt(input[offset]) * PRIME64_5), 11n) * PRIME64_1)
+    offset += 1
+  }
+
+  acc ^= acc >> 33n
+  acc = u64(acc * PRIME64_2)
+  acc ^= acc >> 29n
+  acc = u64(acc * PRIME64_3)
+  acc ^= acc >> 32n
+  return u64(acc)
+}
+
+function xxh64Round(acc: bigint, lane: bigint): bigint {
+  return u64(rotl64(u64(acc + u64(lane * PRIME64_2)), 31n) * PRIME64_1)
+}
+
+function xxh64MergeRound(acc: bigint, lane: bigint): bigint {
+  return u64(u64((acc ^ xxh64Round(0n, lane)) * PRIME64_1) + PRIME64_4)
+}
+
+function rotl64(value: bigint, bits: bigint): bigint {
+  return u64((value << bits) | (value >> (64n - bits)))
+}
+
+function u64(value: bigint): bigint {
+  return value & UINT64_MASK
 }
 
 export function getSharedPoolMaxBodyBytes(config: Config): number {
