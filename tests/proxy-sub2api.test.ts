@@ -7,7 +7,7 @@ console.log('\ntests/proxy-sub2api.test.ts')
 const ccGatewayHeaders = {
   'x-cc-account-id': 'account-1',
   'x-cc-egress-bucket': 'bucket-a',
-  'x-cc-policy-version': '2.1.119',
+  'x-cc-policy-version': '2.1.146',
 }
 
 function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<string, unknown> = {}) {
@@ -19,17 +19,18 @@ function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<
     account_identities: {
       'account-1': {
         device_id: 'b'.repeat(64),
-        account_uuid_hash: 'sha256:account-uuid',
-        email_hash: 'sha256:email',
-        account_hash: 'sha256:account-1',
+        account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        email_hash: 'hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        account_hash: 'hmac-sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
         persona_variant: 'claude-code-2.1.146-macos-local',
         session_policy: 'preserve_downstream_session_id',
-        policy_version: '2.1.119',
+        policy_version: '2.1.146',
       },
     },
     egress_buckets: {
-      'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'sha256:proxy-a', allowed_account_ids: ['account-1'] },
+      'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'opaque:proxy-ref:v1:bucket-a', allowed_account_ids: ['account-1'] },
     },
+    env: { ...baseConfig().env, version: '2.1.146', version_base: '2.1.146' },
     ...overrides,
   } as any)
 }
@@ -47,9 +48,6 @@ test('sub2api Anthropic OAuth preserves selected authorization and strips all x-
         'x-cc-provider': 'anthropic',
         'x-cc-account-id': 'account-1',
         'x-cc-token-type': 'oauth',
-        'x-cc-account-email': 'selected@example.com',
-        'x-cc-account-uuid': 'acct-uuid',
-        'x-cc-organization-uuid': 'org-uuid',
         'x-cc-extra-secret': 'must-not-leak',
         authorization: 'Bearer selected-token',
       },

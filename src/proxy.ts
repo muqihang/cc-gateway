@@ -1,9 +1,9 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
-import { readFileSync } from 'fs'
-import { createHash } from 'crypto'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
 import type { Config } from './config.js'
 import { authenticate, authenticateGateway, initAuth } from './auth.js'
 import { getAccessToken } from './oauth.js'
@@ -11,17 +11,27 @@ import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
 import {
+  canonicalClaudeCodeSessionId,
+  accountIdentityRef,
+  canonicalPersonaHeaders,
   getSharedPoolMaxBodyBytes,
   normalizeSharedPoolSessionId,
   resolveAccountIdentity,
   resolveEgressBucket,
+  resolveSharedPoolPersonaDecision,
   runSigningPipeline,
   selectSharedPoolRoute,
+  validateSharedPoolPersonaHeaderSchema,
   verifySignedCCH,
   type AccountIdentityRecord,
   type EgressBucketResolution,
+  type SharedPoolPersonaRoute,
 } from './policy.js'
 import { redactRequestPath, redactSensitiveText } from './redaction.js'
+import { evaluateUpstreamSafety } from './upstream-safety.js'
+import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
+
+const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 
 export function startProxy(config: Config) {
   initAuth(config)
@@ -45,8 +55,12 @@ export function startProxy(config: Config) {
     log('warn', 'Running without TLS - only use for local development')
   }
 
-  server.listen(config.server.port, () => {
-    log('info', `CC Gateway listening on ${useTls ? 'https' : 'http'}://0.0.0.0:${config.server.port}`)
+  const listenHost = config.server.host
+  server.listen(config.server.port, listenHost, () => {
+    const address = server.address()
+    const boundHost = typeof address === 'object' && address ? address.address : '0.0.0.0'
+    const boundPort = typeof address === 'object' && address ? address.port : config.server.port
+    log('info', `CC Gateway listening on ${useTls ? 'https' : 'http'}://${boundHost}:${boundPort}`)
     log('info', `Upstream: ${redactSensitiveText(config.upstream.url)}`)
     log('info', `Canonical device_id: ${config.identity.device_id.slice(0, 8)}...`)
     log('info', `Authorized clients: ${config.auth.tokens.map(t => t.name).join(', ')}`)
@@ -72,15 +86,132 @@ function writeControlPlaneError(res: ServerResponse, status: number, code: strin
   res.end(body)
 }
 
+function rawCaptureDir(): string | null {
+  const dir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  return dir && dir.trim() ? dir.trim() : null
+}
+
+function writeRawCaptureFile(name: string, payload: unknown) {
+  const dir = rawCaptureDir()
+  if (!dir) return
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  chmodSync(dir, 0o700)
+  const file = `${dir}/${name}`
+  writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 })
+  chmodSync(file, 0o600)
+}
+
+function rawCaptureBodyLengthBucket(length: number): string {
+  if (length <= 0) return '0'
+  if (length <= 256) return '1-256'
+  if (length <= 1024) return '257-1024'
+  if (length <= 4096) return '1025-4096'
+  if (length <= 16384) return '4097-16384'
+  return '16385+'
+}
+
+function safeHeaderNames(headers: Record<string, string | string[] | undefined>): string[] {
+  return Object.keys(headers)
+    .map((key) => key.toLowerCase())
+    .sort()
+}
+
+function safeSchemaSummaryFromBuffer(body: Buffer): unknown {
+  const text = body.toString('utf-8')
+  try {
+    return safeSchemaSummary(JSON.parse(text))
+  } catch {
+    return { type: 'non_json' }
+  }
+}
+
+function safeSchemaSummary(value: unknown, depth = 0): unknown {
+  if (depth >= 2) {
+    if (Array.isArray(value)) return { type: 'array' }
+    if (value && typeof value === 'object') return { type: 'object' }
+    return { type: value === null ? 'null' : typeof value }
+  }
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      length: value.length,
+      item_schema: value.length > 0 ? safeSchemaSummary(value[0], depth + 1) : null,
+    }
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const keys = Object.keys(record).sort()
+    const fields: Record<string, unknown> = {}
+    for (const key of keys.slice(0, 12)) {
+      fields[key] = safeSchemaSummary(record[key], depth + 1)
+    }
+    return {
+      type: 'object',
+      keys,
+      fields,
+    }
+  }
+  return { type: value === null ? 'null' : typeof value }
+}
+
+function safeQueryKeys(search: string): string[] {
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  return Array.from(new Set(Array.from(params.keys()))).sort()
+}
+
+function safeVerifierSummary(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return { ok: false, code: 'unavailable' }
+  const typed = result as Record<string, unknown>
+  return typed.ok === true
+    ? { ok: true }
+    : { ok: false, code: typeof typed.code === 'string' ? typed.code : 'unknown' }
+}
+
+function safeSensitiveHeaderPresence(headers: Record<string, string | string[] | undefined>) {
+  return {
+    authorization: headers.authorization !== undefined,
+    x_api_key: headers['x-api-key'] !== undefined,
+    x_claude_code_session_id: headers['X-Claude-Code-Session-Id'] !== undefined,
+  }
+}
+
+function rawResponseCapturePayload(status: number, responseHeaders: Record<string, string | string[] | undefined>, responseBody: Buffer) {
+  const payload: Record<string, unknown> = {
+    status_code: status,
+    header_names: safeHeaderNames(responseHeaders),
+    body_length: responseBody.length,
+    body_length_bucket: rawCaptureBodyLengthBucket(responseBody.length),
+    body_omitted_reason: 'raw_upstream_response_forbidden',
+    digest_omitted_reason: 'plain_body_digest_forbidden',
+  }
+  const encoding = String(responseHeaders['content-encoding'] || responseHeaders['Content-Encoding'] || '').toLowerCase()
+  payload.body_encoding = encoding || 'identity'
+  try {
+    let decoded: Buffer | null = null
+    if (encoding.includes('gzip')) decoded = gunzipSync(responseBody)
+    else if (encoding.includes('br')) decoded = brotliDecompressSync(responseBody)
+    else if (encoding.includes('deflate')) decoded = inflateSync(responseBody)
+    else if (!encoding) decoded = responseBody
+    if (decoded) {
+      payload.decoded_body_encoding = encoding || 'identity'
+      payload.decoded_schema_summary = safeSchemaSummaryFromBuffer(decoded)
+      payload.decoded_body_omitted_reason = 'raw_decoded_response_forbidden'
+    }
+  } catch (err) {
+    payload.decoded_body_error = err instanceof Error ? err.name : 'DecodeError'
+  }
+  return payload
+}
+
 function proxyAgentCacheKey(account: AccountContext, upstreamUrl: URL, egress: EgressBucketResolution): string {
   const parts = [
     account.provider,
     account.accountId || '-',
     egress.bucketId,
-    egress.proxyIdentityHash,
+    egress.proxyIdentityRef,
     upstreamUrl.protocol,
     upstreamUrl.host,
-    createHash('sha256').update(upstreamUrl.href).digest('hex').slice(0, 12),
+    upstreamUrl.pathname || '/',
   ]
   return parts.join('|')
 }
@@ -89,9 +220,6 @@ type AccountContext = {
   provider: string
   accountId?: string
   tokenType: 'oauth' | 'apikey'
-  accountEmail?: string
-  accountUuid?: string
-  organizationUuid?: string
   egressBucket?: string
   policyVersion?: string
 }
@@ -141,6 +269,14 @@ async function handleRequest(
     return
   }
 
+  if (config.mode === 'sub2api') {
+    const upstreamSafety = evaluateUpstreamSafety(config, method, target.pathname)
+    if (!upstreamSafety.ok) {
+      writeControlPlaneError(res, upstreamSafety.status, upstreamSafety.code, 'Upstream is not allowed for this CC Gateway preflight/canary mode')
+      return
+    }
+  }
+
   // Authenticate client (proxy-level auth)
   const clientName = authenticateForMode(req, config)
   if (!clientName) {
@@ -155,12 +291,15 @@ async function handleRequest(
   }
 
   log('info', `Client "${clientName}" → ${method} ${safePath}`)
+  const trustedPersonaClient = isTrustedPersonaClient(req)
 
   let accountContext: AccountContext | null = null
   let accountIdentity: AccountIdentityRecord | null = null
   let egress: EgressBucketResolution | null = null
+  let personaDecision: ReturnType<typeof resolveSharedPoolPersonaDecision> | null = null
   let oauthToken: string | null = null
   let routePolicy: ReturnType<typeof selectSharedPoolRoute> | null = null
+  const sharedPoolRoute: SharedPoolPersonaRoute = target.pathname === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
 
   if (config.mode === 'sub2api') {
     routePolicy = selectSharedPoolRoute(method, target.pathname, target.search)
@@ -181,10 +320,6 @@ async function handleRequest(
       writeControlPlaneError(res, 403, 'missing_account_identity', 'Missing per-account identity for selected upstream account')
       return
     }
-    if (accountIdentity.policy_version !== accountContext.policyVersion) {
-      writeControlPlaneError(res, 403, 'identity_policy_version_mismatch', 'Account identity policy version mismatch')
-      return
-    }
 
     const resolvedEgress = resolveEgressBucket(config, accountContext.egressBucket, accountContext.accountId)
     if ('error' in resolvedEgress) {
@@ -203,22 +338,34 @@ async function handleRequest(
     }
   }
 
-  if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
-    await drainRequestWithinLimit(req, getSharedPoolMaxBodyBytes(config), res)
-    if (!res.writableEnded) {
-      res.writeHead(204, { 'X-CC-Gateway-Event-Policy': 'suppress' })
-      res.end()
-      if (config.logging.audit) audit(clientName, method, safePath, 204)
-    }
-    return
-  }
-
   const bodyResult = await readRequestBody(req, config.mode === 'sub2api' ? getSharedPoolMaxBodyBytes(config) : undefined)
   if ('error' in bodyResult) {
     writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
     return
   }
   let body = bodyResult.body
+  let rawSigningOutputBody = ''
+  let rawCCH: string | null = null
+  let rawVerifierResult: unknown = null
+
+  if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
+    const controlPlaneCheck = verifySuppressedControlPlaneRequest(
+      req,
+      body,
+      config,
+      accountIdentity!,
+      accountContext!.policyVersion || String(config.env.version),
+      trustedPersonaClient,
+    )
+    if (!controlPlaneCheck.ok) {
+      writeControlPlaneError(res, controlPlaneCheck.status, controlPlaneCheck.code, controlPlaneCheck.message)
+      return
+    }
+    res.writeHead(204, { 'X-CC-Gateway-Event-Policy': 'suppress' })
+    res.end()
+    if (config.logging.audit) audit(clientName, method, safePath, 204)
+    return
+  }
 
   let parsedBody: unknown = null
   if (config.mode === 'sub2api' && body.length > 0) {
@@ -235,6 +382,30 @@ async function handleRequest(
   }
   if (parsedBody && body.length > 0) {
     body = Buffer.from(JSON.stringify(parsedBody), 'utf-8')
+  }
+
+  if (config.mode === 'sub2api') {
+    const requestedModel = parsedBody && typeof (parsedBody as any).model === 'string' ? String((parsedBody as any).model) : ''
+    personaDecision = resolveSharedPoolPersonaDecision(
+      config,
+      accountIdentity,
+      accountContext!.policyVersion || String(config.env.version),
+      requestedModel,
+      trustedPersonaClient,
+      sharedPoolRoute,
+    )
+    if (personaDecision.status.startsWith('quarantine') || personaDecision.status.startsWith('reject')) {
+      writeControlPlaneError(res, 403, `persona_${personaDecision.status}`, 'Persona policy rejected request')
+      return
+    }
+  }
+
+  if (config.mode === 'sub2api') {
+    const canaryCostEnvelope = evaluateCanaryCostEnvelope(config, body)
+    if (!canaryCostEnvelope.ok) {
+      writeControlPlaneError(res, canaryCostEnvelope.status, canaryCostEnvelope.code, 'Canary request exceeds the configured cost envelope')
+      return
+    }
   }
 
   const billingMode = (config as any).shared_pool?.billing_cch_mode || 'strip'
@@ -269,7 +440,17 @@ async function handleRequest(
     req.headers as Record<string, string | string[] | undefined>,
     config,
     config.mode === 'sub2api'
-      ? { upstreamAuth: accountContext!.tokenType, stripGatewayControlHeaders: true, sharedPool: true, route: target.pathname }
+      ? {
+          upstreamAuth: accountContext!.tokenType,
+          stripGatewayControlHeaders: true,
+          sharedPool: true,
+          route: target.pathname,
+          accountIdentity: accountIdentity ?? undefined,
+          requestedPolicyVersion: accountContext!.policyVersion,
+          requestedModel: parsedBody && typeof (parsedBody as any).model === 'string' ? String((parsedBody as any).model) : '',
+          trustedClient: personaDecision?.trustedClient ?? false,
+          sessionId,
+        }
       : {},
   )
 
@@ -277,20 +458,40 @@ async function handleRequest(
     rewrittenHeaders['X-Claude-Code-Session-Id'] = sessionId
   }
 
+  const signingInputBody = body.toString('utf-8')
   if (config.mode === 'sub2api' && billingMode === 'sign') {
-    const signing = runSigningPipeline(config, body)
+    const signing = runSigningPipeline(config, body, {
+      cliVersion: personaDecision?.effectiveVersion || String(config.env.version),
+    })
     if (!signing.ok) {
       writeControlPlaneError(res, 403, signing.code, 'Manual signing mode is disabled or signer verification failed')
       return
     }
     body = signing.body
-    const verifier = verifySignedCCH(body)
+    rawSigningOutputBody = body.toString('utf-8')
+    rawCCH = signing.cch
+    const verifier = verifySharedPoolFinalOutput(config, rewrittenHeaders, body, {
+      route: sharedPoolRoute,
+      sessionId,
+      accountIdentity: accountIdentity ?? undefined,
+      expectedVersion: personaDecision?.effectiveVersion,
+      expectedBeta: personaDecision?.betaHeader,
+      billingMode: 'sign',
+    })
+    rawVerifierResult = verifier
     if (!verifier.ok) {
       writeControlPlaneError(res, 400, verifier.code, 'Shared-pool signing verifier failed')
       return
     }
   } else if (config.mode === 'sub2api') {
-    const verifier = verifySharedPoolFinalOutput(rewrittenHeaders, body)
+    const verifier = verifySharedPoolFinalOutput(config, rewrittenHeaders, body, {
+      route: sharedPoolRoute,
+      sessionId,
+      accountIdentity: accountIdentity ?? undefined,
+      expectedVersion: personaDecision?.effectiveVersion,
+      expectedBeta: personaDecision?.betaHeader,
+      billingMode: 'strip',
+    })
     if (!verifier.ok) {
       writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
       return
@@ -316,16 +517,51 @@ async function handleRequest(
     writeControlPlaneError(res, 403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
     return
   }
+  const forwardHeaders = {
+    ...rewrittenHeaders,
+    host: upstream.host,
+    'content-length': String(body.length),
+  }
+  writeRawCaptureFile('01_final_upstream_request.json', {
+    method,
+    path: upstreamUrl.pathname,
+    query_keys: safeQueryKeys(upstreamUrl.search),
+    header_names: safeHeaderNames(forwardHeaders),
+    sensitive_header_presence: safeSensitiveHeaderPresence(forwardHeaders),
+    body_length: body.length,
+    body_length_bucket: rawCaptureBodyLengthBucket(body.length),
+    schema_summary: safeSchemaSummaryFromBuffer(body),
+    body_omitted_reason: 'raw_upstream_request_forbidden',
+    digest_omitted_reason: 'plain_body_digest_forbidden',
+  })
+  writeRawCaptureFile('03_final_output.json', {
+    billing_cch_mode: billingMode,
+    body_length: body.length,
+    body_length_bucket: rawCaptureBodyLengthBucket(body.length),
+    schema_summary: safeSchemaSummaryFromBuffer(body),
+    body_omitted_reason: 'raw_final_output_forbidden',
+    digest_omitted_reason: 'plain_body_digest_forbidden',
+    signing_input_length: Buffer.byteLength(signingInputBody),
+    signing_output_length: rawSigningOutputBody ? Buffer.byteLength(rawSigningOutputBody) : body.length,
+    cch_present: rawCCH !== null,
+    verifier_result: safeVerifierSummary(rawVerifierResult),
+    post_sign_mutation_check: {
+      final_body_length: body.length,
+      signing_output_length: rawSigningOutputBody ? Buffer.byteLength(rawSigningOutputBody) : body.length,
+      pass: !rawSigningOutputBody || body.toString('utf-8') === rawSigningOutputBody,
+    },
+    fallback_check: {
+      sign_to_strip_fallback: false,
+      direct_fallback: false,
+    },
+  })
+
   const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
   const proxyReq = requestFn(
     upstreamUrl,
     {
       method,
-      headers: {
-        ...rewrittenHeaders,
-        host: upstream.host,
-        'content-length': String(body.length),
-      },
+      headers: forwardHeaders,
       ...(agent && { agent }),
     },
     (proxyRes) => {
@@ -334,13 +570,21 @@ async function handleRequest(
       const responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
 
-      res.writeHead(status, responseHeaders)
-
-      // Stream response directly (SSE for Claude responses)
-      proxyRes.pipe(res)
-
-      if (config.logging.audit) {
-        audit(clientName, method, safePath, status)
+      if (rawCaptureDir()) {
+        const chunks: Buffer[] = []
+        proxyRes.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        proxyRes.on('end', () => {
+          const responseBody = Buffer.concat(chunks)
+          writeRawCaptureFile('02_upstream_response.json', rawResponseCapturePayload(status, responseHeaders, responseBody))
+          res.writeHead(status, responseHeaders)
+          res.end(responseBody)
+          if (config.logging.audit) audit(clientName, method, safePath, status)
+        })
+      } else {
+        res.writeHead(status, responseHeaders)
+        // Stream response directly (SSE for Claude responses)
+        proxyRes.pipe(res)
+        if (config.logging.audit) audit(clientName, method, safePath, status)
       }
     },
   )
@@ -366,12 +610,49 @@ async function handleRequest(
 }
 
 
-function verifySharedPoolFinalOutput(headers: Record<string, string>, body: Buffer): { ok: true } | { ok: false; code: string } {
+export function verifySharedPoolFinalOutput(
+  config: Config,
+  headers: Record<string, string>,
+  body: Buffer,
+  options: {
+    route: SharedPoolPersonaRoute
+    sessionId?: string
+    accountIdentity?: AccountIdentityRecord
+    expectedVersion?: string
+    expectedBeta?: string
+    billingMode: 'strip' | 'sign'
+  },
+): { ok: true } | { ok: false; code: string } {
+  try {
+    validateSharedPoolPersonaHeaderSchema(headers, options.route, options.sessionId)
+  } catch {
+    return { ok: false, code: 'persona_header_mismatch' }
+  }
+  if (options.expectedVersion && userAgentVersion(headers['User-Agent']) !== options.expectedVersion) {
+    return { ok: false, code: 'persona_header_mismatch' }
+  }
+  if (options.expectedBeta && headers['anthropic-beta'] !== options.expectedBeta) {
+    return { ok: false, code: 'persona_header_mismatch' }
+  }
+  if (options.sessionId && headers['X-Claude-Code-Session-Id'] !== options.sessionId) {
+    return { ok: false, code: 'session_binding_failed' }
+  }
   const headerKeys = Object.keys(headers).map((key) => key.toLowerCase())
-  if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'strip_verifier_failed' }
   const bodyText = body.toString('utf-8')
-  if (/x-anthropic-billing-header/i.test(bodyText) || /\bcch=/i.test(bodyText)) {
-    return { ok: false, code: 'strip_verifier_failed' }
+  if (options.billingMode === 'sign') {
+    if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'persona_cch_version_mismatch' }
+    const billingVersion = extractBillingHeaderVersion(bodyText)
+    if (!billingVersion) return { ok: false, code: 'persona_cch_version_mismatch' }
+    if (options.expectedVersion && billingVersion !== options.expectedVersion) {
+      return { ok: false, code: 'persona_cch_version_mismatch' }
+    }
+    const verifier = verifySignedCCH(body)
+    if (!verifier.ok) return { ok: false, code: verifier.code }
+  } else {
+    if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'strip_verifier_failed' }
+    if (/x-anthropic-billing-header/i.test(bodyText) || /\bcch=/i.test(bodyText)) {
+      return { ok: false, code: 'strip_verifier_failed' }
+    }
   }
   try {
     const parsed = JSON.parse(bodyText)
@@ -381,10 +662,134 @@ function verifySharedPoolFinalOutput(headers: Record<string, string>, body: Buff
     const allowed = ['account_uuid', 'device_id', 'session_id']
     if (!allowed.every((key) => typeof userId[key] === 'string')) return { ok: false, code: 'session_binding_failed' }
     if (Object.keys(userId).some((key) => !allowed.includes(key))) return { ok: false, code: 'identity_verifier_failed' }
+    if (options.sessionId && userId.session_id !== options.sessionId) return { ok: false, code: 'session_binding_failed' }
+    if (options.accountIdentity) {
+      if (userId.device_id !== options.accountIdentity.device_id) return { ok: false, code: 'identity_verifier_failed' }
+      if (userId.account_uuid !== accountIdentityRef(options.accountIdentity)) return { ok: false, code: 'identity_verifier_failed' }
+    }
   } catch {
     return { ok: false, code: 'identity_verifier_failed' }
   }
   return { ok: true }
+}
+
+function verifySuppressedControlPlaneRequest(
+  req: IncomingMessage,
+  body: Buffer,
+  config: Config,
+  accountIdentity: AccountIdentityRecord,
+  requestedPolicyVersion: string,
+  trustedPersonaClient: boolean,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const rawSessionId = readHeader(req, 'x-claude-code-session-id')
+  const sessionId = canonicalClaudeCodeSessionId(rawSessionId)
+  if (rawSessionId && !sessionId) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'control_plane_persona_mismatch',
+      message: 'Control-plane session header is not a canonical Claude Code UUID',
+    }
+  }
+
+  const decision = resolveSharedPoolPersonaDecision(
+    config,
+    accountIdentity,
+    requestedPolicyVersion,
+    '',
+    trustedPersonaClient,
+    'control_plane',
+  )
+  if (decision.status.startsWith('quarantine') || decision.status.startsWith('reject')) {
+    return {
+      ok: false,
+      status: 403,
+      code: `persona_${decision.status}`,
+      message: 'Control-plane persona policy rejected request',
+    }
+  }
+
+  if (hasControlPlaneBillingMarker(req.headers, body)) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'control_plane_cch_marker_forbidden',
+      message: 'Control-plane routes must not carry messages billing/CCH material',
+    }
+  }
+
+  const expectedHeaders = canonicalPersonaHeaders(config, 'control_plane', sessionId, {
+    identity: accountIdentity,
+    requestedPolicyVersion,
+    trustedClient: decision.trustedClient,
+  })
+  if (findControlPlanePersonaMismatch(req.headers, expectedHeaders)) {
+    return {
+      ok: false,
+      status: 403,
+      code: 'control_plane_persona_mismatch',
+      message: 'Control-plane persona headers do not match the resolver decision',
+    }
+  }
+  return { ok: true }
+}
+
+function isTrustedPersonaClient(req: IncomingMessage): boolean {
+  const marker = readHeader(req, TRUSTED_PERSONA_HEADER)
+  if (marker !== '1' && marker?.toLowerCase() !== 'true') return false
+  const remote = (req.socket?.remoteAddress || '').trim()
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+}
+
+function userAgentVersion(userAgent: string | undefined): string | null {
+  const match = String(userAgent || '').match(/^claude-cli\/(\d+\.\d+\.\d+) \(external, sdk-cli\)$/)
+  return match ? match[1] : null
+}
+
+function extractBillingHeaderVersion(bodyText: string): string | null {
+  const match = bodyText.match(/x-anthropic-billing-header:[^"\n]*cc_version=(\d+\.\d+\.\d+)\.[a-f0-9]{3};/i)
+  return match ? match[1] : null
+}
+
+function hasControlPlaneBillingMarker(
+  headers: IncomingMessage['headers'],
+  body: Buffer,
+): boolean {
+  if (readHeaderValue(headers, 'x-anthropic-billing-header')) return true
+  const text = body.toString('utf-8')
+  return /x-anthropic-billing-header/i.test(text) || /\bcch=[a-f0-9]{5}\b/i.test(text)
+}
+
+function findControlPlanePersonaMismatch(
+  headers: IncomingMessage['headers'],
+  expectedHeaders: Record<string, string>,
+): string | null {
+  const personaHeaderNames = new Set([
+    'anthropic-beta',
+    'anthropic-dangerous-direct-browser-access',
+    'anthropic-version',
+    'user-agent',
+    'x-app',
+    'x-claude-code-session-id',
+    'x-stainless-arch',
+    'x-stainless-lang',
+    'x-stainless-os',
+    'x-stainless-package-version',
+    'x-stainless-retry-count',
+    'x-stainless-runtime',
+    'x-stainless-runtime-version',
+    'x-stainless-timeout',
+  ])
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue
+    const normalized = key.toLowerCase()
+    if (!personaHeaderNames.has(normalized) && !normalized.startsWith('x-stainless-')) continue
+    const expectedKey = Object.keys(expectedHeaders).find((candidate) => candidate.toLowerCase() === normalized)
+    if (!expectedKey) return key
+    const actual = Array.isArray(value) ? value.join(', ') : value
+    if (actual !== expectedHeaders[expectedKey]) return key
+  }
+  return null
 }
 
 function verifyRetryFinalOutputContract(
@@ -476,18 +881,12 @@ function parseAccountContext(req: IncomingMessage, config: Config): { context: A
   if (!policyVersion) {
     return { status: 400, code: 'missing_policy_version', error: 'Missing x-cc-policy-version' }
   }
-  if (policyVersion !== config.env.version) {
-    return { status: 403, code: 'policy_version_mismatch', error: `Policy version mismatch: ${policyVersion}` }
-  }
 
   return {
     context: {
       provider,
       accountId,
       tokenType: normalizedTokenType,
-      accountEmail: readHeader(req, 'x-cc-account-email'),
-      accountUuid: readHeader(req, 'x-cc-account-uuid'),
-      organizationUuid: readHeader(req, 'x-cc-organization-uuid'),
       egressBucket,
       policyVersion,
     },
@@ -498,6 +897,18 @@ function readHeader(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name]
   if (Array.isArray(value)) return value[0]
   return value
+}
+
+function readHeaderValue(
+  headers: IncomingMessage['headers'],
+  name: string,
+): string | undefined {
+  const target = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target || value === undefined) continue
+    return Array.isArray(value) ? value.join(', ') : value
+  }
+  return undefined
 }
 
 type RequestTarget = {

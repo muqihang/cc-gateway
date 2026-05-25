@@ -8,10 +8,10 @@ console.log('\ntests/security-boundary.test.ts')
 const ccGatewayHeaders = {
   'x-cc-account-id': 'account-a',
   'x-cc-egress-bucket': 'bucket-a',
-  'x-cc-policy-version': '2.1.119',
+  'x-cc-policy-version': '2.1.146',
 }
 
-function sub2apiConfig(upstreamUrl: string, proxyUrl: string) {
+function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<string, unknown> = {}) {
   return baseConfig({
     mode: 'sub2api',
     upstream: { url: upstreamUrl },
@@ -20,19 +20,49 @@ function sub2apiConfig(upstreamUrl: string, proxyUrl: string) {
     account_identities: {
       'account-a': {
         device_id: 'b'.repeat(64),
-        account_uuid_hash: 'sha256:account-uuid',
-        email_hash: 'sha256:email',
-        account_hash: 'sha256:account-a',
+        account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        email_hash: 'hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        account_hash: 'hmac-sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
         persona_variant: 'claude-code-2.1.146-macos-local',
         session_policy: 'preserve_downstream_session_id',
-        policy_version: '2.1.119',
+        policy_version: '2.1.146',
       },
     },
     egress_buckets: {
-      'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'sha256:proxy-a', allowed_account_ids: ['account-a'] },
+      'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'opaque:proxy-ref:v1:bucket-a', allowed_account_ids: ['account-a'] },
     },
+    ...overrides,
   } as any)
 }
+
+
+test('serverUrl targets IPv6 loopback when gateway binds wildcard IPv6', async () => {
+  const gateway = startProxy(baseConfig({ server: { port: 0, tls: { cert: '', key: '' } } }))
+
+  try {
+    const address = gateway.address() as any
+    assert.equal(address.address, '::')
+    assert.match(serverUrl(gateway, '/_health'), /^http:\/\/\[::1\]:\d+\/_health$/)
+  } finally {
+    await close(gateway)
+  }
+})
+
+test('explicit server host binds gateway to loopback for localhost-only harnesses', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, { server: { port: 0, host: '127.0.0.1', tls: { cert: '', key: '' } } } as any))
+
+  try {
+    await new Promise((resolve) => gateway.once('listening', resolve))
+    const address = gateway.address() as any
+    assert.equal(address.address, '127.0.0.1')
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
 
 test('fixed upstream ignores inbound Host and Forwarded routing headers', async () => {
   const upstream = await startFakeUpstream()
@@ -83,7 +113,7 @@ test('absolute-form URL still uses fixed upstream and route-sensitive body rewri
     })
     const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = httpRequest({
-        host: '127.0.0.1',
+        host: (gateway.address() as any).address === '::' ? '::1' : '127.0.0.1',
         port: (gateway.address() as any).port,
         method: 'POST',
         path: 'http://attacker.example/v1/messages?beta=true',

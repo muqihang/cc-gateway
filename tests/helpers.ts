@@ -230,6 +230,7 @@ export async function httpJson(
 }
 
 export function serverUrl(server: Server, path: string): string {
-  const { port } = server.address() as AddressInfo
-  return `http://127.0.0.1:${port}${path}`
+  const address = server.address() as AddressInfo
+  const host = address.address === '::' ? '[::1]' : '127.0.0.1'
+  return `http://${host}:${address.port}${path}`
 }

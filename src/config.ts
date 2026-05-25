@@ -9,8 +9,11 @@ export type TokenEntry = {
 
 export type AccountIdentityConfig = {
   device_id: string
-  account_uuid_hash: string
+  account_uuid_ref?: string
+  account_uuid_hash?: string
+  email_ref?: string
   email_hash?: string
+  account_ref?: string
   account_hash?: string
   persona_variant: string
   session_policy: 'preserve_downstream_session_id' | 'gateway_generated'
@@ -20,6 +23,7 @@ export type AccountIdentityConfig = {
 export type EgressBucketConfig = {
   enabled: boolean
   proxy_url: string
+  proxy_identity_ref?: string
   proxy_identity_hash?: string
   allowed_account_ids?: string[]
 }
@@ -28,6 +32,7 @@ export type Config = {
   mode: 'standalone' | 'sub2api'
   server: {
     port: number
+    host?: string
     tls: {
       cert: string
       key: string
@@ -71,6 +76,37 @@ export type Config = {
     billing_cch_mode?: 'strip' | 'sign' | 'disabled'
     signing_enabled?: boolean
     signing_evidence_gates_approved?: boolean
+    upstream_mode?: 'preflight' | 'dry-run' | 'local-capture' | 'real-canary' | 'production'
+    real_canary_user_approved?: boolean
+    production_upstream_enabled?: boolean
+    message_beta_profile?: 'claude_code_2_1_146' | 'claude_code_2_1_150_subscription' | 'claude_code_2_1_150_subscription_1m' | 'first_200_oauth_compat' | 'claude_code_candidate_beta' | string
+    canary_envelope_role?: string
+    canary_cost_envelope?: {
+      enabled?: boolean
+      max_tokens?: number
+      max_body_bytes?: number
+      max_tools_count?: number
+      allow_thinking?: boolean
+      max_thinking_budget_tokens?: number
+      allow_output_config?: boolean
+      allow_context_management?: boolean
+      allow_context_1m?: boolean
+      max_context_window_tokens?: number
+      allowed_models?: string[]
+    }
+    candidate_model_allowlist?: string[]
+    candidate_model_replay_proofs?: Record<string, string>
+    candidate_model_kill_switches?: Record<string, boolean>
+    candidate_model_audit_budgets?: Record<string, number>
+    candidate_beta_allowlist?: string[]
+    candidate_beta_replay_proofs?: Record<string, string>
+    candidate_beta_kill_switches?: Record<string, boolean>
+    candidate_beta_audit_budgets?: Record<string, number>
+    production_budget?: {
+      mode?: 'observe_only' | string
+      enforcement_enabled?: boolean
+      p0_hard_block_only?: boolean
+    }
   }
   account_identities?: Record<string, AccountIdentityConfig>
   egress_buckets?: Record<string, EgressBucketConfig>

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'crypto'
 import type { Config } from './config.js'
 import { log } from './logger.js'
-import { canonicalPersonaHeaders, type AccountIdentityRecord } from './policy.js'
+import { accountIdentityRef, canonicalPersonaHeaders, type AccountIdentityRecord } from './policy.js'
 
 // 3-hex cc_version suffix helper (reverse-engineered from cli.js).
 const CC_VERSION_SALT = '59cf53e54c78'
@@ -37,9 +37,10 @@ function extractFirstUserMessage(messages: any[]): string {
 /**
  * Rewrite identity fields in the API request body.
  *
- * Handles two request types:
- * 1. /v1/messages - rewrite metadata.user_id JSON blob
- * 2. /api/event_logging/batch - rewrite event_data identity/env/process fields
+ * Handles two request families:
+ * 1. /v1/messages - rewrite metadata.user_id JSON blob.
+ * 2. Legacy standalone /api/event_logging/batch only. Shared-pool
+ *    synthetic telemetry must not call raw telemetry body rewriting.
  */
 export function rewriteBody(
   body: Buffer,
@@ -60,7 +61,8 @@ export function rewriteBody(
   if (path.startsWith('/v1/messages')) {
     rewriteMessagesBody(parsed, config, options.accountIdentity, options.sessionId)
   } else if (path.includes('/event_logging/batch')) {
-    rewriteEventBatch(parsed, config)
+    if (config.mode === 'sub2api') return body
+    rewriteLegacyEventBatch(parsed, config)
   } else if (path.includes('/policy_limits') || path.includes('/settings')) {
     rewriteGenericIdentity(parsed, config)
   }
@@ -83,9 +85,9 @@ function rewriteMessagesBody(body: any, config: Config, accountIdentity?: Accoun
     try {
       const parsed = JSON.parse(body.metadata.user_id)
       const userId = accountIdentity
-        ? {
+          ? {
             device_id: accountIdentity.device_id,
-            account_uuid: accountIdentity.account_uuid_hash,
+            account_uuid: accountIdentityRef(accountIdentity),
             session_id: sessionId || parsed.session_id,
           }
         : { ...parsed, device_id: config.identity.device_id }
@@ -217,10 +219,11 @@ function rewriteSystemReminders(text: string, config: Config): string {
 }
 
 /**
- * Rewrite /api/event_logging/batch payload.
- * Each event has event_data with identity, env, and process fields.
+ * Legacy standalone rewrite for /api/event_logging/batch payloads.
+ * Shared-pool synthetic telemetry must be generated from safe summaries, never
+ * by rewriting a raw telemetry body through this function.
  */
-function rewriteEventBatch(body: any, config: Config) {
+function rewriteLegacyEventBatch(body: any, config: Config) {
   if (!Array.isArray(body?.events)) return
 
   for (const event of body.events) {
@@ -337,7 +340,17 @@ function randomInRange(min: number, max: number): number {
 export function rewriteHeaders(
   headers: Record<string, string | string[] | undefined>,
   config: Config,
-  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; stripGatewayControlHeaders?: boolean; sharedPool?: boolean; route?: string } = {},
+  options: {
+    upstreamAuth?: 'oauth' | 'apikey' | 'none'
+    stripGatewayControlHeaders?: boolean
+    sharedPool?: boolean
+    route?: string
+    accountIdentity?: AccountIdentityRecord
+    requestedPolicyVersion?: string
+    requestedModel?: string
+    trustedClient?: boolean
+    sessionId?: string
+  } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
   if (options.sharedPool) {
@@ -397,7 +410,15 @@ export function rewriteHeaders(
 function rewriteSharedPoolHeaders(
   headers: Record<string, string | string[] | undefined>,
   config: Config,
-  options: { upstreamAuth?: 'oauth' | 'apikey' | 'none'; route?: string },
+  options: {
+    upstreamAuth?: 'oauth' | 'apikey' | 'none'
+    route?: string
+    accountIdentity?: AccountIdentityRecord
+    requestedPolicyVersion?: string
+    requestedModel?: string
+    trustedClient?: boolean
+    sessionId?: string
+  },
 ): Record<string, string> {
   const out: Record<string, string> = {}
   const route = options.route === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
@@ -409,7 +430,17 @@ function rewriteSharedPoolHeaders(
     out['x-api-key'] = selectedApiKey
   }
 
-  const canonical = canonicalPersonaHeaders(config, route, readHeaderValue(headers, 'x-claude-code-session-id'))
+  const canonical = canonicalPersonaHeaders(
+    config,
+    route,
+    options.sessionId || readHeaderValue(headers, 'x-claude-code-session-id'),
+    {
+      identity: options.accountIdentity,
+      requestedPolicyVersion: options.requestedPolicyVersion,
+      requestedModel: options.requestedModel,
+      trustedClient: options.trustedClient,
+    },
+  )
   for (const [key, value] of Object.entries(canonical)) {
     out[key] = value
   }

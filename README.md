@@ -285,8 +285,8 @@ See [`clash-rules.yaml`](clash-rules.yaml) for the full template.
 ### v0.2.0 (2026-04-02)
 
 **Billing header strategy overhaul**
-- Stripped the `x-anthropic-billing-header` entirely (system prompt block + HTTP header) instead of rewriting the hash. This is consistent with the official `CLAUDE_CODE_ATTRIBUTION_HEADER=false` env var and enables cross-session prompt cache sharing (~85% cost reduction on system prompt).
-- The CCH hash algorithm (reverse-engineered from `cli.js`) is implemented as a fallback but not active by default.
+- Stripped the `x-anthropic-billing-header` entirely (system prompt block + HTTP header) instead of rewriting a deterministic verifier ref. This is consistent with the official `CLAUDE_CODE_ATTRIBUTION_HEADER=false` env var and enables cross-session prompt cache sharing (~85% cost reduction on system prompt).
+- The CCH verifier ref algorithm (reverse-engineered from `cli.js`) is implemented as a fallback but not active by default.
 
 **Zero-login client setup**
 - New `add-client.sh` generates self-contained launcher scripts (`./clients/cc-<name>`). Clients run one file — no `~/.zshrc` changes, no config files, no browser login.

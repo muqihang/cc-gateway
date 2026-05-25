@@ -156,10 +156,10 @@ test('rewrites home paths in user messages with system-reminder', () => {
 })
 
 // ============================================================
-console.log('\n/api/event_logging/batch - event data rewriting')
+console.log('\n/api/event_logging/batch - legacy standalone event data rewriting')
 // ============================================================
 
-test('rewrites device_id and email in events', () => {
+test('legacy standalone rewrites device_id and email in events', () => {
   const body = {
     events: [{
       event_type: 'ClaudeCodeInternalEvent',
@@ -179,7 +179,7 @@ test('rewrites device_id and email in events', () => {
   assert.equal(data.email, config.identity.email)
 })
 
-test('replaces entire env object with canonical', () => {
+test('legacy standalone replaces entire env object with canonical', () => {
   const body = {
     events: [{
       event_type: 'ClaudeCodeInternalEvent',
@@ -208,7 +208,7 @@ test('replaces entire env object with canonical', () => {
   assert.equal(env.deployment_environment, 'unknown-darwin')
 })
 
-test('strips baseUrl that leaks gateway address', () => {
+test('legacy standalone strips baseUrl that leaks gateway address', () => {
   const body = {
     events: [{
       event_type: 'ClaudeCodeInternalEvent',
@@ -227,7 +227,29 @@ test('strips baseUrl that leaks gateway address', () => {
   assert.equal(data.gateway, undefined, 'gateway should be stripped')
 })
 
-test('rewrites process metrics (base64 encoded)', () => {
+
+test('shared-pool sub2api does not rewrite raw event telemetry body', () => {
+  const body = {
+    events: [{
+      event_type: 'ClaudeCodeInternalEvent',
+      event_data: {
+        device_id: 'real_device_id',
+        email: 'real@email.com',
+        env: { platform: 'linux', arch: 'x64' },
+      },
+    }],
+  }
+  const sharedPoolConfig = { ...config, mode: 'sub2api' as const }
+  const result = JSON.parse(
+    rewriteBody(Buffer.from(JSON.stringify(body)), '/api/event_logging/batch', sharedPoolConfig).toString(),
+  )
+  const data = result.events[0].event_data
+  assert.equal(data.device_id, 'real_device_id')
+  assert.equal(data.email, 'real@email.com')
+  assert.equal(data.env.platform, 'linux')
+})
+
+test('legacy standalone rewrites process metrics (base64 encoded)', () => {
   const processData = {
     uptime: 100,
     rss: 999999999,
