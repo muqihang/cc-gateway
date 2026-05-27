@@ -36,7 +36,7 @@ const DEFAULT_LIMITS: Required<CanaryCostEnvelopeLimits> = {
   max_thinking_budget_tokens: 0,
   allow_output_config: true,
   allow_context_management: true,
-  allowed_models: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-7-thinking', 'claude-opus-4-6', 'claude-opus-4-6-thinking'],
+  allowed_models: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-7-thinking', 'claude-opus-4-6', 'claude-opus-4-6-thinking', 'claude-haiku-4-5-20251001'],
 }
 
 export function evaluateCanaryCostEnvelope(config: Config, body: Buffer): CanaryCostEnvelopeResult {

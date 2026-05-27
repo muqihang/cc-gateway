@@ -24,6 +24,8 @@ const KNOWN_MODELS = [
   'claude-opus-4-7-thinking',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
+  // Observed from Claude Code 2.1.150 for lightweight explore/subagent requests.
+  'claude-haiku-4-5-20251001',
 ] as const
 
 const MESSAGE_BETA = 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24'

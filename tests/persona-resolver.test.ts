@@ -163,6 +163,22 @@ test('future trusted sonnet/opus candidate models gray without capability downgr
   assert.equal(opus.capabilities.thinking, true)
 })
 
+
+test('observed Claude Code Haiku subagent model is known for untrusted production client path', () => {
+  const decision = resolvePersonaDecision({
+    config: config(),
+    identity,
+    route: 'messages',
+    requestedPolicyVersion: '2.1.150',
+    requestedModel: 'claude-haiku-4-5-20251001',
+    trustedClient: false,
+  })
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.capabilities.tools, true)
+  assert.equal(decision.capabilities.thinking, true)
+  assert.equal(decision.capabilities.stream, true)
+})
+
 test('untrusted unknown model rejects and unknown major quarantines', () => {
   const unknownMajor = resolvePersonaDecision({
     config: config({ env: { ...baseConfig().env, version: '3.0.0', version_base: '3.0.0' } as any }),

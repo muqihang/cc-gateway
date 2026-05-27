@@ -127,6 +127,7 @@ shared_pool:
       - "claude-opus-4-7-thinking"
       - "claude-opus-4-6"
       - "claude-opus-4-6-thinking"
+      - "claude-haiku-4-5-20251001"
   # Future trusted Sonnet/Opus models must enter a candidate gray path rather
   # than being mechanically blocked or blindly trusted. These knobs are rollout
   # controls, not production capability downgrades.
