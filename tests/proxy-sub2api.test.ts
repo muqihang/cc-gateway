@@ -1,4 +1,8 @@
 import { strict as assert } from 'assert'
+import { mkdtempSync, readdirSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { request as httpRequest } from 'http'
 import { startProxy } from '../src/proxy.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 
@@ -8,6 +12,36 @@ const ccGatewayHeaders = {
   'x-cc-account-id': 'account-1',
   'x-cc-egress-bucket': 'bucket-a',
   'x-cc-policy-version': '2.1.146',
+}
+
+function streamPost(url: string, headers: Record<string, string>, body: unknown) {
+  const payload = JSON.stringify(body)
+  const started = Date.now()
+  return new Promise<{ status: number; firstChunkMs: number; body: string }>((resolve, reject) => {
+    let firstChunkMs = -1
+    const chunks: Buffer[] = []
+    const req = httpRequest(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(payload)),
+        ...headers,
+      },
+    }, (res) => {
+      res.on('data', (chunk) => {
+        if (firstChunkMs < 0) firstChunkMs = Date.now() - started
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      })
+      res.on('end', () => resolve({
+        status: res.statusCode || 0,
+        firstChunkMs,
+        body: Buffer.concat(chunks).toString('utf-8'),
+      }))
+    })
+    req.on('error', reject)
+    req.write(payload)
+    req.end()
+  })
 }
 
 function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<string, unknown> = {}) {
@@ -60,6 +94,54 @@ test('sub2api Anthropic OAuth preserves selected authorization and strips all x-
     assert.equal(upstream.captured[0].headers['x-api-key'], undefined)
     assert.ok(!Object.keys(upstream.captured[0].headers).some((key) => key.startsWith('x-cc-')))
   } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('raw capture does not buffer streaming responses before first downstream chunk', async () => {
+  const rawDir = mkdtempSync(join(tmpdir(), 'cc-gateway-raw-stream-'))
+  const oldRawDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  const oldRawLayout = process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = rawDir
+  process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = 'per-request'
+
+  const upstream = await startFakeUpstream((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' })
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}\n\n')
+    setTimeout(() => {
+      res.write('event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":1}}\n\n')
+      res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n')
+    }, 350)
+  })
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+
+  try {
+    const response = await streamPost(serverUrl(gateway, '/v1/messages?beta=true'), {
+      ...ccGatewayHeaders,
+      'x-cc-gateway-token': 'gateway-token',
+      'x-cc-provider': 'anthropic',
+      'x-cc-token-type': 'oauth',
+      authorization: 'Bearer selected-token',
+    }, {
+      model: 'claude-sonnet-4-6',
+      stream: true,
+      messages: [{ role: 'user', content: 'hello' }],
+    })
+
+    assert.equal(response.status, 200, response.body)
+    assert.ok(response.body.includes('message_start'), response.body)
+    assert.ok(response.body.includes('message_stop'), response.body)
+    assert.ok(response.firstChunkMs >= 0, 'expected at least one streamed chunk')
+    assert.ok(response.firstChunkMs < 250, `first streamed chunk was buffered for ${response.firstChunkMs}ms`)
+    assert.ok(readdirSync(rawDir).length > 0, 'raw capture should still write per-request artifacts')
+  } finally {
+    if (oldRawDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldRawDir
+    if (oldRawLayout === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+    else process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = oldRawLayout
     await close(gateway)
     await close(upstream.server)
     await close(proxy.server)

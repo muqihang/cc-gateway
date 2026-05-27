@@ -640,12 +640,21 @@ async function handleRequest(
 
       if (rawCapture.dir) {
         const chunks: Buffer[] = []
-        proxyRes.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        res.writeHead(status, responseHeaders)
+        proxyRes.on('data', (chunk) => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+          chunks.push(buffer)
+          if (!res.destroyed && !res.write(buffer)) {
+            proxyRes.pause()
+          }
+        })
+        res.on('drain', () => {
+          proxyRes.resume()
+        })
         proxyRes.on('end', () => {
           const responseBody = Buffer.concat(chunks)
           writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(status, responseHeaders, responseBody, rawCapture))
-          res.writeHead(status, responseHeaders)
-          res.end(responseBody)
+          if (!res.destroyed) res.end()
           if (config.logging.audit) audit(clientName, method, safePath, status)
         })
       } else {
