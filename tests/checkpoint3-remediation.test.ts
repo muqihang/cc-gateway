@@ -783,6 +783,39 @@ test('approved signing rejects downstream CCH material and never downgrades to s
   }
 })
 
+test('approved signing allows literal billing header text without downstream CCH value', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig()
+  config.shared_pool = {
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+  } as any
+  config.egress_buckets!['bucket-a'].proxy_url = proxy.url
+  const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: sharedHeaders,
+      body: {
+        metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
+        messages: [{
+          role: 'user',
+          content: [{ type: 'text', text: 'Log text mentions x-anthropic-billing-header: without a cch value.' }],
+        }],
+      },
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.match(upstream.captured[0].body, /x-anthropic-billing-header: cc_version=2\.1\.146\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};/)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('approved sign-primary mode generates billing CCH and forwards only after verifier passes', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()

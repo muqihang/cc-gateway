@@ -323,7 +323,7 @@ function removeExistingBillingMaterial(body: any): { ok: true } | { ok: false; c
       .join('\n')
   }
 
-  if (containsCCHMarker(body)) return { ok: false, code: 'signing_untrusted_billing_input' }
+  if (containsCCHValueMarker(body)) return { ok: false, code: 'signing_untrusted_billing_input' }
   return { ok: true }
 }
 
@@ -331,10 +331,10 @@ function isBillingHeaderText(text: string): boolean {
   return text.trimStart().toLowerCase().startsWith(BILLING_HEADER_PREFIX)
 }
 
-function containsCCHMarker(value: any): boolean {
-  if (typeof value === 'string') return /\bcch=[a-f0-9]{5}\b/i.test(value) || /x-anthropic-billing-header:/i.test(value)
-  if (Array.isArray(value)) return value.some(containsCCHMarker)
-  if (value && typeof value === 'object') return Object.values(value).some(containsCCHMarker)
+function containsCCHValueMarker(value: any): boolean {
+  if (typeof value === 'string') return /\bcch=[a-f0-9]{5}\b/i.test(value)
+  if (Array.isArray(value)) return value.some(containsCCHValueMarker)
+  if (value && typeof value === 'object') return Object.values(value).some(containsCCHValueMarker)
   return false
 }
 

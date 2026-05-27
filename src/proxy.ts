@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
+import { randomUUID } from 'crypto'
 import type { Config } from './config.js'
 import { authenticate, authenticateGateway, initAuth } from './auth.js'
 import { getAccessToken } from './oauth.js'
@@ -86,19 +87,60 @@ function writeControlPlaneError(res: ServerResponse, status: number, code: strin
   res.end(body)
 }
 
+type RawCaptureSink = {
+  dir: string | null
+  fullRaw: boolean
+}
+
 function rawCaptureDir(): string | null {
   const dir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
   return dir && dir.trim() ? dir.trim() : null
 }
 
-function writeRawCaptureFile(name: string, payload: unknown) {
-  const dir = rawCaptureDir()
+function createRawCaptureSink(method: string, pathname: string): RawCaptureSink {
+  const root = rawCaptureDir()
+  if (!root) return { dir: null, fullRaw: false }
+  mkdirSync(root, { recursive: true, mode: 0o700 })
+  chmodSync(root, 0o700)
+
+  let dir = root
+  if (process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT === 'per-request') {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const safeRoute = pathname.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'root'
+    dir = `${root}/${timestamp}-${method.toUpperCase()}-${safeRoute}-${randomUUID()}`
+  }
+  return {
+    dir,
+    fullRaw: process.env.CC_GATEWAY_FULL_RAW_CAPTURE === '1',
+  }
+}
+
+function writeRawCaptureFile(sink: RawCaptureSink, name: string, payload: unknown) {
+  const dir = sink.dir
   if (!dir) return
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   chmodSync(dir, 0o700)
   const file = `${dir}/${name}`
   writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 })
   chmodSync(file, 0o600)
+}
+
+function redactedHeaderValues(headers: Record<string, string | string[] | undefined>): Record<string, string | string[]> {
+  const sensitive = new Set([
+    'authorization',
+    'x-api-key',
+    'api-key',
+    'cookie',
+    'set-cookie',
+    'proxy-authorization',
+  ])
+  const out: Record<string, string | string[]> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (value === undefined) continue
+    const normalized = key.toLowerCase()
+    out[key] = sensitive.has(normalized) ? '<redacted>' : value
+  }
+  return out
 }
 
 function rawCaptureBodyLengthBucket(length: number): string {
@@ -175,7 +217,12 @@ function safeSensitiveHeaderPresence(headers: Record<string, string | string[] |
   }
 }
 
-function rawResponseCapturePayload(status: number, responseHeaders: Record<string, string | string[] | undefined>, responseBody: Buffer) {
+function rawResponseCapturePayload(
+  status: number,
+  responseHeaders: Record<string, string | string[] | undefined>,
+  responseBody: Buffer,
+  sink: RawCaptureSink,
+) {
   const payload: Record<string, unknown> = {
     status_code: status,
     header_names: safeHeaderNames(responseHeaders),
@@ -183,6 +230,11 @@ function rawResponseCapturePayload(status: number, responseHeaders: Record<strin
     body_length_bucket: rawCaptureBodyLengthBucket(responseBody.length),
     body_omitted_reason: 'raw_upstream_response_forbidden',
     digest_omitted_reason: 'plain_body_digest_forbidden',
+  }
+  if (sink.fullRaw) {
+    payload.raw_capture_scope = 'server_side_full_body_redacted_headers'
+    payload.redacted_headers = redactedHeaderValues(responseHeaders)
+    payload.body_base64 = responseBody.toString('base64')
   }
   const encoding = String(responseHeaders['content-encoding'] || responseHeaders['Content-Encoding'] || '').toLowerCase()
   payload.body_encoding = encoding || 'identity'
@@ -196,6 +248,9 @@ function rawResponseCapturePayload(status: number, responseHeaders: Record<strin
       payload.decoded_body_encoding = encoding || 'identity'
       payload.decoded_schema_summary = safeSchemaSummaryFromBuffer(decoded)
       payload.decoded_body_omitted_reason = 'raw_decoded_response_forbidden'
+      if (sink.fullRaw) {
+        payload.decoded_body_utf8 = decoded.toString('utf-8')
+      }
     }
   } catch (err) {
     payload.decoded_body_error = err instanceof Error ? err.name : 'DecodeError'
@@ -235,6 +290,7 @@ async function handleRequest(
   const path = target.path
   const safePath = redactRequestPath(path)
   const clientIp = req.socket.remoteAddress || 'unknown'
+  const rawCapture = createRawCaptureSink(method, target.pathname)
 
   log('info', `← ${method} ${safePath} from ${clientIp}`)
 
@@ -522,7 +578,7 @@ async function handleRequest(
     host: upstream.host,
     'content-length': String(body.length),
   }
-  writeRawCaptureFile('01_final_upstream_request.json', {
+  const requestCapturePayload: Record<string, unknown> = {
     method,
     path: upstreamUrl.pathname,
     query_keys: safeQueryKeys(upstreamUrl.search),
@@ -533,8 +589,15 @@ async function handleRequest(
     schema_summary: safeSchemaSummaryFromBuffer(body),
     body_omitted_reason: 'raw_upstream_request_forbidden',
     digest_omitted_reason: 'plain_body_digest_forbidden',
-  })
-  writeRawCaptureFile('03_final_output.json', {
+  }
+  if (rawCapture.fullRaw) {
+    requestCapturePayload.raw_capture_scope = 'server_side_full_body_redacted_headers'
+    requestCapturePayload.redacted_headers = redactedHeaderValues(forwardHeaders)
+    requestCapturePayload.body_utf8 = body.toString('utf-8')
+  }
+  writeRawCaptureFile(rawCapture, '01_final_upstream_request.json', requestCapturePayload)
+
+  const finalOutputCapturePayload: Record<string, unknown> = {
     billing_cch_mode: billingMode,
     body_length: body.length,
     body_length_bucket: rawCaptureBodyLengthBucket(body.length),
@@ -554,7 +617,12 @@ async function handleRequest(
       sign_to_strip_fallback: false,
       direct_fallback: false,
     },
-  })
+  }
+  if (rawCapture.fullRaw) {
+    finalOutputCapturePayload.raw_capture_scope = 'server_side_full_final_output'
+    finalOutputCapturePayload.body_utf8 = body.toString('utf-8')
+  }
+  writeRawCaptureFile(rawCapture, '03_final_output.json', finalOutputCapturePayload)
 
   const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
   const proxyReq = requestFn(
@@ -570,12 +638,12 @@ async function handleRequest(
       const responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
 
-      if (rawCaptureDir()) {
+      if (rawCapture.dir) {
         const chunks: Buffer[] = []
         proxyRes.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
         proxyRes.on('end', () => {
           const responseBody = Buffer.concat(chunks)
-          writeRawCaptureFile('02_upstream_response.json', rawResponseCapturePayload(status, responseHeaders, responseBody))
+          writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(status, responseHeaders, responseBody, rawCapture))
           res.writeHead(status, responseHeaders)
           res.end(responseBody)
           if (config.logging.audit) audit(clientName, method, safePath, status)
