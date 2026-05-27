@@ -467,7 +467,7 @@ export function resolveEgressBucket(config: Config, bucketId: string | undefined
   if (!bucket.proxy_url || bucket.proxy_url === 'undefined' || bucket.proxy_url === 'null') return { error: 'missing_egress_proxy' }
   try {
     const parsed = new URL(bucket.proxy_url)
-    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) return { error: 'invalid_egress_proxy' }
+    if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(parsed.protocol) || !parsed.hostname) return { error: 'invalid_egress_proxy' }
   } catch {
     return { error: 'invalid_egress_proxy' }
   }
@@ -519,7 +519,7 @@ function isSafeLegacyHashRef(value: string): boolean {
   return isSafeIdentityRef(value) && (value.startsWith('hmac-sha256:') || value.startsWith('scoped_hmac_ref:'))
 }
 
-function isSafeIdentityRef(value: unknown): value is string {
+export function isSafeIdentityRef(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
   if (!trimmed || trimmed.length > 512) return false

@@ -100,6 +100,115 @@ test('sub2api Anthropic OAuth preserves selected authorization and strips all x-
   }
 })
 
+test('runtime registration makes a newly onboarded account routable without restart', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-ref'
+  const runtimeHeaders = {
+    ...ccGatewayHeaders,
+    'x-cc-account-id': runtimeAccountRef,
+  }
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const before = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...runtimeHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(before.status, 403)
+    assert.equal(before.headers['x-cc-gateway-error-code'], 'missing_account_identity')
+    assert.equal(upstream.captured.length, 0)
+
+    const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        egress_bucket: 'bucket-a',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket',
+        policy_version: '2.1.146',
+      },
+    })
+    assert.equal(registered.status, 200, registered.body)
+    assert.equal(registered.json?.status, 'registered')
+    assert.deepEqual(registered.json?.registered, {
+      account_identity: true,
+      egress_bucket: true,
+    })
+
+    const after = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...runtimeHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(after.status, 200, after.body)
+    assert.equal(upstream.captured.length, 1)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('runtime registration rejects raw numeric account ids before mutating runtime state', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const rejected = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token' },
+      body: {
+        account_id: '123',
+        account_ref: 'hmac-sha256:runtime-account-ref',
+        egress_bucket: 'bucket-a',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket',
+        policy_version: '2.1.150',
+      },
+    })
+    assert.equal(rejected.status, 400)
+    assert.equal(rejected.headers['x-cc-gateway-error-code'], 'invalid_account_id')
+
+    const after = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-account-id': '123',
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(after.status, 403)
+    assert.equal(after.headers['x-cc-gateway-error-code'], 'missing_account_identity')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('raw capture does not buffer streaming responses before first downstream chunk', async () => {
   const rawDir = mkdtempSync(join(tmpdir(), 'cc-gateway-raw-stream-'))
   const oldRawDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR

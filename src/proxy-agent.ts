@@ -1,4 +1,5 @@
 import { HttpsProxyAgent } from 'https-proxy-agent'
+import { SocksProxyAgent } from 'socks-proxy-agent'
 import type { Agent } from 'https'
 import { log } from './logger.js'
 
@@ -16,7 +17,9 @@ export function getProxyAgent(cacheKey = 'default', explicitProxyUrl?: string): 
   const key = cacheKey || 'default'
   const existing = agents.get(key)
   if (existing) return existing
-  const agent = new HttpsProxyAgent(proxyUrl)
+  const agent = proxyUrl.startsWith('socks5://') || proxyUrl.startsWith('socks5h://')
+    ? new SocksProxyAgent(proxyUrl)
+    : new HttpsProxyAgent(proxyUrl)
   agents.set(key, agent)
   log('info', 'Using proxy agent', {
     cacheKeyRef: 'omitted_by_policy',

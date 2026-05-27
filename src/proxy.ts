@@ -16,6 +16,7 @@ import {
   accountIdentityRef,
   canonicalPersonaHeaders,
   getSharedPoolMaxBodyBytes,
+  isSafeIdentityRef,
   normalizeSharedPoolSessionId,
   resolveAccountIdentity,
   resolveEgressBucket,
@@ -33,6 +34,20 @@ import { evaluateUpstreamSafety } from './upstream-safety.js'
 import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
+const RUNTIME_REGISTER_PATH = '/_runtime/register-account'
+
+type RuntimeRegisterRequest = {
+  account_id?: unknown
+  account_ref?: unknown
+  account_uuid_ref?: unknown
+  email_ref?: unknown
+  egress_bucket?: unknown
+  proxy_url?: unknown
+  proxy_identity_ref?: unknown
+  persona_variant?: unknown
+  session_policy?: unknown
+  policy_version?: unknown
+}
 
 export function startProxy(config: Config) {
   initAuth(config)
@@ -85,6 +100,122 @@ function writeControlPlaneError(res: ServerResponse, status: number, code: strin
     'X-CC-Gateway-Error-Code': code,
   })
   res.end(body)
+}
+
+async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, config: Config, method: string) {
+  if (config.mode !== 'sub2api') {
+    writeControlPlaneError(res, 404, 'unsupported_route', 'Runtime registration is only available in sub2api mode')
+    return
+  }
+  if (method !== 'POST') {
+    writeControlPlaneError(res, 405, 'method_not_allowed', 'Runtime registration requires POST')
+    return
+  }
+  const clientName = authenticateForMode(req, config)
+  if (!clientName) {
+    writeControlPlaneError(res, 401, 'missing_gateway_token', 'Unauthorized - provide gateway token via x-cc-gateway-token header')
+    return
+  }
+  const bodyResult = await readRequestBody(req, 64 * 1024)
+  if ('error' in bodyResult) {
+    writeControlPlaneError(res, 413, 'body_too_large', 'Runtime registration body exceeds configured cap')
+    return
+  }
+  let parsed: RuntimeRegisterRequest
+  try {
+    parsed = JSON.parse(bodyResult.body.toString('utf-8'))
+  } catch {
+    writeControlPlaneError(res, 400, 'invalid_json', 'Runtime registration requires JSON')
+    return
+  }
+  const result = registerRuntimeAccount(config, parsed)
+  if ('status' in result) {
+    writeControlPlaneError(res, result.status, result.code, result.message)
+    return
+  }
+  log('info', 'Runtime account mapping registered', {
+    accountRef: 'omitted_by_policy',
+    egressBucketRef: result.egressBucket.slice(0, 32),
+  })
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({
+    status: 'registered',
+    registered: { account_identity: true, egress_bucket: true },
+  }))
+}
+
+function registerRuntimeAccount(
+  config: Config,
+  input: RuntimeRegisterRequest,
+): { egressBucket: string } | { status: number; code: string; message: string } {
+  const accountId = stringField(input.account_id)
+  const accountRef = stringField(input.account_ref) || accountId
+  const accountUuidRef = stringField(input.account_uuid_ref) || accountRef
+  const emailRef = stringField(input.email_ref)
+  const egressBucket = stringField(input.egress_bucket)
+  const proxyUrl = stringField(input.proxy_url)
+  const proxyIdentityRef = stringField(input.proxy_identity_ref)
+  const policyVersion = stringField(input.policy_version) || String(config.env.version || '')
+  const personaVariant = stringField(input.persona_variant) || `claude-code-${policyVersion}-macos-local`
+  const sessionPolicy = stringField(input.session_policy) || 'preserve_downstream_session_id'
+
+  if (!accountId || !isSafeInternalRoutingKey(accountId)) return { status: 400, code: 'invalid_account_id', message: 'Runtime account id must be a safe internal routing key' }
+  if (!accountRef || !isSafeIdentityRef(accountRef)) return { status: 400, code: 'invalid_account_ref', message: 'Runtime account ref must be a safe ref' }
+  if (!accountUuidRef || !isSafeIdentityRef(accountUuidRef)) return { status: 400, code: 'invalid_account_uuid_ref', message: 'Runtime account uuid ref must be a safe ref' }
+  if (emailRef && !isSafeIdentityRef(emailRef)) return { status: 400, code: 'invalid_email_ref', message: 'Runtime email ref must be a safe ref' }
+  if (!egressBucket || !isSafeInternalRoutingKey(egressBucket)) return { status: 400, code: 'invalid_egress_bucket', message: 'Runtime egress bucket must be a safe internal routing key' }
+  if (!proxyIdentityRef || !isSafeIdentityRef(proxyIdentityRef)) return { status: 400, code: 'invalid_proxy_identity_ref', message: 'Runtime proxy identity ref must be a safe ref' }
+  if (!policyVersion) return { status: 400, code: 'missing_policy_version', message: 'Runtime registration requires policy version' }
+  if (sessionPolicy !== 'preserve_downstream_session_id' && sessionPolicy !== 'gateway_generated') {
+    return { status: 400, code: 'invalid_session_policy', message: 'Runtime registration session policy is not supported' }
+  }
+  const proxyValidation = validateRuntimeProxyUrl(proxyUrl)
+  if (proxyValidation) return proxyValidation
+
+  config.account_identities = config.account_identities || {}
+  config.account_identities[accountId] = {
+    device_id: String(config.identity.device_id || ''),
+    account_uuid_ref: accountUuidRef,
+    account_ref: accountRef,
+    ...(emailRef ? { email_ref: emailRef } : {}),
+    persona_variant: personaVariant,
+    session_policy: sessionPolicy as 'preserve_downstream_session_id' | 'gateway_generated',
+    policy_version: policyVersion,
+  }
+  config.egress_buckets = config.egress_buckets || {}
+  config.egress_buckets[egressBucket] = {
+    enabled: true,
+    proxy_url: proxyUrl,
+    proxy_identity_ref: proxyIdentityRef,
+    allowed_account_ids: [accountId],
+  }
+  return { egressBucket }
+}
+
+function validateRuntimeProxyUrl(value: string): { status: number; code: string; message: string } | null {
+  if (!value || value.length > 2048) return { status: 400, code: 'invalid_proxy_url', message: 'Runtime proxy URL is invalid' }
+  try {
+    const parsed = new URL(value)
+    if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(parsed.protocol) || !parsed.hostname) {
+      return { status: 400, code: 'invalid_proxy_url', message: 'Runtime proxy URL scheme is not supported' }
+    }
+  } catch {
+    return { status: 400, code: 'invalid_proxy_url', message: 'Runtime proxy URL is invalid' }
+  }
+  return null
+}
+
+function isSafeInternalRoutingKey(value: string): boolean {
+  if (!value || value.length > 128) return false
+  if (!/^[A-Za-z0-9._:-]+$/.test(value)) return false
+  if (/^[0-9]+$/.test(value)) return false
+  if (/^[a-f0-9]{64}$/i.test(value)) return false
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) return false
+  return !value.includes('@')
+}
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 type RawCaptureSink = {
@@ -322,6 +453,11 @@ async function handleRequest(
     const sample = buildVerificationPayload(config)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(sample, null, 2))
+    return
+  }
+
+  if (target.pathname === RUNTIME_REGISTER_PATH) {
+    await handleRuntimeRegister(req, res, config, method)
     return
   }
 
