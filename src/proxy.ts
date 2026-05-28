@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
-import { randomUUID } from 'crypto'
+import { createHmac, randomBytes, randomUUID } from 'crypto'
 import type { Config } from './config.js'
 import { authenticate, authenticateGateway, initAuth } from './auth.js'
 import { getAccessToken } from './oauth.js'
@@ -221,6 +221,8 @@ function stringField(value: unknown): string {
 type RawCaptureSink = {
   dir: string | null
   fullRaw: boolean
+  captureRef: string | null
+  generated: boolean
 }
 
 function rawCaptureDir(): string | null {
@@ -230,7 +232,7 @@ function rawCaptureDir(): string | null {
 
 function createRawCaptureSink(method: string, pathname: string): RawCaptureSink {
   const root = rawCaptureDir()
-  if (!root) return { dir: null, fullRaw: false }
+  if (!root) return { dir: null, fullRaw: false, captureRef: null, generated: false }
   mkdirSync(root, { recursive: true, mode: 0o700 })
   chmodSync(root, 0o700)
 
@@ -243,17 +245,52 @@ function createRawCaptureSink(method: string, pathname: string): RawCaptureSink 
   return {
     dir,
     fullRaw: process.env.CC_GATEWAY_FULL_RAW_CAPTURE === '1',
+    captureRef: createRawCaptureRef(method, pathname),
+    generated: false,
   }
 }
 
-function writeRawCaptureFile(sink: RawCaptureSink, name: string, payload: unknown) {
+function createRawCaptureRef(method: string, pathname: string): string {
+  const key = randomBytes(32)
+  const nonce = randomBytes(32).toString('hex')
+  const digest = createHmac('sha256', key)
+    .update(method.toUpperCase())
+    .update('\0')
+    .update(pathname)
+    .update('\0')
+    .update(nonce)
+    .digest('hex')
+  return `hmac-sha256:${digest}`
+}
+
+function writeRawCaptureFile(sink: RawCaptureSink, name: string, payload: unknown): boolean {
   const dir = sink.dir
-  if (!dir) return
+  if (!dir) return false
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   chmodSync(dir, 0o700)
   const file = `${dir}/${name}`
   writeFileSync(file, JSON.stringify(payload, null, 2), { mode: 0o600 })
   chmodSync(file, 0o600)
+  sink.generated = true
+  return true
+}
+
+function applyGatewayEvidenceHeaders(
+  headers: Record<string, string | string[] | undefined>,
+  rawCapture?: RawCaptureSink,
+): Record<string, string | string[] | undefined> {
+  const out = { ...headers }
+  for (const key of Object.keys(out)) {
+    const normalized = key.toLowerCase()
+    if (normalized === 'x-cc-gateway-seen' || normalized === 'x-cc-gateway-raw-capture-ref') {
+      delete out[key]
+    }
+  }
+  out['X-CC-Gateway-Seen'] = '1'
+  if (rawCapture?.generated && rawCapture.captureRef) {
+    out['X-CC-Gateway-Raw-Capture-Ref'] = rawCapture.captureRef
+  }
+  return out
 }
 
 function redactedHeaderValues(headers: Record<string, string | string[] | undefined>): Record<string, string | string[]> {
@@ -363,9 +400,9 @@ function rawResponseCapturePayload(
     digest_omitted_reason: 'plain_body_digest_forbidden',
   }
   if (sink.fullRaw) {
-    payload.raw_capture_scope = 'server_side_full_body_redacted_headers'
-    payload.redacted_headers = redactedHeaderValues(responseHeaders)
-    payload.body_base64 = responseBody.toString('base64')
+    payload.raw_capture_scope = 'safe_summary_only_full_raw_disabled_by_policy'
+    payload.safe_headers = { names: safeHeaderNames(responseHeaders), sensitive_presence: safeSensitiveHeaderPresence(responseHeaders) }
+    payload.raw_body_omitted_reason = 'full_raw_capture_must_not_persist_body'
   }
   const encoding = String(responseHeaders['content-encoding'] || responseHeaders['Content-Encoding'] || '').toLowerCase()
   payload.body_encoding = encoding || 'identity'
@@ -380,7 +417,7 @@ function rawResponseCapturePayload(
       payload.decoded_schema_summary = safeSchemaSummaryFromBuffer(decoded)
       payload.decoded_body_omitted_reason = 'raw_decoded_response_forbidden'
       if (sink.fullRaw) {
-        payload.decoded_body_utf8 = decoded.toString('utf-8')
+        payload.decoded_raw_body_omitted_reason = 'full_raw_capture_must_not_persist_decoded_body'
       }
     }
   } catch (err) {
@@ -422,6 +459,7 @@ async function handleRequest(
   const safePath = redactRequestPath(path)
   const clientIp = req.socket.remoteAddress || 'unknown'
   const rawCapture = createRawCaptureSink(method, target.pathname)
+  res.setHeader('X-CC-Gateway-Seen', '1')
 
   log('info', `← ${method} ${safePath} from ${clientIp}`)
 
@@ -727,9 +765,9 @@ async function handleRequest(
     digest_omitted_reason: 'plain_body_digest_forbidden',
   }
   if (rawCapture.fullRaw) {
-    requestCapturePayload.raw_capture_scope = 'server_side_full_body_redacted_headers'
-    requestCapturePayload.redacted_headers = redactedHeaderValues(forwardHeaders)
-    requestCapturePayload.body_utf8 = body.toString('utf-8')
+    requestCapturePayload.raw_capture_scope = 'safe_summary_only_full_raw_disabled_by_policy'
+    requestCapturePayload.safe_headers = { names: safeHeaderNames(forwardHeaders), sensitive_presence: safeSensitiveHeaderPresence(forwardHeaders) }
+    requestCapturePayload.raw_body_omitted_reason = 'full_raw_capture_must_not_persist_body'
   }
   writeRawCaptureFile(rawCapture, '01_final_upstream_request.json', requestCapturePayload)
 
@@ -755,8 +793,8 @@ async function handleRequest(
     },
   }
   if (rawCapture.fullRaw) {
-    finalOutputCapturePayload.raw_capture_scope = 'server_side_full_final_output'
-    finalOutputCapturePayload.body_utf8 = body.toString('utf-8')
+    finalOutputCapturePayload.raw_capture_scope = 'safe_summary_only_full_raw_disabled_by_policy'
+    finalOutputCapturePayload.raw_body_omitted_reason = 'full_raw_capture_must_not_persist_final_body'
   }
   writeRawCaptureFile(rawCapture, '03_final_output.json', finalOutputCapturePayload)
 
@@ -771,8 +809,9 @@ async function handleRequest(
     (proxyRes) => {
       const status = proxyRes.statusCode || 502
 
-      const responseHeaders = { ...proxyRes.headers }
+      let responseHeaders = { ...proxyRes.headers }
       delete responseHeaders['transfer-encoding']
+      responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
 
       if (rawCapture.dir) {
         const chunks: Buffer[] = []

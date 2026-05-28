@@ -1,5 +1,5 @@
 import { strict as assert } from 'assert'
-import { mkdtempSync, readdirSync } from 'fs'
+import { mkdtempSync, readdirSync, readFileSync, statSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { request as httpRequest } from 'http'
@@ -203,6 +203,163 @@ test('runtime registration rejects raw numeric account ids before mutating runti
     assert.equal(after.headers['x-cc-gateway-error-code'], 'missing_account_identity')
     assert.equal(upstream.captured.length, 0)
   } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+
+test('raw capture evidence headers include safe opaque ref only when capture artifacts are generated', async () => {
+  const rawDir = mkdtempSync(join(tmpdir(), 'cc-gateway-raw-evidence-'))
+  const oldRawDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  const oldRawLayout = process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = rawDir
+  process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = 'per-request'
+
+  const upstream = await startFakeUpstream((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+  })
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(response.status, 200, response.body)
+    assert.equal(response.headers['x-cc-gateway-seen'], '1')
+    const rawRef = response.headers['x-cc-gateway-raw-capture-ref']
+    assert.equal(typeof rawRef, 'string')
+    assert.match(rawRef as string, /^hmac-sha256:[a-f0-9]{64}$/)
+    assert.ok(!(rawRef as string).includes(rawDir), 'raw ref must not expose filesystem path')
+    assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(rawRef as string), 'raw ref must not expose UUID')
+    assert.ok(!(rawRef as string).includes('@'), 'raw ref must not expose email')
+    assert.ok(!(rawRef as string).includes('selected-token'), 'raw ref must not expose token')
+    assert.ok(readdirSync(rawDir).length > 0, 'raw capture artifacts should be generated')
+  } finally {
+    if (oldRawDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldRawDir
+    if (oldRawLayout === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+    else process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = oldRawLayout
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+
+test('full raw capture writes only safe summaries and no raw body material', async () => {
+  const rawDir = mkdtempSync(join(tmpdir(), 'cc-gateway-full-safe-'))
+  const oldRawDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  const oldRawLayout = process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+  const oldFullRaw = process.env.CC_GATEWAY_FULL_RAW_CAPTURE
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = rawDir
+  process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = 'per-request'
+  process.env.CC_GATEWAY_FULL_RAW_CAPTURE = '1'
+
+  const rawPrompt = 'RAW_PROMPT_DO_NOT_CAPTURE_cch_marker_TOKEN_sk-ant-oat01-secret'
+  const upstreamRaw = 'UPSTREAM_RESPONSE_RAW_SECRET_cch_marker_TOKEN'
+  const upstream = await startFakeUpstream((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, completion: upstreamRaw }))
+  })
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: {
+        model: 'claude-sonnet-4-6',
+        messages: [{ role: 'user', content: rawPrompt }],
+      },
+    })
+
+    assert.equal(response.status, 200, response.body)
+    const rawRef = response.headers['x-cc-gateway-raw-capture-ref']
+    assert.equal(typeof rawRef, 'string')
+    assert.match(rawRef as string, /^hmac-sha256:[a-f0-9]{64}$/)
+
+    const artifactDirs = readdirSync(rawDir)
+    assert.ok(artifactDirs.length > 0, 'expected raw capture artifact directory')
+    const artifactTexts: string[] = []
+    for (const entry of artifactDirs) {
+      const artifactDir = join(rawDir, entry)
+      if (!statSync(artifactDir).isDirectory()) continue
+      for (const file of readdirSync(artifactDir)) {
+        artifactTexts.push(readFileSync(join(artifactDir, file), 'utf-8'))
+      }
+    }
+    assert.ok(artifactTexts.length >= 3, 'expected request/response/final-output artifacts')
+    const joinedArtifacts = artifactTexts.join('\n')
+
+    for (const forbidden of [rawPrompt, upstreamRaw, 'sk-ant-oat01-secret', 'cch_marker_TOKEN']) {
+      assert.ok(!joinedArtifacts.includes(forbidden), `raw capture artifact leaked ${forbidden}`)
+    }
+    for (const forbiddenField of ['"body_utf8"', '"body_base64"', '"decoded_body_utf8"']) {
+      assert.ok(!joinedArtifacts.includes(forbiddenField), `raw capture artifact contains forbidden field ${forbiddenField}`)
+    }
+    assert.ok(joinedArtifacts.includes('"schema_summary"'), 'safe schema summary should be retained')
+    assert.ok(joinedArtifacts.includes('"body_length_bucket"'), 'safe size bucket should be retained')
+    assert.ok(joinedArtifacts.includes('"body_omitted_reason"'), 'safe omission reason should be retained')
+  } finally {
+    if (oldRawDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldRawDir
+    if (oldRawLayout === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT
+    else process.env.CC_GATEWAY_RAW_CAPTURE_LAYOUT = oldRawLayout
+    if (oldFullRaw === undefined) delete process.env.CC_GATEWAY_FULL_RAW_CAPTURE
+    else process.env.CC_GATEWAY_FULL_RAW_CAPTURE = oldFullRaw
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('disabled raw capture omits raw capture evidence ref header', async () => {
+  const oldRawDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+
+  const upstream = await startFakeUpstream((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+  })
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(response.status, 200, response.body)
+    assert.equal(response.headers['x-cc-gateway-seen'], '1')
+    assert.equal(response.headers['x-cc-gateway-raw-capture-ref'], undefined)
+  } finally {
+    if (oldRawDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldRawDir
     await close(gateway)
     await close(upstream.server)
     await close(proxy.server)
