@@ -16,6 +16,11 @@ const headers = {
   'x-claude-code-session-id': 'session-lite',
 }
 
+const trustedHeaders = {
+  ...headers,
+  'x-sub2api-persona-trusted': '1',
+}
+
 function config(upstreamUrl: string, proxyUrl: string, envelope = {}) {
   return baseConfig({
     mode: 'sub2api',
@@ -331,6 +336,96 @@ test('real-canary mode applies default canary cost envelope even without explici
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_max_tokens_exceeded')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('real-canary candidate model envelope allows trusted Opus 4.8 only with rollout controls', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const base = config(upstream.url, proxy.url)
+  base.shared_pool = {
+    upstream_mode: 'real-canary',
+    real_canary_user_approved: true,
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+    candidate_model_allowlist: ['claude-opus-4-8'],
+    candidate_model_replay_proofs: { 'claude-opus-4-8': 'fixture-opus-48' },
+    candidate_model_kill_switches: { 'claude-opus-4-8': false },
+    candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
+  } as any
+  const gateway = startProxy(base)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: trustedHeaders,
+      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('real-canary candidate model envelope rejects Opus 4.8 without rollout controls', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const base = config(upstream.url, proxy.url)
+  base.shared_pool = {
+    upstream_mode: 'real-canary',
+    real_canary_user_approved: true,
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+    candidate_model_allowlist: ['claude-opus-4-8'],
+    candidate_model_kill_switches: { 'claude-opus-4-8': false },
+    candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
+  } as any
+  const gateway = startProxy(base)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers,
+      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'persona_reject_untrusted_model')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('trusted real-canary candidate model envelope rejects Opus 4.8 without rollout controls', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const base = config(upstream.url, proxy.url)
+  base.shared_pool = {
+    upstream_mode: 'real-canary',
+    real_canary_user_approved: true,
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+    candidate_model_allowlist: ['claude-opus-4-8'],
+    candidate_model_kill_switches: { 'claude-opus-4-8': false },
+    candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
+  } as any
+  const gateway = startProxy(base)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: trustedHeaders,
+      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'persona_reject_untrusted_model')
     assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)

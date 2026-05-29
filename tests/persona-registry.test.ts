@@ -17,6 +17,7 @@ test('registry exposes verified 2.1.150 subscription 1m persona with full capabi
   assert.equal(profile.capabilities.stream, true)
   assert.equal(profile.capabilities.max_tokens, 32000)
   assert.ok(profile.knownModels.includes('claude-opus-4-7'))
+  assert.equal(profile.knownModels.includes('claude-opus-4-8'), false)
   assert.ok(profile.knownModels.includes('claude-opus-4-6-thinking'))
 })
 
