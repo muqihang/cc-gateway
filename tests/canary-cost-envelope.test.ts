@@ -395,7 +395,7 @@ test('real-canary candidate model envelope rejects Opus 4.8 without rollout cont
       body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
     })
     assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'persona_reject_untrusted_model')
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_model_blocked')
     assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)
@@ -425,7 +425,7 @@ test('trusted real-canary candidate model envelope rejects Opus 4.8 without roll
       body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
     })
     assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'persona_reject_untrusted_model')
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_model_blocked')
     assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)

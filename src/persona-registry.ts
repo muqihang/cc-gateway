@@ -24,6 +24,7 @@ const KNOWN_MODELS = [
   'claude-opus-4-7-thinking',
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
+  'claude-opus-4-8',
   // Observed from Claude Code 2.1.150 for lightweight explore/subagent requests.
   'claude-haiku-4-5-20251001',
 ] as const

@@ -137,7 +137,7 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
   assert.equal(gray.status, 'candidate_beta_gray')
 })
 
-test('future trusted sonnet/opus candidate models gray without capability downgrade', () => {
+test('future trusted sonnet candidate model grays without capability downgrade', () => {
   const sonnet = resolvePersonaDecision({
     config: config(),
     identity,
@@ -149,18 +149,9 @@ test('future trusted sonnet/opus candidate models gray without capability downgr
   assert.equal(sonnet.status, 'candidate_model_gray')
   assert.equal(sonnet.capabilities.max_tokens, 32000)
   assert.equal(sonnet.capabilities.context_1m, true)
-
-  const opus = resolvePersonaDecision({
-    config: config(),
-    identity,
-    route: 'messages',
-    requestedPolicyVersion: '2.1.150',
-    requestedModel: 'claude-opus-4-8',
-    trustedClient: true,
-  })
-  assert.equal(opus.status, 'candidate_model_gray')
-  assert.equal(opus.capabilities.max_tokens, 32000)
-  assert.equal(opus.capabilities.thinking, true)
+  assert.equal(sonnet.capabilities.tools, true)
+  assert.equal(sonnet.capabilities.thinking, true)
+  assert.equal(sonnet.capabilities.stream, true)
 })
 
 
@@ -174,6 +165,22 @@ test('observed Claude Code Haiku subagent model is known for untrusted productio
     trustedClient: false,
   })
   assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.capabilities.tools, true)
+  assert.equal(decision.capabilities.thinking, true)
+  assert.equal(decision.capabilities.stream, true)
+})
+
+test('observed Opus 4.8 model is known for untrusted production client path', () => {
+  const decision = resolvePersonaDecision({
+    config: config(),
+    identity,
+    route: 'messages',
+    requestedPolicyVersion: '2.1.150',
+    requestedModel: 'claude-opus-4-8',
+    trustedClient: false,
+  })
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.capabilities.context_1m, true)
   assert.equal(decision.capabilities.tools, true)
   assert.equal(decision.capabilities.thinking, true)
   assert.equal(decision.capabilities.stream, true)
@@ -195,7 +202,7 @@ test('untrusted unknown model rejects and unknown major quarantines', () => {
     identity,
     route: 'messages',
     requestedPolicyVersion: '2.1.150',
-    requestedModel: 'claude-opus-4-8',
+    requestedModel: 'claude-opus-4-9',
     trustedClient: false,
   })
   assert.equal(untrusted.status, 'reject_untrusted_model')
