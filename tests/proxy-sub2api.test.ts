@@ -603,4 +603,75 @@ test('sub2api mode blocks unknown event logging routes with a control-plane erro
   }
 })
 
+test('raw capture records Sub2API inbound and CC Gateway normalized routes', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-route-capture-'))
+  const previous = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = dir
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        'x-sub2api-compat-inbound-route': '/v1/messages',
+        'x-sub2api-compat-cc-gateway-route': '/v1/messages?beta=true',
+        authorization: 'Bearer selected-token',
+      },
+      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(response.status, 200, response.body)
+    const requestCapture = JSON.parse(readFileSync(join(dir, '01_final_upstream_request.json'), 'utf-8'))
+    assert.equal(requestCapture.inbound_route, '/v1/messages')
+    assert.equal(requestCapture.cc_gateway_route, '/v1/messages?beta=true')
+    assert.equal(requestCapture.body, undefined)
+  } finally {
+    if (previous === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = previous
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('raw capture ignores unsafe Sub2API route audit headers', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-route-capture-'))
+  const previous = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = dir
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...ccGatewayHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        'x-sub2api-compat-inbound-route': '/v1/messages?token=secret',
+        'x-sub2api-compat-cc-gateway-route': '/v1/messages?beta=true&token=secret',
+        authorization: 'Bearer selected-token',
+      },
+      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(response.status, 200, response.body)
+    const requestCapture = JSON.parse(readFileSync(join(dir, '01_final_upstream_request.json'), 'utf-8'))
+    assert.equal(requestCapture.inbound_route, '/v1/messages')
+    assert.equal(requestCapture.cc_gateway_route, '/v1/messages?beta=true')
+  } finally {
+    if (previous === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = previous
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 await finish()

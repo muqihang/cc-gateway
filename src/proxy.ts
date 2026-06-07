@@ -369,6 +369,17 @@ function safeQueryKeys(search: string): string[] {
   return Array.from(new Set(Array.from(params.keys()))).sort()
 }
 
+function safeSub2ApiCompatInboundRoute(req: IncomingMessage, target: RequestTarget): string {
+  return readHeader(req, 'x-sub2api-compat-inbound-route') === '/v1/messages' ? '/v1/messages' : target.pathname
+}
+
+function safeSub2ApiCompatCCGatewayRoute(req: IncomingMessage, target: RequestTarget): string {
+  const normalized = `${target.pathname}${target.search}`
+  return readHeader(req, 'x-sub2api-compat-cc-gateway-route') === '/v1/messages?beta=true'
+    ? '/v1/messages?beta=true'
+    : normalized
+}
+
 function safeVerifierSummary(result: unknown): unknown {
   if (!result || typeof result !== 'object') return { ok: false, code: 'unavailable' }
   const typed = result as Record<string, unknown>
@@ -754,6 +765,8 @@ async function handleRequest(
   }
   const requestCapturePayload: Record<string, unknown> = {
     method,
+    inbound_route: safeSub2ApiCompatInboundRoute(req, target),
+    cc_gateway_route: safeSub2ApiCompatCCGatewayRoute(req, target),
     path: upstreamUrl.pathname,
     query_keys: safeQueryKeys(upstreamUrl.search),
     header_names: safeHeaderNames(forwardHeaders),
