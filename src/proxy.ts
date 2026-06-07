@@ -393,7 +393,7 @@ function safeCompatBoolHeader(req: IncomingMessage, name: string): boolean | und
 }
 
 function safeCompatFilledFields(req: IncomingMessage): string[] | undefined {
-  const allowed = new Set(['system', 'metadata', 'metadata.user_id', 'tools'])
+  const allowed = new Set(['system', 'metadata', 'metadata.user_id', 'tools', 'tool_reference', 'defer_loading', 'eager_input_streaming', 'tools.native_only'])
   const value = readHeader(req, 'x-sub2api-compat-server-filled-fields')
   if (!value) return undefined
   const fields = value.split(',').map((item) => item.trim()).filter((item) => item.length > 0)
