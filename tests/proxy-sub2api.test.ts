@@ -620,6 +620,16 @@ test('raw capture records Sub2API inbound and CC Gateway normalized routes', asy
         'x-cc-token-type': 'oauth',
         'x-sub2api-compat-inbound-route': '/v1/messages',
         'x-sub2api-compat-cc-gateway-route': '/v1/messages?beta=true',
+        'x-sub2api-compat-client-type': 'claude_code_compat',
+        'x-sub2api-compat-server-filled-shape': 'true',
+        'x-sub2api-compat-server-filled-fields': 'system,metadata.user_id',
+        'x-sub2api-compat-persona-source': 'server_selected',
+        'x-sub2api-compat-fidelity-level': 'L2',
+        'x-sub2api-compat-tool-search-mode': 'truthful_pass_through',
+        'x-sub2api-compat-tool-reference-present': 'false',
+        'x-sub2api-compat-defer-loading-present': 'false',
+        'x-sub2api-compat-eager-input-streaming-present': 'false',
+        'x-sub2api-compat-capability-backed': 'false',
         authorization: 'Bearer selected-token',
       },
       body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
@@ -629,6 +639,16 @@ test('raw capture records Sub2API inbound and CC Gateway normalized routes', asy
     const requestCapture = JSON.parse(readFileSync(join(dir, '01_final_upstream_request.json'), 'utf-8'))
     assert.equal(requestCapture.inbound_route, '/v1/messages')
     assert.equal(requestCapture.cc_gateway_route, '/v1/messages?beta=true')
+    assert.equal(requestCapture.client_type, 'claude_code_compat')
+    assert.equal(requestCapture.server_filled_shape, true)
+    assert.deepEqual(requestCapture.server_filled_fields, ['system', 'metadata.user_id'])
+    assert.equal(requestCapture.persona_source, 'server_selected')
+    assert.equal(requestCapture.compat_fidelity_level, 'L2')
+    assert.equal(requestCapture.tool_search_mode, 'truthful_pass_through')
+    assert.equal(requestCapture.tool_reference_present, false)
+    assert.equal(requestCapture.defer_loading_present, false)
+    assert.equal(requestCapture.eager_input_streaming_present, false)
+    assert.equal(requestCapture.capability_backed, false)
     assert.equal(requestCapture.body, undefined)
   } finally {
     if (previous === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR

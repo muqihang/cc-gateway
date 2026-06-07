@@ -380,6 +380,26 @@ function safeSub2ApiCompatCCGatewayRoute(req: IncomingMessage, target: RequestTa
     : normalized
 }
 
+function safeCompatHeaderValue(req: IncomingMessage, name: string, allowed: readonly string[]): string | undefined {
+  const value = readHeader(req, name)
+  return value && allowed.includes(value) ? value : undefined
+}
+
+function safeCompatBoolHeader(req: IncomingMessage, name: string): boolean | undefined {
+  const value = readHeader(req, name)
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+function safeCompatFilledFields(req: IncomingMessage): string[] | undefined {
+  const allowed = new Set(['system', 'metadata', 'metadata.user_id', 'tools'])
+  const value = readHeader(req, 'x-sub2api-compat-server-filled-fields')
+  if (!value) return undefined
+  const fields = value.split(',').map((item) => item.trim()).filter((item) => item.length > 0)
+  return fields.length > 0 && fields.every((item) => allowed.has(item)) ? fields : undefined
+}
+
 function safeVerifierSummary(result: unknown): unknown {
   if (!result || typeof result !== 'object') return { ok: false, code: 'unavailable' }
   const typed = result as Record<string, unknown>
@@ -767,6 +787,16 @@ async function handleRequest(
     method,
     inbound_route: safeSub2ApiCompatInboundRoute(req, target),
     cc_gateway_route: safeSub2ApiCompatCCGatewayRoute(req, target),
+    client_type: safeCompatHeaderValue(req, 'x-sub2api-compat-client-type', ['claude_code_compat']),
+    server_filled_shape: safeCompatBoolHeader(req, 'x-sub2api-compat-server-filled-shape'),
+    server_filled_fields: safeCompatFilledFields(req),
+    persona_source: safeCompatHeaderValue(req, 'x-sub2api-compat-persona-source', ['server_selected']),
+    compat_fidelity_level: safeCompatHeaderValue(req, 'x-sub2api-compat-fidelity-level', ['L0', 'L1', 'L2', 'L3']),
+    tool_search_mode: safeCompatHeaderValue(req, 'x-sub2api-compat-tool-search-mode', ['not_present', 'truthful_pass_through', 'strip_with_audit', 'capability_backed']),
+    tool_reference_present: safeCompatBoolHeader(req, 'x-sub2api-compat-tool-reference-present'),
+    defer_loading_present: safeCompatBoolHeader(req, 'x-sub2api-compat-defer-loading-present'),
+    eager_input_streaming_present: safeCompatBoolHeader(req, 'x-sub2api-compat-eager-input-streaming-present'),
+    capability_backed: safeCompatBoolHeader(req, 'x-sub2api-compat-capability-backed'),
     path: upstreamUrl.pathname,
     query_keys: safeQueryKeys(upstreamUrl.search),
     header_names: safeHeaderNames(forwardHeaders),
