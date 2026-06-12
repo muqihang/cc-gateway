@@ -417,7 +417,8 @@ function xxh64MergeRound(acc: bigint, lane: bigint): bigint {
 }
 
 function rotl64(value: bigint, bits: bigint): bigint {
-  return u64((value << bits) | (value >> (64n - bits)))
+  const normalized = u64(value)
+  return u64((normalized << bits) | (normalized >> (64n - bits)))
 }
 
 function u64(value: bigint): bigint {

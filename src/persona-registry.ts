@@ -25,13 +25,15 @@ const KNOWN_MODELS = [
   'claude-opus-4-6',
   'claude-opus-4-6-thinking',
   'claude-opus-4-8',
-  // Observed from Claude Code 2.1.150 for lightweight explore/subagent requests.
+  'claude-fable-5',
+  // Observed from Claude Code CLI for lightweight explore/subagent requests.
   'claude-haiku-4-5-20251001',
 ] as const
 
 const MESSAGE_BETA = 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24'
 const CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA = 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
 const CLAUDE_CODE_2_1_150_SUBSCRIPTION_1M_BETA = 'claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
+const CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA = 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24'
 const FIRST_200_OAUTH_COMPAT_BETA = CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA
 
 const FULL_CAPABILITIES: PersonaCapabilities = {
@@ -71,6 +73,17 @@ const REGISTRY: PersonaProfile[] = [
     betaHeader: CLAUDE_CODE_2_1_150_SUBSCRIPTION_1M_BETA,
     stainlessPackageVersion: '0.94.0',
     aliases: ['claude-code-2.1.150-macos-local'],
+    knownModels: [...KNOWN_MODELS],
+    capabilities: { ...FULL_CAPABILITIES },
+  },
+
+  {
+    id: 'claude_code_2_1_170_subscription_1m',
+    version: '2.1.170',
+    messageBetaProfile: 'claude_code_2_1_170_subscription_1m',
+    betaHeader: CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA,
+    stainlessPackageVersion: '0.94.0',
+    aliases: ['claude-code-2.1.170-macos-local'],
     knownModels: [...KNOWN_MODELS],
     capabilities: { ...FULL_CAPABILITIES },
   },
@@ -116,5 +129,7 @@ export function betaHeaderForProfile(profileId: string): string {
 }
 
 export function inferLegacyPersonaVariant(version: string): string {
-  return version.startsWith('2.1.150') ? 'claude-code-2.1.150-macos-local' : 'claude-code-2.1.146-macos-local'
+  if (version.startsWith('2.1.170')) return 'claude-code-2.1.170-macos-local'
+  if (version.startsWith('2.1.150')) return 'claude-code-2.1.150-macos-local'
+  return 'claude-code-2.1.146-macos-local'
 }

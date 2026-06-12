@@ -61,9 +61,9 @@ env:
   is_running_with_bun: false
   is_ci: false
   is_claude_ai_auth: true
-  # Canonical shared-pool persona for the current verified 1m CLI-through round.
-  version: "2.1.150"
-  version_base: "2.1.150"
+  # Canonical shared-pool persona for the current interim old-CCH-compatible CLI-through round.
+  version: "2.1.170"
+  version_base: "2.1.170"
   build_time: "2026-05-21T00:00:00Z"
   deployment_environment: unknown-darwin
   vcs: git
@@ -96,11 +96,12 @@ shared_pool:
   upstream_mode: preflight
   real_canary_user_approved: false
   # Beta profile is an internal persona resolver input, not an official Claude
-  # Code capability ceiling. Keep the verified 2.1.150 subscription 1m profile
-  # by default; first_200_oauth_compat remains a legacy alias. Unknown beta
+  # Code capability ceiling. Keep the verified 2.1.170 interim subscription 1m profile
+  # by default; 2.1.150 and first_200_oauth_compat remain legacy aliases.
+  # 2.1.171 was not published, and 2.1.172+ CCH changed pending delta investigation. Unknown beta
   # values must go through candidate allowlist + replay proof + kill switch +
   # audit budget, and never bypass trusted-client checks.
-  message_beta_profile: claude_code_2_1_150_subscription_1m
+  message_beta_profile: claude_code_2_1_170_subscription_1m
   canary_envelope_role: localhost_canary_guardrail_not_production_capability_ceiling
   # Canary-only safety envelope. These are local rollout guardrails, not
   # Claude Code official capability limits. They are meant for explicit
@@ -128,6 +129,8 @@ shared_pool:
       - "claude-opus-4-6"
       - "claude-opus-4-6-thinking"
       - "claude-haiku-4-5-20251001"
+      - "claude-opus-4-8"
+      - "claude-fable-5"
   # Future trusted Sonnet/Opus models must enter a candidate gray path rather
   # than being mechanically blocked or blindly trusted. These knobs are rollout
   # controls, not production capability downgrades.
@@ -161,9 +164,9 @@ account_identities:
     account_uuid_ref: "scoped_hmac_ref_redacted"
     email_ref: "scoped_hmac_ref_redacted"
     account_ref: "scoped_hmac_ref_redacted"
-    persona_variant: "claude-code-2.1.150-macos-local"
+    persona_variant: "claude-code-2.1.170-macos-local"
     session_policy: preserve_downstream_session_id
-    policy_version: "2.1.150"
+    policy_version: "2.1.170"
 
 # Per-account/bucket egress isolation. The legacy openai_gateway_egress_bucket fallback
 # is intentionally not consumed by CC Gateway shared-pool routing.

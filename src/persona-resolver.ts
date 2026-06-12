@@ -55,7 +55,7 @@ const FUTURE_TRUSTED_MODEL_RE = /^claude-(sonnet|opus)-\d+-\d+(?:-thinking)?$/
 export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): PersonaDecision {
   const profileId = resolvePersonaProfileId(input.identity.persona_variant)
     || resolvePersonaProfileId((input.config.shared_pool as any)?.message_beta_profile)
-    || resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.150')))
+    || resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.170')))
   if (!profileId) {
     return rejectDecision('reject_unknown_persona', fallbackProfile(), input.requestedPolicyVersion, input.trustedClient, input.route)
   }
@@ -67,7 +67,7 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
     return {
       status: 'quarantine_unknown_major',
       profile,
-      effectiveVersion: input.requestedPolicyVersion,
+      effectiveVersion: versionDecision.effectiveVersion,
       capabilities: { ...profile.capabilities },
       betaHeader: resolvedBetaHeader,
       auditTags: ['unknown_major', `route:${input.route}`],
@@ -77,16 +77,16 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
   }
 
   const betaProfile = String(shared.message_beta_profile || profile.messageBetaProfile)
-  const betaDecision = resolveBetaDecision(betaProfile, shared, input.trustedClient, profile, input.route, input.requestedPolicyVersion)
+  const betaDecision = resolveBetaDecision(betaProfile, shared, input.trustedClient, profile, input.route, versionDecision.effectiveVersion)
   if (betaDecision) return betaDecision
 
-  const modelDecision = resolveModelDecision(input.requestedModel, shared, input.trustedClient, profile, input.route, input.requestedPolicyVersion)
+  const modelDecision = resolveModelDecision(input.requestedModel, shared, input.trustedClient, profile, input.route, versionDecision.effectiveVersion)
   if (modelDecision) return modelDecision
 
   return {
     status: versionDecision.status,
     profile,
-    effectiveVersion: input.requestedPolicyVersion,
+    effectiveVersion: versionDecision.effectiveVersion,
     capabilities: { ...profile.capabilities },
     betaHeader: resolvedBetaHeader,
     auditTags: versionDecision.status === 'observed_minor_drift' ? ['minor_drift', `route:${input.route}`] : [`route:${input.route}`],
@@ -95,12 +95,21 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
   }
 }
 
-function resolveVersionStatus(profileVersion: string, requestedVersion: string, trustedClient: boolean): { status: 'exact_known' | 'observed_minor_drift' | 'quarantine_unknown_major' } {
+function resolveVersionStatus(profileVersion: string, requestedVersion: string, trustedClient: boolean): { status: 'exact_known' | 'observed_minor_drift' | 'quarantine_unknown_major'; effectiveVersion: string } {
   const requested = normalizeVersion(requestedVersion)
   const profile = normalizeVersion(profileVersion)
-  if (requested.raw === profile.raw) return { status: 'exact_known' }
-  if (trustedClient && requested.major === profile.major && requested.minor === profile.minor) return { status: 'observed_minor_drift' }
-  return { status: 'quarantine_unknown_major' }
+  if (requested.raw === profile.raw) return { status: 'exact_known', effectiveVersion: profile.raw }
+  if (!trustedClient || requested.major !== profile.major || requested.minor !== profile.minor) {
+    return { status: 'quarantine_unknown_major', effectiveVersion: requested.raw }
+  }
+  if (!isOldCchCompatibleVersion(requested)) {
+    return { status: 'quarantine_unknown_major', effectiveVersion: requested.raw }
+  }
+  // The 2.1.170 interim profile canonicalizes stale older Sub2API policy
+  // metadata to 2.1.170. Earlier explicit legacy profiles keep requested drift only for verified
+  // corpus versions used by rollback/canary tests; 2.1.171+ never passes here.
+  const effectiveVersion = profile.raw === '2.1.170' && requested.patch < profile.patch ? profile.raw : requested.raw
+  return { status: 'observed_minor_drift', effectiveVersion }
 }
 
 function resolveBetaDecision(
@@ -196,6 +205,12 @@ function normalizeVersion(version: string) {
   }
 }
 
+function isOldCchCompatibleVersion(version: ReturnType<typeof normalizeVersion>): boolean {
+  // Explicit verified-corpus gate. Do not infer compatibility from patch order:
+  // 2.1.171 was not published, and 2.1.172+ needs CCH delta investigation.
+  return ['2.1.150', '2.1.153', '2.1.169', '2.1.170'].includes(version.raw)
+}
+
 function betaHeaderForConfiguredProfile(shared: SharedPoolCandidateConfig, profile: PersonaProfile): string {
   const configured = String(shared.message_beta_profile || profile.messageBetaProfile)
   const configuredProfileId = resolvePersonaProfileId(configured)
@@ -207,5 +222,5 @@ function hasPositiveAuditBudget(value: unknown): boolean {
 }
 
 function fallbackProfile(): PersonaProfile {
-  return getPersonaProfile('claude_code_2_1_150_subscription_1m')
+  return getPersonaProfile('claude_code_2_1_170_subscription_1m')
 }
