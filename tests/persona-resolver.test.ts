@@ -86,7 +86,7 @@ test('stale 2.1.150 Sub2API metadata canonicalizes to 2.1.170 interim profile', 
   assert.equal(decision.profile.id, 'claude_code_2_1_170_subscription_1m')
 })
 
-test('2.1.171 and 2.1.172+ policy versions stay behind the CCH delta gate', () => {
+test('2.1.171 and 2.1.172+ policy versions stay behind the persona rollout gate', () => {
   for (const version of ['2.1.171', '2.1.172', '2.1.175']) {
     const decision = resolvePersonaDecision({
       config: config(),

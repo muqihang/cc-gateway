@@ -107,7 +107,7 @@ function resolveVersionStatus(profileVersion: string, requestedVersion: string, 
   }
   // The 2.1.170 interim profile canonicalizes stale older Sub2API policy
   // metadata to 2.1.170. Earlier explicit legacy profiles keep requested drift only for verified
-  // corpus versions used by rollback/canary tests; 2.1.171+ never passes here.
+  // corpus versions used by rollback/canary tests; 2.1.171+ stays gated here until a persona rollout is approved.
   const effectiveVersion = profile.raw === '2.1.170' && requested.patch < profile.patch ? profile.raw : requested.raw
   return { status: 'observed_minor_drift', effectiveVersion }
 }
@@ -206,8 +206,8 @@ function normalizeVersion(version: string) {
 }
 
 function isOldCchCompatibleVersion(version: ReturnType<typeof normalizeVersion>): boolean {
-  // Explicit verified-corpus gate. Do not infer compatibility from patch order:
-  // 2.1.171 was not published, and 2.1.172+ needs CCH delta investigation.
+  // Explicit persona rollout gate. CCH signing supports 2.1.172+, but outbound
+  // persona/profile upgrades still require separate capture and rollout approval.
   return ['2.1.150', '2.1.153', '2.1.169', '2.1.170'].includes(version.raw)
 }
 
