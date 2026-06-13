@@ -266,7 +266,7 @@ export function runSigningPipeline(
 
   const placeholderBody = Buffer.from(JSON.stringify(parsed), 'utf-8')
   if (!placeholderBody.includes(Buffer.from('cch=00000;'))) return { ok: false, code: 'signing_placeholder_missing' }
-  const cch = computeCCH5Hex(placeholderBody)
+  const cch = computeCCH5Hex(placeholderBody, version)
   const signed = Buffer.from(placeholderBody.toString('utf-8').replace('cch=00000;', `cch=${cch};`), 'utf-8')
   const verifier = verifySignedCCH(signed)
   if (!verifier.ok || verifier.cch !== cch) return { ok: false, code: 'signing_verifier_failed' }
@@ -283,12 +283,62 @@ export function computeCCVersionSuffix(firstUserText: string, cliVersion: string
 
 export function verifySignedCCH(body: Buffer): { ok: true; cch: string } | { ok: false; code: 'signing_placeholder_missing' | 'signing_verifier_failed' } {
   const text = body.toString('utf-8')
-  const match = text.match(/x-anthropic-billing-header:[^"\n]*\bcch=([a-f0-9]{5});/)
-  if (!match) return { ok: false, code: 'signing_placeholder_missing' }
-  const normalized = Buffer.from(text.replace(match[0], match[0].replace(`cch=${match[1]};`, 'cch=00000;')), 'utf-8')
-  const expected = computeCCH5Hex(normalized)
-  if (expected !== match[1]) return { ok: false, code: 'signing_verifier_failed' }
+  let parsed: any
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return { ok: false, code: 'signing_verifier_failed' }
+  }
+  const billing = locateTrustedBillingHeader(parsed)
+  if (!billing.ok) return { ok: false, code: billing.code }
+  if (containsCCHValueMarkerOutsidePath(parsed, billing.path)) {
+    return { ok: false, code: 'signing_verifier_failed' }
+  }
+  const normalizedText = text.replace(billing.text, billing.text.replace(`cch=${billing.cch};`, 'cch=00000;'))
+  const expected = computeCCH5Hex(Buffer.from(normalizedText, 'utf-8'), billing.version)
+  if (expected !== billing.cch) return { ok: false, code: 'signing_verifier_failed' }
   return { ok: true, cch: expected }
+}
+
+type TrustedBillingHeaderLocation =
+  | { ok: true; text: string; cch: string; version: string; path: Array<string | number> }
+  | { ok: false; code: 'signing_placeholder_missing' | 'signing_verifier_failed' }
+
+function locateTrustedBillingHeader(parsed: any): TrustedBillingHeaderLocation {
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.system)) {
+    return { ok: false, code: 'signing_placeholder_missing' }
+  }
+
+  const candidates: Array<{ text: string; path: Array<string | number> }> = []
+  parsed.system.forEach((item: any, index: number) => {
+    const text = typeof item === 'string' ? item : item?.type === 'text' ? item.text : undefined
+    if (typeof text !== 'string' || !isBillingHeaderText(text)) return
+    candidates.push({ text, path: typeof item === 'string' ? ['system', index] : ['system', index, 'text'] })
+  })
+
+  if (candidates.length === 0) return { ok: false, code: 'signing_placeholder_missing' }
+  if (candidates.length !== 1) return { ok: false, code: 'signing_verifier_failed' }
+
+  const [candidate] = candidates
+  const cch = candidate.text.match(/\bcch=([a-f0-9]{5});/i)?.[1]
+  const version = extractBillingCLIVersion(candidate.text)
+  if (!cch || !version) return { ok: false, code: 'signing_verifier_failed' }
+  return { ok: true, text: candidate.text, cch, version, path: candidate.path }
+}
+
+function containsCCHValueMarkerOutsidePath(value: any, allowedPath: Array<string | number>, path: Array<string | number> = []): boolean {
+  if (typeof value === 'string') {
+    return !samePath(path, allowedPath) && /\bcch=[a-f0-9]{5}\b/i.test(value)
+  }
+  if (Array.isArray(value)) return value.some((item, index) => containsCCHValueMarkerOutsidePath(item, allowedPath, [...path, index]))
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, child]) => containsCCHValueMarkerOutsidePath(child, allowedPath, [...path, key]))
+  }
+  return false
+}
+
+function samePath(left: Array<string | number>, right: Array<string | number>): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index])
 }
 
 function extractFirstUserText(messages: any): string {
@@ -351,9 +401,63 @@ function prependBillingHeader(body: any, header: string) {
   body.system = [billingBlock]
 }
 
-function computeCCH5Hex(bodyWithPlaceholder: Buffer): string {
-  const digest = xxh64(bodyWithPlaceholder, CCH_SEED)
+function computeCCH5Hex(bodyWithPlaceholder: Buffer, cliVersion = ''): string {
+  const preimage = cchPreimage(bodyWithPlaceholder, cliVersion)
+  const digest = xxh64(preimage, CCH_SEED)
   return (digest & CCH_MASK).toString(16).padStart(5, '0')
+}
+
+function cchPreimage(bodyWithPlaceholder: Buffer, cliVersion: string): Buffer {
+  if (!usesNormalizedCCHPreimage(cliVersion)) return bodyWithPlaceholder
+  try {
+    const parsed = JSON.parse(bodyWithPlaceholder.toString('utf-8'))
+    return Buffer.from(JSON.stringify(normalizeCCHPreimageValue(parsed)), 'utf-8')
+  } catch {
+    return bodyWithPlaceholder
+  }
+}
+
+function normalizeCCHPreimageValue(value: any): any {
+  if (Array.isArray(value)) return value.map(normalizeCCHPreimageValue)
+  if (value && typeof value === 'object') {
+    const normalized: Record<string, any> = Object.create(null)
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'model' && typeof child === 'string') {
+        defineNormalizedProperty(normalized, key, '')
+      } else if (key === 'max_tokens' && typeof child === 'number') {
+        // Claude Code 2.1.172+ omits numeric max_tokens from the CCH preimage only.
+      } else {
+        defineNormalizedProperty(normalized, key, normalizeCCHPreimageValue(child))
+      }
+    }
+    return normalized
+  }
+  return value
+}
+
+function defineNormalizedProperty(target: Record<string, any>, key: string, value: any) {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+}
+
+function extractBillingCLIVersion(billingHeader: string): string {
+  return billingHeader.match(/\bcc_version=(\d+\.\d+\.\d+)(?:\.[a-f0-9]{3})?;/i)?.[1] || ''
+}
+
+function usesNormalizedCCHPreimage(cliVersion: string): boolean {
+  const version = parseCLIVersion(cliVersion)
+  if (!version) return false
+  if (version.major !== 2 || version.minor !== 1) return version.major > 2 || (version.major === 2 && version.minor > 1)
+  return version.patch >= 172
+}
+
+function parseCLIVersion(cliVersion: string): { major: number; minor: number; patch: number } | null {
+  const match = String(cliVersion || '').match(/^(\d+)\.(\d+)\.(\d+)$/)
+  if (!match) return null
+  return {
+    major: Number.parseInt(match[1], 10),
+    minor: Number.parseInt(match[2], 10),
+    patch: Number.parseInt(match[3], 10),
+  }
 }
 
 function xxh64(input: Buffer, seed: bigint): bigint {
@@ -417,7 +521,8 @@ function xxh64MergeRound(acc: bigint, lane: bigint): bigint {
 }
 
 function rotl64(value: bigint, bits: bigint): bigint {
-  return u64((value << bits) | (value >> (64n - bits)))
+  const normalized = u64(value)
+  return u64((normalized << bits) | (normalized >> (64n - bits)))
 }
 
 function u64(value: bigint): bigint {

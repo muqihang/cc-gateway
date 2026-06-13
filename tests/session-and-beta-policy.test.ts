@@ -143,4 +143,42 @@ test('message beta policy supports 2.1.150 subscription with 1m context enabled'
   assert.equal(oneMillionContextProfile['anthropic-beta'], 'claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11')
 })
 
+
+test('message beta policy supports 2.1.170 interim subscription with 1m context enabled', () => {
+  const config = sharedConfig('http://127.0.0.1:1', 'http://127.0.0.1:2', { message_beta_profile: 'claude_code_2_1_170_subscription_1m' })
+  config.env = { ...config.env, version: '2.1.170', version_base: '2.1.170' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude-code-2.1.170-macos-local',
+    policy_version: '2.1.170',
+  }
+  const identity = config.account_identities!['account-a']
+  const interimProfile = canonicalPersonaHeaders(config, 'messages', validUuid, {
+    identity,
+    requestedPolicyVersion: '2.1.170',
+    requestedModel: 'claude-opus-4-8',
+  })
+  assert.equal(interimProfile['anthropic-beta'], 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24')
+  assert.equal(interimProfile['User-Agent'], 'claude-cli/2.1.170 (external, sdk-cli)')
+})
+
+
+test('message beta policy supports 2.1.175 final subscription with 1m context enabled', () => {
+  const config = sharedConfig('http://127.0.0.1:1', 'http://127.0.0.1:2', { message_beta_profile: 'claude_code_2_1_175_subscription_1m' })
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude-code-2.1.175-macos-local',
+    policy_version: '2.1.175',
+  }
+  const identity = config.account_identities!['account-a']
+  const finalProfile = canonicalPersonaHeaders(config, 'messages', validUuid, {
+    identity,
+    requestedPolicyVersion: '2.1.175',
+    requestedModel: 'claude-opus-4-8',
+  })
+  assert.equal(finalProfile['anthropic-beta'], 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24')
+  assert.equal(finalProfile['User-Agent'], 'claude-cli/2.1.175 (external, sdk-cli)')
+})
+
 await finish()

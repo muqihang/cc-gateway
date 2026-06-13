@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert'
 import { request as httpRequest } from 'http'
 import { startProxy, verifySharedPoolFinalOutput } from '../src/proxy.js'
-import { canonicalPersonaHeaders, resolveAccountIdentity, resolveEgressBucket, runSigningPipeline } from '../src/policy.js'
+import { canonicalPersonaHeaders, resolveAccountIdentity, resolveEgressBucket, runSigningPipeline, verifySignedCCH } from '../src/policy.js'
 import { rewriteHeaders } from '../src/rewriter.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 
@@ -149,7 +149,7 @@ test('shared-pool verifier fails closed on signed cc_version mismatch', () => {
   const identity = config.account_identities!['account-a']
   const headers = canonicalPersonaHeaders(config, 'messages', uuidSessionB, {
     identity,
-    requestedPolicyVersion: '2.1.151',
+    requestedPolicyVersion: '2.1.153',
     requestedModel: 'claude-sonnet-4-6',
   })
   const body = Buffer.from(JSON.stringify({
@@ -164,7 +164,7 @@ test('shared-pool verifier fails closed on signed cc_version mismatch', () => {
       route: 'messages',
       sessionId: uuidSessionB,
       accountIdentity: identity,
-      expectedVersion: '2.1.151',
+      expectedVersion: '2.1.153',
       expectedBeta: headers['anthropic-beta'],
       billingMode: 'sign',
     }),
@@ -851,7 +851,7 @@ test('approved sign-primary mode generates billing CCH and forwards only after v
   }
 })
 
-test('sign-primary same-minor drift keeps final UA and signed cc_version aligned with resolver decision', async () => {
+test('sign-primary verified legacy drift keeps final UA and signed cc_version aligned with resolver decision', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const config = sharedConfig()
@@ -873,7 +873,7 @@ test('sign-primary same-minor drift keeps final UA and signed cc_version aligned
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: {
         ...sharedHeaders,
-        'x-cc-policy-version': '2.1.151',
+        'x-cc-policy-version': '2.1.153',
         'x-sub2api-persona-trusted': '1',
       },
       body: {
@@ -884,8 +884,8 @@ test('sign-primary same-minor drift keeps final UA and signed cc_version aligned
     assert.equal(response.status, 200, response.body)
     assert.equal(upstream.captured.length, 1)
     const forwarded = upstream.captured[0]
-    assert.equal(forwarded.headers['user-agent'], 'claude-cli/2.1.151 (external, sdk-cli)')
-    assert.match(forwarded.body, /x-anthropic-billing-header: cc_version=2\.1\.151\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};/)
+    assert.equal(forwarded.headers['user-agent'], 'claude-cli/2.1.153 (external, sdk-cli)')
+    assert.match(forwarded.body, /x-anthropic-billing-header: cc_version=2\.1\.153\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};/)
     assert.equal(forwarded.headers['x-claude-code-session-id'], uuidSessionB)
   } finally {
     await close(gateway)
@@ -894,7 +894,55 @@ test('sign-primary same-minor drift keeps final UA and signed cc_version aligned
   }
 })
 
-test('same-minor drift without internal trust header fails closed before upstream forwarding', async () => {
+
+test('sign-primary 2.1.175 final canonicalizes stale 2.1.170 metadata and signs with normalized CCH', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig()
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude-code-2.1.170-macos-local',
+    policy_version: '2.1.170',
+  }
+  config.shared_pool = {
+    billing_cch_mode: 'sign',
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+    message_beta_profile: 'claude_code_2_1_175_subscription_1m',
+  } as any
+  config.egress_buckets!['bucket-a'].proxy_url = proxy.url
+  const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...sharedHeaders,
+        'x-cc-policy-version': '2.1.170',
+        'x-sub2api-persona-trusted': '1',
+      },
+      body: {
+        model: 'claude-opus-4-8',
+        max_tokens: 32000,
+        metadata: { user_id: JSON.stringify({ session_id: uuidSessionC }) },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from final sign lane' }] }],
+      },
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    const forwarded = upstream.captured[0]
+    assert.equal(forwarded.headers['user-agent'], 'claude-cli/2.1.175 (external, sdk-cli)')
+    assert.match(forwarded.body, /x-anthropic-billing-header: cc_version=2\.1\.175\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};/)
+    assert.equal(verifySignedCCH(Buffer.from(forwarded.body, 'utf-8')).ok, true)
+    assert.equal(forwarded.headers['x-claude-code-session-id'], uuidSessionC)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('verified legacy drift without internal trust header fails closed before upstream forwarding', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const config = sharedConfig()
@@ -916,7 +964,7 @@ test('same-minor drift without internal trust header fails closed before upstrea
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: {
         ...sharedHeaders,
-        'x-cc-policy-version': '2.1.151',
+        'x-cc-policy-version': '2.1.153',
       },
       body: {
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionB }) },
