@@ -5,18 +5,24 @@ import type { AccountIdentityConfig, Config } from '../src/config.js'
 
 console.log('\ntests/persona-resolver.test.ts')
 
-const identity2170: AccountIdentityConfig = {
+const identity2175: AccountIdentityConfig = {
   device_id: 'b'.repeat(64),
   account_uuid_hash: 'hmac-sha256:k-test:account-ref:v1:acct-a',
   email_hash: 'hmac-sha256:k-test:email-ref:v1:user-a',
   account_hash: 'hmac-sha256:k-test:account-partition:v1:acct-a',
-  persona_variant: 'claude-code-2.1.170-macos-local',
+  persona_variant: 'claude-code-2.1.175-macos-local',
   session_policy: 'preserve_downstream_session_id',
+  policy_version: '2.1.175',
+}
+
+const identity2170: AccountIdentityConfig = {
+  ...identity2175,
+  persona_variant: 'claude-code-2.1.170-macos-local',
   policy_version: '2.1.170',
 }
 
 const legacyIdentity2150: AccountIdentityConfig = {
-  ...identity2170,
+  ...identity2175,
   persona_variant: 'claude-code-2.1.150-macos-local',
   policy_version: '2.1.150',
 }
@@ -25,12 +31,12 @@ function config(overrides: Partial<Config> = {}): Config {
   const base = baseConfig()
   return baseConfig({
     ...overrides,
-    env: { ...base.env, version: '2.1.170', version_base: '2.1.170', ...(overrides.env as any) },
+    env: { ...base.env, version: '2.1.175', version_base: '2.1.175', ...(overrides.env as any) },
     shared_pool: {
       billing_cch_mode: 'sign',
       signing_enabled: true,
       signing_evidence_gates_approved: true,
-      message_beta_profile: 'claude_code_2_1_170_subscription_1m',
+      message_beta_profile: 'claude_code_2_1_175_subscription_1m',
       candidate_model_allowlist: ['claude-sonnet-4-8'],
       candidate_model_replay_proofs: {
         'claude-sonnet-4-8': 'fixture-sonnet-48',
@@ -50,18 +56,18 @@ function config(overrides: Partial<Config> = {}): Config {
   } as Config)
 }
 
-test('exact known 2.1.170 interim profile resolves without capability downgrade', () => {
+test('exact known 2.1.175 final profile resolves without capability downgrade', () => {
   const decision = resolvePersonaDecision({
     config: config(),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-opus-4-8',
     trustedClient: true,
   })
   assert.equal(decision.status, 'exact_known')
-  assert.equal(decision.effectiveVersion, '2.1.170')
-  assert.equal(decision.profile.id, 'claude_code_2_1_170_subscription_1m')
+  assert.equal(decision.effectiveVersion, '2.1.175')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m')
   assert.equal(decision.capabilities.context_1m, true)
   assert.equal(decision.capabilities.tools, true)
   assert.equal(decision.capabilities.thinking, true)
@@ -72,31 +78,52 @@ test('exact known 2.1.170 interim profile resolves without capability downgrade'
   assert.equal(decision.route, 'messages')
 })
 
-test('stale 2.1.150 Sub2API metadata canonicalizes to 2.1.170 interim profile', () => {
-  const decision = resolvePersonaDecision({
-    config: config(),
-    identity: identity2170,
-    route: 'messages',
-    requestedPolicyVersion: '2.1.150',
-    requestedModel: 'claude-opus-4-8',
-    trustedClient: true,
-  })
-  assert.equal(decision.status, 'observed_minor_drift')
-  assert.equal(decision.effectiveVersion, '2.1.170')
-  assert.equal(decision.profile.id, 'claude_code_2_1_170_subscription_1m')
-})
-
-test('2.1.171 and 2.1.172+ policy versions stay behind the persona rollout gate', () => {
-  for (const version of ['2.1.171', '2.1.172', '2.1.175']) {
+test('stale 2.1.150 and 2.1.170 Sub2API metadata canonicalize to 2.1.175 final profile', () => {
+  for (const [version, identity] of [
+    ['2.1.150', legacyIdentity2150],
+    ['2.1.170', identity2170],
+  ] as const) {
     const decision = resolvePersonaDecision({
       config: config(),
-      identity: identity2170,
+      identity,
+      route: 'messages',
+      requestedPolicyVersion: version,
+      requestedModel: 'claude-opus-4-8',
+      trustedClient: true,
+    })
+    assert.equal(decision.status, 'observed_minor_drift', version)
+    assert.equal(decision.effectiveVersion, '2.1.175', version)
+    assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m', version)
+  }
+})
+
+test('2.1.171 and unsupported 2.1.172+ policy versions stay behind the persona rollout gate', () => {
+  for (const version of ['2.1.171', '2.1.172', '2.1.173']) {
+    const decision = resolvePersonaDecision({
+      config: config(),
+      identity: identity2175,
       route: 'messages',
       requestedPolicyVersion: version,
       requestedModel: 'claude-opus-4-8',
       trustedClient: true,
     })
     assert.equal(decision.status, 'quarantine_unknown_major', version)
+  }
+})
+
+test('untrusted stale identity cannot self-promote directly to 2.1.175', () => {
+  for (const requestedPolicyVersion of ['2.1.175', '2.1.175 ', ' 2.1.175']) {
+    const decision = resolvePersonaDecision({
+      config: config(),
+      identity: identity2170,
+      route: 'messages',
+      requestedPolicyVersion,
+      requestedModel: 'claude-opus-4-8',
+      trustedClient: false,
+    })
+    assert.equal(decision.status, 'quarantine_unknown_major', requestedPolicyVersion)
+    assert.equal(decision.effectiveVersion, '2.1.175', requestedPolicyVersion)
+    assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m', requestedPolicyVersion)
   }
 })
 
@@ -143,9 +170,9 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
   })
   const quarantined = resolvePersonaDecision({
     config: badConfig,
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-opus-4-8',
     trustedClient: true,
   })
@@ -159,9 +186,9 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
         candidate_beta_audit_budgets: {},
       } as any,
     }),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-opus-4-8',
     trustedClient: true,
   })
@@ -174,27 +201,27 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
         message_beta_profile: 'claude_code_candidate_beta',
       } as any,
     }),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-opus-4-8',
     trustedClient: true,
   })
   assert.equal(gray.status, 'candidate_beta_gray')
-  assert.equal(gray.effectiveVersion, '2.1.170')
+  assert.equal(gray.effectiveVersion, '2.1.175')
 })
 
 test('future trusted sonnet candidate model grays without capability downgrade', () => {
   const sonnet = resolvePersonaDecision({
     config: config(),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-sonnet-4-8',
     trustedClient: true,
   })
   assert.equal(sonnet.status, 'candidate_model_gray')
-  assert.equal(sonnet.effectiveVersion, '2.1.170')
+  assert.equal(sonnet.effectiveVersion, '2.1.175')
   assert.equal(sonnet.capabilities.max_tokens, 32000)
   assert.equal(sonnet.capabilities.context_1m, true)
   assert.equal(sonnet.capabilities.tools, true)
@@ -205,9 +232,9 @@ test('future trusted sonnet candidate model grays without capability downgrade',
 test('observed Claude Code Haiku subagent model is known for untrusted production client path', () => {
   const decision = resolvePersonaDecision({
     config: config(),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-haiku-4-5-20251001',
     trustedClient: false,
   })
@@ -221,9 +248,9 @@ test('observed Opus 4.8 and Fable 5 models are known for untrusted production cl
   for (const model of ['claude-opus-4-8', 'claude-fable-5']) {
     const decision = resolvePersonaDecision({
       config: config(),
-      identity: identity2170,
+      identity: identity2175,
       route: 'messages',
-      requestedPolicyVersion: '2.1.170',
+      requestedPolicyVersion: '2.1.175',
       requestedModel: model,
       trustedClient: false,
     })
@@ -238,7 +265,7 @@ test('observed Opus 4.8 and Fable 5 models are known for untrusted production cl
 test('untrusted unknown model rejects and unknown major quarantines', () => {
   const unknownMajor = resolvePersonaDecision({
     config: config({ env: { ...baseConfig().env, version: '3.0.0', version_base: '3.0.0' } as any }),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
     requestedPolicyVersion: '3.0.0',
     requestedModel: 'claude-opus-4-8',
@@ -248,9 +275,9 @@ test('untrusted unknown model rejects and unknown major quarantines', () => {
 
   const untrusted = resolvePersonaDecision({
     config: config(),
-    identity: identity2170,
+    identity: identity2175,
     route: 'messages',
-    requestedPolicyVersion: '2.1.170',
+    requestedPolicyVersion: '2.1.175',
     requestedModel: 'claude-opus-4-9',
     trustedClient: false,
   })
@@ -260,7 +287,7 @@ test('untrusted unknown model rejects and unknown major quarantines', () => {
 test('control-plane route decisions remain route-aware and fail closed on unknown major drift', () => {
   const decision = resolvePersonaDecision({
     config: config(),
-    identity: identity2170,
+    identity: identity2175,
     route: 'control_plane',
     requestedPolicyVersion: '3.0.0',
     requestedModel: '',

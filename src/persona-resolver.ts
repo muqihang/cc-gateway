@@ -51,18 +51,34 @@ type SharedPoolCandidateConfig = {
 }
 
 const FUTURE_TRUSTED_MODEL_RE = /^claude-(sonnet|opus)-\d+-\d+(?:-thinking)?$/
+const DEFAULT_PERSONA_PROFILE_ID = 'claude_code_2_1_175_subscription_1m'
+const LEGACY_CCH_COMPATIBLE_VERSIONS = new Set(['2.1.150', '2.1.153', '2.1.169', '2.1.170'])
+const FINAL_2175_STALE_METADATA_VERSIONS = new Set(['2.1.150', '2.1.170'])
 
 export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): PersonaDecision {
-  const profileId = resolvePersonaProfileId(input.identity.persona_variant)
-    || resolvePersonaProfileId((input.config.shared_pool as any)?.message_beta_profile)
-    || resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.170')))
+  const shared = ((input.config.shared_pool || {}) as SharedPoolCandidateConfig)
+  const configuredProfileId = resolvePersonaProfileId(shared.message_beta_profile)
+    || resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.175')))
+  const profileId = configuredProfileId || resolvePersonaProfileId(input.identity.persona_variant)
   if (!profileId) {
     return rejectDecision('reject_unknown_persona', fallbackProfile(), input.requestedPolicyVersion, input.trustedClient, input.route)
   }
   const profile = getPersonaProfile(profileId)
-  const shared = ((input.config.shared_pool || {}) as SharedPoolCandidateConfig)
   const resolvedBetaHeader = betaHeaderForConfiguredProfile(shared, profile)
   const versionDecision = resolveVersionStatus(profile.version, input.requestedPolicyVersion, input.trustedClient)
+  const selfPromotionVersion = untrustedFinalPersonaSelfPromotionVersion(profile, input)
+  if (selfPromotionVersion) {
+    return {
+      status: 'quarantine_unknown_major',
+      profile,
+      effectiveVersion: selfPromotionVersion,
+      capabilities: { ...profile.capabilities },
+      betaHeader: resolvedBetaHeader,
+      auditTags: ['unknown_major', `route:${input.route}`],
+      route: input.route,
+      trustedClient: input.trustedClient,
+    }
+  }
   if (versionDecision.status === 'quarantine_unknown_major') {
     return {
       status: 'quarantine_unknown_major',
@@ -95,6 +111,16 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
   }
 }
 
+
+function untrustedFinalPersonaSelfPromotionVersion(profile: PersonaProfile, input: ResolvePersonaDecisionInput): string | null {
+  if (profile.id !== DEFAULT_PERSONA_PROFILE_ID || input.trustedClient) return null
+  const requestedVersion = normalizeVersion(input.requestedPolicyVersion).raw
+  if (requestedVersion !== profile.version) return null
+  const identityProfileId = resolvePersonaProfileId(input.identity.persona_variant)
+  const identityPolicyVersion = normalizeVersion(String(input.identity.policy_version || '')).raw
+  return identityProfileId !== profile.id || identityPolicyVersion !== profile.version ? requestedVersion : null
+}
+
 function resolveVersionStatus(profileVersion: string, requestedVersion: string, trustedClient: boolean): { status: 'exact_known' | 'observed_minor_drift' | 'quarantine_unknown_major'; effectiveVersion: string } {
   const requested = normalizeVersion(requestedVersion)
   const profile = normalizeVersion(profileVersion)
@@ -102,14 +128,11 @@ function resolveVersionStatus(profileVersion: string, requestedVersion: string, 
   if (!trustedClient || requested.major !== profile.major || requested.minor !== profile.minor) {
     return { status: 'quarantine_unknown_major', effectiveVersion: requested.raw }
   }
-  if (!isOldCchCompatibleVersion(requested)) {
+  const compatible = rolloutCompatibleVersion(profile, requested)
+  if (!compatible) {
     return { status: 'quarantine_unknown_major', effectiveVersion: requested.raw }
   }
-  // The 2.1.170 interim profile canonicalizes stale older Sub2API policy
-  // metadata to 2.1.170. Earlier explicit legacy profiles keep requested drift only for verified
-  // corpus versions used by rollback/canary tests; 2.1.171+ stays gated here until a persona rollout is approved.
-  const effectiveVersion = profile.raw === '2.1.170' && requested.patch < profile.patch ? profile.raw : requested.raw
-  return { status: 'observed_minor_drift', effectiveVersion }
+  return { status: 'observed_minor_drift', effectiveVersion: compatible.effectiveVersion }
 }
 
 function resolveBetaDecision(
@@ -205,10 +228,27 @@ function normalizeVersion(version: string) {
   }
 }
 
-function isOldCchCompatibleVersion(version: ReturnType<typeof normalizeVersion>): boolean {
-  // Explicit persona rollout gate. CCH signing supports 2.1.172+, but outbound
-  // persona/profile upgrades still require separate capture and rollout approval.
-  return ['2.1.150', '2.1.153', '2.1.169', '2.1.170'].includes(version.raw)
+function rolloutCompatibleVersion(
+  profile: ReturnType<typeof normalizeVersion>,
+  requested: ReturnType<typeof normalizeVersion>,
+): { effectiveVersion: string } | null {
+  if (profile.raw === '2.1.175') {
+    // 2.1.175 is the active final persona. Only explicitly approved stale
+    // Sub2API metadata canonicalizes upward; 2.1.171 was not published and
+    // other 2.1.172+ versions need their own persona rollout approval.
+    return FINAL_2175_STALE_METADATA_VERSIONS.has(requested.raw)
+      ? { effectiveVersion: profile.raw }
+      : null
+  }
+  if (profile.raw === '2.1.170') {
+    if (!LEGACY_CCH_COMPATIBLE_VERSIONS.has(requested.raw)) return null
+    return { effectiveVersion: requested.patch < profile.patch ? profile.raw : requested.raw }
+  }
+  if (profile.raw === '2.1.150') {
+    if (!LEGACY_CCH_COMPATIBLE_VERSIONS.has(requested.raw)) return null
+    return { effectiveVersion: requested.raw }
+  }
+  return null
 }
 
 function betaHeaderForConfiguredProfile(shared: SharedPoolCandidateConfig, profile: PersonaProfile): string {
@@ -222,5 +262,5 @@ function hasPositiveAuditBudget(value: unknown): boolean {
 }
 
 function fallbackProfile(): PersonaProfile {
-  return getPersonaProfile('claude_code_2_1_170_subscription_1m')
+  return getPersonaProfile(DEFAULT_PERSONA_PROFILE_ID)
 }

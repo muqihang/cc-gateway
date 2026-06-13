@@ -79,7 +79,7 @@ export type Config = {
     upstream_mode?: 'preflight' | 'dry-run' | 'local-capture' | 'real-canary' | 'production'
     real_canary_user_approved?: boolean
     production_upstream_enabled?: boolean
-    message_beta_profile?: 'claude_code_2_1_146' | 'claude_code_2_1_150_subscription' | 'claude_code_2_1_150_subscription_1m' | 'claude_code_2_1_170_subscription_1m' | 'first_200_oauth_compat' | 'claude_code_candidate_beta' | string
+    message_beta_profile?: 'claude_code_2_1_146' | 'claude_code_2_1_150_subscription' | 'claude_code_2_1_150_subscription_1m' | 'claude_code_2_1_170_subscription_1m' | 'claude_code_2_1_175_subscription_1m' | 'first_200_oauth_compat' | 'claude_code_candidate_beta' | string
     canary_envelope_role?: string
     canary_cost_envelope?: {
       enabled?: boolean
