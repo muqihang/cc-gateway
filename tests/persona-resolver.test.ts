@@ -211,6 +211,61 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
   assert.equal(gray.effectiveVersion, '2.1.175')
 })
 
+
+test('trusted identity cannot silently switch to a different 2.1.175 profile class', () => {
+  const decision = resolvePersonaDecision({
+    config: config({ shared_pool: { message_beta_profile: 'claude_code_2_1_175_api_key_non_1m' } as any }),
+    identity: identity2175,
+    route: 'messages',
+    requestedPolicyVersion: '2.1.175',
+    requestedModel: 'claude-opus-4-8',
+    trustedClient: true,
+  })
+  assert.equal(decision.status, 'quarantine_unknown_beta')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m')
+})
+
+test('identity profile wins when shared config only carries default environment version', () => {
+  const apiKeyIdentity: AccountIdentityConfig = {
+    ...identity2175,
+    persona_variant: 'claude_code_2_1_175_api_key_non_1m',
+    policy_version: '2.1.175',
+  }
+  const decision = resolvePersonaDecision({
+    config: config({
+      shared_pool: {
+        billing_cch_mode: 'sign',
+        signing_enabled: true,
+        signing_evidence_gates_approved: true,
+        message_beta_profile: undefined,
+      } as any,
+    }),
+    identity: apiKeyIdentity,
+    route: 'messages',
+    requestedPolicyVersion: '2.1.175',
+    requestedModel: 'claude-fable-5',
+    trustedClient: true,
+  })
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_api_key_non_1m')
+  assert.equal(decision.capabilities.context_1m, false)
+  assert.ok(!decision.betaHeader.includes('context-1m-2025-08-07'))
+})
+
+test('profile class mismatch preserves route and trusted audit fields', () => {
+  const decision = resolvePersonaDecision({
+    config: config({ shared_pool: { message_beta_profile: 'claude_code_2_1_175_api_key_non_1m' } as any }),
+    identity: identity2175,
+    route: 'control_plane',
+    requestedPolicyVersion: '2.1.175',
+    requestedModel: '',
+    trustedClient: true,
+  })
+  assert.equal(decision.status, 'quarantine_unknown_beta')
+  assert.equal(decision.route, 'control_plane')
+  assert.equal(decision.trustedClient, true)
+})
+
 test('future trusted sonnet candidate model grays without capability downgrade', () => {
   const sonnet = resolvePersonaDecision({
     config: config(),
@@ -229,23 +284,8 @@ test('future trusted sonnet candidate model grays without capability downgrade',
   assert.equal(sonnet.capabilities.stream, true)
 })
 
-test('observed Claude Code Haiku subagent model is known for untrusted production client path', () => {
-  const decision = resolvePersonaDecision({
-    config: config(),
-    identity: identity2175,
-    route: 'messages',
-    requestedPolicyVersion: '2.1.175',
-    requestedModel: 'claude-haiku-4-5-20251001',
-    trustedClient: false,
-  })
-  assert.equal(decision.status, 'exact_known')
-  assert.equal(decision.capabilities.tools, true)
-  assert.equal(decision.capabilities.thinking, true)
-  assert.equal(decision.capabilities.stream, true)
-})
-
-test('observed Opus 4.8 and Fable 5 models are known for untrusted production client path', () => {
-  for (const model of ['claude-opus-4-8', 'claude-fable-5']) {
+test('known native models remain known for existing untrusted strip-mode compatibility path', () => {
+  for (const model of ['claude-haiku-4-5-20251001', 'claude-opus-4-8', 'claude-fable-5']) {
     const decision = resolvePersonaDecision({
       config: config(),
       identity: identity2175,
@@ -255,10 +295,6 @@ test('observed Opus 4.8 and Fable 5 models are known for untrusted production cl
       trustedClient: false,
     })
     assert.equal(decision.status, 'exact_known', model)
-    assert.equal(decision.capabilities.context_1m, true)
-    assert.equal(decision.capabilities.tools, true)
-    assert.equal(decision.capabilities.thinking, true)
-    assert.equal(decision.capabilities.stream, true)
   }
 })
 

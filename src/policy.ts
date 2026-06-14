@@ -121,11 +121,15 @@ export function resolveSharedPoolPersonaDecision(
   trustedClient: boolean,
   route: SharedPoolPersonaRoute = 'messages',
 ): PersonaDecision {
+  const sharedPool = (config as any).shared_pool || {}
+  const syntheticPersonaVariant = typeof sharedPool.message_beta_profile === 'string' && sharedPool.message_beta_profile.trim()
+    ? sharedPool.message_beta_profile
+    : inferLegacyPersonaVariant(String(config.env.version || requestedPolicyVersion))
   const resolvedIdentity = identity || {
     device_id: String(config.identity.device_id || ''),
     account_uuid_ref: 'opaque:synthetic-account-ref',
     account_ref: 'opaque:synthetic-account-ref',
-    persona_variant: inferLegacyPersonaVariant(String(config.env.version || requestedPolicyVersion)),
+    persona_variant: syntheticPersonaVariant,
     session_policy: 'preserve_downstream_session_id',
     policy_version: requestedPolicyVersion,
   }

@@ -15,6 +15,11 @@ export type PersonaProfile = {
   stainlessPackageVersion: string
   aliases: string[]
   knownModels: string[]
+  toolProfile?: {
+    kind: 'full_tool' | 'low_tool'
+    toolCount?: number
+    toolNames?: string[]
+  }
   capabilities: PersonaCapabilities
 }
 
@@ -34,8 +39,10 @@ const MESSAGE_BETA = 'claude-code-20250219,context-1m-2025-08-07,interleaved-thi
 const CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA = 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
 const CLAUDE_CODE_2_1_150_SUBSCRIPTION_1M_BETA = 'claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24,extended-cache-ttl-2025-04-11'
 const CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA = 'claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24'
-// Verified 2.1.175 capture kept the same messages beta set as 2.1.170.
+// Verified 2.1.175 subscription/1M capture kept the same messages beta set as 2.1.170.
 const CLAUDE_CODE_2_1_175_SUBSCRIPTION_1M_BETA = CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA
+const CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA = 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24'
+const CLAUDE_CODE_2_1_175_SIMPLE_BARE_BETA = CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA
 const FIRST_200_OAUTH_COMPAT_BETA = CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA
 
 const FULL_CAPABILITIES: PersonaCapabilities = {
@@ -45,6 +52,12 @@ const FULL_CAPABILITIES: PersonaCapabilities = {
   context_management: true,
   stream: true,
   max_tokens: 32000,
+}
+
+const NON_1M_CAPABILITIES: PersonaCapabilities = {
+  ...FULL_CAPABILITIES,
+  context_1m: false,
+  max_tokens: 64000,
 }
 
 const REGISTRY: PersonaProfile[] = [
@@ -100,6 +113,27 @@ const REGISTRY: PersonaProfile[] = [
     capabilities: { ...FULL_CAPABILITIES },
   },
   {
+    id: 'claude_code_2_1_175_api_key_non_1m',
+    version: '2.1.175',
+    messageBetaProfile: 'claude_code_2_1_175_api_key_non_1m',
+    betaHeader: CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA,
+    stainlessPackageVersion: '0.94.0',
+    aliases: [],
+    knownModels: [...KNOWN_MODELS],
+    capabilities: { ...NON_1M_CAPABILITIES },
+  },
+  {
+    id: 'claude_code_2_1_175_simple_bare',
+    version: '2.1.175',
+    messageBetaProfile: 'claude_code_2_1_175_simple_bare',
+    betaHeader: CLAUDE_CODE_2_1_175_SIMPLE_BARE_BETA,
+    stainlessPackageVersion: '0.94.0',
+    aliases: [],
+    knownModels: [...KNOWN_MODELS],
+    toolProfile: { kind: 'low_tool', toolCount: 3, toolNames: ['Bash', 'Edit', 'Read'] },
+    capabilities: { ...NON_1M_CAPABILITIES },
+  },
+  {
     id: 'first_200_oauth_compat',
     version: '2.1.150',
     messageBetaProfile: 'first_200_oauth_compat',
@@ -133,7 +167,13 @@ export function resolvePersonaProfileId(variant: string | undefined | null): str
 }
 
 export function knownPersonaProfiles(): PersonaProfile[] {
-  return REGISTRY.map((profile) => ({ ...profile, aliases: [...profile.aliases], knownModels: [...profile.knownModels], capabilities: { ...profile.capabilities } }))
+  return REGISTRY.map((profile) => ({
+    ...profile,
+    aliases: [...profile.aliases],
+    knownModels: [...profile.knownModels],
+    toolProfile: profile.toolProfile ? { ...profile.toolProfile, toolNames: profile.toolProfile.toolNames ? [...profile.toolProfile.toolNames] : undefined } : undefined,
+    capabilities: { ...profile.capabilities },
+  }))
 }
 
 export function betaHeaderForProfile(profileId: string): string {
