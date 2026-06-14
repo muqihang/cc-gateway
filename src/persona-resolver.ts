@@ -58,8 +58,12 @@ const FINAL_2175_STALE_METADATA_VERSIONS = new Set(['2.1.150', '2.1.170'])
 export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): PersonaDecision {
   const shared = ((input.config.shared_pool || {}) as SharedPoolCandidateConfig)
   const configuredProfileId = resolvePersonaProfileId(shared.message_beta_profile)
-    || resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.175')))
-  const profileId = configuredProfileId || resolvePersonaProfileId(input.identity.persona_variant)
+  const envProfileId = resolvePersonaProfileId(inferLegacyPersonaVariant(String(input.config.env.version || '2.1.175')))
+  const identityProfileId = resolvePersonaProfileId(input.identity.persona_variant)
+  const profileMismatch = configuredProfileMismatch(configuredProfileId, identityProfileId, input)
+  if (profileMismatch) return profileMismatch
+
+  const profileId = configuredProfileId || identityProfileId || envProfileId
   if (!profileId) {
     return rejectDecision('reject_unknown_persona', fallbackProfile(), input.requestedPolicyVersion, input.trustedClient, input.route)
   }
@@ -96,6 +100,7 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
   const betaDecision = resolveBetaDecision(betaProfile, shared, input.trustedClient, profile, input.route, versionDecision.effectiveVersion)
   if (betaDecision) return betaDecision
 
+
   const modelDecision = resolveModelDecision(input.requestedModel, shared, input.trustedClient, profile, input.route, versionDecision.effectiveVersion)
   if (modelDecision) return modelDecision
 
@@ -109,6 +114,22 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
     route: input.route,
     trustedClient: input.trustedClient,
   }
+}
+
+
+function configuredProfileMismatch(
+  configuredProfileId: string | null,
+  identityProfileId: string | null,
+  input: ResolvePersonaDecisionInput,
+): PersonaDecision | null {
+  if (!configuredProfileId || !identityProfileId || configuredProfileId === identityProfileId) return null
+  const configured = getPersonaProfile(configuredProfileId)
+  const identityProfile = getPersonaProfile(identityProfileId)
+  const identityPolicyVersion = normalizeVersion(String(input.identity.policy_version || identityProfile.version || '')).raw
+  const allowedFinalCanonicalization = configured.id === DEFAULT_PERSONA_PROFILE_ID
+    && FINAL_2175_STALE_METADATA_VERSIONS.has(identityPolicyVersion)
+  if (allowedFinalCanonicalization) return null
+  return rejectDecision('quarantine_unknown_beta', identityProfile, identityPolicyVersion || identityProfile.version, input.trustedClient, input.route)
 }
 
 
@@ -143,7 +164,13 @@ function resolveBetaDecision(
   route: ResolvePersonaDecisionInput['route'],
   effectiveVersion: string,
 ): PersonaDecision | null {
-  if (resolvePersonaProfileId(betaProfile)) return null
+  const configuredProfileId = resolvePersonaProfileId(betaProfile)
+  if (configuredProfileId) {
+    if (configuredProfileId !== profile.id) {
+      return rejectDecision('quarantine_unknown_beta', profile, effectiveVersion, trustedClient, route)
+    }
+    return null
+  }
   if (!trustedClient) {
     return rejectDecision('quarantine_unknown_beta', profile, profile.version, trustedClient, route)
   }
