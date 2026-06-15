@@ -181,4 +181,90 @@ test('message beta policy supports 2.1.175 final subscription with 1m context en
   assert.equal(finalProfile['User-Agent'], 'claude-cli/2.1.175 (external, sdk-cli)')
 })
 
+
+test('trusted internal healthcheck override uses non-1m beta while normal traffic keeps 1m', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig(upstream.url, proxy.url, { message_beta_profile: 'claude_code_2_1_175_subscription_1m' })
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude-code-2.1.175-macos-local',
+    policy_version: '2.1.175',
+  }
+  const gateway = startProxy(config)
+  try {
+    const body = {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 64,
+      metadata: { user_id: JSON.stringify({ session_id: validUuid }) },
+      stream: false,
+      system: [],
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'healthcheck' }] }],
+    }
+    const normal = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: { ...sharedHeaders, 'x-cc-policy-version': '2.1.175' },
+      body,
+    })
+    assert.equal(normal.status, 200, normal.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.match(String(upstream.captured[0].headers['anthropic-beta']), /context-1m-2025-08-07/)
+
+    const healthcheck = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...sharedHeaders,
+        'x-cc-policy-version': '2.1.175',
+        'x-sub2api-healthcheck-persona': 'claude_code_2_1_175_api_key_non_1m',
+      },
+      body,
+    })
+    assert.equal(healthcheck.status, 200, healthcheck.body)
+    assert.equal(upstream.captured.length, 2)
+    assert.doesNotMatch(String(upstream.captured[1].headers['anthropic-beta']), /context-1m-2025-08-07/)
+    assert.match(String(upstream.captured[1].headers['anthropic-beta']), /claude-code-20250219/)
+    assert.equal(upstream.captured[1].headers['user-agent'], 'claude-cli/2.1.175 (external, sdk-cli)')
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('healthcheck persona override rejects unsupported profiles before upstream', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig(upstream.url, proxy.url, { message_beta_profile: 'claude_code_2_1_175_subscription_1m' })
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude-code-2.1.175-macos-local',
+    policy_version: '2.1.175',
+  }
+  const gateway = startProxy(config)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...sharedHeaders,
+        'x-cc-policy-version': '2.1.175',
+        'x-sub2api-healthcheck-persona': 'claude_code_2_1_175_subscription_1m',
+      },
+      body: {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 64,
+        metadata: { user_id: JSON.stringify({ session_id: validUuid }) },
+        stream: false,
+        system: [],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'healthcheck' }] }],
+      },
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'unsupported_healthcheck_persona')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
 await finish()

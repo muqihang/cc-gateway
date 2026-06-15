@@ -34,6 +34,8 @@ import { evaluateUpstreamSafety } from './upstream-safety.js'
 import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
+const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
+const HEALTHCHECK_NON_1M_PROFILE = 'claude_code_2_1_175_api_key_non_1m'
 const RUNTIME_REGISTER_PATH = '/_runtime/register-account'
 
 type RuntimeRegisterRequest = {
@@ -553,6 +555,11 @@ async function handleRequest(
 
   log('info', `Client "${clientName}" → ${method} ${safePath}`)
   const trustedPersonaClient = isTrustedPersonaClient(req)
+  const healthcheckPersonaProfile = readTrustedHealthcheckPersonaProfile(req, clientName)
+  if (healthcheckPersonaProfile && healthcheckPersonaProfile !== HEALTHCHECK_NON_1M_PROFILE) {
+    writeControlPlaneError(res, 403, 'unsupported_healthcheck_persona', 'Unsupported internal healthcheck persona profile')
+    return
+  }
 
   let accountContext: AccountContext | null = null
   let accountIdentity: AccountIdentityRecord | null = null
@@ -588,6 +595,13 @@ async function handleRequest(
       return
     }
     egress = resolvedEgress
+    if (healthcheckPersonaProfile) {
+      accountIdentity = {
+        ...accountIdentity,
+        persona_variant: healthcheckPersonaProfile,
+        policy_version: String(config.env.version || '2.1.175'),
+      }
+    }
   } else {
     // Get the real OAuth token (managed by gateway)
     oauthToken = getAccessToken()
@@ -648,7 +662,7 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     const requestedModel = parsedBody && typeof (parsedBody as any).model === 'string' ? String((parsedBody as any).model) : ''
     personaDecision = resolveSharedPoolPersonaDecision(
-      config,
+      configWithHealthcheckPersona(config, healthcheckPersonaProfile),
       accountIdentity,
       accountContext!.policyVersion || String(config.env.version),
       requestedModel,
@@ -699,7 +713,7 @@ async function handleRequest(
   // Rewrite headers (strips client auth, normalizes identity headers)
   const rewrittenHeaders = rewriteHeaders(
     req.headers as Record<string, string | string[] | undefined>,
-    config,
+    configWithHealthcheckPersona(config, healthcheckPersonaProfile),
     config.mode === 'sub2api'
       ? {
           upstreamAuth: accountContext!.tokenType,
@@ -1032,8 +1046,29 @@ function verifySuppressedControlPlaneRequest(
 function isTrustedPersonaClient(req: IncomingMessage): boolean {
   const marker = readHeader(req, TRUSTED_PERSONA_HEADER)
   if (marker !== '1' && marker?.toLowerCase() !== 'true') return false
+  return isLocalRequest(req)
+}
+
+function readTrustedHealthcheckPersonaProfile(req: IncomingMessage, clientName: string | null): string | null {
+  const profile = readHeader(req, HEALTHCHECK_PERSONA_HEADER)?.trim()
+  if (!profile) return null
+  return clientName === 'gateway' ? profile : null
+}
+
+function isLocalRequest(req: IncomingMessage): boolean {
   const remote = (req.socket?.remoteAddress || '').trim()
   return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+}
+
+function configWithHealthcheckPersona(config: Config, profile: string | null): Config {
+  if (!profile) return config
+  return {
+    ...config,
+    shared_pool: {
+      ...((config as any).shared_pool || {}),
+      message_beta_profile: profile,
+    },
+  } as Config
 }
 
 function userAgentVersion(userAgent: string | undefined): string | null {
