@@ -350,6 +350,7 @@ export function rewriteHeaders(
     requestedModel?: string
     trustedClient?: boolean
     sessionId?: string
+    requestedContext1M?: boolean
   } = {},
 ): Record<string, string> {
   const out: Record<string, string> = {}
@@ -418,6 +419,7 @@ function rewriteSharedPoolHeaders(
     requestedModel?: string
     trustedClient?: boolean
     sessionId?: string
+    requestedContext1M?: boolean
   },
 ): Record<string, string> {
   const out: Record<string, string> = {}
@@ -439,6 +441,7 @@ function rewriteSharedPoolHeaders(
       requestedPolicyVersion: options.requestedPolicyVersion,
       requestedModel: options.requestedModel,
       trustedClient: options.trustedClient,
+      requestedContext1M: options.requestedContext1M,
     },
   )
   for (const [key, value] of Object.entries(canonical)) {

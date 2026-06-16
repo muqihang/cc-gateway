@@ -96,13 +96,16 @@ shared_pool:
   upstream_mode: preflight
   real_canary_user_approved: false
   # Beta profile is an internal persona resolver input, not an official Claude
-  # Code capability ceiling. Keep the verified 2.1.175 final subscription 1m profile
-  # by default; 2.1.170, 2.1.150, and first_200_oauth_compat remain rollback aliases.
-  # 2.1.171 was not published. 2.1.172+ CCH uses the recovered normalized preimage,
-  # but persona defaults should still move only through verified rollout gates. Unknown beta
-  # values must go through candidate allowlist + replay proof + kill switch +
-  # audit budget, and never bypass trusted-client checks.
-  message_beta_profile: claude_code_2_1_175_subscription_1m
+  # Code capability ceiling. Default to the verified 2.1.175 non-1M profile so
+  # ordinary Haiku/Sonnet traffic is not forced into context-1m. Sub2API may
+  # explicitly request context-1m with the internal x-sub2api-context-1m header
+  # when the user selected a 1M model alias; CC Gateway then re-checks the model
+  # allowlist and upgrades only that request to the verified subscription 1M
+  # profile. 2.1.170, 2.1.150, and first_200_oauth_compat remain rollback aliases.
+  # 2.1.171 was not published. Unknown beta values must go through candidate
+  # allowlist + replay proof + kill switch + audit budget, and never bypass
+  # trusted-client checks.
+  message_beta_profile: claude_code_2_1_175_api_key_non_1m
   canary_envelope_role: localhost_canary_guardrail_not_production_capability_ceiling
   # Canary-only safety envelope. These are local rollout guardrails, not
   # Claude Code official capability limits. They are meant for explicit
@@ -117,7 +120,7 @@ shared_pool:
     max_thinking_budget_tokens: 32000
     allow_output_config: true
     allow_context_management: true
-    allow_context_1m: true
+    allow_context_1m: false
     max_context_window_tokens: 1000000
     # Known Claude Code 1m-capable model families. Do not use this local
     # canary envelope to downgrade normal production capabilities; future

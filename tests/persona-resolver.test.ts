@@ -212,7 +212,7 @@ test('unknown beta is quarantined unless candidate allowlist, replay proof, kill
 })
 
 
-test('trusted identity cannot silently switch to a different 2.1.175 profile class', () => {
+test('non-1m default may safely downshift a 1m identity but does not silently enable 1m', () => {
   const decision = resolvePersonaDecision({
     config: config({ shared_pool: { message_beta_profile: 'claude_code_2_1_175_api_key_non_1m' } as any }),
     identity: identity2175,
@@ -221,8 +221,9 @@ test('trusted identity cannot silently switch to a different 2.1.175 profile cla
     requestedModel: 'claude-opus-4-8',
     trustedClient: true,
   })
-  assert.equal(decision.status, 'quarantine_unknown_beta')
-  assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m')
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_api_key_non_1m')
+  assert.equal(decision.capabilities.context_1m, false)
 })
 
 test('identity profile wins when shared config only carries default environment version', () => {
@@ -252,17 +253,19 @@ test('identity profile wins when shared config only carries default environment 
   assert.ok(!decision.betaHeader.includes('context-1m-2025-08-07'))
 })
 
-test('profile class mismatch preserves route and trusted audit fields', () => {
+test('non-1m default safely downshifts legacy 1m account identity without quarantining', () => {
   const decision = resolvePersonaDecision({
     config: config({ shared_pool: { message_beta_profile: 'claude_code_2_1_175_api_key_non_1m' } as any }),
     identity: identity2175,
-    route: 'control_plane',
+    route: 'messages',
     requestedPolicyVersion: '2.1.175',
-    requestedModel: '',
+    requestedModel: 'claude-sonnet-4-6',
     trustedClient: true,
   })
-  assert.equal(decision.status, 'quarantine_unknown_beta')
-  assert.equal(decision.route, 'control_plane')
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_api_key_non_1m')
+  assert.equal(decision.capabilities.context_1m, false)
+  assert.equal(decision.route, 'messages')
   assert.equal(decision.trustedClient, true)
 })
 
@@ -331,6 +334,22 @@ test('control-plane route decisions remain route-aware and fail closed on unknow
   })
   assert.equal(decision.status, 'quarantine_unknown_major')
   assert.equal(decision.route, 'control_plane')
+})
+
+test('explicit context-1m request works when production default profile is non-1m', () => {
+  const decision = resolvePersonaDecision({
+    config: config({ shared_pool: { message_beta_profile: 'claude_code_2_1_175_api_key_non_1m' } as any }),
+    identity: identity2175,
+    route: 'messages',
+    requestedPolicyVersion: '2.1.175',
+    requestedModel: 'claude-sonnet-4-6',
+    trustedClient: true,
+    requestedContext1M: true,
+  })
+  assert.equal(decision.status, 'exact_known')
+  assert.equal(decision.profile.id, 'claude_code_2_1_175_subscription_1m')
+  assert.equal(decision.capabilities.context_1m, true)
+  assert.match(decision.betaHeader, /context-1m-2025-08-07/)
 })
 
 await finish()

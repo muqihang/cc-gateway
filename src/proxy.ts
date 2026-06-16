@@ -35,6 +35,7 @@ import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
+const CONTEXT_1M_REQUEST_HEADER = 'x-sub2api-context-1m'
 const HEALTHCHECK_NON_1M_PROFILE = 'claude_code_2_1_175_api_key_non_1m'
 const RUNTIME_REGISTER_PATH = '/_runtime/register-account'
 
@@ -555,6 +556,7 @@ async function handleRequest(
 
   log('info', `Client "${clientName}" → ${method} ${safePath}`)
   const trustedPersonaClient = isTrustedPersonaClient(req)
+  const requestedContext1M = readTrustedContext1MRequest(req, clientName)
   const healthcheckPersonaProfile = readTrustedHealthcheckPersonaProfile(req, clientName)
   if (healthcheckPersonaProfile && healthcheckPersonaProfile !== HEALTHCHECK_NON_1M_PROFILE) {
     writeControlPlaneError(res, 403, 'unsupported_healthcheck_persona', 'Unsupported internal healthcheck persona profile')
@@ -668,9 +670,13 @@ async function handleRequest(
       requestedModel,
       trustedPersonaClient,
       sharedPoolRoute,
+      requestedContext1M,
     )
     if (personaDecision.status.startsWith('quarantine') || personaDecision.status.startsWith('reject')) {
-      writeControlPlaneError(res, 403, `persona_${personaDecision.status}`, 'Persona policy rejected request')
+      const code = personaDecision.status === 'reject_context_1m_unsupported_model'
+        ? 'context_1m_unsupported_model'
+        : `persona_${personaDecision.status}`
+      writeControlPlaneError(res, 403, code, 'Persona policy rejected request')
       return
     }
   }
@@ -725,6 +731,7 @@ async function handleRequest(
           requestedModel: parsedBody && typeof (parsedBody as any).model === 'string' ? String((parsedBody as any).model) : '',
           trustedClient: personaDecision?.trustedClient ?? false,
           sessionId,
+          requestedContext1M,
         }
       : {},
   )
@@ -1053,6 +1060,11 @@ function readTrustedHealthcheckPersonaProfile(req: IncomingMessage, clientName: 
   const profile = readHeader(req, HEALTHCHECK_PERSONA_HEADER)?.trim()
   if (!profile) return null
   return clientName === 'gateway' ? profile : null
+}
+
+function readTrustedContext1MRequest(req: IncomingMessage, clientName: string | null): boolean {
+  if (clientName !== 'gateway') return false
+  return readBooleanHeader(req, CONTEXT_1M_REQUEST_HEADER)
 }
 
 function isLocalRequest(req: IncomingMessage): boolean {

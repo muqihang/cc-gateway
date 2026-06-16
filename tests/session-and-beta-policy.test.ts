@@ -230,6 +230,118 @@ test('trusted internal healthcheck override uses non-1m beta while normal traffi
   }
 })
 
+
+test('shared-pool uses non-1m persona for ordinary Haiku and Sonnet traffic by default', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig(upstream.url, proxy.url)
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude_code_2_1_175_api_key_non_1m',
+    policy_version: '2.1.175',
+  }
+  const gateway = startProxy(config)
+  try {
+    for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6']) {
+      const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+        headers: { ...sharedHeaders, 'x-cc-policy-version': '2.1.175' },
+        body: {
+          model,
+          max_tokens: 64,
+          metadata: { user_id: JSON.stringify({ session_id: validUuid }) },
+          stream: false,
+          system: [],
+          messages: [{ role: 'user', content: [{ type: 'text', text: 'ordinary request' }] }],
+        },
+      })
+      assert.equal(response.status, 200, `${model}: ${response.body}`)
+    }
+    assert.equal(upstream.captured.length, 2)
+    for (const captured of upstream.captured) {
+      assert.doesNotMatch(String(captured.headers['anthropic-beta']), /context-1m-2025-08-07/)
+    }
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('trusted Sub2API context-1m request opts into 1m persona for eligible Sonnet model', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig(upstream.url, proxy.url)
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude_code_2_1_175_api_key_non_1m',
+    policy_version: '2.1.175',
+  }
+  const gateway = startProxy(config)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...sharedHeaders,
+        'x-cc-policy-version': '2.1.175',
+        'x-sub2api-context-1m': 'true',
+      },
+      body: {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 64,
+        metadata: { user_id: JSON.stringify({ session_id: validUuid }) },
+        stream: false,
+        system: [],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'long context selected' }] }],
+      },
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.match(String(upstream.captured[0].headers['anthropic-beta']), /context-1m-2025-08-07/)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
+test('context-1m request for Haiku fails closed before upstream', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const config = sharedConfig(upstream.url, proxy.url)
+  config.env = { ...config.env, version: '2.1.175', version_base: '2.1.175' }
+  config.account_identities!['account-a'] = {
+    ...config.account_identities!['account-a'],
+    persona_variant: 'claude_code_2_1_175_api_key_non_1m',
+    policy_version: '2.1.175',
+  }
+  const gateway = startProxy(config)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...sharedHeaders,
+        'x-cc-policy-version': '2.1.175',
+        'x-sub2api-context-1m': 'true',
+      },
+      body: {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 64,
+        metadata: { user_id: JSON.stringify({ session_id: validUuid }) },
+        stream: false,
+        system: [],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'haiku should not use 1m' }] }],
+      },
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'context_1m_unsupported_model')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+    await close(upstream.server)
+  }
+})
+
 test('healthcheck persona override rejects unsupported profiles before upstream', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()

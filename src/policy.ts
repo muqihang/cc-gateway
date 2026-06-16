@@ -78,7 +78,7 @@ export function canonicalPersonaHeaders(
   config: Config,
   route: SharedPoolPersonaRoute,
   sessionId?: string,
-  options: { identity?: AccountIdentityRecord; requestedPolicyVersion?: string; requestedModel?: string; trustedClient?: boolean } = {},
+  options: { identity?: AccountIdentityRecord; requestedPolicyVersion?: string; requestedModel?: string; trustedClient?: boolean; requestedContext1M?: boolean } = {},
 ): Record<string, string> {
   const decision = resolveSharedPoolPersonaDecision(
     config,
@@ -87,6 +87,7 @@ export function canonicalPersonaHeaders(
     options.requestedModel || '',
     options.trustedClient !== false,
     route,
+    options.requestedContext1M === true,
   )
   const version = decision.effectiveVersion
   const headers: Record<string, string> = {
@@ -120,6 +121,7 @@ export function resolveSharedPoolPersonaDecision(
   requestedModel: string,
   trustedClient: boolean,
   route: SharedPoolPersonaRoute = 'messages',
+  requestedContext1M = false,
 ): PersonaDecision {
   const sharedPool = (config as any).shared_pool || {}
   const syntheticPersonaVariant = typeof sharedPool.message_beta_profile === 'string' && sharedPool.message_beta_profile.trim()
@@ -140,6 +142,7 @@ export function resolveSharedPoolPersonaDecision(
     requestedPolicyVersion,
     requestedModel,
     trustedClient,
+    requestedContext1M,
   })
 }
 

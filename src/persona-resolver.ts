@@ -17,6 +17,7 @@ export type PersonaDecisionStatus =
   | 'quarantine_unknown_beta'
   | 'reject_untrusted_model'
   | 'reject_unknown_persona'
+  | 'reject_context_1m_unsupported_model'
 
 export type PersonaDecision = {
   status: PersonaDecisionStatus
@@ -36,6 +37,7 @@ type ResolvePersonaDecisionInput = {
   requestedPolicyVersion: string
   requestedModel: string
   trustedClient: boolean
+  requestedContext1M?: boolean
 }
 
 type SharedPoolCandidateConfig = {
@@ -52,6 +54,17 @@ type SharedPoolCandidateConfig = {
 
 const FUTURE_TRUSTED_MODEL_RE = /^claude-(sonnet|opus)-\d+-\d+(?:-thinking)?$/
 const DEFAULT_PERSONA_PROFILE_ID = 'claude_code_2_1_175_subscription_1m'
+const DEFAULT_NON_1M_PERSONA_PROFILE_ID = 'claude_code_2_1_175_api_key_non_1m'
+const CONTEXT_1M_PERSONA_PROFILE_ID = 'claude_code_2_1_175_subscription_1m'
+const CONTEXT_1M_SUPPORTED_MODELS = new Set([
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-7-thinking',
+  'claude-opus-4-6',
+  'claude-opus-4-6-thinking',
+  'claude-sonnet-4-6',
+  'claude-fable-5',
+])
 const LEGACY_CCH_COMPATIBLE_VERSIONS = new Set(['2.1.150', '2.1.153', '2.1.169', '2.1.170'])
 const FINAL_2175_STALE_METADATA_VERSIONS = new Set(['2.1.150', '2.1.170'])
 
@@ -63,12 +76,20 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
   const profileMismatch = configuredProfileMismatch(configuredProfileId, identityProfileId, input)
   if (profileMismatch) return profileMismatch
 
-  const profileId = configuredProfileId || identityProfileId || envProfileId
+  let profileId = configuredProfileId || identityProfileId || envProfileId
+  if (input.requestedContext1M) {
+    if (!isContext1MSupportedModel(input.requestedModel)) {
+      return rejectDecision('reject_context_1m_unsupported_model', getPersonaProfile(profileId || DEFAULT_NON_1M_PERSONA_PROFILE_ID), input.requestedPolicyVersion, input.trustedClient, input.route)
+    }
+    profileId = CONTEXT_1M_PERSONA_PROFILE_ID
+  }
   if (!profileId) {
     return rejectDecision('reject_unknown_persona', fallbackProfile(), input.requestedPolicyVersion, input.trustedClient, input.route)
   }
   const profile = getPersonaProfile(profileId)
-  const resolvedBetaHeader = betaHeaderForConfiguredProfile(shared, profile)
+  const resolvedBetaHeader = input.requestedContext1M
+    ? betaHeaderForProfile(profile.id)
+    : betaHeaderForConfiguredProfile(shared, profile)
   const versionDecision = resolveVersionStatus(profile.version, input.requestedPolicyVersion, input.trustedClient)
   const selfPromotionVersion = untrustedFinalPersonaSelfPromotionVersion(profile, input)
   if (selfPromotionVersion) {
@@ -96,7 +117,9 @@ export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): Pers
     }
   }
 
-  const betaProfile = String(shared.message_beta_profile || profile.messageBetaProfile)
+  const betaProfile = input.requestedContext1M
+    ? profile.messageBetaProfile
+    : String(shared.message_beta_profile || profile.messageBetaProfile)
   const betaDecision = resolveBetaDecision(betaProfile, shared, input.trustedClient, profile, input.route, versionDecision.effectiveVersion)
   if (betaDecision) return betaDecision
 
@@ -128,12 +151,19 @@ function configuredProfileMismatch(
   const identityPolicyVersion = normalizeVersion(String(input.identity.policy_version || identityProfile.version || '')).raw
   const allowedFinalCanonicalization = configured.id === DEFAULT_PERSONA_PROFILE_ID
     && FINAL_2175_STALE_METADATA_VERSIONS.has(identityPolicyVersion)
-  if (allowedFinalCanonicalization) return null
+  const allowedNon1MToFinalSelection = configured.id === DEFAULT_PERSONA_PROFILE_ID
+    && identityProfile.id === DEFAULT_NON_1M_PERSONA_PROFILE_ID
+    && identityPolicyVersion === configured.version
+  const allowedFinalToNon1MDownshift = configured.id === DEFAULT_NON_1M_PERSONA_PROFILE_ID
+    && identityProfile.id === DEFAULT_PERSONA_PROFILE_ID
+    && identityPolicyVersion === configured.version
+  if (allowedFinalCanonicalization || allowedNon1MToFinalSelection || allowedFinalToNon1MDownshift) return null
   return rejectDecision('quarantine_unknown_beta', identityProfile, identityPolicyVersion || identityProfile.version, input.trustedClient, input.route)
 }
 
 
 function untrustedFinalPersonaSelfPromotionVersion(profile: PersonaProfile, input: ResolvePersonaDecisionInput): string | null {
+  if (input.requestedContext1M) return null
   if (profile.id !== DEFAULT_PERSONA_PROFILE_ID || input.trustedClient) return null
   const requestedVersion = normalizeVersion(input.requestedPolicyVersion).raw
   if (requestedVersion !== profile.version) return null
@@ -223,6 +253,10 @@ function resolveModelDecision(
     }
   }
   return rejectDecision('reject_untrusted_model', profile, profile.version, trustedClient, route)
+}
+
+function isContext1MSupportedModel(model: string): boolean {
+  return CONTEXT_1M_SUPPORTED_MODELS.has(String(model || '').trim())
 }
 
 function rejectDecision(

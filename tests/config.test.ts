@@ -70,7 +70,7 @@ test('config.example documents Phase 0 mode/auth/provider and stable persona def
   assert.match(example, /claude-opus-4-8/)
   assert.match(example, /claude-fable-5/)
   assert.match(example, /dynamic model resolver/)
-  assert.match(example, /claude_code_2_1_175_subscription_1m/)
+  assert.match(example, /claude_code_2_1_175_api_key_non_1m/)
   assert.match(example, /candidate_model_allowlist:/)
   assert.match(example, /candidate_model_audit_budgets:/)
   assert.match(example, /candidate_beta_audit_budgets:/)
