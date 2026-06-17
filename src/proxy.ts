@@ -1,8 +1,9 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
+import { dirname } from 'path'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
 import { createHmac, randomBytes, randomUUID } from 'crypto'
 import type { Config } from './config.js'
@@ -38,6 +39,8 @@ const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
 const CONTEXT_1M_REQUEST_HEADER = 'x-sub2api-context-1m'
 const HEALTHCHECK_NON_1M_PROFILE = 'claude_code_2_1_175_api_key_non_1m'
 const RUNTIME_REGISTER_PATH = '/_runtime/register-account'
+const RUNTIME_MAPPING_FILE_ENV = 'CC_GATEWAY_RUNTIME_MAPPING_FILE'
+const RUNTIME_MAPPING_DEFAULT_DOCKER_FILE = '/app/runtime/runtime-mappings.json'
 
 type RuntimeRegisterRequest = {
   account_id?: unknown
@@ -52,8 +55,27 @@ type RuntimeRegisterRequest = {
   policy_version?: unknown
 }
 
+type RuntimeMappingRecord = {
+  account_id: string
+  account_ref: string
+  account_uuid_ref: string
+  email_ref?: string
+  egress_bucket: string
+  proxy_url: string
+  proxy_identity_ref: string
+  persona_variant: string
+  session_policy: 'preserve_downstream_session_id' | 'gateway_generated'
+  policy_version: string
+}
+
+type RuntimeMappingFile = {
+  version: 1
+  mappings: Record<string, RuntimeMappingRecord>
+}
+
 export function startProxy(config: Config) {
   initAuth(config)
+  replayRuntimeMappings(config)
 
   const upstream = new URL(config.upstream.url)
   const useTls = config.server.tls?.cert && config.server.tls?.key
@@ -150,7 +172,22 @@ async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, 
 function registerRuntimeAccount(
   config: Config,
   input: RuntimeRegisterRequest,
+  options: { persist?: boolean } = {},
 ): { egressBucket: string } | { status: number; code: string; message: string } {
+  const normalized = normalizeRuntimeAccountMapping(config, input)
+  if ('status' in normalized) return normalized
+  if (options.persist !== false) {
+    const persisted = persistRuntimeMapping(normalized)
+    if (persisted) return persisted
+  }
+  applyRuntimeAccountMapping(config, normalized)
+  return { egressBucket: normalized.egress_bucket }
+}
+
+function normalizeRuntimeAccountMapping(
+  config: Config,
+  input: RuntimeRegisterRequest,
+): RuntimeMappingRecord | { status: number; code: string; message: string } {
   const accountId = stringField(input.account_id)
   const accountRef = stringField(input.account_ref) || accountId
   const accountUuidRef = stringField(input.account_uuid_ref) || accountRef
@@ -175,24 +212,38 @@ function registerRuntimeAccount(
   const proxyValidation = validateRuntimeProxyUrl(proxyUrl)
   if (proxyValidation) return proxyValidation
 
-  config.account_identities = config.account_identities || {}
-  config.account_identities[accountId] = {
-    device_id: String(config.identity.device_id || ''),
-    account_uuid_ref: accountUuidRef,
+  return {
+    account_id: accountId,
     account_ref: accountRef,
+    account_uuid_ref: accountUuidRef,
     ...(emailRef ? { email_ref: emailRef } : {}),
+    egress_bucket: egressBucket,
+    proxy_url: proxyUrl,
+    proxy_identity_ref: proxyIdentityRef,
     persona_variant: personaVariant,
     session_policy: sessionPolicy as 'preserve_downstream_session_id' | 'gateway_generated',
     policy_version: policyVersion,
   }
-  config.egress_buckets = config.egress_buckets || {}
-  config.egress_buckets[egressBucket] = {
-    enabled: true,
-    proxy_url: proxyUrl,
-    proxy_identity_ref: proxyIdentityRef,
-    allowed_account_ids: [accountId],
+}
+
+function applyRuntimeAccountMapping(config: Config, mapping: RuntimeMappingRecord) {
+  config.account_identities = config.account_identities || {}
+  config.account_identities[mapping.account_id] = {
+    device_id: String(config.identity.device_id || ''),
+    account_uuid_ref: mapping.account_uuid_ref,
+    account_ref: mapping.account_ref,
+    ...(mapping.email_ref ? { email_ref: mapping.email_ref } : {}),
+    persona_variant: mapping.persona_variant,
+    session_policy: mapping.session_policy,
+    policy_version: mapping.policy_version,
   }
-  return { egressBucket }
+  config.egress_buckets = config.egress_buckets || {}
+  config.egress_buckets[mapping.egress_bucket] = {
+    enabled: true,
+    proxy_url: mapping.proxy_url,
+    proxy_identity_ref: mapping.proxy_identity_ref,
+    allowed_account_ids: [mapping.account_id],
+  }
 }
 
 function validateRuntimeProxyUrl(value: string): { status: number; code: string; message: string } | null {
@@ -219,6 +270,102 @@ function isSafeInternalRoutingKey(value: string): boolean {
 
 function stringField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function runtimeMappingFilePath(): string | null {
+  const explicit = process.env[RUNTIME_MAPPING_FILE_ENV]?.trim()
+  if (explicit) return explicit
+  // Docker images run with WORKDIR=/app; keep local development side-effect free
+  // while making container restarts recover mappings by default.
+  if (process.cwd() === '/app') return RUNTIME_MAPPING_DEFAULT_DOCKER_FILE
+  return null
+}
+
+function replayRuntimeMappings(config: Config) {
+  const file = runtimeMappingFilePath()
+  if (!file) return
+  const loaded = loadRuntimeMappingFile(file)
+  const entries = Object.values(loaded.mappings)
+  let registered = 0
+  let failed = 0
+  for (const mapping of entries) {
+    const result = registerRuntimeAccount(config, mapping, { persist: false })
+    if ('status' in result) {
+      failed++
+      continue
+    }
+    registered++
+  }
+  if (entries.length > 0 || failed > 0) {
+    log('info', 'Runtime account mappings replayed', { registered, failed })
+  }
+}
+
+function persistRuntimeMapping(mapping: RuntimeMappingRecord): { status: number; code: string; message: string } | null {
+  const file = runtimeMappingFilePath()
+  if (!file) return null
+  try {
+    const existing = loadRuntimeMappingFile(file)
+    existing.mappings[mapping.account_id] = mapping
+    writeRuntimeMappingFile(file, existing)
+    return null
+  } catch (err) {
+    log('error', 'Runtime account mapping persistence failed', { error: err instanceof Error ? err.message : 'unknown' })
+    return { status: 500, code: 'runtime_mapping_persist_failed', message: 'Runtime account mapping could not be persisted for replay' }
+  }
+}
+
+function loadRuntimeMappingFile(file: string): RuntimeMappingFile {
+  try {
+    const raw = readFileSync(file, 'utf-8')
+    const parsed = JSON.parse(raw) as Partial<RuntimeMappingFile>
+    if (parsed.version !== 1 || !parsed.mappings || typeof parsed.mappings !== 'object' || Array.isArray(parsed.mappings)) {
+      log('warn', 'Runtime mapping file ignored because its shape is invalid')
+      return emptyRuntimeMappingFile()
+    }
+    const mappings: Record<string, RuntimeMappingRecord> = {}
+    for (const [key, value] of Object.entries(parsed.mappings)) {
+      if (!isRuntimeMappingRecord(value) || value.account_id !== key) continue
+      mappings[key] = value
+    }
+    return { version: 1, mappings }
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : ''
+    if (code !== 'ENOENT') {
+      log('warn', 'Runtime mapping file could not be loaded; starting with empty replay set', { error: err instanceof Error ? err.message : 'unknown' })
+    }
+    return emptyRuntimeMappingFile()
+  }
+}
+
+function writeRuntimeMappingFile(file: string, state: RuntimeMappingFile) {
+  const dir = dirname(file)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  chmodSync(dir, 0o700)
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, file)
+  chmodSync(file, 0o600)
+}
+
+function emptyRuntimeMappingFile(): RuntimeMappingFile {
+  return { version: 1, mappings: {} }
+}
+
+function isRuntimeMappingRecord(value: unknown): value is RuntimeMappingRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.account_id === 'string' &&
+    typeof record.account_ref === 'string' &&
+    typeof record.account_uuid_ref === 'string' &&
+    (record.email_ref === undefined || typeof record.email_ref === 'string') &&
+    typeof record.egress_bucket === 'string' &&
+    typeof record.proxy_url === 'string' &&
+    typeof record.proxy_identity_ref === 'string' &&
+    typeof record.persona_variant === 'string' &&
+    (record.session_policy === 'preserve_downstream_session_id' || record.session_policy === 'gateway_generated') &&
+    typeof record.policy_version === 'string'
 }
 
 type RawCaptureSink = {

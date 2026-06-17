@@ -11,7 +11,7 @@ console.log('\ntests/proxy-sub2api.test.ts')
 const ccGatewayHeaders = {
   'x-cc-account-id': 'account-1',
   'x-cc-egress-bucket': 'bucket-a',
-  'x-cc-policy-version': '2.1.146',
+  'x-cc-policy-version': '2.1.175',
 }
 
 function streamPost(url: string, headers: Record<string, string>, body: unknown) {
@@ -56,15 +56,15 @@ function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<
         account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         email_hash: 'hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
         account_hash: 'hmac-sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
-        persona_variant: 'claude-code-2.1.146-macos-local',
+        persona_variant: 'claude-code-2.1.175-macos-local',
         session_policy: 'preserve_downstream_session_id',
-        policy_version: '2.1.146',
+        policy_version: '2.1.175',
       },
     },
     egress_buckets: {
       'bucket-a': { enabled: true, proxy_url: proxyUrl, proxy_identity_hash: 'opaque:proxy-ref:v1:bucket-a', allowed_account_ids: ['account-1'] },
     },
-    env: { ...baseConfig().env, version: '2.1.146', version_base: '2.1.146' },
+    env: { ...baseConfig().env, version: '2.1.175', version_base: '2.1.175' },
     ...overrides,
   } as any)
 }
@@ -136,7 +136,7 @@ test('runtime registration makes a newly onboarded account routable without rest
         egress_bucket: 'bucket-a',
         proxy_url: proxy.url,
         proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket',
-        policy_version: '2.1.146',
+        policy_version: '2.1.175',
       },
     })
     assert.equal(registered.status, 200, registered.body)
@@ -165,6 +165,64 @@ test('runtime registration makes a newly onboarded account routable without rest
   }
 })
 
+test('runtime registration persists and replays after gateway restart', async () => {
+  const mappingDir = mkdtempSync(join(tmpdir(), 'cc-gateway-runtime-mapping-'))
+  const previousMappingFile = process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
+  process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE = join(mappingDir, 'runtime-mappings.json')
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-replay'
+  const runtimeHeaders = {
+    ...ccGatewayHeaders,
+    'x-cc-account-id': runtimeAccountRef,
+    'x-cc-egress-bucket': 'bucket-replay',
+  }
+  let gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        egress_bucket: 'bucket-replay',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket-replay',
+        policy_version: '2.1.175',
+      },
+    })
+    assert.equal(registered.status, 200, registered.body)
+    await close(gateway)
+
+    gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+      account_identities: {},
+      egress_buckets: {},
+    }))
+    const afterRestart = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: {
+        ...runtimeHeaders,
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-token-type': 'oauth',
+        authorization: 'Bearer selected-token',
+      },
+      body: { messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(afterRestart.status, 200, afterRestart.body)
+    assert.equal(upstream.captured.length, 1)
+  } finally {
+    if (previousMappingFile === undefined) delete process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
+    else process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE = previousMappingFile
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('runtime registration rejects raw numeric account ids before mutating runtime state', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
@@ -182,7 +240,7 @@ test('runtime registration rejects raw numeric account ids before mutating runti
         egress_bucket: 'bucket-a',
         proxy_url: proxy.url,
         proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket',
-        policy_version: '2.1.150',
+        policy_version: '2.1.175',
       },
     })
     assert.equal(rejected.status, 400)
