@@ -5,8 +5,8 @@ import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import { dirname } from 'path'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
-import { createHmac, randomBytes, randomUUID } from 'crypto'
-import type { Config } from './config.js'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto'
+import { isProductionFormalPool, type Config } from './config.js'
 import { authenticate, authenticateGateway, initAuth } from './auth.js'
 import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
@@ -15,9 +15,11 @@ import { getProxyAgent } from './proxy-agent.js'
 import {
   canonicalClaudeCodeSessionId,
   accountIdentityRef,
+  computeCCVersionSuffix,
   canonicalPersonaHeaders,
   getSharedPoolMaxBodyBytes,
   isSafeIdentityRef,
+  isSignPrimaryAllowedForVersion,
   normalizeSharedPoolSessionId,
   resolveAccountIdentity,
   resolveEgressBucket,
@@ -33,26 +35,63 @@ import {
 import { redactRequestPath, redactSensitiveText } from './redaction.js'
 import { evaluateUpstreamSafety } from './upstream-safety.js'
 import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
+import { resolvePersonaProfileId } from './persona-registry.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
 const CONTEXT_1M_REQUEST_HEADER = 'x-sub2api-context-1m'
-const HEALTHCHECK_NON_1M_PROFILE = 'claude_code_2_1_175_api_key_non_1m'
+const INTERNAL_CONTROL_HEADER = 'x-cc-internal-control-token'
+const HEALTHCHECK_2175_NON_1M_PROFILE = 'claude_code_2_1_175_api_key_non_1m'
+const HEALTHCHECK_2179_NATIVE_DEGRADED_PROFILE = 'claude_code_2_1_179_native_degraded'
 const RUNTIME_REGISTER_PATH = '/_runtime/register-account'
 const RUNTIME_MAPPING_FILE_ENV = 'CC_GATEWAY_RUNTIME_MAPPING_FILE'
 const RUNTIME_MAPPING_DEFAULT_DOCKER_FILE = '/app/runtime/runtime-mappings.json'
+const FORMAL_POOL_SESSION_LEDGER_FILE_ENV = 'CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE'
+const FORMAL_POOL_SESSION_LEDGER_DEFAULT_DOCKER_FILE = '/app/runtime/formal-pool-session-ledger.json'
+const FORMAL_POOL_CONTEXT_HEADER = 'x-cc-formal-pool-context'
+const FORMAL_POOL_SIGNATURE_HEADER = 'x-cc-formal-pool-signature'
+const FORMAL_POOL_ATTESTATION_MAX_SKEW_MS = 5 * 60 * 1000
+const FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST_ENV = 'CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST'
+const FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF = 'strip_attribution'
+const FORMAL_POOL_2179_PROFILE_POLICY_VERSION = 'claude_code_2_1_179_cp1_degraded_v1'
+const FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
+const FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_179_cache_parity_degraded_v1'
+const FORMAL_POOL_2179_NO_CCH_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch'
+const FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch'
+const FORMAL_POOL_2179_NO_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch_oracle_cp1_degraded_v1'
+const FORMAL_POOL_2179_SIGNED_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1'
+const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
+const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
+  'schema_version',
+  'cli_version_bucket',
+  'route_class',
+  'stream',
+  'top_level_body_keys',
+  'unknown_top_level_body_key_count',
+  'tool_count',
+  'thinking_present',
+  'output_config_present',
+  'context_management_present',
+  'billing_block_count',
+  'billing_shape',
+  'cc_entrypoint_bucket',
+])
 
 type RuntimeRegisterRequest = {
   account_id?: unknown
   account_ref?: unknown
   account_uuid_ref?: unknown
   email_ref?: unknown
+  credential_ref?: unknown
+  credential_binding_hmac?: unknown
+  token_type?: unknown
   egress_bucket?: unknown
   proxy_url?: unknown
   proxy_identity_ref?: unknown
   persona_variant?: unknown
   session_policy?: unknown
   policy_version?: unknown
+  device_id?: unknown
 }
 
 type RuntimeMappingRecord = {
@@ -60,17 +99,52 @@ type RuntimeMappingRecord = {
   account_ref: string
   account_uuid_ref: string
   email_ref?: string
+  credential_ref: string
+  credential_binding_hmac: string
+  token_type: 'oauth' | 'apikey'
   egress_bucket: string
   proxy_url: string
   proxy_identity_ref: string
   persona_variant: string
-  session_policy: 'preserve_downstream_session_id' | 'gateway_generated'
+  session_policy: 'preserve_downstream_session_id'
   policy_version: string
+  device_id: string
 }
 
 type RuntimeMappingFile = {
   version: 1
   mappings: Record<string, RuntimeMappingRecord>
+}
+
+type FormalPoolSessionAuthorityBinding = {
+  account_id: string
+  credential_ref: string
+  credential_source: 'server_account_credentials'
+  egress_bucket: string
+  proxy_identity_ref: string
+  policy_version: string
+  persona_profile: string
+  trusted_egress_profile_ref: string
+  profile_policy_version: string
+  billing_shape_policy: FormalPoolBillingShapePolicy
+  request_shape_profile_ref: string
+  cache_parity_profile_ref: string
+  device_ref: string
+}
+
+type FormalPoolBillingShapePolicy = 'strip' | 'no_cch' | 'signed_cch'
+
+type FormalPoolBillingMode = 'strip' | 'no_cch' | 'sign'
+
+type FormalPoolSessionAuthorityLedgerFile = {
+  version: 1
+  sessions: Record<string, FormalPoolSessionAuthorityBinding>
+  attestation_nonces: Record<string, number>
+}
+
+type ProxyRuntimeState = {
+  formalPoolSessionAuthorityLedger: Map<string, FormalPoolSessionAuthorityBinding>
+  formalPoolAttestationNonces: Map<string, number>
 }
 
 export function startProxy(config: Config) {
@@ -79,9 +153,13 @@ export function startProxy(config: Config) {
 
   const upstream = new URL(config.upstream.url)
   const useTls = config.server.tls?.cert && config.server.tls?.key
+  const runtimeState: ProxyRuntimeState = {
+    formalPoolSessionAuthorityLedger: new Map(),
+    formalPoolAttestationNonces: new Map(),
+  }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleRequest(req, res, config, upstream)
+    handleRequest(req, res, config, upstream, runtimeState)
   }
 
   let server
@@ -153,7 +231,7 @@ async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, 
     writeControlPlaneError(res, 400, 'invalid_json', 'Runtime registration requires JSON')
     return
   }
-  const result = registerRuntimeAccount(config, parsed)
+  const result = registerRuntimeAccount(config, parsed, { req })
   if ('status' in result) {
     writeControlPlaneError(res, result.status, result.code, result.message)
     return
@@ -172,10 +250,12 @@ async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, 
 function registerRuntimeAccount(
   config: Config,
   input: RuntimeRegisterRequest,
-  options: { persist?: boolean } = {},
+  options: { persist?: boolean; req?: IncomingMessage; verifiedReplay?: boolean } = {},
 ): { egressBucket: string } | { status: number; code: string; message: string } {
-  const normalized = normalizeRuntimeAccountMapping(config, input)
+  const normalized = normalizeRuntimeAccountMapping(config, input, options.req, options.verifiedReplay === true)
   if ('status' in normalized) return normalized
+  const conflict = findRuntimeMappingConflict(config, normalized)
+  if (conflict) return conflict
   if (options.persist !== false) {
     const persisted = persistRuntimeMapping(normalized)
     if (persisted) return persisted
@@ -187,52 +267,83 @@ function registerRuntimeAccount(
 function normalizeRuntimeAccountMapping(
   config: Config,
   input: RuntimeRegisterRequest,
+  req?: IncomingMessage,
+  verifiedReplay = false,
 ): RuntimeMappingRecord | { status: number; code: string; message: string } {
   const accountId = stringField(input.account_id)
   const accountRef = stringField(input.account_ref) || accountId
   const accountUuidRef = stringField(input.account_uuid_ref) || accountRef
   const emailRef = stringField(input.email_ref)
+  const credentialRef = stringField(input.credential_ref)
+  const credentialBindingHmac = stringField(input.credential_binding_hmac)
+  const tokenType = stringField(input.token_type)
   const egressBucket = stringField(input.egress_bucket)
   const proxyUrl = stringField(input.proxy_url)
   const proxyIdentityRef = stringField(input.proxy_identity_ref)
   const policyVersion = stringField(input.policy_version) || String(config.env.version || '')
   const personaVariant = stringField(input.persona_variant) || `claude-code-${policyVersion}-macos-local`
   const sessionPolicy = stringField(input.session_policy) || 'preserve_downstream_session_id'
+  const deviceId = stringField(input.device_id)
 
   if (!accountId || !isSafeInternalRoutingKey(accountId)) return { status: 400, code: 'invalid_account_id', message: 'Runtime account id must be a safe internal routing key' }
   if (!accountRef || !isSafeIdentityRef(accountRef)) return { status: 400, code: 'invalid_account_ref', message: 'Runtime account ref must be a safe ref' }
   if (!accountUuidRef || !isSafeIdentityRef(accountUuidRef)) return { status: 400, code: 'invalid_account_uuid_ref', message: 'Runtime account uuid ref must be a safe ref' }
   if (emailRef && !isSafeIdentityRef(emailRef)) return { status: 400, code: 'invalid_email_ref', message: 'Runtime email ref must be a safe ref' }
+  if (!credentialRef || !isSafeIdentityRef(credentialRef)) return { status: 400, code: 'invalid_credential_ref', message: 'Runtime credential ref must be a safe ref' }
+  if (!/^hmac-sha256:[a-f0-9]{64}$/i.test(credentialBindingHmac)) return { status: 400, code: 'invalid_credential_binding_hmac', message: 'Runtime credential binding HMAC must be a keyed HMAC ref' }
+  if (tokenType !== 'oauth' && tokenType !== 'apikey') {
+    return { status: 400, code: 'invalid_token_type', message: 'Runtime registration token type is unsupported' }
+  }
   if (!egressBucket || !isSafeInternalRoutingKey(egressBucket)) return { status: 400, code: 'invalid_egress_bucket', message: 'Runtime egress bucket must be a safe internal routing key' }
   if (!proxyIdentityRef || !isSafeIdentityRef(proxyIdentityRef)) return { status: 400, code: 'invalid_proxy_identity_ref', message: 'Runtime proxy identity ref must be a safe ref' }
   if (!policyVersion) return { status: 400, code: 'missing_policy_version', message: 'Runtime registration requires policy version' }
-  if (sessionPolicy !== 'preserve_downstream_session_id' && sessionPolicy !== 'gateway_generated') {
-    return { status: 400, code: 'invalid_session_policy', message: 'Runtime registration session policy is not supported' }
+  if (!/^[a-f0-9]{64}$/i.test(deviceId)) return { status: 400, code: 'missing_device_id', message: 'Runtime registration requires account-owned 64-hex device_id' }
+  if (sessionPolicy !== 'preserve_downstream_session_id') {
+    return { status: 400, code: 'invalid_session_policy', message: 'Runtime registration session policy must be preserve_downstream_session_id until gateway_generated is implemented' }
   }
   const proxyValidation = validateRuntimeProxyUrl(proxyUrl)
   if (proxyValidation) return proxyValidation
+  if (!verifiedReplay) {
+    const credentialProof = req ? selectedRawCredentialForBinding(req, tokenType as 'oauth' | 'apikey') : undefined
+    const secret = formalPoolAttestationSecret(config)
+    if (!credentialProof || !secret) {
+      return { status: 403, code: 'credential_account_mismatch', message: 'Runtime registration credential proof is required' }
+    }
+    const expectedHex = credentialBindingHmac.slice('hmac-sha256:'.length)
+    const actualHex = credentialBindingHmacHex(secret, tokenType as 'oauth' | 'apikey', credentialProof)
+    if (!safeEqualHex(actualHex, expectedHex)) {
+      return { status: 403, code: 'credential_account_mismatch', message: 'Runtime registration credential proof does not match credential binding' }
+    }
+  }
 
   return {
     account_id: accountId,
     account_ref: accountRef,
     account_uuid_ref: accountUuidRef,
     ...(emailRef ? { email_ref: emailRef } : {}),
+    credential_ref: credentialRef,
+    credential_binding_hmac: credentialBindingHmac,
+    token_type: tokenType as 'oauth' | 'apikey',
     egress_bucket: egressBucket,
     proxy_url: proxyUrl,
     proxy_identity_ref: proxyIdentityRef,
     persona_variant: personaVariant,
-    session_policy: sessionPolicy as 'preserve_downstream_session_id' | 'gateway_generated',
+    session_policy: sessionPolicy as 'preserve_downstream_session_id',
     policy_version: policyVersion,
+    device_id: deviceId,
   }
 }
 
 function applyRuntimeAccountMapping(config: Config, mapping: RuntimeMappingRecord) {
   config.account_identities = config.account_identities || {}
   config.account_identities[mapping.account_id] = {
-    device_id: String(config.identity.device_id || ''),
+    device_id: mapping.device_id,
     account_uuid_ref: mapping.account_uuid_ref,
     account_ref: mapping.account_ref,
     ...(mapping.email_ref ? { email_ref: mapping.email_ref } : {}),
+    credential_ref: mapping.credential_ref,
+    credential_binding_hmac: mapping.credential_binding_hmac,
+    token_type: mapping.token_type,
     persona_variant: mapping.persona_variant,
     session_policy: mapping.session_policy,
     policy_version: mapping.policy_version,
@@ -281,6 +392,17 @@ function runtimeMappingFilePath(): string | null {
   return null
 }
 
+function formalPoolSessionLedgerFilePath(): string | null {
+  const explicit = process.env[FORMAL_POOL_SESSION_LEDGER_FILE_ENV]?.trim()
+  if (explicit) return explicit
+  if (process.cwd() === '/app') return FORMAL_POOL_SESSION_LEDGER_DEFAULT_DOCKER_FILE
+  return null
+}
+
+function formalPoolSessionLedgerPersistenceRequired(config: Config): boolean {
+  return isProductionFormalPool(config)
+}
+
 function replayRuntimeMappings(config: Config) {
   const file = runtimeMappingFilePath()
   if (!file) return
@@ -289,7 +411,7 @@ function replayRuntimeMappings(config: Config) {
   let registered = 0
   let failed = 0
   for (const mapping of entries) {
-    const result = registerRuntimeAccount(config, mapping, { persist: false })
+    const result = registerRuntimeAccount(config, mapping, { persist: false, verifiedReplay: true })
     if ('status' in result) {
       failed++
       continue
@@ -306,6 +428,8 @@ function persistRuntimeMapping(mapping: RuntimeMappingRecord): { status: number;
   if (!file) return null
   try {
     const existing = loadRuntimeMappingFile(file)
+    const conflict = findRuntimeMappingFileConflict(existing, mapping)
+    if (conflict) return conflict
     existing.mappings[mapping.account_id] = mapping
     writeRuntimeMappingFile(file, existing)
     return null
@@ -313,6 +437,91 @@ function persistRuntimeMapping(mapping: RuntimeMappingRecord): { status: number;
     log('error', 'Runtime account mapping persistence failed', { error: err instanceof Error ? err.message : 'unknown' })
     return { status: 500, code: 'runtime_mapping_persist_failed', message: 'Runtime account mapping could not be persisted for replay' }
   }
+}
+
+function findRuntimeMappingConflict(
+  config: Config,
+  mapping: RuntimeMappingRecord,
+): { status: number; code: string; message: string } | null {
+  const existingIdentity = config.account_identities?.[mapping.account_id]
+  if (existingIdentity) {
+    const existing: RuntimeMappingRecord = {
+      account_id: mapping.account_id,
+      account_ref: existingIdentity.account_ref || existingIdentity.account_hash || existingIdentity.account_uuid_ref || existingIdentity.account_uuid_hash || '',
+      account_uuid_ref: existingIdentity.account_uuid_ref || existingIdentity.account_uuid_hash || '',
+      ...(existingIdentity.email_ref || existingIdentity.email_hash ? { email_ref: existingIdentity.email_ref || existingIdentity.email_hash } : {}),
+      credential_ref: existingIdentity.credential_ref || '',
+      credential_binding_hmac: existingIdentity.credential_binding_hmac || '',
+      token_type: existingIdentity.token_type || mapping.token_type,
+      egress_bucket: mapping.egress_bucket,
+      proxy_url: mapping.proxy_url,
+      proxy_identity_ref: mapping.proxy_identity_ref,
+      persona_variant: existingIdentity.persona_variant,
+      session_policy: existingIdentity.session_policy,
+      policy_version: existingIdentity.policy_version,
+      device_id: existingIdentity.device_id,
+    }
+    const existingBucket = findExistingRuntimeBucketForAccount(config, mapping.account_id)
+    if (!existingBucket || !sameRuntimeMappingAuthority({ ...existing, ...existingBucket }, mapping)) {
+      return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
+    }
+  }
+  for (const [bucketId, bucket] of Object.entries(config.egress_buckets || {})) {
+    if (bucketId !== mapping.egress_bucket) continue
+    if (!bucket.allowed_account_ids?.includes(mapping.account_id)
+      || bucket.proxy_url !== mapping.proxy_url
+      || (bucket.proxy_identity_ref || bucket.proxy_identity_hash || '') !== mapping.proxy_identity_ref) {
+      return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime egress authority mapping already exists' }
+    }
+  }
+  return null
+}
+
+function findExistingRuntimeBucketForAccount(
+  config: Config,
+  accountId: string,
+): Pick<RuntimeMappingRecord, 'egress_bucket' | 'proxy_url' | 'proxy_identity_ref'> | null {
+  for (const [bucketId, bucket] of Object.entries(config.egress_buckets || {})) {
+    if (bucket.allowed_account_ids?.includes(accountId)) {
+      return {
+        egress_bucket: bucketId,
+        proxy_url: bucket.proxy_url,
+        proxy_identity_ref: bucket.proxy_identity_ref || bucket.proxy_identity_hash || '',
+      }
+    }
+  }
+  return null
+}
+
+function findRuntimeMappingFileConflict(
+  file: RuntimeMappingFile,
+  mapping: RuntimeMappingRecord,
+): { status: number; code: string; message: string } | null {
+  for (const existing of Object.values(file.mappings)) {
+    const sameAccount = existing.account_id === mapping.account_id
+    const sameBucket = existing.egress_bucket === mapping.egress_bucket
+    if ((sameAccount || sameBucket) && !sameRuntimeMappingAuthority(existing, mapping)) {
+      return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
+    }
+  }
+  return null
+}
+
+function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
+  return a.account_id === b.account_id
+    && a.account_ref === b.account_ref
+    && a.account_uuid_ref === b.account_uuid_ref
+    && (a.email_ref || '') === (b.email_ref || '')
+    && a.credential_ref === b.credential_ref
+    && a.credential_binding_hmac === b.credential_binding_hmac
+    && a.token_type === b.token_type
+    && a.egress_bucket === b.egress_bucket
+    && a.proxy_url === b.proxy_url
+    && a.proxy_identity_ref === b.proxy_identity_ref
+    && a.persona_variant === b.persona_variant
+    && a.session_policy === b.session_policy
+    && a.policy_version === b.policy_version
+    && a.device_id === b.device_id
 }
 
 function loadRuntimeMappingFile(file: string): RuntimeMappingFile {
@@ -353,6 +562,80 @@ function emptyRuntimeMappingFile(): RuntimeMappingFile {
   return { version: 1, mappings: {} }
 }
 
+function loadFormalPoolSessionAuthorityLedger(file: string): FormalPoolSessionAuthorityLedgerFile {
+  try {
+    const raw = readFileSync(file, 'utf-8')
+    const parsed = JSON.parse(raw) as Partial<FormalPoolSessionAuthorityLedgerFile>
+    if (parsed.version !== 1 || !parsed.sessions || typeof parsed.sessions !== 'object' || Array.isArray(parsed.sessions)) {
+      throw new Error('invalid_formal_pool_session_ledger')
+    }
+    if (!parsed.attestation_nonces || typeof parsed.attestation_nonces !== 'object' || Array.isArray(parsed.attestation_nonces)) {
+      throw new Error('invalid_formal_pool_session_ledger')
+    }
+    const sessions: Record<string, FormalPoolSessionAuthorityBinding> = {}
+    for (const [key, value] of Object.entries(parsed.sessions)) {
+      if (!isSafeIdentityRef(key) || !isFormalPoolSessionAuthorityBinding(value)) {
+        throw new Error('invalid_formal_pool_session_ledger')
+      }
+      sessions[key] = value
+    }
+    const attestation_nonces: Record<string, number> = {}
+    for (const [key, value] of Object.entries(parsed.attestation_nonces)) {
+      if (!isSafeIdentityRef(key) || !isSafeLedgerExpiry(value)) {
+        throw new Error('invalid_formal_pool_session_ledger')
+      }
+      attestation_nonces[key] = value
+    }
+    return { version: 1, sessions, attestation_nonces }
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : ''
+    if (code === 'ENOENT') return emptyFormalPoolSessionAuthorityLedgerFile()
+    throw err
+  }
+}
+
+function writeFormalPoolSessionAuthorityLedger(
+  file: string,
+  state: FormalPoolSessionAuthorityLedgerFile,
+  faultScope: 'session_authority' | 'attestation_nonce' = 'session_authority',
+) {
+  if (process.env.NODE_ENV === 'test') {
+    const fault = process.env[FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST_ENV]?.trim()
+    if (fault === '1' || fault === faultScope) {
+      throw new Error('injected_formal_pool_session_ledger_write_failure')
+    }
+  }
+  const dir = dirname(file)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  chmodSync(dir, 0o700)
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+  writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 })
+  chmodSync(tmp, 0o600)
+  renameSync(tmp, file)
+  chmodSync(file, 0o600)
+}
+
+function emptyFormalPoolSessionAuthorityLedgerFile(): FormalPoolSessionAuthorityLedgerFile {
+  return { version: 1, sessions: {}, attestation_nonces: {} }
+}
+
+function isSafeLedgerExpiry(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function isFormalPoolSessionAuthorityBinding(value: unknown): value is FormalPoolSessionAuthorityBinding {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Partial<FormalPoolSessionAuthorityBinding>
+  return typeof record.account_id === 'string' && isSafeInternalRoutingKey(record.account_id)
+    && isSafeIdentityRef(record.credential_ref)
+    && record.credential_source === 'server_account_credentials'
+    && typeof record.egress_bucket === 'string' && isSafeInternalRoutingKey(record.egress_bucket)
+    && isSafeIdentityRef(record.proxy_identity_ref)
+    && typeof record.policy_version === 'string' && record.policy_version.trim() === record.policy_version && !/[\r\n]/.test(record.policy_version)
+    && typeof record.persona_profile === 'string' && record.persona_profile.trim() === record.persona_profile && !/[\r\n]/.test(record.persona_profile)
+    && isSafeIdentityRef(record.device_ref)
+}
+
 function isRuntimeMappingRecord(value: unknown): value is RuntimeMappingRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
@@ -360,11 +643,15 @@ function isRuntimeMappingRecord(value: unknown): value is RuntimeMappingRecord {
     typeof record.account_ref === 'string' &&
     typeof record.account_uuid_ref === 'string' &&
     (record.email_ref === undefined || typeof record.email_ref === 'string') &&
+    typeof record.credential_ref === 'string' &&
+    typeof record.credential_binding_hmac === 'string' &&
+    (record.token_type === 'oauth' || record.token_type === 'apikey') &&
     typeof record.egress_bucket === 'string' &&
     typeof record.proxy_url === 'string' &&
     typeof record.proxy_identity_ref === 'string' &&
+    typeof record.device_id === 'string' &&
     typeof record.persona_variant === 'string' &&
-    (record.session_policy === 'preserve_downstream_session_id' || record.session_policy === 'gateway_generated') &&
+    record.session_policy === 'preserve_downstream_session_id' &&
     typeof record.policy_version === 'string'
 }
 
@@ -560,9 +847,9 @@ function safeVerifierSummary(result: unknown): unknown {
 
 function safeSensitiveHeaderPresence(headers: Record<string, string | string[] | undefined>) {
   return {
-    authorization: headers.authorization !== undefined,
-    x_api_key: headers['x-api-key'] !== undefined,
-    x_claude_code_session_id: headers['X-Claude-Code-Session-Id'] !== undefined,
+    authorization_present: headers.authorization !== undefined,
+    x_api_key_present: headers['x-api-key'] !== undefined,
+    x_claude_code_session_id_present: headers['X-Claude-Code-Session-Id'] !== undefined,
   }
 }
 
@@ -624,8 +911,32 @@ type AccountContext = {
   provider: string
   accountId?: string
   tokenType: 'oauth' | 'apikey'
+  credentialRef?: string
   egressBucket?: string
   policyVersion?: string
+}
+
+type AttestedFormalPoolContext = {
+  method: string
+  route_class: string
+  path: string
+  account_id: string
+  token_type: 'oauth' | 'apikey'
+  credential_ref: string
+  credential_source: 'server_account_credentials'
+  egress_bucket: string
+  proxy_identity_ref: string
+  policy_version: string
+  persona_profile: string
+  trusted_egress_profile_ref: string
+  profile_policy_version: string
+  billing_shape_policy: FormalPoolBillingShapePolicy
+  request_shape_profile_ref: string
+  cache_parity_profile_ref: string
+  observed_client_profile: Record<string, unknown>
+  session_id: string
+  timestamp_ms: number
+  nonce: string
 }
 
 async function handleRequest(
@@ -633,6 +944,7 @@ async function handleRequest(
   res: ServerResponse,
   config: Config,
   upstream: URL,
+  runtimeState: ProxyRuntimeState,
 ) {
   const method = req.method || 'GET'
   const target = normalizeRequestTarget(req.url || '/')
@@ -676,6 +988,10 @@ async function handleRequest(
   }
 
   if (target.pathname === RUNTIME_REGISTER_PATH) {
+    if (config.mode === 'sub2api' && !isTrustedInternalControl(req, config)) {
+      writeControlPlaneError(res, 403, 'missing_internal_control_attestation', 'Runtime account registration requires internal control attestation')
+      return
+    }
     await handleRuntimeRegister(req, res, config, method)
     return
   }
@@ -702,10 +1018,21 @@ async function handleRequest(
   }
 
   log('info', `Client "${clientName}" → ${method} ${safePath}`)
-  const trustedPersonaClient = isTrustedPersonaClient(req)
-  const requestedContext1M = readTrustedContext1MRequest(req, clientName)
-  const healthcheckPersonaProfile = readTrustedHealthcheckPersonaProfile(req, clientName)
-  if (healthcheckPersonaProfile && healthcheckPersonaProfile !== HEALTHCHECK_NON_1M_PROFILE) {
+  const configuredBillingMode = (config as any).shared_pool?.billing_cch_mode || 'strip'
+  if (config.mode === 'sub2api' && configuredBillingMode === 'disabled') {
+    writeControlPlaneError(res, 403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
+    return
+  }
+  let billingMode: FormalPoolBillingMode | 'disabled' | string = configuredBillingMode
+  const trustedInternalControl = isTrustedInternalControl(req, config)
+  if (config.mode === 'sub2api' && hasProtectedInternalControlInput(req) && !trustedInternalControl) {
+    writeControlPlaneError(res, 403, 'missing_internal_control_attestation', 'Internal Sub2API control headers require internal control attestation')
+    return
+  }
+  const trustedPersonaClient = isTrustedPersonaClient(req, trustedInternalControl)
+  const requestedContext1M = readTrustedContext1MRequest(req, clientName, trustedInternalControl)
+  const healthcheckPersonaProfile = readTrustedHealthcheckPersonaProfile(req, clientName, trustedInternalControl)
+  if (healthcheckPersonaProfile && !isSupportedHealthcheckPersonaForPolicy(healthcheckPersonaProfile, readHeader(req, 'x-cc-policy-version') || String(config.env.version || ''))) {
     writeControlPlaneError(res, 403, 'unsupported_healthcheck_persona', 'Unsupported internal healthcheck persona profile')
     return
   }
@@ -716,6 +1043,7 @@ async function handleRequest(
   let personaDecision: ReturnType<typeof resolveSharedPoolPersonaDecision> | null = null
   let oauthToken: string | null = null
   let routePolicy: ReturnType<typeof selectSharedPoolRoute> | null = null
+  let formalPoolAttestation: AttestedFormalPoolContext | null = null
   const sharedPoolRoute: SharedPoolPersonaRoute = target.pathname === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
 
   if (config.mode === 'sub2api') {
@@ -732,10 +1060,55 @@ async function handleRequest(
     }
     accountContext = parsed.context
 
+    if (formalPoolAttestationRequired(config)) {
+      const attestation = parseFormalPoolContext(req, config)
+      if (!attestation.ok) {
+        writeControlPlaneError(res, attestation.status, attestation.code, 'Formal-pool scheduler context attestation is required')
+        return
+      }
+      formalPoolAttestation = attestation.context
+      const headerCheck = verifyFormalPoolAttestedHeaders(req, method, target, routePolicy, accountContext, formalPoolAttestation)
+      if (!headerCheck.ok) {
+        writeControlPlaneError(res, headerCheck.status, headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
+        return
+      }
+      const profileCheck = verifyFormalPoolAttestedProfiles(config, formalPoolAttestation)
+      if (!profileCheck.ok) {
+        writeControlPlaneError(res, profileCheck.status, profileCheck.code, profileCheck.message)
+        return
+      }
+      billingMode = formalPoolBillingModeFromAttestation(formalPoolAttestation)
+    }
+
     accountIdentity = resolveAccountIdentity(config, accountContext.accountId)
     if (!accountIdentity) {
       writeControlPlaneError(res, 403, 'missing_account_identity', 'Missing per-account identity for selected upstream account')
       return
+    }
+    if (healthcheckPersonaProfile) {
+      accountIdentity = {
+        ...accountIdentity,
+        persona_variant: healthcheckPersonaProfile,
+        policy_version: accountContext.policyVersion || '',
+      }
+    }
+    if (formalPoolAttestation) {
+      const selectedIdentity = accountIdentity
+      const identityCheck = verifyFormalPoolAttestedAccountIdentity(formalPoolAttestation, selectedIdentity)
+      if (!identityCheck.ok) {
+        writeControlPlaneError(res, identityCheck.status, identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
+        return
+      }
+      const credentialBindingCheck = verifySelectedCredentialBinding(req, config, accountContext, selectedIdentity, formalPoolAttestation.credential_ref)
+      if (!credentialBindingCheck.ok) {
+        writeControlPlaneError(res, credentialBindingCheck.status, credentialBindingCheck.code, 'Selected upstream credential does not match selected account identity')
+        return
+      }
+      const personaCheck = verifyFormalPoolAttestedPersona(formalPoolAttestation, selectedIdentity.persona_variant)
+      if (!personaCheck.ok) {
+        writeControlPlaneError(res, personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match selected persona profile')
+        return
+      }
     }
 
     const resolvedEgress = resolveEgressBucket(config, accountContext.egressBucket, accountContext.accountId)
@@ -744,11 +1117,11 @@ async function handleRequest(
       return
     }
     egress = resolvedEgress
-    if (healthcheckPersonaProfile) {
-      accountIdentity = {
-        ...accountIdentity,
-        persona_variant: healthcheckPersonaProfile,
-        policy_version: String(config.env.version || '2.1.175'),
+    if (formalPoolAttestation) {
+      const egressCheck = verifyFormalPoolAttestedHeaders(req, method, target, routePolicy, accountContext, formalPoolAttestation, egress)
+      if (!egressCheck.ok) {
+        writeControlPlaneError(res, egressCheck.status, egressCheck.code, 'Formal-pool scheduler context does not match selected egress context')
+        return
       }
     }
   } else {
@@ -804,11 +1177,24 @@ async function handleRequest(
     writeControlPlaneError(res, 400, 'session_binding_failed', 'Unable to bind X-Claude-Code-Session-Id to metadata.user_id')
     return
   }
+  if (config.mode === 'sub2api' && formalPoolAttestation) {
+    const sessionCheck = verifyFormalPoolAttestedSession(config, runtimeState, formalPoolAttestation, sessionId)
+    if (!sessionCheck.ok) {
+      writeControlPlaneError(res, sessionCheck.status, sessionCheck.code, 'Formal-pool scheduler context does not match canonical session')
+      return
+    }
+  }
   if (parsedBody && body.length > 0) {
     body = Buffer.from(JSON.stringify(parsedBody), 'utf-8')
   }
 
   if (config.mode === 'sub2api') {
+    if (billingMode === 'sign' && formalPoolRequestUsesPolicyVersion('2.1.177', config, accountContext, accountIdentity, formalPoolAttestation)) {
+      if (!isSignPrimaryAllowedForVersion('2.1.177', config)) {
+        writeControlPlaneError(res, 403, 'sign_primary_2177_oracle_missing', 'Manual signing mode is disabled or signer verification failed')
+        return
+      }
+    }
     const requestedModel = parsedBody && typeof (parsedBody as any).model === 'string' ? String((parsedBody as any).model) : ''
     personaDecision = resolveSharedPoolPersonaDecision(
       configWithHealthcheckPersona(config, healthcheckPersonaProfile),
@@ -826,6 +1212,18 @@ async function handleRequest(
       writeControlPlaneError(res, 403, code, 'Persona policy rejected request')
       return
     }
+    if (formalPoolAttestation) {
+      const personaCheck = verifyFormalPoolAttestedPersona(formalPoolAttestation, accountIdentity?.persona_variant, personaDecision.profile.id, personaDecision.profile.messageBetaProfile)
+      if (!personaCheck.ok) {
+        writeControlPlaneError(res, personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match effective persona profile')
+        return
+      }
+      const sessionAuthorityCheck = verifyFormalPoolSessionAuthorityBinding(config, runtimeState, formalPoolAttestation, accountIdentity!)
+      if (!sessionAuthorityCheck.ok) {
+        writeControlPlaneError(res, sessionAuthorityCheck.status, sessionAuthorityCheck.code, sessionAuthorityCheck.message)
+        return
+      }
+    }
   }
 
   if (config.mode === 'sub2api') {
@@ -836,7 +1234,6 @@ async function handleRequest(
     }
   }
 
-  const billingMode = (config as any).shared_pool?.billing_cch_mode || 'strip'
   if (config.mode === 'sub2api') {
     const retryContract = verifyRetryFinalOutputContract(req, billingMode)
     if (!retryContract.ok) {
@@ -849,7 +1246,7 @@ async function handleRequest(
     writeControlPlaneError(res, 403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
     return
   }
-  if (config.mode === 'sub2api' && !['strip', 'sign'].includes(billingMode)) {
+  if (config.mode === 'sub2api' && !['strip', 'no_cch', 'sign'].includes(String(billingMode))) {
     writeControlPlaneError(res, 403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
     return
   }
@@ -888,6 +1285,14 @@ async function handleRequest(
   }
 
   const signingInputBody = body.toString('utf-8')
+  if (config.mode === 'sub2api' && billingMode === 'no_cch') {
+    const noCch = runNoCchBillingPipeline(body, personaDecision?.effectiveVersion || String(config.env.version))
+    if (!noCch.ok) {
+      writeControlPlaneError(res, 400, noCch.code, 'Shared-pool no-CCH verifier failed')
+      return
+    }
+    body = noCch.body
+  }
   if (config.mode === 'sub2api' && billingMode === 'sign') {
     const signing = runSigningPipeline(config, body, {
       cliVersion: personaDecision?.effectiveVersion || String(config.env.version),
@@ -906,6 +1311,8 @@ async function handleRequest(
       expectedVersion: personaDecision?.effectiveVersion,
       expectedBeta: personaDecision?.betaHeader,
       billingMode: 'sign',
+      requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
+      cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
     })
     rawVerifierResult = verifier
     if (!verifier.ok) {
@@ -919,8 +1326,11 @@ async function handleRequest(
       accountIdentity: accountIdentity ?? undefined,
       expectedVersion: personaDecision?.effectiveVersion,
       expectedBeta: personaDecision?.betaHeader,
-      billingMode: 'strip',
+      billingMode: billingMode === 'no_cch' ? 'no_cch' : 'strip',
+      requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
+      cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
     })
+    rawVerifierResult = verifier
     if (!verifier.ok) {
       writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
       return
@@ -929,7 +1339,7 @@ async function handleRequest(
 
   if (oauthToken) {
     // Inject the real OAuth token via x-api-key (Anthropic uses this header for both
-    // API keys and OAuth tokens, distinguished by prefix: sk-ant-api03- vs sk-ant-oat01-)
+    // API keys and OAuth tokens, distinguished by provider-defined token class prefixes)
     rewrittenHeaders['x-api-key'] = oauthToken
   }
 
@@ -1073,6 +1483,79 @@ async function handleRequest(
 }
 
 
+
+type NoCchBillingPipelineResult =
+  | { ok: true; body: Buffer; ccVersionSuffix: string }
+  | { ok: false; code: 'no_cch_verifier_failed' }
+
+function runNoCchBillingPipeline(body: Buffer, cliVersion: string): NoCchBillingPipelineResult {
+  let parsed: any
+  try {
+    parsed = JSON.parse(body.toString('utf-8'))
+  } catch {
+    return { ok: false, code: 'no_cch_verifier_failed' }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'no_cch_verifier_failed' }
+  stripSystemBillingBlocks(parsed)
+  if (containsCchMarker(parsed)) return { ok: false, code: 'no_cch_verifier_failed' }
+  const version = String(cliVersion || '').trim()
+  if (version !== '2.1.179') return { ok: false, code: 'no_cch_verifier_failed' }
+  const ccVersionSuffix = computeCCVersionSuffix(firstUserTextForBilling(parsed.messages), version)
+  prependNoCchBillingHeader(parsed, `x-anthropic-billing-header: cc_version=${version}.${ccVersionSuffix}; cc_entrypoint=sdk-cli;`)
+  const next = Buffer.from(JSON.stringify(parsed), 'utf-8')
+  const nextText = next.toString('utf-8')
+  return /x-anthropic-billing-header:[^"\n]*cc_version=2\.1\.179\.[a-f0-9]{3};[^"\n]*cc_entrypoint=sdk-cli;/i.test(nextText)
+    && !/\bcch=/i.test(nextText)
+    ? { ok: true, body: next, ccVersionSuffix }
+    : { ok: false, code: 'no_cch_verifier_failed' }
+}
+
+function stripSystemBillingBlocks(parsed: any) {
+  if (Array.isArray(parsed.system)) {
+    parsed.system = parsed.system.filter((item: any) => {
+      const text = typeof item === 'string' ? item : item?.text
+      return !(typeof text === 'string' && text.trimStart().toLowerCase().startsWith('x-anthropic-billing-header:'))
+    })
+  } else if (typeof parsed.system === 'string') {
+    parsed.system = parsed.system
+      .split(/\r?\n/)
+      .filter((line: string) => !line.trimStart().toLowerCase().startsWith('x-anthropic-billing-header:'))
+      .join('\n')
+  }
+}
+
+function containsCchMarker(value: unknown): boolean {
+  if (typeof value === 'string') return /\bcch=[a-f0-9]{5}\b/i.test(value)
+  if (Array.isArray(value)) return value.some(containsCchMarker)
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>).some(containsCchMarker)
+  return false
+}
+
+function firstUserTextForBilling(messages: unknown): string {
+  if (!Array.isArray(messages)) return ''
+  const firstUser = messages.find((message: any) => message?.role === 'user') as any
+  if (!firstUser) return ''
+  if (typeof firstUser.content === 'string') return firstUser.content.includes('<system-reminder>') ? '' : firstUser.content
+  if (Array.isArray(firstUser.content)) {
+    const block = firstUser.content.find((item: any) => item?.type === 'text' && typeof item.text === 'string' && !item.text.includes('<system-reminder>'))
+    return block?.text || ''
+  }
+  return ''
+}
+
+function prependNoCchBillingHeader(parsed: any, header: string) {
+  const billingBlock = { type: 'text', text: header }
+  if (Array.isArray(parsed.system)) {
+    parsed.system = [billingBlock, ...parsed.system]
+    return
+  }
+  if (typeof parsed.system === 'string' && parsed.system.trim() !== '') {
+    parsed.system = [billingBlock, { type: 'text', text: parsed.system }]
+    return
+  }
+  parsed.system = [billingBlock]
+}
+
 export function verifySharedPoolFinalOutput(
   config: Config,
   headers: Record<string, string>,
@@ -1083,7 +1566,9 @@ export function verifySharedPoolFinalOutput(
     accountIdentity?: AccountIdentityRecord
     expectedVersion?: string
     expectedBeta?: string
-    billingMode: 'strip' | 'sign'
+    billingMode: FormalPoolBillingMode
+    requestShapeProfileRef?: string
+    cacheParityProfileRef?: string
   },
 ): { ok: true } | { ok: false; code: string } {
   try {
@@ -1111,6 +1596,13 @@ export function verifySharedPoolFinalOutput(
     }
     const verifier = verifySignedCCH(body)
     if (!verifier.ok) return { ok: false, code: verifier.code }
+  } else if (options.billingMode === 'no_cch') {
+    if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'no_cch_verifier_failed' }
+    const noCchBillingVersion = extractNoCchBillingHeaderVersion(bodyText)
+    if (!noCchBillingVersion || /\bcch=/i.test(bodyText)) return { ok: false, code: 'no_cch_verifier_failed' }
+    if (options.expectedVersion && noCchBillingVersion !== options.expectedVersion) {
+      return { ok: false, code: 'persona_cch_version_mismatch' }
+    }
   } else {
     if (headerKeys.includes('x-anthropic-billing-header')) return { ok: false, code: 'strip_verifier_failed' }
     if (/x-anthropic-billing-header/i.test(bodyText) || /\bcch=/i.test(bodyText)) {
@@ -1119,6 +1611,8 @@ export function verifySharedPoolFinalOutput(
   }
   try {
     const parsed = JSON.parse(bodyText)
+    const shapeCheck = verifyFormalPoolFinalRequestShape(parsed, options)
+    if (!shapeCheck.ok) return shapeCheck
     const userIdRaw = parsed?.metadata?.user_id
     if (typeof userIdRaw !== 'string') return { ok: false, code: 'session_binding_failed' }
     const userId = JSON.parse(userIdRaw)
@@ -1134,6 +1628,72 @@ export function verifySharedPoolFinalOutput(
     return { ok: false, code: 'identity_verifier_failed' }
   }
   return { ok: true }
+}
+
+
+function verifyFormalPoolFinalRequestShape(
+  parsed: any,
+  options: {
+    route: SharedPoolPersonaRoute
+    billingMode: FormalPoolBillingMode
+    requestShapeProfileRef?: string
+    cacheParityProfileRef?: string
+  },
+): { ok: true } | { ok: false; code: string } {
+  if (options.route !== 'messages') return { ok: true }
+  if (options.requestShapeProfileRef && options.requestShapeProfileRef !== FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF) {
+    return { ok: false, code: 'request_shape_profile_mismatch' }
+  }
+  if (options.cacheParityProfileRef && options.cacheParityProfileRef !== FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF) {
+    return { ok: false, code: 'cache_parity_profile_mismatch' }
+  }
+  if (!options.requestShapeProfileRef && !options.cacheParityProfileRef) return { ok: true }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'request_shape_profile_mismatch' }
+  const allowedTopLevel = new Set([
+    'context_management',
+    'max_tokens',
+    'messages',
+    'metadata',
+    'model',
+    'output_config',
+    'stream',
+    'system',
+    'thinking',
+    'tool_choice',
+    'tools',
+  ])
+  for (const key of Object.keys(parsed)) {
+    if (!allowedTopLevel.has(key)) return { ok: false, code: 'request_shape_profile_mismatch' }
+  }
+  if (!Array.isArray(parsed.messages)) return { ok: false, code: 'request_shape_profile_mismatch' }
+  if (parsed.system !== undefined && !isAllowedSystemShape(parsed.system)) return { ok: false, code: 'cache_parity_profile_mismatch' }
+  if (parsed.tools !== undefined && !Array.isArray(parsed.tools)) return { ok: false, code: 'request_shape_profile_mismatch' }
+  if (containsUnknownCacheControlPlacement(parsed)) return { ok: false, code: 'cache_parity_profile_mismatch' }
+  return { ok: true }
+}
+
+function isAllowedSystemShape(system: unknown): boolean {
+  if (typeof system === 'string') return true
+  if (!Array.isArray(system)) return false
+  return system.every((item) => {
+    if (typeof item === 'string') return true
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const record = item as Record<string, unknown>
+    return record.type === 'text' && typeof record.text === 'string'
+  })
+}
+
+function containsUnknownCacheControlPlacement(value: unknown, path: Array<string | number> = []): boolean {
+  if (Array.isArray(value)) return value.some((item, index) => containsUnknownCacheControlPlacement(item, [...path, index]))
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  if (record.cache_control !== undefined) {
+    const container = String(path[0] || '')
+    if (container !== 'system' && container !== 'tools' && container !== 'messages') return true
+    const cache = record.cache_control
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache) || (cache as Record<string, unknown>).type !== 'ephemeral') return true
+  }
+  return Object.entries(record).some(([key, child]) => containsUnknownCacheControlPlacement(child, [...path, key]))
 }
 
 function verifySuppressedControlPlaneRequest(
@@ -1197,20 +1757,51 @@ function verifySuppressedControlPlaneRequest(
   return { ok: true }
 }
 
-function isTrustedPersonaClient(req: IncomingMessage): boolean {
+function hasProtectedInternalControlInput(req: IncomingMessage): boolean {
+  return [
+    TRUSTED_PERSONA_HEADER,
+    HEALTHCHECK_PERSONA_HEADER,
+    CONTEXT_1M_REQUEST_HEADER,
+    INTERNAL_CONTROL_HEADER,
+  ].some((name) => readHeader(req, name) !== undefined)
+}
+
+function isTrustedInternalControl(req: IncomingMessage, config: Config): boolean {
+  const expected = config.auth.internal_control_token
+  if (typeof expected !== 'string' || !expected.trim()) return false
+  const actual = readHeader(req, INTERNAL_CONTROL_HEADER)
+  if (typeof actual !== 'string') return false
+  const actualBuffer = Buffer.from(actual, 'utf-8')
+  const expectedBuffer = Buffer.from(expected.trim(), 'utf-8')
+  return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer) && isLocalRequest(req)
+}
+
+function isTrustedPersonaClient(req: IncomingMessage, trustedInternalControl: boolean): boolean {
   const marker = readHeader(req, TRUSTED_PERSONA_HEADER)
   if (marker !== '1' && marker?.toLowerCase() !== 'true') return false
-  return isLocalRequest(req)
+  return trustedInternalControl
 }
 
-function readTrustedHealthcheckPersonaProfile(req: IncomingMessage, clientName: string | null): string | null {
+function readTrustedHealthcheckPersonaProfile(req: IncomingMessage, clientName: string | null, trustedInternalControl: boolean): string | null {
   const profile = readHeader(req, HEALTHCHECK_PERSONA_HEADER)?.trim()
   if (!profile) return null
-  return clientName === 'gateway' ? profile : null
+  return clientName === 'gateway' && trustedInternalControl ? profile : null
 }
 
-function readTrustedContext1MRequest(req: IncomingMessage, clientName: string | null): boolean {
-  if (clientName !== 'gateway') return false
+function isSupportedHealthcheckPersonaForPolicy(profile: string, policyVersion: string): boolean {
+  const normalizedProfile = profile.trim()
+  const normalizedPolicyVersion = policyVersion.trim()
+  if (normalizedPolicyVersion === '2.1.179') {
+    return normalizedProfile === HEALTHCHECK_2179_NATIVE_DEGRADED_PROFILE
+  }
+  if (normalizedPolicyVersion === '2.1.175') {
+    return normalizedProfile === HEALTHCHECK_2175_NON_1M_PROFILE
+  }
+  return false
+}
+
+function readTrustedContext1MRequest(req: IncomingMessage, clientName: string | null, trustedInternalControl: boolean): boolean {
+  if (clientName !== 'gateway' || !trustedInternalControl) return false
   return readBooleanHeader(req, CONTEXT_1M_REQUEST_HEADER)
 }
 
@@ -1237,6 +1828,11 @@ function userAgentVersion(userAgent: string | undefined): string | null {
 
 function extractBillingHeaderVersion(bodyText: string): string | null {
   const match = bodyText.match(/x-anthropic-billing-header:[^"\n]*cc_version=(\d+\.\d+\.\d+)\.[a-f0-9]{3};/i)
+  return match ? match[1] : null
+}
+
+function extractNoCchBillingHeaderVersion(bodyText: string): string | null {
+  const match = bodyText.match(/x-anthropic-billing-header:[^"\n]*cc_version=(\d+\.\d+\.\d+)\.[a-f0-9]{3};[^"\n]*cc_entrypoint=sdk-cli;(?!(?:[^"\n]*\bcch=))/i)
   return match ? match[1] : null
 }
 
@@ -1335,7 +1931,7 @@ function parseAccountContext(req: IncomingMessage, config: Config): { context: A
     return { status: 400, code: 'missing_provider', error: 'Missing x-cc-provider' }
   }
   if (provider !== 'anthropic') {
-    return { status: 403, code: 'unsupported_provider', error: `Unsupported provider: ${provider}` }
+    return { status: 403, code: 'unsupported_provider', error: 'Unsupported provider' }
   }
   if (!config.providers.anthropic) {
     return { status: 403, code: 'provider_disabled', error: 'Provider disabled: anthropic' }
@@ -1346,7 +1942,7 @@ function parseAccountContext(req: IncomingMessage, config: Config): { context: A
     return { status: 400, code: 'missing_token_type', error: 'Missing x-cc-token-type' }
   }
   if (!['oauth', 'apikey'].includes(tokenType)) {
-    return { status: 400, code: 'unsupported_token_type', error: `Unsupported x-cc-token-type: ${tokenType}` }
+    return { status: 400, code: 'unsupported_token_type', error: 'Unsupported x-cc-token-type' }
   }
   const normalizedTokenType = tokenType as 'oauth' | 'apikey'
   if (normalizedTokenType === 'oauth' && !readHeader(req, 'authorization')) {
@@ -1370,16 +1966,576 @@ function parseAccountContext(req: IncomingMessage, config: Config): { context: A
   if (!policyVersion) {
     return { status: 400, code: 'missing_policy_version', error: 'Missing x-cc-policy-version' }
   }
+  const credentialRef = readHeader(req, 'x-cc-credential-ref')
 
   return {
     context: {
       provider,
       accountId,
       tokenType: normalizedTokenType,
+      credentialRef,
       egressBucket,
       policyVersion,
     },
   }
+}
+
+function formalPoolAttestationRequired(config: Config): boolean {
+  return config.mode === 'sub2api'
+}
+
+function formalPoolAttestationSecret(config: Config): string | undefined {
+  const sharedPool = (config as any).shared_pool || {}
+  const direct = typeof sharedPool.context_attestation_secret === 'string' ? sharedPool.context_attestation_secret.trim() : ''
+  if (direct) return direct
+  const envName = typeof sharedPool.context_attestation_secret_env === 'string' ? sharedPool.context_attestation_secret_env.trim() : ''
+  if (envName && process.env[envName]?.trim()) return process.env[envName]!.trim()
+  const fallback = process.env.CC_GATEWAY_CONTEXT_ATTESTATION_SECRET?.trim()
+  return fallback || undefined
+}
+
+function canonicalFormalPoolContext(value: Record<string, unknown>): string {
+  const sorted: Record<string, unknown> = {}
+  for (const key of Object.keys(value).sort()) sorted[key] = value[key]
+  return JSON.stringify(sorted)
+}
+
+function safeEqualHex(a: string, b: string): boolean {
+  if (!/^[a-f0-9]+$/i.test(a) || !/^[a-f0-9]+$/i.test(b) || a.length !== b.length) return false
+  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'))
+}
+
+function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: true; context: AttestedFormalPoolContext; canonical: string } | { ok: false; status: number; code: string } {
+  if (!formalPoolAttestationRequired(config)) return { ok: false, status: 204, code: 'formal_pool_context_attestation_not_required' }
+  const encodedContext = readHeader(req, FORMAL_POOL_CONTEXT_HEADER)
+  const signature = readHeader(req, FORMAL_POOL_SIGNATURE_HEADER)
+  if (!encodedContext || !signature) return { ok: false, status: 403, code: 'missing_formal_pool_context_attestation' }
+
+  const secret = formalPoolAttestationSecret(config)
+  if (!secret) return { ok: false, status: 403, code: 'missing_formal_pool_context_attestation_secret' }
+
+  let rawContext = ''
+  try {
+    rawContext = Buffer.from(encodedContext, 'base64url').toString('utf-8')
+  } catch {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawContext)
+  } catch {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  const obj = parsed as Record<string, unknown>
+  const requiredStringFields = [
+    'method',
+    'route_class',
+    'path',
+    'account_id',
+    'token_type',
+    'credential_ref',
+    'credential_source',
+    'egress_bucket',
+    'proxy_identity_ref',
+    'policy_version',
+    'persona_profile',
+    'trusted_egress_profile_ref',
+    'profile_policy_version',
+    'billing_shape_policy',
+    'request_shape_profile_ref',
+    'cache_parity_profile_ref',
+    'session_id',
+    'nonce',
+  ]
+  for (const field of requiredStringFields) {
+    if (typeof obj[field] !== 'string' || !(obj[field] as string).trim() || /[\r\n]/.test(obj[field] as string)) {
+      return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+    }
+  }
+  if (obj.token_type !== 'oauth' && obj.token_type !== 'apikey') {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (obj.credential_source !== 'server_account_credentials') {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (typeof obj.timestamp_ms !== 'number' || !Number.isFinite(obj.timestamp_ms)) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (!isSafeIdentityRef(obj.credential_ref) || !isSafeIdentityRef(obj.proxy_identity_ref)) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (!isSafeProfileRef(obj.trusted_egress_profile_ref)
+    || !isSafeProfileRef(obj.profile_policy_version)
+    || !isSafeProfileRef(obj.request_shape_profile_ref)
+    || !isSafeProfileRef(obj.cache_parity_profile_ref)
+    || !isFormalPoolBillingShapePolicy(obj.billing_shape_policy)
+    || !isSafeObservedClientProfile(obj.observed_client_profile)) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+
+  const canonical = canonicalFormalPoolContext(obj)
+  const expected = createHmac('sha256', secret).update(canonical).digest('hex')
+  const actual = signature.startsWith('hmac-sha256:') ? signature.slice('hmac-sha256:'.length) : signature
+  if (!safeEqualHex(actual, expected)) {
+    return { ok: false, status: 403, code: 'invalid_formal_pool_context_attestation' }
+  }
+
+  if (Math.abs(Date.now() - obj.timestamp_ms) > FORMAL_POOL_ATTESTATION_MAX_SKEW_MS) {
+    return { ok: false, status: 403, code: 'expired_formal_pool_context_attestation' }
+  }
+
+  return {
+    ok: true,
+    context: {
+      method: obj.method,
+      route_class: obj.route_class,
+      path: obj.path,
+      account_id: obj.account_id,
+      token_type: obj.token_type,
+      credential_ref: obj.credential_ref,
+      credential_source: obj.credential_source,
+      egress_bucket: obj.egress_bucket,
+      proxy_identity_ref: obj.proxy_identity_ref,
+      policy_version: obj.policy_version,
+      persona_profile: obj.persona_profile,
+      trusted_egress_profile_ref: obj.trusted_egress_profile_ref,
+      profile_policy_version: obj.profile_policy_version,
+      billing_shape_policy: obj.billing_shape_policy,
+      request_shape_profile_ref: obj.request_shape_profile_ref,
+      cache_parity_profile_ref: obj.cache_parity_profile_ref,
+      observed_client_profile: obj.observed_client_profile as Record<string, unknown>,
+      session_id: obj.session_id,
+      timestamp_ms: obj.timestamp_ms,
+      nonce: obj.nonce,
+    } as AttestedFormalPoolContext,
+    canonical,
+  }
+}
+
+
+function isSafeProfileRef(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  return trimmed === value && SAFE_PROFILE_REF.test(trimmed)
+}
+
+function isFormalPoolBillingShapePolicy(value: unknown): value is FormalPoolBillingShapePolicy {
+  return value === 'strip' || value === 'no_cch' || value === 'signed_cch'
+}
+
+function isSafeObservedClientProfile(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const profile = value as Record<string, unknown>
+  for (const key of Object.keys(profile)) {
+    if (!OBSERVED_CLIENT_PROFILE_SAFE_KEYS.has(key)) return false
+  }
+  if (profile.schema_version !== undefined && profile.schema_version !== 'observed_client_profile.v1') return false
+  if (profile.cli_version_bucket !== undefined && !isSafeObservedBucket(profile.cli_version_bucket)) return false
+  if (profile.route_class !== undefined && !['messages', 'count_tokens', 'control_plane', 'event_logging_legacy', 'event_logging_v2'].includes(String(profile.route_class))) return false
+  if (profile.billing_shape !== undefined && !['absent', 'no_cch', 'cch_present', 'unknown'].includes(String(profile.billing_shape))) return false
+  if (profile.cc_entrypoint_bucket !== undefined && !['absent', 'cli', 'sdk-cli', 'other', 'unknown'].includes(String(profile.cc_entrypoint_bucket))) return false
+  if (profile.stream !== undefined && typeof profile.stream !== 'boolean') return false
+  for (const key of ['thinking_present', 'output_config_present', 'context_management_present']) {
+    if (profile[key] !== undefined && typeof profile[key] !== 'boolean') return false
+  }
+  for (const key of ['unknown_top_level_body_key_count', 'tool_count', 'billing_block_count']) {
+    const value = profile[key]
+    if (value !== undefined && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 1000)) return false
+  }
+  if (profile.top_level_body_keys !== undefined) {
+    if (!Array.isArray(profile.top_level_body_keys)) return false
+    for (const key of profile.top_level_body_keys) {
+      if (typeof key !== 'string' || !/^[a-z_]{1,64}$/.test(key)) return false
+    }
+  }
+  return true
+}
+
+function isSafeObservedBucket(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  return /^(unknown|latest|\d+\.\d+\.\d+)$/.test(value)
+}
+
+function formalPoolBillingModeFromAttestation(attested: AttestedFormalPoolContext): FormalPoolBillingMode {
+  if (attested.billing_shape_policy === 'signed_cch') return 'sign'
+  if (attested.billing_shape_policy === 'no_cch') return 'no_cch'
+  return 'strip'
+}
+
+function verifyFormalPoolAttestedProfiles(
+  config: Config,
+  attested: AttestedFormalPoolContext,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const profileRefCheck = verifyFormalPoolProfileRefs(attested)
+  if (!profileRefCheck.ok) return profileRefCheck
+
+  const optionalProfile = attested.trusted_egress_profile_ref === FORMAL_POOL_2179_NO_CCH_PROFILE_REF
+    || attested.trusted_egress_profile_ref === FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF
+  const observedCheck = verifyObservedClientProfileAdmission(attested, optionalProfile)
+  if (!observedCheck.ok) return observedCheck
+
+  if (attested.trusted_egress_profile_ref === FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF) {
+    if (attested.billing_shape_policy !== 'strip') {
+      return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Formal-pool strip_attribution profile requires strip billing policy' }
+    }
+    return { ok: true }
+  }
+
+  if (attested.trusted_egress_profile_ref === FORMAL_POOL_2179_NO_CCH_PROFILE_REF) {
+    if (attested.billing_shape_policy !== 'no_cch') {
+      return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Formal-pool no-CCH profile requires no_cch billing policy' }
+    }
+    const tupleCheck = verifyFormalPool2179OracleTuple(config, attested, 'no_cch')
+    if (!tupleCheck.ok) return tupleCheck
+    return { ok: true }
+  }
+
+  if (attested.trusted_egress_profile_ref === FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF) {
+    if (attested.billing_shape_policy !== 'signed_cch') {
+      return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Formal-pool signed-CCH profile requires signed_cch billing policy' }
+    }
+    const tupleCheck = verifyFormalPool2179OracleTuple(config, attested, 'signed_cch')
+    if (!tupleCheck.ok) return tupleCheck
+    return { ok: true }
+  }
+
+  return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool egress profile is not approved' }
+}
+
+function verifyFormalPoolProfileRefs(attested: AttestedFormalPoolContext): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  if (attested.profile_policy_version !== FORMAL_POOL_2179_PROFILE_POLICY_VERSION) {
+    return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool profile policy version is not approved' }
+  }
+  if (attested.request_shape_profile_ref !== FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF) {
+    return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool request shape profile is not approved' }
+  }
+  if (attested.cache_parity_profile_ref !== FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF) {
+    return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool cache parity profile is not approved' }
+  }
+  return { ok: true }
+}
+
+function verifyObservedClientProfileAdmission(attested: AttestedFormalPoolContext, requireExact2179 = false): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const profile = attested.observed_client_profile
+  if ((profile.unknown_top_level_body_key_count as number | undefined) && Number(profile.unknown_top_level_body_key_count) > 0) {
+    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client profile contains unknown body keys' }
+  }
+  const version = typeof profile.cli_version_bucket === 'string' ? profile.cli_version_bucket : ''
+  if (requireExact2179 && version !== '2.1.179') {
+    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool optional egress profiles require exact 2.1.179 observed client proof' }
+  }
+  if (version && version !== '2.1.179' && version !== 'unknown') {
+    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client version is not approved for this profile' }
+  }
+  const billingShape = typeof profile.billing_shape === 'string' ? profile.billing_shape : ''
+  if (billingShape && !['absent', 'no_cch', 'cch_present'].includes(billingShape)) {
+    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed billing shape is not approved' }
+  }
+  return { ok: true }
+}
+
+function verifyFormalPool2179OracleTuple(
+  config: Config,
+  attested: AttestedFormalPoolContext,
+  shape: 'no_cch' | 'signed_cch',
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  if (attested.policy_version !== '2.1.179') {
+    return { ok: false, status: 403, code: 'formal_pool_egress_profile_oracle_tuple_mismatch', message: 'Formal-pool optional egress profile is not bound to the 2.1.179 oracle tuple' }
+  }
+  const sharedPool = (config as any).shared_pool || {}
+  const prefix = shape === 'no_cch' ? 'no_cch_2179' : 'signed_cch_2179'
+  const expectedRef = shape === 'no_cch' ? FORMAL_POOL_2179_NO_CCH_ORACLE_PROFILE_REF : FORMAL_POOL_2179_SIGNED_CCH_ORACLE_PROFILE_REF
+  if (sharedPool[`${prefix}_oracle_profile_approved`] !== true || sharedPool[`${prefix}_oracle_profile_ref`] !== expectedRef) {
+    return { ok: false, status: 403, code: 'formal_pool_egress_profile_oracle_missing', message: 'Formal-pool optional 2.1.179 egress profile requires exact oracle proof ref' }
+  }
+  return { ok: true }
+}
+
+function expectedFormalPoolRouteClass(routePolicy: ReturnType<typeof selectSharedPoolRoute> | null): string {
+  if (routePolicy?.action === 'forward') return 'messages'
+  if (routePolicy?.action === 'suppress') return routePolicy.kind
+  return 'messages'
+}
+
+function verifyFormalPoolAttestedHeaders(
+  req: IncomingMessage,
+  method: string,
+  target: RequestTarget,
+  routePolicy: ReturnType<typeof selectSharedPoolRoute> | null,
+  accountContext: AccountContext,
+  attested: AttestedFormalPoolContext,
+  egress?: EgressBucketResolution,
+): { ok: true } | { ok: false; status: number; code: string } {
+  const mismatches = [
+    attested.method !== method,
+    attested.path !== target.pathname,
+    attested.route_class !== expectedFormalPoolRouteClass(routePolicy),
+    attested.account_id !== accountContext.accountId,
+    attested.token_type !== accountContext.tokenType,
+    attested.credential_ref !== accountContext.credentialRef,
+    attested.credential_source !== 'server_account_credentials',
+    attested.egress_bucket !== accountContext.egressBucket,
+    attested.policy_version !== accountContext.policyVersion,
+  ]
+  if (egress) mismatches.push(attested.proxy_identity_ref !== egress.proxyIdentityRef)
+  if (mismatches.some(Boolean)) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
+  return { ok: true }
+}
+
+function verifyFormalPoolAttestedAccountIdentity(
+  attested: AttestedFormalPoolContext,
+  identity: AccountIdentityRecord,
+): { ok: true } | { ok: false; status: number; code: string } {
+  const mismatches = [
+    !identity.credential_ref,
+    attested.credential_ref !== identity.credential_ref,
+    attested.policy_version !== identity.policy_version,
+  ]
+  if (mismatches.some(Boolean)) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
+  return { ok: true }
+}
+
+function verifySelectedCredentialBinding(
+  req: IncomingMessage,
+  config: Config,
+  accountContext: AccountContext,
+  identity: AccountIdentityRecord,
+  attestedCredentialRef: string,
+): { ok: true } | { ok: false; status: number; code: string } {
+  if (!identity.credential_ref || accountContext.credentialRef !== identity.credential_ref || attestedCredentialRef !== identity.credential_ref) {
+    return { ok: false, status: 403, code: 'credential_account_mismatch' }
+  }
+  const binding = typeof identity.credential_binding_hmac === 'string' ? identity.credential_binding_hmac.trim() : ''
+  const expectedHex = /^hmac-sha256:[a-f0-9]{64}$/i.test(binding) ? binding.slice('hmac-sha256:'.length) : ''
+  const selectedCredential = selectedRawCredentialForBinding(req, accountContext.tokenType)
+  const secret = formalPoolAttestationSecret(config)
+  if (!expectedHex || !selectedCredential || !secret) {
+    return { ok: false, status: 403, code: 'credential_account_mismatch' }
+  }
+  const actualHex = credentialBindingHmacHex(secret, accountContext.tokenType, selectedCredential)
+  if (!safeEqualHex(actualHex, expectedHex)) {
+    return { ok: false, status: 403, code: 'credential_account_mismatch' }
+  }
+  return { ok: true }
+}
+
+function selectedRawCredentialForBinding(req: IncomingMessage, tokenType: 'oauth' | 'apikey'): string | undefined {
+  return tokenType === 'oauth' ? readHeader(req, 'authorization') : readHeader(req, 'x-api-key')
+}
+
+function credentialBindingHmacHex(secret: string, tokenType: 'oauth' | 'apikey', rawCredential: string): string {
+  return createHmac('sha256', secret)
+    .update('formal_pool_credential_binding_v1')
+    .update('\0')
+    .update(tokenType)
+    .update('\0')
+    .update(rawCredential)
+    .digest('hex')
+}
+
+function verifyFormalPoolAttestedSession(
+  config: Config,
+  runtimeState: ProxyRuntimeState,
+  attested: AttestedFormalPoolContext,
+  sessionId: string | undefined,
+): { ok: true } | { ok: false; status: number; code: string } {
+  if (!sessionId || attested.session_id !== sessionId) {
+    return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
+  }
+  const ledgerFile = formalPoolSessionLedgerFilePath()
+  if (formalPoolSessionLedgerPersistenceRequired(config) && !ledgerFile) {
+    return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable' }
+  }
+  const nonceRef = formalPoolAttestationNonceRef(config, attested)
+  if (!nonceRef) return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable' }
+  const now = Date.now()
+  if (ledgerFile) {
+    let persisted: FormalPoolSessionAuthorityLedgerFile
+    try {
+      persisted = loadFormalPoolSessionAuthorityLedger(ledgerFile)
+    } catch {
+      return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable' }
+    }
+    pruneFormalPoolAttestationNonces(persisted.attestation_nonces, now)
+    if (persisted.attestation_nonces[nonceRef]) {
+      return { ok: false, status: 403, code: 'replayed_formal_pool_context_attestation' }
+    }
+    return { ok: true }
+  }
+  pruneFormalPoolAttestationNonceMap(runtimeState.formalPoolAttestationNonces, now)
+  if (runtimeState.formalPoolAttestationNonces.has(nonceRef)) {
+    return { ok: false, status: 403, code: 'replayed_formal_pool_context_attestation' }
+  }
+  return { ok: true }
+}
+
+function verifyFormalPoolSessionAuthorityBinding(
+  config: Config,
+  runtimeState: ProxyRuntimeState,
+  attested: AttestedFormalPoolContext,
+  identity: AccountIdentityRecord,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const sessionKey = formalPoolSessionAuthorityRef(config, 'session', attested.session_id)
+  const deviceRef = formalPoolSessionAuthorityRef(config, 'device', identity.device_id)
+  const nonceRef = formalPoolAttestationNonceRef(config, attested)
+  if (!sessionKey || !deviceRef || !nonceRef) {
+    return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool session authority ledger is unavailable' }
+  }
+  const binding: FormalPoolSessionAuthorityBinding = {
+    account_id: attested.account_id,
+    credential_ref: attested.credential_ref,
+    credential_source: attested.credential_source,
+    egress_bucket: attested.egress_bucket,
+    proxy_identity_ref: attested.proxy_identity_ref,
+    policy_version: attested.policy_version,
+    persona_profile: attested.persona_profile,
+    trusted_egress_profile_ref: attested.trusted_egress_profile_ref,
+    profile_policy_version: attested.profile_policy_version,
+    billing_shape_policy: attested.billing_shape_policy,
+    request_shape_profile_ref: attested.request_shape_profile_ref,
+    cache_parity_profile_ref: attested.cache_parity_profile_ref,
+    device_ref: deviceRef,
+  }
+  const ledgerFile = formalPoolSessionLedgerFilePath()
+  if (formalPoolSessionLedgerPersistenceRequired(config) && !ledgerFile) {
+    return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool production requires a persistent session authority ledger' }
+  }
+
+  const now = Date.now()
+  const nonceExpiry = formalPoolAttestationNonceExpiry(attested, now)
+  let previous = runtimeState.formalPoolSessionAuthorityLedger.get(sessionKey)
+  if (ledgerFile) {
+    let persisted: FormalPoolSessionAuthorityLedgerFile
+    try {
+      persisted = loadFormalPoolSessionAuthorityLedger(ledgerFile)
+    } catch {
+      return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool session authority ledger is unavailable' }
+    }
+    pruneFormalPoolAttestationNonces(persisted.attestation_nonces, now)
+    if (persisted.attestation_nonces[nonceRef]) {
+      return { ok: false, status: 403, code: 'replayed_formal_pool_context_attestation', message: 'Formal-pool scheduler context attestation was already used' }
+    }
+    const persistedSession = persisted.sessions[sessionKey]
+    previous = persistedSession || previous
+    if (previous && !sameFormalPoolSessionAuthorityBinding(previous, binding)) {
+      return { ok: false, status: 403, code: 'formal_pool_session_authority_mismatch', message: 'Formal-pool session authority changed across requests' }
+    }
+    const next: FormalPoolSessionAuthorityLedgerFile = {
+      version: 1,
+      sessions: { ...persisted.sessions, ...(persistedSession ? {} : { [sessionKey]: binding }) },
+      attestation_nonces: { ...persisted.attestation_nonces, [nonceRef]: nonceExpiry },
+    }
+    try {
+      writeFormalPoolSessionAuthorityLedger(ledgerFile, next, 'session_authority')
+    } catch (err) {
+      log('error', 'Formal-pool session authority ledger persistence failed', { error: err instanceof Error ? err.message : 'unknown' })
+      return { ok: false, status: 500, code: 'formal_pool_session_ledger_persist_failed', message: 'Formal-pool session authority ledger could not be persisted' }
+    }
+    runtimeState.formalPoolSessionAuthorityLedger.set(sessionKey, binding)
+    runtimeState.formalPoolAttestationNonces.set(nonceRef, nonceExpiry)
+    return { ok: true }
+  }
+
+  pruneFormalPoolAttestationNonceMap(runtimeState.formalPoolAttestationNonces, now)
+  if (runtimeState.formalPoolAttestationNonces.has(nonceRef)) {
+    return { ok: false, status: 403, code: 'replayed_formal_pool_context_attestation', message: 'Formal-pool scheduler context attestation was already used' }
+  }
+  if (previous && !sameFormalPoolSessionAuthorityBinding(previous, binding)) {
+    return { ok: false, status: 403, code: 'formal_pool_session_authority_mismatch', message: 'Formal-pool session authority changed across requests' }
+  }
+  runtimeState.formalPoolSessionAuthorityLedger.set(sessionKey, binding)
+  runtimeState.formalPoolAttestationNonces.set(nonceRef, nonceExpiry)
+  return { ok: true }
+}
+
+function formalPoolSessionAuthorityRef(config: Config, scope: 'session' | 'device', value: string): string {
+  const secret = formalPoolAttestationSecret(config)
+  if (!secret || !value) return ''
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update(`formal_pool_session_authority_${scope}`)
+    .update('\0')
+    .update(value)
+    .digest('hex')}`
+}
+
+function formalPoolAttestationNonceRef(config: Config, attested: AttestedFormalPoolContext): string {
+  const secret = formalPoolAttestationSecret(config)
+  if (!secret || !attested.nonce || !Number.isFinite(attested.timestamp_ms)) return ''
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update('formal_pool_attestation_nonce')
+    .update('\0')
+    .update(String(attested.timestamp_ms))
+    .update('\0')
+    .update(attested.nonce)
+    .digest('hex')}`
+}
+
+function formalPoolAttestationNonceExpiry(attested: AttestedFormalPoolContext, now = Date.now()): number {
+  return Math.max(now, attested.timestamp_ms) + FORMAL_POOL_ATTESTATION_MAX_SKEW_MS
+}
+
+function pruneFormalPoolAttestationNonces(nonces: Record<string, number>, now = Date.now()) {
+  for (const [key, expiresAt] of Object.entries(nonces)) {
+    if (expiresAt < now) delete nonces[key]
+  }
+}
+
+function pruneFormalPoolAttestationNonceMap(nonces: Map<string, number>, now = Date.now()) {
+  for (const [key, expiresAt] of nonces) {
+    if (expiresAt < now) nonces.delete(key)
+  }
+}
+
+function sameFormalPoolSessionAuthorityBinding(a: FormalPoolSessionAuthorityBinding, b: FormalPoolSessionAuthorityBinding): boolean {
+  return a.account_id === b.account_id
+    && a.credential_ref === b.credential_ref
+    && a.credential_source === b.credential_source
+    && a.egress_bucket === b.egress_bucket
+    && a.proxy_identity_ref === b.proxy_identity_ref
+    && a.policy_version === b.policy_version
+    && a.persona_profile === b.persona_profile
+    && a.trusted_egress_profile_ref === b.trusted_egress_profile_ref
+    && a.profile_policy_version === b.profile_policy_version
+    && a.billing_shape_policy === b.billing_shape_policy
+    && a.request_shape_profile_ref === b.request_shape_profile_ref
+    && a.cache_parity_profile_ref === b.cache_parity_profile_ref
+    && a.device_ref === b.device_ref
+}
+
+
+function formalPoolRequestUsesPolicyVersion(
+  version: string,
+  config: Config,
+  accountContext: AccountContext | null,
+  accountIdentity: AccountIdentityRecord | null,
+  formalPoolAttestation: AttestedFormalPoolContext | null,
+): boolean {
+  const expected = String(version || '').trim()
+  if (!expected) return false
+  return [
+    accountContext?.policyVersion,
+    formalPoolAttestation?.policy_version,
+    accountIdentity?.policy_version,
+    config.env?.version,
+  ].some((candidate) => String(candidate || '').trim() === expected)
+}
+
+function verifyFormalPoolAttestedPersona(attested: AttestedFormalPoolContext, ...acceptedProfiles: Array<string | undefined>): { ok: true } | { ok: false; status: number; code: string } {
+  const accepted = new Set<string>()
+  for (const profile of acceptedProfiles) {
+    if (!profile) continue
+    accepted.add(profile)
+    const canonical = resolvePersonaProfileId(profile)
+    if (canonical) accepted.add(canonical)
+  }
+  if (!accepted.has(attested.persona_profile)) {
+    return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
+  }
+  return { ok: true }
 }
 
 function readHeader(req: IncomingMessage, name: string): string | undefined {

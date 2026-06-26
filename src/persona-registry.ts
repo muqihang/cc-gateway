@@ -43,6 +43,7 @@ const CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA = 'claude-code-20250219,context-1
 const CLAUDE_CODE_2_1_175_SUBSCRIPTION_1M_BETA = CLAUDE_CODE_2_1_170_SUBSCRIPTION_1M_BETA
 const CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA = 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24'
 const CLAUDE_CODE_2_1_175_SIMPLE_BARE_BETA = CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA
+const CLAUDE_CODE_2_1_179_NATIVE_DEGRADED_BETA = 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24'
 const FIRST_200_OAUTH_COMPAT_BETA = CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA
 
 const FULL_CAPABILITIES: PersonaCapabilities = {
@@ -134,6 +135,17 @@ const REGISTRY: PersonaProfile[] = [
     capabilities: { ...NON_1M_CAPABILITIES },
   },
   {
+    id: 'claude_code_2_1_179_native_degraded',
+    version: '2.1.179',
+    messageBetaProfile: 'claude_code_2_1_179_native_degraded',
+    betaHeader: CLAUDE_CODE_2_1_179_NATIVE_DEGRADED_BETA,
+    stainlessPackageVersion: '0.94.0',
+    aliases: ['claude-code-2.1.179-macos-local'],
+    knownModels: [...KNOWN_MODELS],
+    toolProfile: { kind: 'low_tool', toolCount: 3 },
+    capabilities: { ...NON_1M_CAPABILITIES },
+  },
+  {
     id: 'first_200_oauth_compat',
     version: '2.1.150',
     messageBetaProfile: 'first_200_oauth_compat',
@@ -181,6 +193,7 @@ export function betaHeaderForProfile(profileId: string): string {
 }
 
 export function inferLegacyPersonaVariant(version: string): string {
+  if (version.startsWith('2.1.179')) return 'claude-code-2.1.179-macos-local'
   if (version.startsWith('2.1.175')) return 'claude-code-2.1.175-macos-local'
   if (version.startsWith('2.1.170')) return 'claude-code-2.1.170-macos-local'
   if (version.startsWith('2.1.150')) return 'claude-code-2.1.150-macos-local'

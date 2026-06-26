@@ -21,8 +21,11 @@ export type AccountIdentityRecord = {
   email_hash?: string
   account_ref?: string
   account_hash?: string
+  credential_ref?: string
+  credential_binding_hmac?: string
+  token_type?: 'oauth' | 'apikey'
   persona_variant: string
-  session_policy: 'preserve_downstream_session_id' | 'gateway_generated'
+  session_policy: 'preserve_downstream_session_id'
   policy_version: string
 }
 
@@ -42,9 +45,10 @@ export type EgressBucketResolution = {
 
 const COUNT_TOKENS_BETA = null
 const UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const RAW_UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const RAW_EMAIL_LIKE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-const PLAIN_DIGEST_REF = /^(?:sha256|md5):/i
+const RAW_UUID_LIKE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+const RAW_EMAIL_LIKE = /[^@\s]+@[^@\s]+\.[^@\s]+/
+const PLAIN_DIGEST_REF = /(?:^|[:=;,])(sha256|md5):/i
+const TOKEN_LIKE_MATERIAL = /(?:sk-ant-|sk-[A-Za-z0-9]|Bearer\s+|Basic\s+|oauth|access[_-]?token|refresh[_-]?token|api[_-]?key|secret)/i
 const STAINLESS_HEADER_VALUES = {
   lang: 'js',
   retryCount: '0',
@@ -230,6 +234,7 @@ export type SigningPipelineResult =
       | 'signing_untrusted_billing_input'
       | 'signing_placeholder_missing'
       | 'signing_verifier_failed'
+      | 'sign_primary_2177_oracle_missing'
   }
   | { ok: true; body: Buffer; cch: string; ccVersionSuffix: string }
 
@@ -253,6 +258,8 @@ export function runSigningPipeline(
   const sharedPool = (config as any).shared_pool || {}
   if (!sharedPool.signing_enabled) return { ok: false, code: 'signing_mode_disabled' }
   if (!sharedPool.signing_evidence_gates_approved) return { ok: false, code: 'signing_evidence_gates_unapproved' }
+  const version = String(options.cliVersion || config.env.version)
+  if (!isSignPrimaryAllowedForVersion(version, config)) return { ok: false, code: 'sign_primary_2177_oracle_missing' }
 
   let parsed: any
   try {
@@ -265,7 +272,6 @@ export function runSigningPipeline(
   const cleaned = removeExistingBillingMaterial(parsed)
   if (!cleaned.ok) return { ok: false, code: cleaned.code }
 
-  const version = String(options.cliVersion || config.env.version)
   const firstUserText = extractFirstUserText(parsed.messages)
   const ccVersionSuffix = computeCCVersionSuffix(firstUserText, version)
   const billingHeader = `${BILLING_HEADER_PREFIX} cc_version=${version}.${ccVersionSuffix}; cc_entrypoint=sdk-cli; cch=00000;`
@@ -278,6 +284,27 @@ export function runSigningPipeline(
   const verifier = verifySignedCCH(signed)
   if (!verifier.ok || verifier.cch !== cch) return { ok: false, code: 'signing_verifier_failed' }
   return { ok: true, body: signed, cch, ccVersionSuffix }
+}
+
+
+export function isSignPrimaryAllowedForVersion(version: string, config: Config): boolean {
+  const normalized = String(version || '').trim()
+  const sharedPool = (config as any).shared_pool || {}
+  if (normalized === '2.1.177') {
+    return sharedPool.signing_2177_oracle_profile_approved === true
+      && isSafeIdentityRef(sharedPool.signing_2177_oracle_profile_ref)
+  }
+  if (normalized === '2.1.179') {
+    return sharedPool.signed_cch_2179_oracle_profile_approved === true
+      && sharedPool.signed_cch_2179_oracle_profile_ref === 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1'
+  }
+  return false
+}
+
+function isSafeProfileApprovalRef(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  return trimmed === value && /^[A-Za-z0-9._:-]{1,160}$/.test(trimmed)
 }
 
 export function computeCCVersionSuffix(firstUserText: string, cliVersion: string): string {
@@ -583,7 +610,10 @@ export function resolveEgressBucket(config: Config, bucketId: string | undefined
   } catch {
     return { error: 'invalid_egress_proxy' }
   }
-  if (bucket.allowed_account_ids?.length && (!accountId || !bucket.allowed_account_ids.includes(accountId))) {
+  if (!Array.isArray(bucket.allowed_account_ids) || bucket.allowed_account_ids.length === 0) {
+    return { error: 'missing_egress_account_allowlist' }
+  }
+  if (!accountId || !bucket.allowed_account_ids.includes(accountId)) {
     return { error: 'egress_bucket_account_denied' }
   }
   const proxyIdentityRef = bucket.proxy_identity_ref || bucket.proxy_identity_hash || buildScopedOpaqueRef('proxy-ref', bucket.proxy_url)
@@ -634,9 +664,10 @@ function isSafeLegacyHashRef(value: string): boolean {
 export function isSafeIdentityRef(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
-  if (!trimmed || trimmed.length > 512) return false
-  if (RAW_UUID_LIKE.test(trimmed) || RAW_EMAIL_LIKE.test(trimmed) || PLAIN_DIGEST_REF.test(trimmed)) return false
+  if (trimmed !== value || !trimmed || trimmed.length > 512) return false
+  if (RAW_UUID_LIKE.test(trimmed) || RAW_EMAIL_LIKE.test(trimmed) || PLAIN_DIGEST_REF.test(trimmed) || TOKEN_LIKE_MATERIAL.test(trimmed)) return false
   if (trimmed.includes('\n') || trimmed.includes('\r')) return false
+  if (trimmed.includes('://') || trimmed.includes('@')) return false
   if (trimmed.startsWith('opaque:')) return trimmed.length > 'opaque:'.length
   if (trimmed.startsWith('hmac-sha256:')) return trimmed.length > 'hmac-sha256:'.length
   if (trimmed.startsWith('scoped_hmac_ref:')) return trimmed.length > 'scoped_hmac_ref:'.length
