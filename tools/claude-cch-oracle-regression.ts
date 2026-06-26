@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto'
 import { fileURLToPath } from 'url'
 import { computeCCVersionSuffix, runSigningPipeline, verifySignedCCH } from '../src/policy.js'
 
-const DEFAULT_VERSION = '2.1.175'
+const DEFAULT_VERSION = '2.1.179'
 const BILLING_PREFIX = 'x-anthropic-billing-header:'
 
 const SYNTHETIC_PROMPT_SEEDS = [
@@ -221,7 +221,17 @@ async function runMockCliSample(baseUrl: string, sampleLabel: string, prompt: st
     max_tokens: 16,
     messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
   }), 'utf-8')
-  const config = { env: { version }, shared_pool: { signing_enabled: true, signing_evidence_gates_approved: true } } as any
+  const config = {
+    env: { version },
+    shared_pool: {
+      signing_enabled: true,
+      signing_evidence_gates_approved: true,
+      signed_cch_2179_oracle_profile_approved: version === '2.1.179',
+      signed_cch_2179_oracle_profile_ref: version === '2.1.179'
+        ? 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1'
+        : undefined,
+    },
+  } as any
   const signed = runSigningPipeline(config, body, { cliVersion: version })
   if (!signed.ok) return false
   const response = await fetch(`${baseUrl}/v1/messages?beta=true`, {

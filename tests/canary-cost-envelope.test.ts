@@ -1,9 +1,17 @@
 import { strict as assert } from 'assert'
+import { createHmac } from 'crypto'
+import { mkdtempSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
 import { getSharedPoolMaxBodyBytes } from '../src/policy.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 
 console.log('\ntests/canary-cost-envelope.test.ts')
+
+const attestationSecret = 'canary-attestation-test-secret'
+const internalControlToken = 'canary-internal-control-material-test'
+const sessionId = '123e4567-e89b-42d3-a456-426614174777'
 
 const headers = {
   'x-cc-gateway-token': 'gateway-token',
@@ -11,21 +19,82 @@ const headers = {
   'x-cc-account-id': 'account-a',
   'x-cc-token-type': 'oauth',
   authorization: 'Bearer synthetic-token',
+  'x-cc-credential-ref': 'opaque:credential-ref:v1:canary-cred',
   'x-cc-egress-bucket': 'bucket-a',
   'x-cc-policy-version': '2.1.146',
-  'x-claude-code-session-id': 'session-lite',
+  'x-claude-code-session-id': sessionId,
 }
 
-const trustedHeaders = {
-  ...headers,
-  'x-sub2api-persona-trusted': '1',
+
+function canonicalFormalPoolContext(value: Record<string, unknown>): string {
+  return JSON.stringify(Object.keys(value).sort().reduce((acc, key) => {
+    acc[key] = value[key]
+    return acc
+  }, {} as Record<string, unknown>))
+}
+
+function credentialBindingHmac(rawCredential: string, tokenType: 'oauth' | 'apikey' = 'oauth') {
+  return `hmac-sha256:${createHmac('sha256', attestationSecret)
+    .update('formal_pool_credential_binding_v1')
+    .update('\0')
+    .update(tokenType)
+    .update('\0')
+    .update(rawCredential)
+    .digest('hex')}`
+}
+
+function signedHeaders(base: Record<string, string> = headers, contextOverrides: Record<string, unknown> = {}) {
+  const context = {
+    method: 'POST',
+    route_class: 'messages',
+    path: '/v1/messages',
+    account_id: base['x-cc-account-id'],
+    token_type: base['x-cc-token-type'],
+    credential_ref: base['x-cc-credential-ref'],
+    credential_source: 'server_account_credentials',
+    egress_bucket: base['x-cc-egress-bucket'],
+    proxy_identity_ref: 'opaque:proxy-ref:v1:bucket-a',
+    policy_version: base['x-cc-policy-version'],
+    persona_profile: 'claude_code_2_1_146',
+    session_id: base['x-claude-code-session-id'],
+    timestamp_ms: Date.now(),
+    nonce: `canary-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    trusted_egress_profile_ref: 'strip_attribution',
+    profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
+    billing_shape_policy: 'strip',
+    request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
+    cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
+    observed_client_profile: {
+      schema_version: 'observed_client_profile.v1',
+      cli_version_bucket: 'unknown',
+      route_class: 'messages',
+      billing_shape: 'absent',
+      billing_block_count: 0,
+      cc_entrypoint_bucket: 'absent',
+    },
+    ...contextOverrides,
+  }
+  const canonical = canonicalFormalPoolContext(context)
+  return {
+    ...base,
+    'x-cc-formal-pool-context': Buffer.from(canonical, 'utf-8').toString('base64url'),
+    'x-cc-formal-pool-signature': `hmac-sha256:${createHmac('sha256', attestationSecret).update(canonical).digest('hex')}`,
+  }
+}
+
+function trustedSignedHeaders() {
+  return signedHeaders({
+    ...headers,
+    'x-sub2api-persona-trusted': '1',
+    'x-cc-internal-control-token': internalControlToken,
+  })
 }
 
 function config(upstreamUrl: string, proxyUrl: string, envelope = {}) {
   return baseConfig({
     mode: 'sub2api',
     upstream: { url: upstreamUrl },
-    auth: { gateway_token: 'gateway-token', tokens: [] },
+    auth: { gateway_token: 'gateway-token', internal_control_token: internalControlToken, tokens: [] },
     oauth: undefined,
     env: { ...baseConfig().env, version: '2.1.146', version_base: '2.1.146' },
     shared_pool: {
@@ -33,6 +102,8 @@ function config(upstreamUrl: string, proxyUrl: string, envelope = {}) {
       billing_cch_mode: 'sign',
       signing_enabled: true,
       signing_evidence_gates_approved: true,
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
       canary_cost_envelope: {
         enabled: true,
         max_tokens: 2048,
@@ -51,6 +122,8 @@ function config(upstreamUrl: string, proxyUrl: string, envelope = {}) {
         account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         email_hash: 'hmac-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         account_hash: 'hmac-sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        credential_ref: 'opaque:credential-ref:v1:canary-cred',
+        credential_binding_hmac: credentialBindingHmac('Bearer synthetic-token'),
         persona_variant: 'claude-code-2.1.146-macos-local',
         session_policy: 'preserve_downstream_session_id',
         policy_version: '2.1.146',
@@ -60,7 +133,7 @@ function config(upstreamUrl: string, proxyUrl: string, envelope = {}) {
       'bucket-a': {
         enabled: true,
         proxy_url: proxyUrl,
-        proxy_identity_hash: 'opaque:proxy-ref:v1:bucket-a',
+        proxy_identity_ref: 'opaque:proxy-ref:v1:bucket-a',
         allowed_account_ids: ['account-a'],
       },
     },
@@ -71,7 +144,7 @@ function liteBody(overrides: Record<string, unknown> = {}) {
   return {
     model: 'claude-sonnet-4-6',
     max_tokens: 1024,
-    metadata: { user_id: JSON.stringify({ session_id: 'session-lite' }) },
+    metadata: { user_id: JSON.stringify({ session_id: sessionId }) },
     stream: false,
     system: [],
     messages: [{ role: 'user', content: [{ type: 'text', text: 'local lite canary fixture' }] }],
@@ -88,7 +161,7 @@ async function withGateway(envelope: Record<string, unknown>, body: unknown) {
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(config(upstream.url, proxy.url, envelope))
   try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), { headers, body })
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), { headers: signedHeaders(), body })
     return { response, upstreamCount: upstream.captured.length }
   } finally {
     await close(gateway)
@@ -171,7 +244,7 @@ test('canary cost envelope does not affect non-canary path when disabled', async
   const gateway = startProxy(config(upstream.url, proxy.url, { enabled: false, max_tokens: 1 }))
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({ max_tokens: 1024 }),
     })
     assert.equal(response.status, 200, response.body)
@@ -191,13 +264,15 @@ test('canary cost envelope stays disabled for non-canary routing when no envelop
   base.shared_pool = {
     upstream_mode: 'preflight',
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
   } as any
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({ max_tokens: 32000, tools: Array.from({ length: 10 }, (_, i) => ({ name: `tool_${i}`, description: 'local', input_schema: { type: 'object' } })) }),
     })
     assert.equal(response.status, 200, response.body)
@@ -218,6 +293,8 @@ test('production observe-only budget does not inherit canary cost envelope defau
   base.shared_pool = {
     upstream_mode: 'preflight',
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     production_budget: { mode: 'observe_only', enforcement_enabled: false },
@@ -226,7 +303,7 @@ test('production observe-only budget does not inherit canary cost envelope defau
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({
         max_tokens: 32000,
         tools: richTools,
@@ -249,6 +326,8 @@ test('production observe-only budget does not inherit shared-pool default body c
   base.shared_pool = {
     upstream_mode: 'production',
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     production_upstream_enabled: true,
@@ -264,15 +343,19 @@ test('production upstream mode forwards rich local-mock body without canary enve
   base.shared_pool = {
     upstream_mode: 'production',
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     production_upstream_enabled: true,
     production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
   } as any
+  const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+  process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = join(mkdtempSync(join(tmpdir(), 'cc-gateway-canary-ledger-')), 'formal-pool-session-ledger.json')
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({
         max_tokens: 32000,
         tools: Array.from({ length: 30 }, (_, i) => ({ name: `tool_${i}`, description: 'local', input_schema: { type: 'object' } })),
@@ -285,6 +368,8 @@ test('production upstream mode forwards rich local-mock body without canary enve
     assert.equal(response.status, 200, response.body)
     assert.equal(upstream.captured.length, 1)
   } finally {
+    if (previousLedgerFile === undefined) delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+    else process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = previousLedgerFile
     await close(gateway)
     await close(proxy.server)
     await close(upstream.server)
@@ -299,13 +384,15 @@ test('real-canary default envelope allows Opus 4.7 model family', async () => {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
   } as any
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({ model: 'claude-opus-4-7', max_tokens: 1024 }),
     })
     assert.equal(response.status, 200, response.body)
@@ -325,13 +412,15 @@ test('real-canary mode applies default canary cost envelope even without explici
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
   } as any
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({ max_tokens: 32000 }),
     })
     assert.equal(response.status, 403)
@@ -352,6 +441,8 @@ test('real-canary candidate model envelope allows trusted Opus 4.8 only with rol
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     candidate_model_allowlist: ['claude-opus-4-8'],
@@ -362,7 +453,7 @@ test('real-canary candidate model envelope allows trusted Opus 4.8 only with rol
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: trustedHeaders,
+      headers: trustedSignedHeaders(),
       body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
     })
     assert.equal(response.status, 200, response.body)
@@ -382,6 +473,8 @@ test('real-canary candidate model envelope rejects Opus 4.8 without rollout cont
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     candidate_model_allowlist: ['claude-opus-4-8'],
@@ -391,7 +484,7 @@ test('real-canary candidate model envelope rejects Opus 4.8 without rollout cont
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers,
+      headers: signedHeaders(),
       body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
     })
     assert.equal(response.status, 403)
@@ -412,6 +505,8 @@ test('trusted real-canary candidate model envelope rejects Opus 4.8 without roll
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
     billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+      context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
     candidate_model_allowlist: ['claude-opus-4-8'],
@@ -421,7 +516,7 @@ test('trusted real-canary candidate model envelope rejects Opus 4.8 without roll
   const gateway = startProxy(base)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: trustedHeaders,
+      headers: trustedSignedHeaders(),
       body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
     })
     assert.equal(response.status, 403)

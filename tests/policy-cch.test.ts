@@ -25,15 +25,23 @@ function syntheticBody() {
   }), 'utf-8')
 }
 
-test('fixed rotl64 signer/verifier round trips old-CCH-compatible versions locally', () => {
-  const config = baseConfig({ shared_pool: { signing_enabled: true, signing_evidence_gates_approved: true } } as any)
-  for (const version of ['2.1.150', '2.1.153', '2.1.169', '2.1.170']) {
-    const signed = runSigningPipeline(config, syntheticBody(), { cliVersion: version })
-    assert.equal(signed.ok, true, version)
-    if (!signed.ok) continue
-    assert.deepEqual(verifySignedCCH(signed.body), { ok: true, cch: signed.cch }, version)
-    assert.match(signed.body.toString('utf-8'), new RegExp(`cc_version=${version.replace(/\./g, '\\.') }\\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};`), version)
-  }
+function approved2179SigningConfig() {
+  return baseConfig({
+    shared_pool: {
+      signing_enabled: true,
+      signing_evidence_gates_approved: true,
+      signed_cch_2179_oracle_profile_approved: true,
+      signed_cch_2179_oracle_profile_ref: 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1',
+    },
+  } as any)
+}
+
+test('fixed rotl64 signer/verifier round trips explicit 2.1.179 oracle-approved profile locally', () => {
+  const signed = runSigningPipeline(approved2179SigningConfig(), syntheticBody(), { cliVersion: '2.1.179' })
+  assert.equal(signed.ok, true)
+  if (!signed.ok) return
+  assert.deepEqual(verifySignedCCH(signed.body), { ok: true, cch: signed.cch })
+  assert.match(signed.body.toString('utf-8'), /cc_version=2\.1\.179\.[a-f0-9]{3}; cc_entrypoint=sdk-cli; cch=[a-f0-9]{5};/)
 })
 
 test('safe real-capture corpus records version-aware CCH preimage compatibility', () => {
@@ -51,15 +59,20 @@ test('safe real-capture corpus records version-aware CCH preimage compatibility'
   }
 })
 
-test('version boundary keeps 2.1.171 legacy and switches 2.1.172 to normalized preimage', () => {
+test('safe corpus evidence alone does not auto-enable unapproved legacy signer versions', () => {
+  const config = baseConfig({ shared_pool: { signing_enabled: true, signing_evidence_gates_approved: true } } as any)
+  const signed169 = runSigningPipeline(config, syntheticBody(), { cliVersion: '2.1.169' })
+  assert.deepEqual(signed169, { ok: false, code: 'sign_primary_2177_oracle_missing' })
+})
+
+test('version boundary does not auto-sign unapproved legacy gaps and switches 2.1.172 to normalized preimage', () => {
   const config = baseConfig({ shared_pool: { signing_enabled: true, signing_evidence_gates_approved: true } } as any)
   const signed171 = runSigningPipeline(config, Buffer.from(JSON.stringify({
     model: 'claude-opus-4-8',
     max_tokens: 64000,
     messages: [{ role: 'user', content: [{ type: 'text', text: 'alpha' }] }],
   }), 'utf-8'), { cliVersion: '2.1.171' })
-  assert.equal(signed171.ok, true)
-  if (signed171.ok) assert.deepEqual(verifySignedCCH(signed171.body), { ok: true, cch: signed171.cch })
+  assert.deepEqual(signed171, { ok: false, code: 'sign_primary_2177_oracle_missing' })
 
   const legacyBodyWithNormalizedCCH = '{"model":"claude-opus-4-8","max_tokens":64000,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.171.abc; cc_entrypoint=sdk-cli; cch=7952b;"}],"messages":[{"role":"user","content":[{"type":"text","text":"alpha"}]}]}'
   const normalizedBody = legacyBodyWithNormalizedCCH.replace('2.1.171.abc', '2.1.172.abc').replace('cch=7952b;', 'cch=89ed0;')
@@ -97,18 +110,18 @@ test('2.1.172+ verifier matches real CLI oracle vectors that normalize model and
   }
 })
 
-test('2.1.172+ signing ignores requested string model and numeric max_tokens in CCH preimage only', () => {
-  const config = baseConfig({ shared_pool: { signing_enabled: true, signing_evidence_gates_approved: true } } as any)
+test('2.1.179 oracle-approved signing ignores requested string model and numeric max_tokens in CCH preimage only', () => {
+  const config = approved2179SigningConfig()
   const first = runSigningPipeline(config, Buffer.from(JSON.stringify({
     model: 'claude-opus-4-8',
     max_tokens: 64000,
     messages: [{ role: 'user', content: [{ type: 'text', text: 'alpha' }] }],
-  }), 'utf-8'), { cliVersion: '2.1.175' })
+  }), 'utf-8'), { cliVersion: '2.1.179' })
   const second = runSigningPipeline(config, Buffer.from(JSON.stringify({
     model: 'claude-fable-5',
     max_tokens: 1,
     messages: [{ role: 'user', content: [{ type: 'text', text: 'alpha' }] }],
-  }), 'utf-8'), { cliVersion: '2.1.175' })
+  }), 'utf-8'), { cliVersion: '2.1.179' })
 
   assert.equal(first.ok, true)
   assert.equal(second.ok, true)

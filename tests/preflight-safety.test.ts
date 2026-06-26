@@ -1,25 +1,87 @@
 import { strict as assert } from 'assert'
+import { createHmac } from 'crypto'
 import { startProxy } from '../src/proxy.js'
 import { evaluateUpstreamSafety } from '../src/upstream-safety.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 
 console.log('\ntests/preflight-safety.test.ts')
 
+const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
+const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
+const sessionId = '123e4567-e89b-42d3-a456-426614174999'
+
 const sharedHeaders = {
   'x-cc-gateway-token': 'gateway-token',
   'x-cc-provider': 'anthropic',
   'x-cc-account-id': 'account-a',
   'x-cc-token-type': 'oauth',
+  'x-cc-credential-ref': 'opaque:credential-ref:v1:cred-a',
   authorization: 'Bearer synthetic-token',
   'x-cc-egress-bucket': 'bucket-a',
   'x-cc-policy-version': '2.1.146',
+  'x-claude-code-session-id': sessionId,
+}
+
+function canonicalFormalPoolContext(value: Record<string, unknown>): string {
+  return JSON.stringify(Object.keys(value).sort().reduce((acc, key) => {
+    acc[key] = value[key]
+    return acc
+  }, {} as Record<string, unknown>))
+}
+
+function credentialBindingHmac(rawCredential: string, tokenType: 'oauth' | 'apikey' = 'oauth') {
+  return `hmac-sha256:${createHmac('sha256', attestationSecret)
+    .update('formal_pool_credential_binding_v1')
+    .update('\0')
+    .update(tokenType)
+    .update('\0')
+    .update(rawCredential)
+    .digest('hex')}`
+}
+
+function signedSharedHeaders() {
+  const context = {
+    method: 'POST',
+    route_class: 'messages',
+    path: '/v1/messages',
+    account_id: sharedHeaders['x-cc-account-id'],
+    token_type: sharedHeaders['x-cc-token-type'],
+    credential_ref: sharedHeaders['x-cc-credential-ref'],
+    credential_source: 'server_account_credentials',
+    egress_bucket: sharedHeaders['x-cc-egress-bucket'],
+    proxy_identity_ref: 'opaque:proxy-ref:v1:bucket-a',
+    policy_version: sharedHeaders['x-cc-policy-version'],
+    persona_profile: 'claude-code-2.1.146-macos-local',
+    session_id: sharedHeaders['x-claude-code-session-id'],
+    timestamp_ms: Date.now(),
+    nonce: `nonce-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    trusted_egress_profile_ref: 'strip_attribution',
+    profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
+    billing_shape_policy: 'strip',
+    request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
+    cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
+    observed_client_profile: {
+      schema_version: 'observed_client_profile.v1',
+      cli_version_bucket: 'unknown',
+      route_class: 'messages',
+      billing_shape: 'absent',
+      billing_block_count: 0,
+      cc_entrypoint_bucket: 'absent',
+    },
+  }
+  const canonical = canonicalFormalPoolContext(context)
+  return {
+    ...sharedHeaders,
+    'x-cc-formal-pool-context': Buffer.from(canonical, 'utf-8').toString('base64url'),
+    'x-cc-formal-pool-signature': `hmac-sha256:${createHmac('sha256', attestationSecret).update(canonical).digest('hex')}`,
+  }
 }
 
 function sharedPreflightConfig(upstreamUrl: string) {
   return baseConfig({
     mode: 'sub2api',
     upstream: { url: upstreamUrl },
-    auth: { gateway_token: 'gateway-token', tokens: [] },
+    auth: { gateway_token: 'gateway-token', internal_control_token: internalControlToken, tokens: [] },
     oauth: undefined,
     env: { ...baseConfig().env, version: '2.1.146', version_base: '2.1.146' },
     shared_pool: {
@@ -27,6 +89,8 @@ function sharedPreflightConfig(upstreamUrl: string) {
       billing_cch_mode: 'sign',
       signing_enabled: true,
       signing_evidence_gates_approved: true,
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
     },
     account_identities: {
       'account-a': {
@@ -34,6 +98,8 @@ function sharedPreflightConfig(upstreamUrl: string) {
         account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         email_hash: 'hmac-sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
         account_hash: 'hmac-sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+        credential_ref: 'opaque:credential-ref:v1:cred-a',
+        credential_binding_hmac: credentialBindingHmac('Bearer synthetic-token'),
         persona_variant: 'claude-code-2.1.146-macos-local',
         session_policy: 'preserve_downstream_session_id',
         policy_version: '2.1.146',
@@ -161,7 +227,7 @@ test('messages-shaped preflight with identity and bucket uses localhost mock onl
   const gateway = startProxy(config)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: sharedHeaders,
+      headers: signedSharedHeaders(),
       body: { metadata: {}, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 200)
