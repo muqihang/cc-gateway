@@ -158,9 +158,13 @@ ccg help                  Show help
 
 ### Gateway Modes
 
-`mode: standalone` is the default and keeps the original behavior: CC Gateway owns OAuth refresh and injects the upstream credential.
+`mode: standalone` is the default personal/single-account mode: CC Gateway owns OAuth refresh and injects the upstream credential for one operator-owned gateway.
 
-`mode: sub2api` is for server-side integration where another service has already selected the account. In this mode CC Gateway authenticates the caller with `x-cc-gateway-token`, preserves the selected upstream credential (`authorization` for OAuth or `x-api-key` for API key accounts), and strips all `x-cc-*` control headers before forwarding. The Sub2API adapter is a separate integration step and is not enabled by these scripts.
+> **Formal-pool safety:** `standalone` is only for personal/single-account gateway use. It is forbidden as the shared Anthropic formal-pool production boundary. Formal-pool traffic must use `mode: sub2api`, where Sub2API authenticates the end user and selects the server-owned account while CC Gateway independently verifies account identity, egress, persona/session, billing/CCH, and final-output shape before upstream egress.
+
+`mode: sub2api` is for server-side integration where Sub2API has already selected the account from scheduler state. In this mode CC Gateway authenticates the caller with `x-cc-gateway-token`, preserves the selected upstream credential (`authorization` for OAuth or `x-api-key` for API key accounts) only after the formal-pool safety checks pass, and strips all `x-cc-*` control headers before forwarding. The runtime registration endpoint (`/_runtime/register-account`) is an internal-control API: it requires `x-cc-internal-control-token` from the internal path and a server-generated account-owned 64-hex `device_id` for that selected account. Do not log or configure raw account UUIDs, emails, upstream tokens, proxy credentials, raw prompts, bodies, telemetry, or CCH material for runtime registration. The Sub2API adapter is a separate integration step and is not enabled by the standalone quick/admin setup scripts.
+
+Use `config.example.yaml` for personal standalone setup. Use `config.sub2api.formal-pool.example.yaml` only for the Sub2API formal-pool integration path. For operator-facing formal-pool safety scope, safe capture field families, and degraded claims, see [Formal-Pool Sub2API Safety Boundary](docs/formal-pool-sub2api-safety.md).
 
 ### Local (development)
 
@@ -174,7 +178,7 @@ npm run dev    # tsx watch, auto-reload
 bash scripts/admin-setup.sh
 ```
 
-This interactive script:
+This interactive script is for personal standalone setup unless the Sub2API formal-pool integration path is explicitly configured:
 1. Extracts OAuth credentials
 2. Generates config + first client launcher
 3. Builds and starts the Docker container
@@ -257,7 +261,7 @@ In `standalone` mode, the gateway manages the full OAuth token lifecycle:
 
 Standalone clients never contact `platform.claude.com`. They send requests to the gateway with their client token; the gateway injects the real OAuth token before forwarding upstream.
 
-In `sub2api` mode, CC Gateway does not refresh or inject OAuth. The upstream credential must already be selected and attached by the caller, and CC Gateway only rewrites identity while preserving that credential.
+In `sub2api` mode, CC Gateway does not refresh or inject OAuth. The upstream credential must already be selected and attached by the caller, and CC Gateway only rewrites identity while preserving that credential. Formal-pool runtime mappings use the per-account/runtime `device_id` registered for the selected account, not the standalone global `identity.device_id`.
 
 ## Clash Rules
 
@@ -303,8 +307,8 @@ See [`clash-rules.yaml`](clash-rules.yaml) for the full template.
 - Connection-level request logging: every inbound request is logged with client IP before auth, and client name after auth.
 
 **Admin tooling**
-- `admin-setup.sh` — interactive Docker deployment with credential extraction and client generation.
-- `quick-setup.sh` — one-command local setup that extracts full credentials (access + refresh + expiry).
+- `admin-setup.sh` — interactive standalone-personal Docker deployment with credential extraction and client generation.
+- `quick-setup.sh` — one-command standalone-personal local setup that extracts full credentials (access + refresh + expiry).
 
 ### v0.1.0 (2026-04-01)
 

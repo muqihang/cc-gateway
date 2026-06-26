@@ -102,6 +102,42 @@ Treat any of the following as a release blocker:
 If this fails for a future Claude Code package, stop the persona upgrade and run
 a CCH delta investigation before changing production defaults.
 
+## Claude Code 2.1.179 native formal-pool matrix
+
+`tools/claude-native-oracle-matrix.ts` is the CP1 harness for the native
+formal-pool production path. It captures safe summaries for the stable
+`2.1.179` CLI in two localhost-only invocation modes:
+
+- `custom-base`
+- `first-party-assumed`
+
+Run it only with a pinned, version-verified executable:
+
+```bash
+CC_GATEWAY_NATIVE_ORACLE_REAL_CLI=1 \
+  CC_GATEWAY_NATIVE_ORACLE_VERSION=2.1.179 \
+  CC_GATEWAY_NATIVE_ORACLE_RUNTIME_ROOT=/path/to/pinned/2.1.179/claude \
+  CC_GATEWAY_NATIVE_ORACLE_OUTPUT=/private/tmp/native-oracle-matrix-2.1.179.json \
+  node --import tsx tools/claude-native-oracle-matrix.ts
+```
+
+Safety properties are the same as the CCH regression harness: localhost stub
+only, synthetic prompts via stdin, raw request bodies used in memory only, and
+JSON output limited to safe summaries. The matrix intentionally records CCH
+verifier booleans only; it must not persist raw CCH values or billing strings.
+
+The 2026-06-25 CP1 run observed `billing_shape=cch_present`,
+`cc_entrypoint_bucket=sdk-cli`, and verifier success for captured 2.1.179
+message samples. It also observed that the minimal 2.1.179 CLI invocations sent
+`stream=true` upstream even when the CLI output format was `json`, so
+non-streaming upstream body parity remains degraded until separately proven.
+
+This oracle evidence does **not** change the production default:
+formal-pool traffic stays on `strip_attribution` unless an explicit
+egress/profile proof enables `signed_cch` or `no_cch`. Unknown future versions,
+unknown beta/body shapes, or unknown billing shapes must strip/downscope or fail
+closed.
+
 ## Future-version investigation mode
 
 Real oracle runs are locked to `2.1.175` by default. For a future package

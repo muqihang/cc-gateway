@@ -10,8 +10,10 @@ server:
   #   key: ./certs/key.pem
 
 # Gateway mode:
-# - standalone: cc-gateway owns OAuth refresh and injects the upstream credential.
-# - sub2api: sub2api selects the account and cc-gateway preserves its credential.
+# - standalone: personal/single-account OAuth proxy only. Do not use as a
+#   shared formal-pool production boundary.
+# - sub2api: required for Sub2API formal-pool/shared-account production.
+#   Sub2API selects the account and CC Gateway performs final-output safety.
 mode: standalone
 
 # Upstream Anthropic API
@@ -42,7 +44,10 @@ auth:
     - name: machine-b
       token: change-me-token-2
 
-# Canonical identity - all clients will appear as this single device
+# Canonical identity for personal standalone mode - all clients will appear as
+# this single device. Sub2API formal-pool runtime registration uses a separate
+# account-owned 64-hex device_id per selected account; see
+# config.sub2api.formal-pool.example.yaml.
 # Generate a fresh identity: npm run generate-identity
 identity:
   device_id: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -84,102 +89,11 @@ process:
   heap_total_range: [40000000, 80000000]
   heap_used_range: [100000000, 200000000]
 
-# Shared-pool Anthropic boundary. In sub2api mode these maps are required:
-# missing account identity or missing/disabled/unknown egress bucket fails closed.
-shared_pool:
-  max_body_bytes: 2097152
-  # Default is strip. sign remains disabled until manually approved evidence gates pass.
-  billing_cch_mode: strip
-  signing_enabled: false
-  # Preflight/local capture is the safe default. Real Anthropic canary also
-  # requires ALLOW_REAL_ANTHROPIC_CANARY=1 and explicit user approval.
-  upstream_mode: preflight
-  real_canary_user_approved: false
-  # Beta profile is an internal persona resolver input, not an official Claude
-  # Code capability ceiling. Default to the verified 2.1.175 non-1M profile so
-  # ordinary Haiku/Sonnet traffic is not forced into context-1m. Sub2API may
-  # explicitly request context-1m with the internal x-sub2api-context-1m header
-  # when the user selected a 1M model alias; CC Gateway then re-checks the model
-  # allowlist and upgrades only that request to the verified subscription 1M
-  # profile. 2.1.170, 2.1.150, and first_200_oauth_compat remain rollback aliases.
-  # 2.1.171 was not published. Unknown beta values must go through candidate
-  # allowlist + replay proof + kill switch + audit budget, and never bypass
-  # trusted-client checks.
-  message_beta_profile: claude_code_2_1_175_api_key_non_1m
-  canary_envelope_role: localhost_canary_guardrail_not_production_capability_ceiling
-  # Canary-only safety envelope. These are local rollout guardrails, not
-  # Claude Code official capability limits. They are meant for explicit
-  # real-canary requests and should not be used to cap normal production
-  # Claude Code ability; production should use adaptive quota/queue policy.
-  canary_cost_envelope:
-    enabled: false
-    max_tokens: 32000
-    max_body_bytes: 131072
-    max_tools_count: 40
-    allow_thinking: true
-    max_thinking_budget_tokens: 32000
-    allow_output_config: true
-    allow_context_management: true
-    allow_context_1m: false
-    max_context_window_tokens: 1000000
-    # Known Claude Code 1m-capable model families. Do not use this local
-    # canary envelope to downgrade normal production capabilities; future
-    # trusted Sonnet/Opus versions should enter the dynamic model resolver
-    # candidate/gray path rather than being mechanically blocked.
-    allowed_models:
-      - "claude-sonnet-4-6"
-      - "claude-opus-4-7"
-      - "claude-opus-4-7-thinking"
-      - "claude-opus-4-6"
-      - "claude-opus-4-6-thinking"
-      - "claude-haiku-4-5-20251001"
-      - "claude-opus-4-8"
-      - "claude-fable-5"
-  # Future trusted Sonnet/Opus models must enter a candidate gray path rather
-  # than being mechanically blocked or blindly trusted. These knobs are rollout
-  # controls, not production capability downgrades.
-  candidate_model_allowlist:
-    - "claude-sonnet-4-8"
-    - "claude-opus-4-8"
-  candidate_model_replay_proofs:
-    claude-sonnet-4-8: "fixture-sonnet-48"
-    claude-opus-4-8: "fixture-opus-48"
-  candidate_model_kill_switches:
-    claude-sonnet-4-8: false
-    claude-opus-4-8: false
-  candidate_model_audit_budgets:
-    claude-sonnet-4-8: 25
-    claude-opus-4-8: 25
-  candidate_beta_allowlist:
-    - "claude_code_candidate_beta"
-  candidate_beta_replay_proofs:
-    claude_code_candidate_beta: "fixture-beta"
-  candidate_beta_kill_switches:
-    claude_code_candidate_beta: false
-  candidate_beta_audit_budgets:
-    claude_code_candidate_beta: 25
-
-# Per selected upstream account identity, keyed by x-cc-account-id. Store scoped
-# opaque/HMAC references for logs/safe deliverables; do not put raw emails/account
-# UUIDs here.
-account_identities:
-  example-account-id:
-    device_id: "<from-account-identity>"
-    account_uuid_ref: "scoped_hmac_ref_redacted"
-    email_ref: "scoped_hmac_ref_redacted"
-    account_ref: "scoped_hmac_ref_redacted"
-    persona_variant: "claude-code-2.1.175-macos-local"
-    session_policy: preserve_downstream_session_id
-    policy_version: "2.1.175"
-
-# Per-account/bucket egress isolation. The legacy openai_gateway_egress_bucket fallback
-# is intentionally not consumed by CC Gateway shared-pool routing.
-egress_buckets:
-  example-bucket:
-    enabled: false
-    proxy_url: "http://user:redacted-email:8080"
-    proxy_identity_ref: "opaque:proxy-ref:v1:example-bucket"
-    allowed_account_ids: ["example-account-id"]
+# Optional personal safety cap. This standalone example intentionally omits
+# active formal-pool/shared-account maps. Use config.sub2api.formal-pool.example.yaml
+# for Sub2API formal-pool production.
+# shared_pool:
+#   max_body_bytes: 2097152
 
 # Logging
 logging:
