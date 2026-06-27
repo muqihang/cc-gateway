@@ -69,8 +69,6 @@ const CLAUDE_PLATFORM_AWS_HOST_PREFIX = 'aws-external-anthropic.'
 const CLAUDE_PLATFORM_AWS_HOST_SUFFIX = '.api.aws'
 const CLAUDE_PLATFORM_AWS_WORKSPACE_REF_DOMAIN = 'claude_platform_aws_workspace_ref_v1'
 const CLAUDE_PLATFORM_AWS_BINDING_DOMAIN = 'claude_platform_aws_workspace_binding_v1'
-const CLAUDE_PLATFORM_AWS_BINDING_DEFAULT_SECRET = 'sub2api-claude-platform-aws-binding-v1'
-const FORMAL_POOL_SAFE_REF_DEFAULT_SECRET = 'sub2api-gateway-sticky-session-dev-key'
 const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
 const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'schema_version',
@@ -2012,7 +2010,10 @@ type ClaudePlatformAWSWorkspaceAuthorityInput = {
 function verifyClaudePlatformAWSWorkspaceAuthority(
   config: Config,
   input: ClaudePlatformAWSWorkspaceAuthorityInput,
-): { ok: true } | { ok: false; code: 'claude_platform_aws_workspace_ref_mismatch' | 'claude_platform_aws_workspace_binding_mismatch' } {
+): { ok: true } | { ok: false; code: 'claude_platform_aws_workspace_ref_mismatch' | 'claude_platform_aws_workspace_binding_mismatch' | 'claude_platform_aws_workspace_authority_secret_missing' } {
+  if (!claudePlatformAWSWorkspaceAuthoritySecretsConfigured(config)) {
+    return { ok: false, code: 'claude_platform_aws_workspace_authority_secret_missing' }
+  }
   const expectedWorkspaceRef = claudePlatformAWSWorkspaceRef(config, input.region, input.rawWorkspaceId)
   if (!safeEqualHmacRef(input.workspaceRef, expectedWorkspaceRef)) {
     return { ok: false, code: 'claude_platform_aws_workspace_ref_mismatch' }
@@ -2058,19 +2059,31 @@ function claudePlatformAWSWorkspaceBindingHmac(config: Config, input: ClaudePlat
 }
 
 function formalPoolSafeRefSecret(config: Config): string {
-  const sharedPool = (config as any).shared_pool || {}
-  const configured = typeof sharedPool.sticky_session_hmac_key === 'string' ? sharedPool.sticky_session_hmac_key.trim() : ''
-  const env = process.env.SUB2API_GATEWAY_STICKY_SESSION_HMAC_KEY?.trim() || ''
-  return configured || env || FORMAL_POOL_SAFE_REF_DEFAULT_SECRET
+  return explicitFormalPoolSafeRefSecret(config)
 }
 
 function claudePlatformAWSWorkspaceBindingSecret(config: Config): string {
+  return explicitClaudePlatformAWSWorkspaceBindingSecret(config)
+}
+
+function claudePlatformAWSWorkspaceAuthoritySecretsConfigured(config: Config): boolean {
+  return Boolean(explicitFormalPoolSafeRefSecret(config) && explicitClaudePlatformAWSWorkspaceBindingSecret(config))
+}
+
+function explicitFormalPoolSafeRefSecret(config: Config): string {
+  const sharedPool = (config as any).shared_pool || {}
+  const configured = typeof sharedPool.sticky_session_hmac_key === 'string' ? sharedPool.sticky_session_hmac_key.trim() : ''
+  const env = process.env.SUB2API_GATEWAY_STICKY_SESSION_HMAC_KEY?.trim() || ''
+  return configured || env
+}
+
+function explicitClaudePlatformAWSWorkspaceBindingSecret(config: Config): string {
   const sharedPool = (config as any).shared_pool || {}
   const configured = typeof sharedPool.claude_platform_aws_workspace_binding_hmac_key === 'string'
     ? sharedPool.claude_platform_aws_workspace_binding_hmac_key.trim()
     : ''
   const env = process.env.SUB2API_CLAUDE_PLATFORM_AWS_BINDING_HMAC_KEY?.trim() || ''
-  return configured || env || CLAUDE_PLATFORM_AWS_BINDING_DEFAULT_SECRET
+  return configured || env
 }
 
 function safeEqualHmacRef(actual: string, expected: string): boolean {

@@ -12,8 +12,8 @@ console.log('\ntests/claude-platform-aws-cp5.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
 const defaultSessionId = '123e4567-e89b-42d3-a456-426614174999'
-const workspaceHmacSecret = 'sub2api-gateway-sticky-session-dev-key'
-const workspaceBindingSecret = 'sub2api-claude-platform-aws-binding-v1'
+const workspaceHmacSecret = 'local-fixture-workspace-ref-hmac-material-123456'
+const workspaceBindingSecret = 'local-fixture-workspace-binding-hmac-material-123456'
 const rawWorkspaceId = 'workspace-id-local-fixture'
 const endpointRef = 'endpoint:aws-external-anthropic:us-east-1'
 const betaPolicyRef = 'beta-policy:claude-platform-aws-v1-strip'
@@ -174,6 +174,8 @@ function awsSub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Reco
     shared_pool: {
       context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
       context_attestation_secret: attestationSecret,
+      sticky_session_hmac_key: workspaceHmacSecret,
+      claude_platform_aws_workspace_binding_hmac_key: workspaceBindingSecret,
       upstream_mode: 'local-capture',
     },
     account_identities: {
@@ -843,6 +845,39 @@ test('claude platform aws runtime replay blocks old mappings without aws capabil
 })
 
 
+
+
+
+test('claude platform aws production requires explicit workspace authority secrets', async () => {
+  const proxy = await startDenyConnectProxy()
+  const ledgerDir = mkdtempSync(join(tmpdir(), 'cc-gateway-cpaws-prod-secret-ledger-'))
+  const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+  process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = join(ledgerDir, 'formal-pool-session-ledger.json')
+  const gateway = startProxy(awsSub2apiConfig('https://aws-external-anthropic.us-east-1.api.aws', proxy.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      upstream_mode: 'production',
+      production_upstream_enabled: true,
+      production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
+    },
+  }))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders(),
+      body: awsBody(),
+    })
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'claude_platform_aws_workspace_authority_secret_missing')
+    assert.equal(proxy.connectTargets.length, 0)
+  } finally {
+    if (previousLedgerFile === undefined) delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+    else process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = previousLedgerFile
+    await close(gateway)
+    await close(proxy.server)
+  }
+})
 
 test('claude platform aws production rejects configured upstream endpoint mismatch before egress', async () => {
   const upstream = await startFakeUpstream()
