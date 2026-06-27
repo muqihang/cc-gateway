@@ -343,7 +343,7 @@ export function rewriteHeaders(
   options: {
     upstreamAuth?: 'oauth' | 'apikey' | 'none'
     providerKind?: 'anthropic_first_party' | 'claude_platform_aws'
-    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key'
+    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key' | 'sigv4'
     anthropicWorkspaceId?: string
     stripGatewayControlHeaders?: boolean
     sharedPool?: boolean
@@ -417,7 +417,7 @@ function rewriteSharedPoolHeaders(
   options: {
     upstreamAuth?: 'oauth' | 'apikey' | 'none'
     providerKind?: 'anthropic_first_party' | 'claude_platform_aws'
-    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key'
+    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key' | 'sigv4'
     anthropicWorkspaceId?: string
     route?: string
     accountIdentity?: AccountIdentityRecord
@@ -438,6 +438,8 @@ function rewriteSharedPoolHeaders(
     } else if (options.upstreamAuthScheme === 'x_api_key' && selectedApiKey) {
       out['x-api-key'] = selectedApiKey
     }
+    // SigV4 signs the final rewritten request later; the client/API key proof
+    // must not be forwarded as upstream auth for this profile.
     if (options.anthropicWorkspaceId) {
       out['anthropic-workspace-id'] = options.anthropicWorkspaceId
     }

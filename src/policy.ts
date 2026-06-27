@@ -34,11 +34,14 @@ export type AccountIdentityRecord = {
   aws_region?: string
   upstream_host?: string
   allowed_upstream_path?: string
-  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key' | 'sigv4'
   beta_policy_ref?: string
   request_shape_profile_ref?: string
   cache_parity_profile_ref?: string
   anthropic_workspace_id?: string
+  aws_access_key_id?: string
+  aws_secret_access_key?: string
+  aws_session_token?: string
 }
 
 export type EgressBucketRecord = {

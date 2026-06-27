@@ -28,11 +28,14 @@ export type AccountIdentityConfig = {
   aws_region?: string
   upstream_host?: string
   allowed_upstream_path?: string
-  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key' | 'sigv4'
   beta_policy_ref?: string
   request_shape_profile_ref?: string
   cache_parity_profile_ref?: string
   anthropic_workspace_id?: string
+  aws_access_key_id?: string
+  aws_secret_access_key?: string
+  aws_session_token?: string
 }
 
 export type EgressBucketConfig = {
@@ -100,6 +103,7 @@ export type Config = {
     context_attestation_secret_ref?: string
     context_attestation_secret?: string
     context_attestation_secret_env?: string
+    claude_platform_aws_sigv4_enabled?: boolean
     message_beta_profile?: 'claude_code_2_1_146' | 'claude_code_2_1_150_subscription' | 'claude_code_2_1_150_subscription_1m' | 'claude_code_2_1_170_subscription_1m' | 'claude_code_2_1_175_subscription_1m' | 'first_200_oauth_compat' | 'claude_code_candidate_beta' | string
     canary_envelope_role?: string
     canary_cost_envelope?: {
