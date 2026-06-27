@@ -67,6 +67,10 @@ const CLAUDE_PLATFORM_AWS_BETA_POLICY_REF = 'beta-policy:claude-platform-aws-v1-
 const CLAUDE_PLATFORM_AWS_ALLOWED_PATH = '/v1/messages'
 const CLAUDE_PLATFORM_AWS_HOST_PREFIX = 'aws-external-anthropic.'
 const CLAUDE_PLATFORM_AWS_HOST_SUFFIX = '.api.aws'
+const CLAUDE_PLATFORM_AWS_WORKSPACE_REF_DOMAIN = 'claude_platform_aws_workspace_ref_v1'
+const CLAUDE_PLATFORM_AWS_BINDING_DOMAIN = 'claude_platform_aws_workspace_binding_v1'
+const CLAUDE_PLATFORM_AWS_BINDING_DEFAULT_SECRET = 'sub2api-claude-platform-aws-binding-v1'
+const FORMAL_POOL_SAFE_REF_DEFAULT_SECRET = 'sub2api-gateway-sticky-session-dev-key'
 const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
 const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'schema_version',
@@ -353,8 +357,10 @@ function normalizeRuntimeAccountMapping(
   if (sessionPolicy !== 'preserve_downstream_session_id') {
     return { status: 400, code: 'invalid_session_policy', message: 'Runtime registration session policy must be preserve_downstream_session_id until gateway_generated is implemented' }
   }
-  const awsValidation = validateRuntimeClaudePlatformAWSFields({
+  const awsValidation = validateRuntimeClaudePlatformAWSFields(config, {
     provider_kind: providerKind,
+    account_ref: accountRef,
+    credential_ref: credentialRef,
     token_type: tokenType,
     workspace_ref: workspaceRef,
     workspace_binding_hmac: workspaceBindingHmac,
@@ -367,6 +373,8 @@ function normalizeRuntimeAccountMapping(
     request_shape_profile_ref: requestShapeProfileRef,
     cache_parity_profile_ref: cacheParityProfileRef,
     anthropic_workspace_id: anthropicWorkspaceId,
+    egress_bucket: egressBucket,
+    proxy_identity_ref: proxyIdentityRef,
   })
   if (awsValidation) return awsValidation
   const proxyValidation = validateRuntimeProxyUrl(proxyUrl)
@@ -466,7 +474,7 @@ function validateRuntimeProxyUrl(value: string): { status: number; code: string;
   return null
 }
 
-function validateRuntimeClaudePlatformAWSFields(input: Record<string, string>): { status: number; code: string; message: string } | null {
+function validateRuntimeClaudePlatformAWSFields(config: Config, input: Record<string, string>): { status: number; code: string; message: string } | null {
   const providerKind = input.provider_kind
   if (!providerKind) return null
   if (providerKind !== 'anthropic_first_party' && providerKind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
@@ -507,6 +515,22 @@ function validateRuntimeClaudePlatformAWSFields(input: Record<string, string>): 
   }
   if (!input.anthropic_workspace_id || /[\r\n]/.test(input.anthropic_workspace_id) || input.anthropic_workspace_id.length > 512) {
     return { status: 400, code: 'missing_anthropic_workspace_id', message: 'Claude Platform on AWS runtime registration requires workspace id in sensitive storage' }
+  }
+  const authority = verifyClaudePlatformAWSWorkspaceAuthority(config, {
+    providerKind,
+    accountRef: input.account_ref,
+    credentialRef: input.credential_ref,
+    workspaceRef: input.workspace_ref,
+    workspaceBindingHmac: input.workspace_binding_hmac,
+    endpointRef: input.upstream_endpoint_ref,
+    region: input.aws_region,
+    authScheme: input.upstream_auth_scheme,
+    egressBucket: input.egress_bucket,
+    proxyIdentityRef: input.proxy_identity_ref,
+    rawWorkspaceId: input.anthropic_workspace_id,
+  })
+  if (!authority.ok) {
+    return { status: 403, code: authority.code, message: 'Claude Platform on AWS workspace authority binding is invalid' }
   }
   return null
 }
@@ -1202,7 +1226,7 @@ async function handleRequest(
 
   if (config.mode === 'sub2api') {
     const upstreamSafety = evaluateUpstreamSafety(config, method, target.pathname)
-    if (!upstreamSafety.ok) {
+    if (!upstreamSafety.ok && upstreamSafety.code !== 'real_aws_claude_platform_requires_post_attestation') {
       writeControlPlaneError(res, upstreamSafety.status, upstreamSafety.code, 'Upstream is not allowed for this CC Gateway preflight/canary mode')
       return
     }
@@ -1364,6 +1388,7 @@ async function handleRequest(
   let rawSigningOutputBody = ''
   let rawCCH: string | null = null
   let rawVerifierResult: unknown = null
+  let finalVerifierOptions: FinalOutputVerifierOptions | null = null
 
   if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
     const controlPlaneCheck = verifySuppressedControlPlaneRequest(
@@ -1527,7 +1552,7 @@ async function handleRequest(
     body = signing.body
     rawSigningOutputBody = body.toString('utf-8')
     rawCCH = signing.cch
-    const verifier = verifySharedPoolFinalOutput(config, rewrittenHeaders, body, {
+    finalVerifierOptions = {
       route: sharedPoolRoute,
       sessionId,
       accountIdentity: accountIdentity ?? undefined,
@@ -1537,14 +1562,9 @@ async function handleRequest(
       requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
       attestation: formalPoolAttestation ?? undefined,
-    })
-    rawVerifierResult = verifier
-    if (!verifier.ok) {
-      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool signing verifier failed')
-      return
     }
   } else if (config.mode === 'sub2api') {
-    const verifier = verifySharedPoolFinalOutput(config, rewrittenHeaders, body, {
+    finalVerifierOptions = {
       route: sharedPoolRoute,
       sessionId,
       accountIdentity: accountIdentity ?? undefined,
@@ -1554,11 +1574,6 @@ async function handleRequest(
       requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
       attestation: formalPoolAttestation ?? undefined,
-    })
-    rawVerifierResult = verifier
-    if (!verifier.ok) {
-      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
-      return
     }
   }
 
@@ -1575,6 +1590,25 @@ async function handleRequest(
     upstreamUrl.search = ''
   }
 
+  const forwardHeaders = {
+    ...rewrittenHeaders,
+    host: formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && formalPoolAttestation.upstream_host
+      ? formalPoolAttestation.upstream_host
+      : upstream.host,
+    'content-length': String(body.length),
+  }
+  if (config.mode === 'sub2api' && finalVerifierOptions) {
+    const verifier = verifyProviderAwareFinalRequest(config, upstreamUrl, forwardHeaders, body, finalVerifierOptions, accountIdentity ?? undefined, egress ?? undefined)
+    rawVerifierResult = verifier
+    if (!verifier.ok) {
+      if (formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+        writeControlPlaneError(res, 403, verifier.code, 'Claude Platform on AWS final verifier failed')
+        return
+      }
+      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
+      return
+    }
+  }
   const agentKey = config.mode === 'sub2api' && accountContext && egress
     ? proxyAgentCacheKey(accountContext, upstream, egress)
     : 'default'
@@ -1585,20 +1619,7 @@ async function handleRequest(
     writeControlPlaneError(res, 403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
     return
   }
-  const forwardHeaders = {
-    ...rewrittenHeaders,
-    host: formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && formalPoolAttestation.upstream_host
-      ? formalPoolAttestation.upstream_host
-      : upstream.host,
-    'content-length': String(body.length),
-  }
-  if (config.mode === 'sub2api' && formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
-    const finalAWSCheck = verifyClaudePlatformAWSFinalRequest(config, upstreamUrl, forwardHeaders, formalPoolAttestation)
-    if (!finalAWSCheck.ok) {
-      writeControlPlaneError(res, 403, finalAWSCheck.code, 'Claude Platform on AWS final verifier failed')
-      return
-    }
-  }
+
   const requestCapturePayload: Record<string, unknown> = {
     method,
     inbound_route: safeSub2ApiCompatInboundRoute(req, target),
@@ -1794,28 +1815,45 @@ function prependNoCchBillingHeader(parsed: any, header: string) {
   parsed.system = [billingBlock]
 }
 
+type FinalOutputVerifierOptions = {
+  route: SharedPoolPersonaRoute
+  sessionId?: string
+  accountIdentity?: AccountIdentityRecord
+  expectedVersion?: string
+  expectedBeta?: string
+  billingMode: FormalPoolBillingMode
+  requestShapeProfileRef?: string
+  cacheParityProfileRef?: string
+  attestation?: AttestedFormalPoolContext
+}
+
+function verifyProviderAwareFinalRequest(
+  config: Config,
+  upstreamUrl: URL,
+  headers: Record<string, string>,
+  body: Buffer,
+  options: FinalOutputVerifierOptions,
+  identity?: AccountIdentityRecord,
+  egress?: EgressBucketResolution,
+): { ok: true } | { ok: false; code: string } {
+  const sharedCheck = verifySharedPoolFinalOutput(config, headers, body, options)
+  if (!sharedCheck.ok) return sharedCheck
+  if (options.attestation?.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return { ok: true }
+  return verifyClaudePlatformAWSFinalRequest(config, upstreamUrl, headers, body, options.attestation, identity, egress)
+}
+
 export function verifySharedPoolFinalOutput(
   config: Config,
   headers: Record<string, string>,
   body: Buffer,
-  options: {
-    route: SharedPoolPersonaRoute
-    sessionId?: string
-    accountIdentity?: AccountIdentityRecord
-    expectedVersion?: string
-    expectedBeta?: string
-    billingMode: FormalPoolBillingMode
-    requestShapeProfileRef?: string
-    cacheParityProfileRef?: string
-    attestation?: AttestedFormalPoolContext
-  },
+  options: FinalOutputVerifierOptions,
 ): { ok: true } | { ok: false; code: string } {
   if (options.attestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
-    const awsHeaderCheck = verifyClaudePlatformAWSFinalHeaders(headers, options.attestation)
+    const awsHeaderCheck = verifyClaudePlatformAWSFinalHeaders(headers, options.attestation, options.accountIdentity)
     if (!awsHeaderCheck.ok) return awsHeaderCheck
   } else {
     try {
-      validateSharedPoolPersonaHeaderSchema(headers, options.route, options.sessionId)
+      validateSharedPoolPersonaHeaderSchema(personaSemanticHeaders(headers), options.route, options.sessionId)
     } catch {
       return { ok: false, code: 'persona_header_mismatch' }
     }
@@ -1874,9 +1912,19 @@ export function verifySharedPoolFinalOutput(
   return { ok: true }
 }
 
+function personaSemanticHeaders(headers: Record<string, string>): Record<string, string> {
+  const out = { ...headers }
+  delete out.host
+  delete out.Host
+  delete out['content-length']
+  delete out['Content-Length']
+  return out
+}
+
 function verifyClaudePlatformAWSFinalHeaders(
   headers: Record<string, string>,
   attested: AttestedFormalPoolContext,
+  identity?: AccountIdentityRecord,
 ): { ok: true } | { ok: false; code: string } {
   if (attested.upstream_auth_scheme !== 'x_api_key') {
     return { ok: false, code: 'claude_platform_aws_auth_profile_unproven' }
@@ -1896,6 +1944,9 @@ function verifyClaudePlatformAWSFinalHeaders(
   }
   if (!headers['anthropic-workspace-id']) return { ok: false, code: 'claude_platform_aws_workspace_header_mismatch' }
   if (!headers['x-api-key']) return { ok: false, code: 'claude_platform_aws_auth_header_mismatch' }
+  if (identity?.anthropic_workspace_id && headers['anthropic-workspace-id'] !== identity.anthropic_workspace_id) {
+    return { ok: false, code: 'claude_platform_aws_workspace_header_mismatch' }
+  }
   return { ok: true }
 }
 
@@ -1903,7 +1954,10 @@ function verifyClaudePlatformAWSFinalRequest(
   config: Config,
   upstreamUrl: URL,
   headers: Record<string, string>,
+  _body: Buffer,
   attested: AttestedFormalPoolContext,
+  identity?: AccountIdentityRecord,
+  egress?: EgressBucketResolution,
 ): { ok: true } | { ok: false; code: string } {
   if (attested.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
     return { ok: false, code: 'claude_platform_aws_provider_mismatch' }
@@ -1922,7 +1976,110 @@ function verifyClaudePlatformAWSFinalRequest(
   if (upstreamUrl.pathname !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH || upstreamUrl.search !== '') {
     return { ok: false, code: 'claude_platform_aws_route_mismatch' }
   }
-  return verifyClaudePlatformAWSFinalHeaders(headers, attested)
+  const headerCheck = verifyClaudePlatformAWSFinalHeaders(headers, attested, identity)
+  if (!headerCheck.ok) return headerCheck
+  if (!identity || !egress) return { ok: false, code: 'claude_platform_aws_workspace_binding_mismatch' }
+  return verifyClaudePlatformAWSWorkspaceAuthority(config, {
+    providerKind: attested.provider_kind,
+    accountRef: accountRefForWorkspaceBinding(identity, attested.account_id),
+    credentialRef: attested.credential_ref,
+    workspaceRef: attested.workspace_ref || '',
+    workspaceBindingHmac: attested.workspace_binding_hmac || '',
+    endpointRef: attested.upstream_endpoint_ref || '',
+    region: attested.aws_region || '',
+    authScheme: attested.upstream_auth_scheme || '',
+    egressBucket: attested.egress_bucket,
+    proxyIdentityRef: egress.proxyIdentityRef,
+    rawWorkspaceId: identity.anthropic_workspace_id || '',
+  })
+}
+
+
+type ClaudePlatformAWSWorkspaceAuthorityInput = {
+  providerKind: string
+  accountRef: string
+  credentialRef: string
+  workspaceRef: string
+  workspaceBindingHmac: string
+  endpointRef: string
+  region: string
+  authScheme: string
+  egressBucket: string
+  proxyIdentityRef: string
+  rawWorkspaceId: string
+}
+
+function verifyClaudePlatformAWSWorkspaceAuthority(
+  config: Config,
+  input: ClaudePlatformAWSWorkspaceAuthorityInput,
+): { ok: true } | { ok: false; code: 'claude_platform_aws_workspace_ref_mismatch' | 'claude_platform_aws_workspace_binding_mismatch' } {
+  const expectedWorkspaceRef = claudePlatformAWSWorkspaceRef(config, input.region, input.rawWorkspaceId)
+  if (!safeEqualHmacRef(input.workspaceRef, expectedWorkspaceRef)) {
+    return { ok: false, code: 'claude_platform_aws_workspace_ref_mismatch' }
+  }
+  const expectedBinding = claudePlatformAWSWorkspaceBindingHmac(config, input)
+  if (!safeEqualHmacRef(input.workspaceBindingHmac, expectedBinding)) {
+    return { ok: false, code: 'claude_platform_aws_workspace_binding_mismatch' }
+  }
+  return { ok: true }
+}
+
+function claudePlatformAWSWorkspaceRef(config: Config, region: string, rawWorkspaceId: string): string {
+  return formalPoolSafeRef(config, 'workspace', [CLAUDE_PLATFORM_AWS_WORKSPACE_REF_DOMAIN, region, rawWorkspaceId].join('\0'))
+}
+
+function formalPoolSafeRef(config: Config, scope: string, raw: string): string {
+  const secret = formalPoolSafeRefSecret(config)
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update(`formal_pool_${scope}`)
+    .update('\0')
+    .update('v1')
+    .update('\0')
+    .update(raw)
+    .digest('hex')}`
+}
+
+function claudePlatformAWSWorkspaceBindingHmac(config: Config, input: ClaudePlatformAWSWorkspaceAuthorityInput): string {
+  const secret = claudePlatformAWSWorkspaceBindingSecret(config)
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update([
+      CLAUDE_PLATFORM_AWS_BINDING_DOMAIN,
+      input.providerKind,
+      input.accountRef,
+      input.credentialRef,
+      input.workspaceRef,
+      input.endpointRef,
+      input.region,
+      input.authScheme,
+      input.egressBucket,
+      input.proxyIdentityRef,
+    ].join('\0'))
+    .digest('hex')}`
+}
+
+function formalPoolSafeRefSecret(config: Config): string {
+  const sharedPool = (config as any).shared_pool || {}
+  const configured = typeof sharedPool.sticky_session_hmac_key === 'string' ? sharedPool.sticky_session_hmac_key.trim() : ''
+  const env = process.env.SUB2API_GATEWAY_STICKY_SESSION_HMAC_KEY?.trim() || ''
+  return configured || env || FORMAL_POOL_SAFE_REF_DEFAULT_SECRET
+}
+
+function claudePlatformAWSWorkspaceBindingSecret(config: Config): string {
+  const sharedPool = (config as any).shared_pool || {}
+  const configured = typeof sharedPool.claude_platform_aws_workspace_binding_hmac_key === 'string'
+    ? sharedPool.claude_platform_aws_workspace_binding_hmac_key.trim()
+    : ''
+  const env = process.env.SUB2API_CLAUDE_PLATFORM_AWS_BINDING_HMAC_KEY?.trim() || ''
+  return configured || env || CLAUDE_PLATFORM_AWS_BINDING_DEFAULT_SECRET
+}
+
+function safeEqualHmacRef(actual: string, expected: string): boolean {
+  if (!/^hmac-sha256:[a-f0-9]{64}$/i.test(actual) || !/^hmac-sha256:[a-f0-9]{64}$/i.test(expected)) return false
+  return safeEqualHex(actual.slice('hmac-sha256:'.length), expected.slice('hmac-sha256:'.length))
+}
+
+function accountRefForWorkspaceBinding(identity: AccountIdentityRecord, fallbackAccountId: string): string {
+  return identity.account_ref || identity.account_hash || identity.account_uuid_ref || identity.account_uuid_hash || fallbackAccountId
 }
 
 function claudePlatformAWSRequiresRealEndpoint(config: Config): boolean {

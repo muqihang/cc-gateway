@@ -191,6 +191,27 @@ test('real Anthropic production upstream requires production mode and production
   }
 })
 
+
+
+test('real AWS Claude Platform upstream requires post-attestation provider gate', () => {
+  for (const mode of ['real-canary', 'production'] as const) {
+    const config = sharedPreflightConfig('https://aws-external-anthropic.us-east-1.api.aws')
+    ;(config.shared_pool as any).upstream_mode = mode
+    ;(config.shared_pool as any).real_canary_user_approved = true
+    ;(config.shared_pool as any).production_upstream_enabled = true
+    assert.deepEqual(evaluateUpstreamSafety(config, 'POST', '/v1/messages'), {
+      ok: false,
+      status: 428,
+      code: 'real_aws_claude_platform_requires_post_attestation',
+    })
+    assert.deepEqual(evaluateUpstreamSafety(config, 'POST', '/v1/messages/count_tokens'), {
+      ok: false,
+      status: 403,
+      code: 'real_aws_claude_platform_route_forbidden',
+    })
+  }
+})
+
 test('real modes reject nonlocal non-Anthropic upstreams unless explicitly supported by code', () => {
   for (const mode of ['real-canary', 'production'] as const) {
     const config = sharedPreflightConfig('https://example.invalid')

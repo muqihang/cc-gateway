@@ -12,14 +12,16 @@ console.log('\ntests/claude-platform-aws-cp5.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
 const defaultSessionId = '123e4567-e89b-42d3-a456-426614174999'
-const workspaceRef = 'workspace:cpaws-a'
-const workspaceBindingHmac = 'hmac-sha256:' + 'd'.repeat(64)
+const workspaceHmacSecret = 'sub2api-gateway-sticky-session-dev-key'
+const workspaceBindingSecret = 'sub2api-claude-platform-aws-binding-v1'
+const rawWorkspaceId = 'workspace-id-local-fixture'
 const endpointRef = 'endpoint:aws-external-anthropic:us-east-1'
 const betaPolicyRef = 'beta-policy:claude-platform-aws-v1-strip'
 const requestShapeProfileRef = 'request-shape:claude-platform-aws-v1-strip'
 const cacheParityProfileRef = 'cache-profile:claude-platform-aws-v1-strip'
 const selectedApiKey = 'selected-api-key-local-fixture'
-const rawWorkspaceId = 'workspace-id-local-fixture'
+const workspaceRef = formalPoolSafeRef('workspace', `claude_platform_aws_workspace_ref_v1\0us-east-1\0${rawWorkspaceId}`)
+const workspaceBindingHmac = claudePlatformAwsWorkspaceBindingHmac({ workspaceRef })
 const selectedApiKeyBindingHmac = credentialBindingHmac(selectedApiKey)
 
 function canonicalFormalPoolContext(value: Record<string, unknown>): string {
@@ -40,6 +42,46 @@ function credentialBindingHmac(rawCredential: string, tokenType: 'oauth' | 'apik
     .update(tokenType)
     .update('\0')
     .update(rawCredential)
+    .digest('hex')}`
+}
+
+
+function formalPoolSafeRef(scope: string, raw: string, secret = workspaceHmacSecret) {
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update(`formal_pool_${scope}`)
+    .update('\0')
+    .update('v1')
+    .update('\0')
+    .update(raw)
+    .digest('hex')}`
+}
+
+function claudePlatformAwsWorkspaceBindingHmac(overrides: Record<string, string> = {}, secret = workspaceBindingSecret) {
+  const tuple = {
+    providerKind: 'claude_platform_aws',
+    accountRef: 'hmac-sha256:' + 'e'.repeat(64),
+    credentialRef: 'opaque:credential-ref:v1:cpaws-a',
+    workspaceRef,
+    endpointRef,
+    region: 'us-east-1',
+    authScheme: 'x_api_key',
+    egressBucket: 'bucket-cpaws-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:cpaws-a',
+    ...overrides,
+  }
+  return `hmac-sha256:${createHmac('sha256', secret)
+    .update([
+      'claude_platform_aws_workspace_binding_v1',
+      tuple.providerKind,
+      tuple.accountRef,
+      tuple.credentialRef,
+      tuple.workspaceRef,
+      tuple.endpointRef,
+      tuple.region,
+      tuple.authScheme,
+      tuple.egressBucket,
+      tuple.proxyIdentityRef,
+    ].join('\0'))
     .digest('hex')}`
 }
 
@@ -434,6 +476,71 @@ test('aws endpoint host is allowed only for claude platform aws provider kind', 
   }
 })
 
+
+test('claude platform aws configured upstream requires valid provider attestation before egress', async () => {
+  const proxy = await startDenyConnectProxy()
+  const gateway = startProxy(awsSub2apiConfig('https://aws-external-anthropic.us-east-1.api.aws', proxy.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      upstream_mode: 'production',
+      production_upstream_enabled: true,
+      production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
+    },
+  }))
+
+  try {
+    const missingAttestation = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: {
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-account-id': 'cpaws-account-a',
+        'x-cc-token-type': 'apikey',
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:cpaws-a',
+        'x-cc-egress-bucket': 'bucket-cpaws-a',
+        'x-cc-policy-version': '2.1.175',
+        'x-claude-code-session-id': defaultSessionId,
+        'x-api-key': selectedApiKey,
+      },
+      body: awsBody(),
+    })
+    assert.equal(missingAttestation.status, 403)
+    assert.equal(missingAttestation.headers['x-cc-gateway-error-code'], 'missing_formal_pool_context_attestation')
+
+    const wrongProvider = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders({}, { provider_kind: 'anthropic_first_party' }),
+      body: awsBody(),
+    })
+    assert.ok([403, 404].includes(wrongProvider.status))
+    assert.ok(['real_aws_claude_platform_provider_mismatch', 'unsupported_route'].includes(String(wrongProvider.headers['x-cc-gateway-error-code'])))
+    assert.equal(proxy.connectTargets.length, 0)
+  } finally {
+    await close(gateway)
+    await close(proxy.server)
+  }
+})
+
+test('claude platform aws final verifier catches final body profile mismatch before egress', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders(),
+      body: { ...awsBody(), cpaws_unknown_final_field: 'fake-profile-mismatch-fixture' },
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'request_shape_profile_mismatch')
+    assert.equal(upstream.captured.length, 0)
+    assert.equal(proxy.connectTargets.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('claude platform aws session ledger rejects workspace endpoint auth beta profile switches', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
@@ -469,6 +576,151 @@ test('claude platform aws session ledger rejects workspace endpoint auth beta pr
   }
 })
 
+
+test('claude platform aws rejects raw workspace id mismatch against workspace ref', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {
+      'cpaws-account-a': {
+        device_id: 'b'.repeat(64),
+        account_uuid_ref: 'hmac-sha256:' + 'a'.repeat(64),
+        email_ref: 'hmac-sha256:' + 'c'.repeat(64),
+        account_ref: 'hmac-sha256:' + 'e'.repeat(64),
+        credential_ref: 'opaque:credential-ref:v1:cpaws-a',
+        credential_binding_hmac: selectedApiKeyBindingHmac,
+        token_type: 'apikey',
+        persona_variant: 'claude-code-2.1.175-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.175',
+        provider_kind: 'claude_platform_aws',
+        workspace_ref: workspaceRef,
+        workspace_binding_hmac: workspaceBindingHmac,
+        upstream_endpoint_ref: endpointRef,
+        aws_region: 'us-east-1',
+        upstream_host: 'aws-external-anthropic.us-east-1.api.aws',
+        allowed_upstream_path: '/v1/messages',
+        upstream_auth_scheme: 'x_api_key',
+        beta_policy_ref: betaPolicyRef,
+        request_shape_profile_ref: requestShapeProfileRef,
+        cache_parity_profile_ref: cacheParityProfileRef,
+        anthropic_workspace_id: 'different-workspace-id-local-fixture',
+      },
+    },
+  }))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders(),
+      body: awsBody(),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'claude_platform_aws_workspace_ref_mismatch')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('claude platform aws rejects workspace ref not recomputed from raw workspace id', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const badWorkspaceRef = formalPoolSafeRef('workspace', `claude_platform_aws_workspace_ref_v1\0us-east-1\0other-workspace-id-local-fixture`)
+  const badBinding = claudePlatformAwsWorkspaceBindingHmac({ workspaceRef: badWorkspaceRef })
+  const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {
+      'cpaws-account-a': {
+        device_id: 'b'.repeat(64),
+        account_uuid_ref: 'hmac-sha256:' + 'a'.repeat(64),
+        email_ref: 'hmac-sha256:' + 'c'.repeat(64),
+        account_ref: 'hmac-sha256:' + 'e'.repeat(64),
+        credential_ref: 'opaque:credential-ref:v1:cpaws-a',
+        credential_binding_hmac: selectedApiKeyBindingHmac,
+        token_type: 'apikey',
+        persona_variant: 'claude-code-2.1.175-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.175',
+        provider_kind: 'claude_platform_aws',
+        workspace_ref: badWorkspaceRef,
+        workspace_binding_hmac: badBinding,
+        upstream_endpoint_ref: endpointRef,
+        aws_region: 'us-east-1',
+        upstream_host: 'aws-external-anthropic.us-east-1.api.aws',
+        allowed_upstream_path: '/v1/messages',
+        upstream_auth_scheme: 'x_api_key',
+        beta_policy_ref: betaPolicyRef,
+        request_shape_profile_ref: requestShapeProfileRef,
+        cache_parity_profile_ref: cacheParityProfileRef,
+        anthropic_workspace_id: rawWorkspaceId,
+      },
+    },
+  }))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders({}, { workspace_ref: badWorkspaceRef, workspace_binding_hmac: badBinding }),
+      body: awsBody(),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'claude_platform_aws_workspace_ref_mismatch')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('claude platform aws rejects workspace binding hmac tuple mismatch', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const tupleMismatchBinding = claudePlatformAwsWorkspaceBindingHmac({ egressBucket: 'bucket-cpaws-other' })
+  const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {
+      'cpaws-account-a': {
+        device_id: 'b'.repeat(64),
+        account_uuid_ref: 'hmac-sha256:' + 'a'.repeat(64),
+        email_ref: 'hmac-sha256:' + 'c'.repeat(64),
+        account_ref: 'hmac-sha256:' + 'e'.repeat(64),
+        credential_ref: 'opaque:credential-ref:v1:cpaws-a',
+        credential_binding_hmac: selectedApiKeyBindingHmac,
+        token_type: 'apikey',
+        persona_variant: 'claude-code-2.1.175-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.175',
+        provider_kind: 'claude_platform_aws',
+        workspace_ref: workspaceRef,
+        workspace_binding_hmac: tupleMismatchBinding,
+        upstream_endpoint_ref: endpointRef,
+        aws_region: 'us-east-1',
+        upstream_host: 'aws-external-anthropic.us-east-1.api.aws',
+        allowed_upstream_path: '/v1/messages',
+        upstream_auth_scheme: 'x_api_key',
+        beta_policy_ref: betaPolicyRef,
+        request_shape_profile_ref: requestShapeProfileRef,
+        cache_parity_profile_ref: cacheParityProfileRef,
+        anthropic_workspace_id: rawWorkspaceId,
+      },
+    },
+  }))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
+      headers: awsSchedulerHeaders({}, { workspace_binding_hmac: tupleMismatchBinding }),
+      body: awsBody(),
+    })
+    assert.equal(response.status, 403)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'claude_platform_aws_workspace_binding_mismatch')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('claude platform aws runtime registration persists aws fields and rejects conflicting replay', async () => {
   const mappingDir = mkdtempSync(join(tmpdir(), 'cc-gateway-cpaws-runtime-'))
   const previousMappingFile = process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
@@ -478,23 +730,31 @@ test('claude platform aws runtime registration persists aws fields and rejects c
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, { account_identities: {}, egress_buckets: {} }))
 
   try {
+    const runtimeAccountRef = 'opaque:account-ref:v1:cpaws-runtime-a'
+    const runtimeProxyRef = 'opaque:proxy-ref:v1:cpaws-runtime-a'
+    const runtimeBucket = 'bucket-cpaws-runtime-a'
+    const runtimeBindingHmac = claudePlatformAwsWorkspaceBindingHmac({
+      accountRef: runtimeAccountRef,
+      egressBucket: runtimeBucket,
+      proxyIdentityRef: runtimeProxyRef,
+    })
     const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
       headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, 'x-api-key': selectedApiKey },
       body: {
         account_id: 'cpaws-runtime-a',
-        account_ref: 'opaque:account-ref:v1:cpaws-runtime-a',
-        account_uuid_ref: 'opaque:account-ref:v1:cpaws-runtime-a',
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
         device_id: 'd'.repeat(64),
-        egress_bucket: 'bucket-cpaws-runtime-a',
+        egress_bucket: runtimeBucket,
         proxy_url: proxy.url,
-        proxy_identity_ref: 'opaque:proxy-ref:v1:cpaws-runtime-a',
+        proxy_identity_ref: runtimeProxyRef,
         credential_ref: 'opaque:credential-ref:v1:cpaws-a',
         credential_binding_hmac: selectedApiKeyBindingHmac,
         token_type: 'apikey',
         policy_version: '2.1.175',
         provider_kind: 'claude_platform_aws',
         workspace_ref: workspaceRef,
-        workspace_binding_hmac: workspaceBindingHmac,
+        workspace_binding_hmac: runtimeBindingHmac,
         upstream_endpoint_ref: endpointRef,
         aws_region: 'us-east-1',
         upstream_host: 'aws-external-anthropic.us-east-1.api.aws',
@@ -511,13 +771,19 @@ test('claude platform aws runtime registration persists aws fields and rejects c
     const mapping = persisted.mappings['cpaws-runtime-a']
     assert.equal(mapping.provider_kind, 'claude_platform_aws')
     assert.equal(mapping.workspace_ref, workspaceRef)
-    assert.equal(mapping.workspace_binding_hmac, workspaceBindingHmac)
+    assert.equal(mapping.workspace_binding_hmac, runtimeBindingHmac)
     assert.equal(mapping.upstream_auth_scheme, 'x_api_key')
     assert.equal(mapping.anthropic_workspace_id, rawWorkspaceId)
 
+    const conflictingProxyRef = 'opaque:proxy-ref:v1:cpaws-runtime-other'
+    const conflictingBindingHmac = claudePlatformAwsWorkspaceBindingHmac({
+      accountRef: runtimeAccountRef,
+      egressBucket: runtimeBucket,
+      proxyIdentityRef: conflictingProxyRef,
+    })
     const conflict = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
       headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, 'x-api-key': selectedApiKey },
-      body: { ...mapping, workspace_ref: 'workspace:cpaws-other' },
+      body: { ...mapping, proxy_identity_ref: conflictingProxyRef, workspace_binding_hmac: conflictingBindingHmac },
     })
     assert.equal(conflict.status, 409)
     assert.equal(conflict.headers['x-cc-gateway-error-code'], 'runtime_mapping_authority_exists')

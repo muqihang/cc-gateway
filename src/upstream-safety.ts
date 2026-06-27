@@ -23,7 +23,7 @@ export function evaluateUpstreamSafety(config: Config, method: string, pathname:
   if (upstreamMode === 'real-canary') {
     if (isAWSClaudePlatform) {
       return method === 'POST' && pathname === '/v1/messages'
-        ? { ok: true }
+        ? { ok: false, status: 428, code: 'real_aws_claude_platform_requires_post_attestation' }
         : { ok: false, status: 403, code: 'real_aws_claude_platform_route_forbidden' }
     }
     if (!isRealAnthropic) {
@@ -43,7 +43,7 @@ export function evaluateUpstreamSafety(config: Config, method: string, pathname:
   if (upstreamMode === 'production') {
     if (isAWSClaudePlatform) {
       return method === 'POST' && pathname === '/v1/messages'
-        ? { ok: true }
+        ? { ok: false, status: 428, code: 'real_aws_claude_platform_requires_post_attestation' }
         : { ok: false, status: 403, code: 'real_aws_claude_platform_route_forbidden' }
     }
     if (!isRealAnthropic) {
