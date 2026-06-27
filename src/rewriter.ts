@@ -342,6 +342,9 @@ export function rewriteHeaders(
   config: Config,
   options: {
     upstreamAuth?: 'oauth' | 'apikey' | 'none'
+    providerKind?: 'anthropic_first_party' | 'claude_platform_aws'
+    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key'
+    anthropicWorkspaceId?: string
     stripGatewayControlHeaders?: boolean
     sharedPool?: boolean
     route?: string
@@ -413,6 +416,9 @@ function rewriteSharedPoolHeaders(
   config: Config,
   options: {
     upstreamAuth?: 'oauth' | 'apikey' | 'none'
+    providerKind?: 'anthropic_first_party' | 'claude_platform_aws'
+    upstreamAuthScheme?: 'x_api_key' | 'bearer_api_key'
+    anthropicWorkspaceId?: string
     route?: string
     accountIdentity?: AccountIdentityRecord
     requestedPolicyVersion?: string
@@ -426,10 +432,21 @@ function rewriteSharedPoolHeaders(
   const route = options.route === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
   const selectedAuthHeader = readHeaderValue(headers, 'authorization')
   const selectedApiKey = readHeaderValue(headers, 'x-api-key')
-  if (options.upstreamAuth === 'oauth' && selectedAuthHeader) {
-    out.authorization = selectedAuthHeader
-  } else if (options.upstreamAuth === 'apikey' && selectedApiKey) {
-    out['x-api-key'] = selectedApiKey
+  if (options.providerKind === 'claude_platform_aws') {
+    if (options.upstreamAuthScheme === 'bearer_api_key' && selectedAuthHeader) {
+      out.authorization = selectedAuthHeader
+    } else if (options.upstreamAuthScheme === 'x_api_key' && selectedApiKey) {
+      out['x-api-key'] = selectedApiKey
+    }
+    if (options.anthropicWorkspaceId) {
+      out['anthropic-workspace-id'] = options.anthropicWorkspaceId
+    }
+  } else {
+    if (options.upstreamAuth === 'oauth' && selectedAuthHeader) {
+      out.authorization = selectedAuthHeader
+    } else if (options.upstreamAuth === 'apikey' && selectedApiKey) {
+      out['x-api-key'] = selectedApiKey
+    }
   }
 
   const canonical = canonicalPersonaHeaders(
@@ -446,6 +463,9 @@ function rewriteSharedPoolHeaders(
   )
   for (const [key, value] of Object.entries(canonical)) {
     out[key] = value
+  }
+  if (options.providerKind === 'claude_platform_aws') {
+    delete out['anthropic-beta']
   }
 
   const contentType = readHeaderValue(headers, 'content-type')

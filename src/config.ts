@@ -21,6 +21,18 @@ export type AccountIdentityConfig = {
   persona_variant: string
   session_policy: 'preserve_downstream_session_id'
   policy_version: string
+  provider_kind?: 'anthropic_first_party' | 'claude_platform_aws'
+  workspace_ref?: string
+  workspace_binding_hmac?: string
+  upstream_endpoint_ref?: string
+  aws_region?: string
+  upstream_host?: string
+  allowed_upstream_path?: string
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  beta_policy_ref?: string
+  request_shape_profile_ref?: string
+  cache_parity_profile_ref?: string
+  anthropic_workspace_id?: string
 }
 
 export type EgressBucketConfig = {

@@ -60,6 +60,13 @@ const FORMAL_POOL_2179_NO_CCH_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_
 const FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch'
 const FORMAL_POOL_2179_NO_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch_oracle_cp1_degraded_v1'
 const FORMAL_POOL_2179_SIGNED_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1'
+const CLAUDE_PLATFORM_AWS_PROVIDER_KIND = 'claude_platform_aws'
+const CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF = 'request-shape:claude-platform-aws-v1-strip'
+const CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF = 'cache-profile:claude-platform-aws-v1-strip'
+const CLAUDE_PLATFORM_AWS_BETA_POLICY_REF = 'beta-policy:claude-platform-aws-v1-strip'
+const CLAUDE_PLATFORM_AWS_ALLOWED_PATH = '/v1/messages'
+const CLAUDE_PLATFORM_AWS_HOST_PREFIX = 'aws-external-anthropic.'
+const CLAUDE_PLATFORM_AWS_HOST_SUFFIX = '.api.aws'
 const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
 const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'schema_version',
@@ -92,6 +99,18 @@ type RuntimeRegisterRequest = {
   session_policy?: unknown
   policy_version?: unknown
   device_id?: unknown
+  provider_kind?: unknown
+  workspace_ref?: unknown
+  workspace_binding_hmac?: unknown
+  upstream_endpoint_ref?: unknown
+  aws_region?: unknown
+  upstream_host?: unknown
+  allowed_upstream_path?: unknown
+  upstream_auth_scheme?: unknown
+  beta_policy_ref?: unknown
+  request_shape_profile_ref?: unknown
+  cache_parity_profile_ref?: unknown
+  anthropic_workspace_id?: unknown
 }
 
 type RuntimeMappingRecord = {
@@ -109,6 +128,18 @@ type RuntimeMappingRecord = {
   session_policy: 'preserve_downstream_session_id'
   policy_version: string
   device_id: string
+  provider_kind?: 'anthropic_first_party' | 'claude_platform_aws'
+  workspace_ref?: string
+  workspace_binding_hmac?: string
+  upstream_endpoint_ref?: string
+  aws_region?: string
+  upstream_host?: string
+  allowed_upstream_path?: string
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  beta_policy_ref?: string
+  request_shape_profile_ref?: string
+  cache_parity_profile_ref?: string
+  anthropic_workspace_id?: string
 }
 
 type RuntimeMappingFile = {
@@ -130,6 +161,15 @@ type FormalPoolSessionAuthorityBinding = {
   request_shape_profile_ref: string
   cache_parity_profile_ref: string
   device_ref: string
+  provider_kind?: 'anthropic_first_party' | 'claude_platform_aws'
+  workspace_ref?: string
+  workspace_binding_hmac?: string
+  upstream_endpoint_ref?: string
+  aws_region?: string
+  upstream_host?: string
+  allowed_upstream_path?: string
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  beta_policy_ref?: string
 }
 
 type FormalPoolBillingShapePolicy = 'strip' | 'no_cch' | 'signed_cch'
@@ -284,6 +324,18 @@ function normalizeRuntimeAccountMapping(
   const personaVariant = stringField(input.persona_variant) || `claude-code-${policyVersion}-macos-local`
   const sessionPolicy = stringField(input.session_policy) || 'preserve_downstream_session_id'
   const deviceId = stringField(input.device_id)
+  const providerKind = stringField(input.provider_kind)
+  const workspaceRef = stringField(input.workspace_ref)
+  const workspaceBindingHmac = stringField(input.workspace_binding_hmac)
+  const upstreamEndpointRef = stringField(input.upstream_endpoint_ref)
+  const awsRegion = stringField(input.aws_region)
+  const upstreamHost = stringField(input.upstream_host)
+  const allowedUpstreamPath = stringField(input.allowed_upstream_path)
+  const upstreamAuthScheme = stringField(input.upstream_auth_scheme)
+  const betaPolicyRef = stringField(input.beta_policy_ref)
+  const requestShapeProfileRef = stringField(input.request_shape_profile_ref)
+  const cacheParityProfileRef = stringField(input.cache_parity_profile_ref)
+  const anthropicWorkspaceId = stringField(input.anthropic_workspace_id)
 
   if (!accountId || !isSafeInternalRoutingKey(accountId)) return { status: 400, code: 'invalid_account_id', message: 'Runtime account id must be a safe internal routing key' }
   if (!accountRef || !isSafeIdentityRef(accountRef)) return { status: 400, code: 'invalid_account_ref', message: 'Runtime account ref must be a safe ref' }
@@ -301,6 +353,22 @@ function normalizeRuntimeAccountMapping(
   if (sessionPolicy !== 'preserve_downstream_session_id') {
     return { status: 400, code: 'invalid_session_policy', message: 'Runtime registration session policy must be preserve_downstream_session_id until gateway_generated is implemented' }
   }
+  const awsValidation = validateRuntimeClaudePlatformAWSFields({
+    provider_kind: providerKind,
+    token_type: tokenType,
+    workspace_ref: workspaceRef,
+    workspace_binding_hmac: workspaceBindingHmac,
+    upstream_endpoint_ref: upstreamEndpointRef,
+    aws_region: awsRegion,
+    upstream_host: upstreamHost,
+    allowed_upstream_path: allowedUpstreamPath,
+    upstream_auth_scheme: upstreamAuthScheme,
+    beta_policy_ref: betaPolicyRef,
+    request_shape_profile_ref: requestShapeProfileRef,
+    cache_parity_profile_ref: cacheParityProfileRef,
+    anthropic_workspace_id: anthropicWorkspaceId,
+  })
+  if (awsValidation) return awsValidation
   const proxyValidation = validateRuntimeProxyUrl(proxyUrl)
   if (proxyValidation) return proxyValidation
   if (!verifiedReplay) {
@@ -331,6 +399,20 @@ function normalizeRuntimeAccountMapping(
     session_policy: sessionPolicy as 'preserve_downstream_session_id',
     policy_version: policyVersion,
     device_id: deviceId,
+    ...(providerKind ? { provider_kind: providerKind as 'anthropic_first_party' | 'claude_platform_aws' } : {}),
+    ...(providerKind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+      workspace_ref: workspaceRef,
+      workspace_binding_hmac: workspaceBindingHmac,
+      upstream_endpoint_ref: upstreamEndpointRef,
+      aws_region: awsRegion,
+      upstream_host: upstreamHost,
+      allowed_upstream_path: allowedUpstreamPath,
+      upstream_auth_scheme: upstreamAuthScheme as 'x_api_key' | 'bearer_api_key',
+      beta_policy_ref: betaPolicyRef,
+      request_shape_profile_ref: requestShapeProfileRef,
+      cache_parity_profile_ref: cacheParityProfileRef,
+      anthropic_workspace_id: anthropicWorkspaceId,
+    } : {}),
   }
 }
 
@@ -347,6 +429,20 @@ function applyRuntimeAccountMapping(config: Config, mapping: RuntimeMappingRecor
     persona_variant: mapping.persona_variant,
     session_policy: mapping.session_policy,
     policy_version: mapping.policy_version,
+    ...(mapping.provider_kind ? { provider_kind: mapping.provider_kind } : {}),
+    ...(mapping.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+      workspace_ref: mapping.workspace_ref,
+      workspace_binding_hmac: mapping.workspace_binding_hmac,
+      upstream_endpoint_ref: mapping.upstream_endpoint_ref,
+      aws_region: mapping.aws_region,
+      upstream_host: mapping.upstream_host,
+      allowed_upstream_path: mapping.allowed_upstream_path,
+      upstream_auth_scheme: mapping.upstream_auth_scheme,
+      beta_policy_ref: mapping.beta_policy_ref,
+      request_shape_profile_ref: mapping.request_shape_profile_ref,
+      cache_parity_profile_ref: mapping.cache_parity_profile_ref,
+      anthropic_workspace_id: mapping.anthropic_workspace_id,
+    } : {}),
   }
   config.egress_buckets = config.egress_buckets || {}
   config.egress_buckets[mapping.egress_bucket] = {
@@ -366,6 +462,51 @@ function validateRuntimeProxyUrl(value: string): { status: number; code: string;
     }
   } catch {
     return { status: 400, code: 'invalid_proxy_url', message: 'Runtime proxy URL is invalid' }
+  }
+  return null
+}
+
+function validateRuntimeClaudePlatformAWSFields(input: Record<string, string>): { status: number; code: string; message: string } | null {
+  const providerKind = input.provider_kind
+  if (!providerKind) return null
+  if (providerKind !== 'anthropic_first_party' && providerKind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    return { status: 400, code: 'invalid_provider_kind', message: 'Runtime registration provider kind is unsupported' }
+  }
+  if (providerKind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return null
+  if (input.token_type !== 'apikey') {
+    return { status: 400, code: 'invalid_token_type', message: 'Claude Platform on AWS phase 1 requires protected API-key credential proof' }
+  }
+  const requiredSafeRefs = [
+    ['workspace_ref', input.workspace_ref, 'workspace:'],
+    ['upstream_endpoint_ref', input.upstream_endpoint_ref, 'endpoint:'],
+  ] as const
+  for (const [label, value, prefix] of requiredSafeRefs) {
+    if (!isSafeClaudePlatformAWSRef(value, prefix)) return { status: 400, code: `invalid_${label}`, message: 'Claude Platform on AWS runtime registration requires safe refs' }
+  }
+  if (!/^hmac-sha256:[a-f0-9]{64}$/i.test(input.workspace_binding_hmac)) {
+    return { status: 400, code: 'invalid_workspace_binding_hmac', message: 'Claude Platform on AWS runtime registration requires workspace binding' }
+  }
+  if (!isSafeAWSRegion(input.aws_region)) return { status: 400, code: 'invalid_aws_region', message: 'Claude Platform on AWS runtime registration requires AWS region' }
+  const expectedHost = claudePlatformAWSHostForRegion(input.aws_region)
+  if (input.upstream_host !== expectedHost) {
+    return { status: 400, code: 'invalid_upstream_host', message: 'Claude Platform on AWS runtime registration endpoint mismatch' }
+  }
+  if (input.allowed_upstream_path !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH) {
+    return { status: 400, code: 'invalid_allowed_upstream_path', message: 'Claude Platform on AWS phase 1 requires /v1/messages path' }
+  }
+  if (input.upstream_auth_scheme !== 'x_api_key' && input.upstream_auth_scheme !== 'bearer_api_key') {
+    return { status: 400, code: 'invalid_upstream_auth_scheme', message: 'Claude Platform on AWS runtime registration requires proven auth scheme' }
+  }
+  if (input.upstream_auth_scheme !== 'x_api_key') {
+    return { status: 403, code: 'claude_platform_aws_auth_profile_unproven', message: 'Claude Platform on AWS auth scheme is not enabled without CP0 evidence' }
+  }
+  if (input.beta_policy_ref !== CLAUDE_PLATFORM_AWS_BETA_POLICY_REF
+    || input.request_shape_profile_ref !== CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF
+    || input.cache_parity_profile_ref !== CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF) {
+    return { status: 400, code: 'invalid_claude_platform_aws_profile', message: 'Claude Platform on AWS runtime registration requires provider-scoped profiles' }
+  }
+  if (!input.anthropic_workspace_id || /[\r\n]/.test(input.anthropic_workspace_id) || input.anthropic_workspace_id.length > 512) {
+    return { status: 400, code: 'missing_anthropic_workspace_id', message: 'Claude Platform on AWS runtime registration requires workspace id in sensitive storage' }
   }
   return null
 }
@@ -460,6 +601,20 @@ function findRuntimeMappingConflict(
       session_policy: existingIdentity.session_policy,
       policy_version: existingIdentity.policy_version,
       device_id: existingIdentity.device_id,
+      ...(existingIdentity.provider_kind ? { provider_kind: existingIdentity.provider_kind } : {}),
+      ...(existingIdentity.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+        workspace_ref: existingIdentity.workspace_ref,
+        workspace_binding_hmac: existingIdentity.workspace_binding_hmac,
+        upstream_endpoint_ref: existingIdentity.upstream_endpoint_ref,
+        aws_region: existingIdentity.aws_region,
+        upstream_host: existingIdentity.upstream_host,
+        allowed_upstream_path: existingIdentity.allowed_upstream_path,
+        upstream_auth_scheme: existingIdentity.upstream_auth_scheme,
+        beta_policy_ref: existingIdentity.beta_policy_ref,
+        request_shape_profile_ref: existingIdentity.request_shape_profile_ref,
+        cache_parity_profile_ref: existingIdentity.cache_parity_profile_ref,
+        anthropic_workspace_id: existingIdentity.anthropic_workspace_id,
+      } : {}),
     }
     const existingBucket = findExistingRuntimeBucketForAccount(config, mapping.account_id)
     if (!existingBucket || !sameRuntimeMappingAuthority({ ...existing, ...existingBucket }, mapping)) {
@@ -522,6 +677,18 @@ function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingR
     && a.session_policy === b.session_policy
     && a.policy_version === b.policy_version
     && a.device_id === b.device_id
+    && (a.provider_kind || '') === (b.provider_kind || '')
+    && (a.workspace_ref || '') === (b.workspace_ref || '')
+    && (a.workspace_binding_hmac || '') === (b.workspace_binding_hmac || '')
+    && (a.upstream_endpoint_ref || '') === (b.upstream_endpoint_ref || '')
+    && (a.aws_region || '') === (b.aws_region || '')
+    && (a.upstream_host || '') === (b.upstream_host || '')
+    && (a.allowed_upstream_path || '') === (b.allowed_upstream_path || '')
+    && (a.upstream_auth_scheme || '') === (b.upstream_auth_scheme || '')
+    && (a.beta_policy_ref || '') === (b.beta_policy_ref || '')
+    && (a.request_shape_profile_ref || '') === (b.request_shape_profile_ref || '')
+    && (a.cache_parity_profile_ref || '') === (b.cache_parity_profile_ref || '')
+    && (a.anthropic_workspace_id || '') === (b.anthropic_workspace_id || '')
 }
 
 function loadRuntimeMappingFile(file: string): RuntimeMappingFile {
@@ -626,7 +793,7 @@ function isSafeLedgerExpiry(value: unknown): value is number {
 function isFormalPoolSessionAuthorityBinding(value: unknown): value is FormalPoolSessionAuthorityBinding {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Partial<FormalPoolSessionAuthorityBinding>
-  return typeof record.account_id === 'string' && isSafeInternalRoutingKey(record.account_id)
+  const base = typeof record.account_id === 'string' && isSafeInternalRoutingKey(record.account_id)
     && isSafeIdentityRef(record.credential_ref)
     && record.credential_source === 'server_account_credentials'
     && typeof record.egress_bucket === 'string' && isSafeInternalRoutingKey(record.egress_bucket)
@@ -634,12 +801,24 @@ function isFormalPoolSessionAuthorityBinding(value: unknown): value is FormalPoo
     && typeof record.policy_version === 'string' && record.policy_version.trim() === record.policy_version && !/[\r\n]/.test(record.policy_version)
     && typeof record.persona_profile === 'string' && record.persona_profile.trim() === record.persona_profile && !/[\r\n]/.test(record.persona_profile)
     && isSafeIdentityRef(record.device_ref)
+  if (!base) return false
+  if (record.provider_kind === undefined) return true
+  if (record.provider_kind !== 'anthropic_first_party' && record.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return false
+  if (record.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return true
+  return isSafeClaudePlatformAWSRef(record.workspace_ref, 'workspace:')
+    && /^hmac-sha256:[a-f0-9]{64}$/i.test(String(record.workspace_binding_hmac || ''))
+    && isSafeClaudePlatformAWSRef(record.upstream_endpoint_ref, 'endpoint:')
+    && isSafeAWSRegion(record.aws_region)
+    && record.upstream_host === claudePlatformAWSHostForRegion(String(record.aws_region || ''))
+    && record.allowed_upstream_path === CLAUDE_PLATFORM_AWS_ALLOWED_PATH
+    && (record.upstream_auth_scheme === 'x_api_key' || record.upstream_auth_scheme === 'bearer_api_key')
+    && record.beta_policy_ref === CLAUDE_PLATFORM_AWS_BETA_POLICY_REF
 }
 
 function isRuntimeMappingRecord(value: unknown): value is RuntimeMappingRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Record<string, unknown>
-  return typeof record.account_id === 'string' &&
+  const base = typeof record.account_id === 'string' &&
     typeof record.account_ref === 'string' &&
     typeof record.account_uuid_ref === 'string' &&
     (record.email_ref === undefined || typeof record.email_ref === 'string') &&
@@ -653,6 +832,21 @@ function isRuntimeMappingRecord(value: unknown): value is RuntimeMappingRecord {
     typeof record.persona_variant === 'string' &&
     record.session_policy === 'preserve_downstream_session_id' &&
     typeof record.policy_version === 'string'
+  if (!base) return false
+  if (record.provider_kind === undefined) return true
+  if (record.provider_kind !== 'anthropic_first_party' && record.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return false
+  if (record.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) return true
+  return typeof record.workspace_ref === 'string'
+    && typeof record.workspace_binding_hmac === 'string'
+    && typeof record.upstream_endpoint_ref === 'string'
+    && typeof record.aws_region === 'string'
+    && typeof record.upstream_host === 'string'
+    && typeof record.allowed_upstream_path === 'string'
+    && (record.upstream_auth_scheme === 'x_api_key' || record.upstream_auth_scheme === 'bearer_api_key')
+    && typeof record.beta_policy_ref === 'string'
+    && typeof record.request_shape_profile_ref === 'string'
+    && typeof record.cache_parity_profile_ref === 'string'
+    && typeof record.anthropic_workspace_id === 'string'
 }
 
 type RawCaptureSink = {
@@ -937,6 +1131,16 @@ type AttestedFormalPoolContext = {
   session_id: string
   timestamp_ms: number
   nonce: string
+  credential_binding_hmac?: string
+  provider_kind?: 'anthropic_first_party' | 'claude_platform_aws'
+  upstream_auth_scheme?: 'x_api_key' | 'bearer_api_key'
+  workspace_ref?: string
+  workspace_binding_hmac?: string
+  upstream_endpoint_ref?: string
+  aws_region?: string
+  upstream_host?: string
+  allowed_upstream_path?: string
+  beta_policy_ref?: string
 }
 
 async function handleRequest(
@@ -1049,6 +1253,14 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     routePolicy = selectSharedPoolRoute(method, target.pathname, target.search)
     if (routePolicy.action === 'block') {
+      const awsRoutePolicy = maybeAllowClaudePlatformAWSMessagesRoute(req, config, method, target, routePolicy)
+      if ('status' in awsRoutePolicy) {
+        writeControlPlaneError(res, awsRoutePolicy.status, awsRoutePolicy.code, 'Formal-pool scheduler context attestation is required')
+        return
+      }
+      routePolicy = awsRoutePolicy.routePolicy
+    }
+    if (routePolicy.action === 'block') {
       writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported route: ${safePath}`)
       return
     }
@@ -1067,6 +1279,14 @@ async function handleRequest(
         return
       }
       formalPoolAttestation = attestation.context
+      if (isConfiguredClaudePlatformAWSUpstream(upstream) && formalPoolAttestation.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+        writeControlPlaneError(res, 403, 'real_aws_claude_platform_provider_mismatch', 'AWS Claude Platform upstream requires Claude Platform on AWS provider attestation')
+        return
+      }
+      if (formalPoolAttestation.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && target.search !== '') {
+        writeControlPlaneError(res, 404, 'unsupported_route', 'Claude Platform on AWS phase 1 allows /v1/messages without internal query markers only')
+        return
+      }
       const headerCheck = verifyFormalPoolAttestedHeaders(req, method, target, routePolicy, accountContext, formalPoolAttestation)
       if (!headerCheck.ok) {
         writeControlPlaneError(res, headerCheck.status, headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
@@ -1099,7 +1319,7 @@ async function handleRequest(
         writeControlPlaneError(res, identityCheck.status, identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
         return
       }
-      const credentialBindingCheck = verifySelectedCredentialBinding(req, config, accountContext, selectedIdentity, formalPoolAttestation.credential_ref)
+      const credentialBindingCheck = verifySelectedCredentialBinding(req, config, accountContext, selectedIdentity, formalPoolAttestation.credential_ref, formalPoolAttestation.credential_binding_hmac)
       if (!credentialBindingCheck.ok) {
         writeControlPlaneError(res, credentialBindingCheck.status, credentialBindingCheck.code, 'Selected upstream credential does not match selected account identity')
         return
@@ -1267,6 +1487,9 @@ async function handleRequest(
     config.mode === 'sub2api'
       ? {
           upstreamAuth: accountContext!.tokenType,
+          providerKind: formalPoolAttestation?.provider_kind,
+          upstreamAuthScheme: formalPoolAttestation?.upstream_auth_scheme,
+          anthropicWorkspaceId: formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? accountIdentity?.anthropic_workspace_id : undefined,
           stripGatewayControlHeaders: true,
           sharedPool: true,
           route: target.pathname,
@@ -1313,6 +1536,7 @@ async function handleRequest(
       billingMode: 'sign',
       requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
+      attestation: formalPoolAttestation ?? undefined,
     })
     rawVerifierResult = verifier
     if (!verifier.ok) {
@@ -1329,6 +1553,7 @@ async function handleRequest(
       billingMode: billingMode === 'no_cch' ? 'no_cch' : 'strip',
       requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
+      attestation: formalPoolAttestation ?? undefined,
     })
     rawVerifierResult = verifier
     if (!verifier.ok) {
@@ -1345,6 +1570,10 @@ async function handleRequest(
 
   // Forward to upstream
   const upstreamUrl = buildFixedUpstreamUrl(target, upstream)
+  if (formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    upstreamUrl.pathname = CLAUDE_PLATFORM_AWS_ALLOWED_PATH
+    upstreamUrl.search = ''
+  }
 
   const agentKey = config.mode === 'sub2api' && accountContext && egress
     ? proxyAgentCacheKey(accountContext, upstream, egress)
@@ -1358,8 +1587,17 @@ async function handleRequest(
   }
   const forwardHeaders = {
     ...rewrittenHeaders,
-    host: upstream.host,
+    host: formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && formalPoolAttestation.upstream_host
+      ? formalPoolAttestation.upstream_host
+      : upstream.host,
     'content-length': String(body.length),
+  }
+  if (config.mode === 'sub2api' && formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    const finalAWSCheck = verifyClaudePlatformAWSFinalRequest(config, upstreamUrl, forwardHeaders, formalPoolAttestation)
+    if (!finalAWSCheck.ok) {
+      writeControlPlaneError(res, 403, finalAWSCheck.code, 'Claude Platform on AWS final verifier failed')
+      return
+    }
   }
   const requestCapturePayload: Record<string, unknown> = {
     method,
@@ -1569,17 +1807,23 @@ export function verifySharedPoolFinalOutput(
     billingMode: FormalPoolBillingMode
     requestShapeProfileRef?: string
     cacheParityProfileRef?: string
+    attestation?: AttestedFormalPoolContext
   },
 ): { ok: true } | { ok: false; code: string } {
-  try {
-    validateSharedPoolPersonaHeaderSchema(headers, options.route, options.sessionId)
-  } catch {
-    return { ok: false, code: 'persona_header_mismatch' }
+  if (options.attestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    const awsHeaderCheck = verifyClaudePlatformAWSFinalHeaders(headers, options.attestation)
+    if (!awsHeaderCheck.ok) return awsHeaderCheck
+  } else {
+    try {
+      validateSharedPoolPersonaHeaderSchema(headers, options.route, options.sessionId)
+    } catch {
+      return { ok: false, code: 'persona_header_mismatch' }
+    }
   }
   if (options.expectedVersion && userAgentVersion(headers['User-Agent']) !== options.expectedVersion) {
     return { ok: false, code: 'persona_header_mismatch' }
   }
-  if (options.expectedBeta && headers['anthropic-beta'] !== options.expectedBeta) {
+  if (options.expectedBeta && options.attestation?.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND && headers['anthropic-beta'] !== options.expectedBeta) {
     return { ok: false, code: 'persona_header_mismatch' }
   }
   if (options.sessionId && headers['X-Claude-Code-Session-Id'] !== options.sessionId) {
@@ -1630,6 +1874,62 @@ export function verifySharedPoolFinalOutput(
   return { ok: true }
 }
 
+function verifyClaudePlatformAWSFinalHeaders(
+  headers: Record<string, string>,
+  attested: AttestedFormalPoolContext,
+): { ok: true } | { ok: false; code: string } {
+  if (attested.upstream_auth_scheme !== 'x_api_key') {
+    return { ok: false, code: 'claude_platform_aws_auth_profile_unproven' }
+  }
+  const normalized = Object.keys(headers).map((key) => key.toLowerCase())
+  if (normalized.filter((key) => key === 'anthropic-workspace-id').length !== 1) {
+    return { ok: false, code: 'claude_platform_aws_workspace_header_mismatch' }
+  }
+  if (normalized.filter((key) => key === 'x-api-key').length !== 1 || normalized.includes('authorization')) {
+    return { ok: false, code: 'claude_platform_aws_auth_header_mismatch' }
+  }
+  if (normalized.includes('anthropic-beta') || normalized.includes('x-anthropic-billing-header')) {
+    return { ok: false, code: 'claude_platform_aws_header_policy_mismatch' }
+  }
+  if (normalized.some((key) => key.startsWith('x-cc-') || key.startsWith('x-sub2api-'))) {
+    return { ok: false, code: 'claude_platform_aws_header_policy_mismatch' }
+  }
+  if (!headers['anthropic-workspace-id']) return { ok: false, code: 'claude_platform_aws_workspace_header_mismatch' }
+  if (!headers['x-api-key']) return { ok: false, code: 'claude_platform_aws_auth_header_mismatch' }
+  return { ok: true }
+}
+
+function verifyClaudePlatformAWSFinalRequest(
+  config: Config,
+  upstreamUrl: URL,
+  headers: Record<string, string>,
+  attested: AttestedFormalPoolContext,
+): { ok: true } | { ok: false; code: string } {
+  if (attested.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    return { ok: false, code: 'claude_platform_aws_provider_mismatch' }
+  }
+  if (attested.aws_region !== 'us-east-1') {
+    return { ok: false, code: 'claude_platform_aws_region_mismatch' }
+  }
+  const expectedHost = claudePlatformAWSHostForRegion(attested.aws_region)
+  if (attested.upstream_host !== expectedHost || headers.host !== expectedHost) {
+    return { ok: false, code: 'claude_platform_aws_endpoint_mismatch' }
+  }
+  if (claudePlatformAWSRequiresRealEndpoint(config)
+    && (upstreamUrl.protocol !== 'https:' || upstreamUrl.hostname !== expectedHost || upstreamUrl.host !== expectedHost)) {
+    return { ok: false, code: 'claude_platform_aws_endpoint_mismatch' }
+  }
+  if (upstreamUrl.pathname !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH || upstreamUrl.search !== '') {
+    return { ok: false, code: 'claude_platform_aws_route_mismatch' }
+  }
+  return verifyClaudePlatformAWSFinalHeaders(headers, attested)
+}
+
+function claudePlatformAWSRequiresRealEndpoint(config: Config): boolean {
+  const upstreamMode = String(((config as any).shared_pool || {}).upstream_mode || 'preflight')
+  return upstreamMode === 'production' || upstreamMode === 'real-canary'
+}
+
 
 function verifyFormalPoolFinalRequestShape(
   parsed: any,
@@ -1641,6 +1941,34 @@ function verifyFormalPoolFinalRequestShape(
   },
 ): { ok: true } | { ok: false; code: string } {
   if (options.route !== 'messages') return { ok: true }
+  if (options.requestShapeProfileRef === CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF || options.cacheParityProfileRef === CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF) {
+    if (options.requestShapeProfileRef !== CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF) {
+      return { ok: false, code: 'request_shape_profile_mismatch' }
+    }
+    if (options.cacheParityProfileRef !== CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF) {
+      return { ok: false, code: 'cache_parity_profile_mismatch' }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'request_shape_profile_mismatch' }
+    const allowedTopLevel = new Set([
+      'context_management',
+      'max_tokens',
+      'messages',
+      'metadata',
+      'model',
+      'output_config',
+      'stream',
+      'system',
+      'thinking',
+      'tool_choice',
+      'tools',
+    ])
+    for (const key of Object.keys(parsed)) {
+      if (!allowedTopLevel.has(key)) return { ok: false, code: 'request_shape_profile_mismatch' }
+    }
+    if (!Array.isArray(parsed.messages)) return { ok: false, code: 'request_shape_profile_mismatch' }
+    if (containsUnknownCacheControlPlacement(parsed)) return { ok: false, code: 'cache_parity_profile_mismatch' }
+    return { ok: true }
+  }
   if (options.requestShapeProfileRef && options.requestShapeProfileRef !== FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF) {
     return { ok: false, code: 'request_shape_profile_mismatch' }
   }
@@ -1980,6 +2308,26 @@ function parseAccountContext(req: IncomingMessage, config: Config): { context: A
   }
 }
 
+function maybeAllowClaudePlatformAWSMessagesRoute(
+  req: IncomingMessage,
+  config: Config,
+  method: string,
+  target: RequestTarget,
+  current: ReturnType<typeof selectSharedPoolRoute>,
+): { routePolicy: ReturnType<typeof selectSharedPoolRoute> } | { status: number; code: string } {
+  if (current.action !== 'block' || method !== 'POST' || target.pathname !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH || target.search !== '') {
+    return { routePolicy: current }
+  }
+  const attestation = parseFormalPoolContext(req, config)
+  if (!attestation.ok) {
+    return { status: attestation.status, code: attestation.code }
+  }
+  if (attestation.context.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    return { routePolicy: current }
+  }
+  return { routePolicy: { action: 'forward', kind: 'messages' } }
+}
+
 function formalPoolAttestationRequired(config: Config): boolean {
   return config.mode === 'sub2api'
 }
@@ -2068,6 +2416,39 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
   if (!isSafeIdentityRef(obj.credential_ref) || !isSafeIdentityRef(obj.proxy_identity_ref)) {
     return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
   }
+  const providerKind = typeof obj.provider_kind === 'string' ? obj.provider_kind : undefined
+  if (providerKind !== undefined && providerKind !== 'anthropic_first_party' && providerKind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
+  if (providerKind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    const awsRequired = [
+      'upstream_auth_scheme',
+      'credential_binding_hmac',
+      'workspace_ref',
+      'workspace_binding_hmac',
+      'upstream_endpoint_ref',
+      'aws_region',
+      'upstream_host',
+      'allowed_upstream_path',
+      'beta_policy_ref',
+    ]
+    for (const field of awsRequired) {
+      if (typeof obj[field] !== 'string' || !(obj[field] as string).trim() || /[\r\n]/.test(obj[field] as string)) {
+        return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+      }
+    }
+    if (!isSafeClaudePlatformAWSRef(obj.workspace_ref, 'workspace:')
+      || !isSafeClaudePlatformAWSRef(obj.upstream_endpoint_ref, 'endpoint:')
+      || !/^hmac-sha256:[a-f0-9]{64}$/i.test(String(obj.credential_binding_hmac))
+      || !/^hmac-sha256:[a-f0-9]{64}$/i.test(String(obj.workspace_binding_hmac))
+      || !isSafeAWSRegion(obj.aws_region)
+      || obj.upstream_host !== claudePlatformAWSHostForRegion(String(obj.aws_region))
+      || obj.allowed_upstream_path !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH
+      || (obj.upstream_auth_scheme !== 'x_api_key' && obj.upstream_auth_scheme !== 'bearer_api_key')
+      || !isSafeProfileRef(obj.beta_policy_ref)) {
+      return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+    }
+  }
   if (!isSafeProfileRef(obj.trusted_egress_profile_ref)
     || !isSafeProfileRef(obj.profile_policy_version)
     || !isSafeProfileRef(obj.request_shape_profile_ref)
@@ -2111,6 +2492,18 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       session_id: obj.session_id,
       timestamp_ms: obj.timestamp_ms,
       nonce: obj.nonce,
+      ...(providerKind ? { provider_kind: providerKind } : {}),
+      ...(providerKind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+        credential_binding_hmac: obj.credential_binding_hmac,
+        upstream_auth_scheme: obj.upstream_auth_scheme,
+        workspace_ref: obj.workspace_ref,
+        workspace_binding_hmac: obj.workspace_binding_hmac,
+        upstream_endpoint_ref: obj.upstream_endpoint_ref,
+        aws_region: obj.aws_region,
+        upstream_host: obj.upstream_host,
+        allowed_upstream_path: obj.allowed_upstream_path,
+        beta_policy_ref: obj.beta_policy_ref,
+      } : {}),
     } as AttestedFormalPoolContext,
     canonical,
   }
@@ -2121,6 +2514,32 @@ function isSafeProfileRef(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
   return trimmed === value && SAFE_PROFILE_REF.test(trimmed)
+}
+
+function isSafeProviderScopedRef(value: unknown, prefix: string): value is string {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (trimmed !== value || !trimmed.startsWith(prefix) || trimmed.length <= prefix.length || trimmed.length > 512) return false
+  if (/[\r\n]/.test(trimmed) || trimmed.includes('://') || trimmed.includes('@')) return false
+  if (!/^[A-Za-z0-9._:-]+$/.test(trimmed)) return false
+  return true
+}
+
+function isSafeClaudePlatformAWSRef(value: unknown, prefix: string): value is string {
+  return isSafeIdentityRef(value) || isSafeProviderScopedRef(value, prefix)
+}
+
+function isSafeAWSRegion(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z]{2}-[a-z]+-\d$/.test(value)
+}
+
+function claudePlatformAWSHostForRegion(region: string): string {
+  return `${CLAUDE_PLATFORM_AWS_HOST_PREFIX}${region}${CLAUDE_PLATFORM_AWS_HOST_SUFFIX}`
+}
+
+function isConfiguredClaudePlatformAWSUpstream(upstream: URL): boolean {
+  const host = upstream.hostname.toLowerCase()
+  return host.startsWith(CLAUDE_PLATFORM_AWS_HOST_PREFIX) && host.endsWith(CLAUDE_PLATFORM_AWS_HOST_SUFFIX)
 }
 
 function isFormalPoolBillingShapePolicy(value: unknown): value is FormalPoolBillingShapePolicy {
@@ -2207,6 +2626,23 @@ function verifyFormalPoolAttestedProfiles(
 }
 
 function verifyFormalPoolProfileRefs(attested: AttestedFormalPoolContext): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  if (attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    if (attested.profile_policy_version !== FORMAL_POOL_2179_PROFILE_POLICY_VERSION) {
+      return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool profile policy version is not approved' }
+    }
+    if (attested.trusted_egress_profile_ref !== FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF || attested.billing_shape_policy !== 'strip') {
+      return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Claude Platform on AWS phase 1 requires strip billing policy' }
+    }
+    if (attested.request_shape_profile_ref !== CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF
+      || attested.cache_parity_profile_ref !== CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF
+      || attested.beta_policy_ref !== CLAUDE_PLATFORM_AWS_BETA_POLICY_REF) {
+      return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Claude Platform on AWS provider-scoped profile is not approved' }
+    }
+    if (attested.upstream_auth_scheme !== 'x_api_key') {
+      return { ok: false, status: 403, code: 'claude_platform_aws_auth_profile_unproven', message: 'Claude Platform on AWS auth profile has not been proven by CP0' }
+    }
+    return { ok: true }
+  }
   if (attested.profile_policy_version !== FORMAL_POOL_2179_PROFILE_POLICY_VERSION) {
     return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool profile policy version is not approved' }
   }
@@ -2282,6 +2718,14 @@ function verifyFormalPoolAttestedHeaders(
     attested.policy_version !== accountContext.policyVersion,
   ]
   if (egress) mismatches.push(attested.proxy_identity_ref !== egress.proxyIdentityRef)
+  if (attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    mismatches.push(
+      target.search !== '',
+      attested.allowed_upstream_path !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH,
+      attested.path !== CLAUDE_PLATFORM_AWS_ALLOWED_PATH,
+      attested.upstream_host !== claudePlatformAWSHostForRegion(String(attested.aws_region || '')),
+    )
+  }
   if (mismatches.some(Boolean)) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
   return { ok: true }
 }
@@ -2295,6 +2739,25 @@ function verifyFormalPoolAttestedAccountIdentity(
     attested.credential_ref !== identity.credential_ref,
     attested.policy_version !== identity.policy_version,
   ]
+  if (attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    mismatches.push(
+      identity.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND,
+      identity.token_type !== 'apikey',
+      attested.workspace_ref !== identity.workspace_ref,
+      attested.workspace_binding_hmac !== identity.workspace_binding_hmac,
+      attested.upstream_endpoint_ref !== identity.upstream_endpoint_ref,
+      attested.aws_region !== identity.aws_region,
+      attested.upstream_host !== identity.upstream_host,
+      attested.allowed_upstream_path !== identity.allowed_upstream_path,
+      attested.upstream_auth_scheme !== identity.upstream_auth_scheme,
+      attested.beta_policy_ref !== identity.beta_policy_ref,
+      attested.request_shape_profile_ref !== identity.request_shape_profile_ref,
+      attested.cache_parity_profile_ref !== identity.cache_parity_profile_ref,
+      !identity.anthropic_workspace_id,
+    )
+  } else if (identity.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
+    mismatches.push(true)
+  }
   if (mismatches.some(Boolean)) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
   return { ok: true }
 }
@@ -2305,11 +2768,15 @@ function verifySelectedCredentialBinding(
   accountContext: AccountContext,
   identity: AccountIdentityRecord,
   attestedCredentialRef: string,
+  attestedCredentialBindingHmac?: string,
 ): { ok: true } | { ok: false; status: number; code: string } {
   if (!identity.credential_ref || accountContext.credentialRef !== identity.credential_ref || attestedCredentialRef !== identity.credential_ref) {
     return { ok: false, status: 403, code: 'credential_account_mismatch' }
   }
   const binding = typeof identity.credential_binding_hmac === 'string' ? identity.credential_binding_hmac.trim() : ''
+  if (attestedCredentialBindingHmac !== undefined && attestedCredentialBindingHmac !== binding) {
+    return { ok: false, status: 403, code: 'credential_account_mismatch' }
+  }
   const expectedHex = /^hmac-sha256:[a-f0-9]{64}$/i.test(binding) ? binding.slice('hmac-sha256:'.length) : ''
   const selectedCredential = selectedRawCredentialForBinding(req, accountContext.tokenType)
   const secret = formalPoolAttestationSecret(config)
@@ -2399,6 +2866,17 @@ function verifyFormalPoolSessionAuthorityBinding(
     request_shape_profile_ref: attested.request_shape_profile_ref,
     cache_parity_profile_ref: attested.cache_parity_profile_ref,
     device_ref: deviceRef,
+    ...(attested.provider_kind ? { provider_kind: attested.provider_kind } : {}),
+    ...(attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+      workspace_ref: attested.workspace_ref,
+      workspace_binding_hmac: attested.workspace_binding_hmac,
+      upstream_endpoint_ref: attested.upstream_endpoint_ref,
+      aws_region: attested.aws_region,
+      upstream_host: attested.upstream_host,
+      allowed_upstream_path: attested.allowed_upstream_path,
+      upstream_auth_scheme: attested.upstream_auth_scheme,
+      beta_policy_ref: attested.beta_policy_ref,
+    } : {}),
   }
   const ledgerFile = formalPoolSessionLedgerFilePath()
   if (formalPoolSessionLedgerPersistenceRequired(config) && !ledgerFile) {
@@ -2504,6 +2982,15 @@ function sameFormalPoolSessionAuthorityBinding(a: FormalPoolSessionAuthorityBind
     && a.request_shape_profile_ref === b.request_shape_profile_ref
     && a.cache_parity_profile_ref === b.cache_parity_profile_ref
     && a.device_ref === b.device_ref
+    && (a.provider_kind || '') === (b.provider_kind || '')
+    && (a.workspace_ref || '') === (b.workspace_ref || '')
+    && (a.workspace_binding_hmac || '') === (b.workspace_binding_hmac || '')
+    && (a.upstream_endpoint_ref || '') === (b.upstream_endpoint_ref || '')
+    && (a.aws_region || '') === (b.aws_region || '')
+    && (a.upstream_host || '') === (b.upstream_host || '')
+    && (a.allowed_upstream_path || '') === (b.allowed_upstream_path || '')
+    && (a.upstream_auth_scheme || '') === (b.upstream_auth_scheme || '')
+    && (a.beta_policy_ref || '') === (b.beta_policy_ref || '')
 }
 
 

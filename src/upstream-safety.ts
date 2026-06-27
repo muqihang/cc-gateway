@@ -19,7 +19,13 @@ export function evaluateUpstreamSafety(config: Config, method: string, pathname:
   if (!upstream) return { ok: false, status: 403, code: 'invalid_upstream_url' }
 
   const isRealAnthropic = isRealAnthropicHost(upstream.hostname)
+  const isAWSClaudePlatform = isAWSClaudePlatformHost(upstream.hostname)
   if (upstreamMode === 'real-canary') {
+    if (isAWSClaudePlatform) {
+      return method === 'POST' && pathname === '/v1/messages'
+        ? { ok: true }
+        : { ok: false, status: 403, code: 'real_aws_claude_platform_route_forbidden' }
+    }
     if (!isRealAnthropic) {
       return isLocalOnlyHost(upstream.hostname)
         ? { ok: true }
@@ -35,6 +41,11 @@ export function evaluateUpstreamSafety(config: Config, method: string, pathname:
   }
 
   if (upstreamMode === 'production') {
+    if (isAWSClaudePlatform) {
+      return method === 'POST' && pathname === '/v1/messages'
+        ? { ok: true }
+        : { ok: false, status: 403, code: 'real_aws_claude_platform_route_forbidden' }
+    }
     if (!isRealAnthropic) {
       return isLocalOnlyHost(upstream.hostname)
         ? { ok: true }
@@ -67,6 +78,11 @@ function parseUpstream(raw: string | undefined): URL | null {
 
 function isRealAnthropicHost(hostname: string): boolean {
   return REAL_ANTHROPIC_HOSTS.has(hostname.toLowerCase())
+}
+
+function isAWSClaudePlatformHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  return /^aws-external-anthropic\.[a-z0-9-]+\.api\.aws$/.test(host)
 }
 
 function isLocalOnlyHost(hostname: string): boolean {
