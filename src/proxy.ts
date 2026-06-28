@@ -3019,7 +3019,8 @@ function verifyObservedClientProfileAdmission(attested: AttestedFormalPoolContex
   if (requireExact2179 && version !== '2.1.179') {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool optional egress profiles require exact 2.1.179 observed client proof' }
   }
-  if (version && version !== '2.1.179' && version !== 'unknown') {
+  const observedOnlyStripVersions = new Set(['2.1.179', '2.1.181', '2.1.195', 'unknown'])
+  if (version && !observedOnlyStripVersions.has(version)) {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client version is not approved for this profile' }
   }
   const billingShape = typeof profile.billing_shape === 'string' ? profile.billing_shape : ''
