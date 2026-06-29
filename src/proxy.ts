@@ -686,7 +686,12 @@ function findRuntimeMappingConflict(
       } : {}),
     }
     const existingBucket = findExistingRuntimeBucketForAccount(config, mapping.account_id)
-    if (!existingBucket || !sameRuntimeMappingAuthority({ ...existing, ...existingBucket }, mapping)) {
+    if (!existingBucket) {
+      return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
+    }
+    const existingAuthority = { ...existing, ...existingBucket }
+    if (!sameRuntimeMappingAuthority(existingAuthority, mapping)
+      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existingAuthority, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
@@ -724,11 +729,43 @@ function findRuntimeMappingFileConflict(
   for (const existing of Object.values(file.mappings)) {
     const sameAccount = existing.account_id === mapping.account_id
     const sameBucket = existing.egress_bucket === mapping.egress_bucket
-    if ((sameAccount || sameBucket) && !sameRuntimeMappingAuthority(existing, mapping)) {
+    if ((sameAccount || sameBucket)
+      && !sameRuntimeMappingAuthority(existing, mapping)
+      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existing, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
   return null
+}
+
+function sameRuntimeMappingAuthorityAllowingCredentialRotation(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
+  return a.account_id === b.account_id
+    && a.account_ref === b.account_ref
+    && a.account_uuid_ref === b.account_uuid_ref
+    && (a.email_ref || '') === (b.email_ref || '')
+    && a.token_type === b.token_type
+    && a.egress_bucket === b.egress_bucket
+    && a.proxy_url === b.proxy_url
+    && a.proxy_identity_ref === b.proxy_identity_ref
+    && a.persona_variant === b.persona_variant
+    && a.session_policy === b.session_policy
+    && a.policy_version === b.policy_version
+    && a.device_id === b.device_id
+    && (a.provider_kind || '') === (b.provider_kind || '')
+    && (a.workspace_ref || '') === (b.workspace_ref || '')
+    && (a.workspace_binding_hmac || '') === (b.workspace_binding_hmac || '')
+    && (a.upstream_endpoint_ref || '') === (b.upstream_endpoint_ref || '')
+    && (a.aws_region || '') === (b.aws_region || '')
+    && (a.upstream_host || '') === (b.upstream_host || '')
+    && (a.allowed_upstream_path || '') === (b.allowed_upstream_path || '')
+    && (a.upstream_auth_scheme || '') === (b.upstream_auth_scheme || '')
+    && (a.beta_policy_ref || '') === (b.beta_policy_ref || '')
+    && (a.request_shape_profile_ref || '') === (b.request_shape_profile_ref || '')
+    && (a.cache_parity_profile_ref || '') === (b.cache_parity_profile_ref || '')
+    && (a.anthropic_workspace_id || '') === (b.anthropic_workspace_id || '')
+    && (a.aws_access_key_id || '') === (b.aws_access_key_id || '')
+    && (a.aws_secret_access_key || '') === (b.aws_secret_access_key || '')
+    && (a.aws_session_token || '') === (b.aws_session_token || '')
 }
 
 function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {

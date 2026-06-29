@@ -507,6 +507,105 @@ test('runtime registration makes a newly onboarded account routable without rest
   }
 })
 
+
+test('runtime registration permits same-account credential rotation with fresh internal proof', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-rotation'
+  const runtimeSessionId = '123e4567-e89b-42d3-a456-426614174013'
+  const runtimeDeviceId = 'a'.repeat(64)
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const first = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer old-selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: runtimeDeviceId,
+        egress_bucket: 'bucket-runtime-rotation',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-rotation',
+        credential_ref: 'opaque:credential-ref:v1:rotation-old',
+        credential_binding_hmac: credentialBindingHmac('Bearer old-selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.179',
+      },
+    })
+    assert.equal(first.status, 200, first.body)
+
+    const rotated = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer new-selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: runtimeDeviceId,
+        egress_bucket: 'bucket-runtime-rotation',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-rotation',
+        credential_ref: 'opaque:credential-ref:v1:rotation-new',
+        credential_binding_hmac: credentialBindingHmac('Bearer new-selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.179',
+      },
+    })
+    assert.equal(rotated.status, 200, rotated.body)
+
+    const stale = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: schedulerHeaders({
+        ...ccGatewayHeaders,
+        'x-cc-account-id': runtimeAccountRef,
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:rotation-new',
+        'x-cc-egress-bucket': 'bucket-runtime-rotation',
+        'x-cc-policy-version': '2.1.179',
+        'x-claude-code-session-id': runtimeSessionId,
+        authorization: 'Bearer old-selected-token',
+      }, {
+        credential_ref: 'opaque:credential-ref:v1:rotation-new',
+        egress_bucket: 'bucket-runtime-rotation',
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-rotation',
+        policy_version: '2.1.179',
+        persona_profile: 'claude-code-2.1.179-macos-local',
+        session_id: runtimeSessionId,
+      }),
+      body: { metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(stale.status, 403, stale.body)
+    assert.equal(stale.headers['x-cc-gateway-error-code'], 'credential_account_mismatch')
+
+    const fresh = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: schedulerHeaders({
+        ...ccGatewayHeaders,
+        'x-cc-account-id': runtimeAccountRef,
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:rotation-new',
+        'x-cc-egress-bucket': 'bucket-runtime-rotation',
+        'x-cc-policy-version': '2.1.179',
+        'x-claude-code-session-id': runtimeSessionId,
+        authorization: 'Bearer new-selected-token',
+      }, {
+        credential_ref: 'opaque:credential-ref:v1:rotation-new',
+        egress_bucket: 'bucket-runtime-rotation',
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-rotation',
+        policy_version: '2.1.179',
+        persona_profile: 'claude-code-2.1.179-macos-local',
+        session_id: runtimeSessionId,
+      }),
+      body: { metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(fresh.status, 200, fresh.body)
+    assert.equal(upstream.captured.length, 1)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('runtime registration persists and replays after gateway restart', async () => {
   const mappingDir = mkdtempSync(join(tmpdir(), 'cc-gateway-runtime-mapping-'))
   const previousMappingFile = process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
