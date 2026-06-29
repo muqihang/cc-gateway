@@ -135,8 +135,8 @@ function nativeLikeBody(version: string, overrides: Record<string, unknown> = {}
   }
 }
 
-test('2.1.181 and 2.1.195 observed profiles pass only through strip_attribution and strip billing markers', async () => {
-  for (const version of ['2.1.181', '2.1.195']) {
+test('observed Claude Code versions at or above 2.1.179 pass only through strip_attribution and strip billing markers', async () => {
+  for (const version of ['2.1.179', '2.1.181', '2.1.185', '2.1.193', '2.1.195', '2.1.200']) {
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
@@ -157,14 +157,14 @@ test('2.1.181 and 2.1.195 observed profiles pass only through strip_attribution 
   }
 })
 
-test('unapproved named future observed profile fails closed even under strip_attribution', async () => {
+test('observed Claude Code versions below 2.1.179 fail closed even under strip_attribution', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: signedHeaders(contextFor('2.1.200')),
-      body: nativeLikeBody('2.1.200'),
+      headers: signedHeaders(contextFor('2.1.170')),
+      body: nativeLikeBody('2.1.170'),
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_observed_client_profile_unapproved')
@@ -176,12 +176,12 @@ test('unapproved named future observed profile fails closed even under strip_att
   }
 })
 
-test('2.1.181 and 2.1.195 observed profiles cannot self-promote to optional CCH profiles', async () => {
+test('observed Claude Code versions at or above 2.1.179 cannot self-promote to optional CCH profiles', async () => {
   const cases = [
     { ref: 'claude_code_2_1_179_first_party_signed_cch', policy: 'signed_cch' },
     { ref: 'claude_code_2_1_179_custom_base_no_cch', policy: 'no_cch' },
   ]
-  for (const version of ['2.1.181', '2.1.195']) {
+  for (const version of ['2.1.181', '2.1.185', '2.1.193', '2.1.195', '2.1.200']) {
     for (const tc of cases) {
       const upstream = await startFakeUpstream()
       const proxy = await startFakeConnectProxy()

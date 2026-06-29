@@ -3073,15 +3073,31 @@ function verifyObservedClientProfileAdmission(attested: AttestedFormalPoolContex
   if (requireExact2179 && version !== '2.1.179') {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool optional egress profiles require exact 2.1.179 observed client proof' }
   }
-  const observedOnlyStripVersions = new Set(['2.1.179', '2.1.181', '2.1.195', 'unknown'])
-  if (version && !observedOnlyStripVersions.has(version)) {
-    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client version is not approved for this profile' }
+  if (version && version !== 'unknown' && !isObservedClaudeCodeVersionAtLeast(version, '2.1.179')) {
+    return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client version is below the approved minimum for this profile' }
   }
   const billingShape = typeof profile.billing_shape === 'string' ? profile.billing_shape : ''
   if (billingShape && !['absent', 'no_cch', 'cch_present'].includes(billingShape)) {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed billing shape is not approved' }
   }
   return { ok: true }
+}
+
+function isObservedClaudeCodeVersionAtLeast(version: string, minimum: string): boolean {
+  const left = parseObservedSemver(version)
+  const right = parseObservedSemver(minimum)
+  if (!left || !right) return false
+  for (let i = 0; i < 3; i++) {
+    if (left[i] > right[i]) return true
+    if (left[i] < right[i]) return false
+  }
+  return true
+}
+
+function parseObservedSemver(version: string): [number, number, number] | null {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim())
+  if (!match) return null
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
 function verifyFormalPool2179OracleTuple(
