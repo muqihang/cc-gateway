@@ -12,6 +12,7 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
+import { callEgressSidecar, egressSidecarEnabled, prepareEgressSidecarRequest } from './egress-sidecar-client.js'
 import {
   canonicalClaudeCodeSessionId,
   accountIdentityRef,
@@ -35,6 +36,7 @@ import {
 import { redactRequestPath, redactSensitiveText } from './redaction.js'
 import { evaluateUpstreamSafety } from './upstream-safety.js'
 import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
+import { isKnownEnabledTLSProfileRef, isSafeTLSProfileRef, tlsProfileMode } from './egress-tls-profile.js'
 import { resolvePersonaProfileId } from './persona-registry.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
@@ -166,6 +168,7 @@ type FormalPoolSessionAuthorityBinding = {
   policy_version: string
   persona_profile: string
   trusted_egress_profile_ref: string
+  egress_tls_profile_ref?: string
   profile_policy_version: string
   billing_shape_policy: FormalPoolBillingShapePolicy
   request_shape_profile_ref: string
@@ -1193,6 +1196,7 @@ type AttestedFormalPoolContext = {
   policy_version: string
   persona_profile: string
   trusted_egress_profile_ref: string
+  egress_tls_profile_ref?: string
   profile_policy_version: string
   billing_shape_policy: FormalPoolBillingShapePolicy
   request_shape_profile_ref: string
@@ -1318,6 +1322,7 @@ async function handleRequest(
   let oauthToken: string | null = null
   let routePolicy: ReturnType<typeof selectSharedPoolRoute> | null = null
   let formalPoolAttestation: AttestedFormalPoolContext | null = null
+  let egressTLSProfileStatus: 'verified' | 'tls_profile_unverified' | null = null
   const sharedPoolRoute: SharedPoolPersonaRoute = target.pathname === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
 
   if (config.mode === 'sub2api') {
@@ -1357,7 +1362,7 @@ async function handleRequest(
         writeControlPlaneError(res, 404, 'unsupported_route', 'Claude Platform on AWS phase 1 allows /v1/messages without internal query markers only')
         return
       }
-      const headerCheck = verifyFormalPoolAttestedHeaders(req, method, target, routePolicy, accountContext, formalPoolAttestation)
+      const headerCheck = verifyFormalPoolAttestedHeaders(config, req, method, target, routePolicy, accountContext, formalPoolAttestation)
       if (!headerCheck.ok) {
         writeControlPlaneError(res, headerCheck.status, headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
         return
@@ -1408,10 +1413,14 @@ async function handleRequest(
     }
     egress = resolvedEgress
     if (formalPoolAttestation) {
-      const egressCheck = verifyFormalPoolAttestedHeaders(req, method, target, routePolicy, accountContext, formalPoolAttestation, egress)
+      const egressCheck = verifyFormalPoolAttestedHeaders(config, req, method, target, routePolicy, accountContext, formalPoolAttestation, egress)
       if (!egressCheck.ok) {
         writeControlPlaneError(res, egressCheck.status, egressCheck.code, 'Formal-pool scheduler context does not match selected egress context')
         return
+      }
+      const tlsMode = tlsProfileMode((config as any).shared_pool)
+      if (tlsMode.enabled) {
+        egressTLSProfileStatus = 'tls_profile_unverified'
       }
     }
   } else {
@@ -1662,13 +1671,16 @@ async function handleRequest(
       return
     }
   }
+  const useTLSSidecar = config.mode === 'sub2api' && egressSidecarEnabled(config as any)
   const agentKey = config.mode === 'sub2api' && accountContext && egress
     ? proxyAgentCacheKey(accountContext, upstream, egress)
     : 'default'
-  const agent = config.mode === 'sub2api' && egress
-    ? getProxyAgent(agentKey, egress.proxyUrl)
-    : getProxyAgent(agentKey)
-  if (config.mode === 'sub2api' && !agent) {
+  const agent = useTLSSidecar
+    ? null
+    : (config.mode === 'sub2api' && egress
+      ? getProxyAgent(agentKey, egress.proxyUrl)
+      : getProxyAgent(agentKey))
+  if (config.mode === 'sub2api' && !useTLSSidecar && !agent) {
     writeControlPlaneError(res, 403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
     return
   }
@@ -1731,6 +1743,40 @@ async function handleRequest(
   }
   writeRawCaptureFile(rawCapture, '03_final_output.json', finalOutputCapturePayload)
 
+  if (useTLSSidecar) {
+    const profileRef = formalPoolAttestation?.egress_tls_profile_ref
+    const prepared = prepareEgressSidecarRequest({
+      config: config as any,
+      profileRef,
+      egressBucket: egress?.bucketId,
+      proxyIdentityRef: egress?.proxyIdentityRef,
+      targetHost: upstreamUrl.hostname,
+      targetPort: Number(upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? '443' : '80')),
+      targetScheme: upstreamUrl.protocol === 'https:' ? 'https' : 'http',
+      targetPath: upstreamUrl.pathname,
+      route: target.pathname,
+      method,
+    })
+    if (!prepared.ok) {
+      writeControlPlaneError(res, prepared.status, prepared.code, prepared.message)
+      return
+    }
+    const sidecarResult = await callEgressSidecar(prepared.prepared, body)
+    if (!sidecarResult.ok) {
+      writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
+      return
+    }
+    let responseHeaders = { ...sidecarResult.response.headers }
+    delete responseHeaders['transfer-encoding']
+    responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
+    responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
+    if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, sidecarResult.response.body, rawCapture))
+    res.writeHead(sidecarResult.response.status, responseHeaders)
+    res.end(sidecarResult.response.body)
+    if (config.logging.audit) audit(clientName, method, safePath, sidecarResult.response.status)
+    return
+  }
+
   const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
   const proxyReq = requestFn(
     upstreamUrl,
@@ -1743,6 +1789,7 @@ async function handleRequest(
       const status = proxyRes.statusCode || 502
 
       let responseHeaders = { ...proxyRes.headers }
+      if (egressTLSProfileStatus === 'tls_profile_unverified') responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
       delete responseHeaders['transfer-encoding']
       responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
 
@@ -2728,6 +2775,7 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
     return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
   }
   const obj = parsed as Record<string, unknown>
+  const tlsMode = tlsProfileMode((config as any).shared_pool)
   const requiredStringFields = [
     'method',
     'route_class',
@@ -2748,6 +2796,9 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
     'session_id',
     'nonce',
   ]
+  if (tlsMode.enabled && tlsMode.strict && (typeof obj.egress_tls_profile_ref !== 'string' || !obj.egress_tls_profile_ref.trim())) {
+    return { ok: false, status: 403, code: 'missing_egress_tls_profile_ref' }
+  }
   for (const field of requiredStringFields) {
     if (typeof obj[field] !== 'string' || !(obj[field] as string).trim() || /[\r\n]/.test(obj[field] as string)) {
       return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
@@ -2798,7 +2849,9 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
     }
   }
-  if (!isSafeProfileRef(obj.trusted_egress_profile_ref)
+  if ((obj.egress_tls_profile_ref !== undefined && !isSafeTLSProfileRef(obj.egress_tls_profile_ref))
+    || (tlsMode.enabled && tlsMode.strict && !isSafeTLSProfileRef(obj.egress_tls_profile_ref))
+    || !isSafeProfileRef(obj.trusted_egress_profile_ref)
     || !isSafeProfileRef(obj.profile_policy_version)
     || !isSafeProfileRef(obj.request_shape_profile_ref)
     || !isSafeProfileRef(obj.cache_parity_profile_ref)
@@ -2833,6 +2886,7 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       policy_version: obj.policy_version,
       persona_profile: obj.persona_profile,
       trusted_egress_profile_ref: obj.trusted_egress_profile_ref,
+      ...(typeof obj.egress_tls_profile_ref === 'string' ? { egress_tls_profile_ref: obj.egress_tls_profile_ref } : {}),
       profile_policy_version: obj.profile_policy_version,
       billing_shape_policy: obj.billing_shape_policy,
       request_shape_profile_ref: obj.request_shape_profile_ref,
@@ -3054,6 +3108,7 @@ function expectedFormalPoolRouteClass(routePolicy: ReturnType<typeof selectShare
 }
 
 function verifyFormalPoolAttestedHeaders(
+  config: Config,
   req: IncomingMessage,
   method: string,
   target: RequestTarget,
@@ -3073,7 +3128,11 @@ function verifyFormalPoolAttestedHeaders(
     attested.egress_bucket !== accountContext.egressBucket,
     attested.policy_version !== accountContext.policyVersion,
   ]
-  if (egress) mismatches.push(attested.proxy_identity_ref !== egress.proxyIdentityRef)
+  if (egress) {
+    mismatches.push(attested.proxy_identity_ref !== egress.proxyIdentityRef)
+    const tlsCheck = verifyFormalPoolAttestedTLSProfile(config, attested, egress)
+    if (!tlsCheck.ok) return tlsCheck
+  }
   if (attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
     mismatches.push(
       target.search !== '',
@@ -3083,6 +3142,27 @@ function verifyFormalPoolAttestedHeaders(
     )
   }
   if (mismatches.some(Boolean)) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
+  return { ok: true }
+}
+
+function verifyFormalPoolAttestedTLSProfile(
+  config: Config,
+  attested: AttestedFormalPoolContext,
+  egress: EgressBucketResolution,
+): { ok: true } | { ok: false; status: number; code: string } {
+  const mode = tlsProfileMode((config as any).shared_pool)
+  if (!mode.enabled) return { ok: true }
+  const expected = egress.tlsProfileRef
+  const actual = attested.egress_tls_profile_ref
+  if (!expected || !actual) {
+    return mode.strict
+      ? { ok: false, status: 403, code: 'missing_egress_tls_profile_ref' }
+      : { ok: true }
+  }
+  if (!isKnownEnabledTLSProfileRef(config as any, actual)) {
+    return { ok: false, status: 403, code: 'unknown_egress_tls_profile_ref' }
+  }
+  if (actual !== expected) return { ok: false, status: 403, code: 'formal_pool_context_mismatch' }
   return { ok: true }
 }
 
@@ -3217,6 +3297,7 @@ function verifyFormalPoolSessionAuthorityBinding(
     policy_version: attested.policy_version,
     persona_profile: attested.persona_profile,
     trusted_egress_profile_ref: attested.trusted_egress_profile_ref,
+    ...(attested.egress_tls_profile_ref ? { egress_tls_profile_ref: attested.egress_tls_profile_ref } : {}),
     profile_policy_version: attested.profile_policy_version,
     billing_shape_policy: attested.billing_shape_policy,
     request_shape_profile_ref: attested.request_shape_profile_ref,
@@ -3333,6 +3414,7 @@ function sameFormalPoolSessionAuthorityBinding(a: FormalPoolSessionAuthorityBind
     && a.policy_version === b.policy_version
     && a.persona_profile === b.persona_profile
     && a.trusted_egress_profile_ref === b.trusted_egress_profile_ref
+    && (a.egress_tls_profile_ref || '') === (b.egress_tls_profile_ref || '')
     && a.profile_policy_version === b.profile_policy_version
     && a.billing_shape_policy === b.billing_shape_policy
     && a.request_shape_profile_ref === b.request_shape_profile_ref

@@ -1,6 +1,8 @@
 import { readFileSync } from 'fs'
 import { parse } from 'yaml'
 import { resolve } from 'path'
+import { assertNoRawTLSProfileMaterial, isSafeTLSProfileRef, validateTLSProfilesConfig, type TLSProfileConfig } from './egress-tls-profile.js'
+import { validateEgressSidecarConfig, type EgressSidecarConfig } from './egress-sidecar-client.js'
 
 export type TokenEntry = {
   name: string
@@ -44,6 +46,7 @@ export type EgressBucketConfig = {
   proxy_identity_ref?: string
   proxy_identity_hash?: string
   allowed_account_ids?: string[]
+  tls_profile_ref?: string
 }
 
 export type Config = {
@@ -127,6 +130,10 @@ export type Config = {
     candidate_beta_replay_proofs?: Record<string, string>
     candidate_beta_kill_switches?: Record<string, boolean>
     candidate_beta_audit_budgets?: Record<string, number>
+    egress_tls?: {
+      enabled?: boolean
+      strict?: boolean
+    }
     production_budget?: {
       mode?: 'observe_only' | string
       enforcement_enabled?: boolean
@@ -135,6 +142,8 @@ export type Config = {
   }
   account_identities?: Record<string, AccountIdentityConfig>
   egress_buckets?: Record<string, EgressBucketConfig>
+  tls_profiles?: Record<string, TLSProfileConfig>
+  egress_tls_sidecar?: EgressSidecarConfig
   logging: {
     level: 'debug' | 'info' | 'warn' | 'error'
     audit: boolean
@@ -282,6 +291,10 @@ export function validateFormalPoolEgressBucket(
     throw new Error(`config: ${path('.proxy_url')} is required`)
   }
   requireSafeFormalPoolRef(path('.proxy_identity_ref'), bucket.proxy_identity_ref)
+  assertNoRawTLSProfileMaterial(path(), bucket)
+  if (bucket.tls_profile_ref !== undefined && !isSafeTLSProfileRef(bucket.tls_profile_ref)) {
+    throw new Error(`config: ${path('.tls_profile_ref')} must be a safe tls-profile ref and never raw TLS material`)
+  }
   if (!Array.isArray(bucket.allowed_account_ids) || bucket.allowed_account_ids.length === 0) {
     throw new Error(`config: ${path('.allowed_account_ids')} must be an explicit non-empty account allowlist`)
   }
@@ -308,9 +321,14 @@ export function validateFormalPoolMode(config: Config): void {
   for (const [accountId, identity] of Object.entries(identities || {})) {
     validateFormalPoolAccountIdentity(accountId, identity)
   }
+  const tlsProfiles = validateTLSProfilesConfig((config as any).tls_profiles)
   for (const [bucketId, bucket] of Object.entries(buckets || {})) {
     validateFormalPoolEgressBucket(bucketId, bucket, accountIds)
+    if (bucket.tls_profile_ref && !tlsProfiles.has(bucket.tls_profile_ref)) {
+      throw new Error(`config: egress_buckets.${bucketId}.tls_profile_ref must reference an enabled tls_profiles profile_ref`)
+    }
   }
+  validateEgressSidecarConfig(config as any)
   validateFormalPoolAttestationConfig(config)
 }
 

@@ -155,6 +155,33 @@ shared_pool:
     claude_code_candidate_beta: false
   candidate_beta_audit_budgets:
     claude_code_candidate_beta: 25
+  # TLS profile authority is server-selected and fail-closed when enabled.
+  # Keep disabled until deployed sidecar/profile equivalence is approved.
+  egress_tls:
+    enabled: false
+    strict: true
+
+# TLS profile registry contains safe refs only, never raw ClientHello, cipher,
+# extension, key, cert, pcap, JA3 raw string, or operator secrets.
+tls_profiles:
+  claude-code-real-oracle-2179:
+    profile_ref: tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    source: observed-oracle-63
+    enabled: true
+
+# Optional TLS-capable egress sidecar/connect-proxy. This is a local/loopback
+# control plane and must not become an open proxy. Keep disabled unless the
+# exact deployed sidecar and profile registry are verified. Never fall back to
+# direct Node HTTPS when this path fails.
+egress_tls_sidecar:
+  enabled: false
+  endpoint: http://127.0.0.1:18081
+  control_token: "replace-with-independent-local-sidecar-control-token"
+  allowed_target_hosts: ["api.anthropic.com"]
+  allowed_routes: ["/v1/messages"]
+  allowed_profile_refs:
+    - tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2179
 
 # Per selected upstream account identity, keyed by attested account_id.
 # Values must be server-generated safe refs/HMACs. Never put raw account UUIDs,
@@ -180,6 +207,7 @@ egress_buckets:
     proxy_url: "http://127.0.0.1:8080"
     proxy_identity_ref: "opaque:proxy-ref:v1:example-bucket"
     allowed_account_ids: ["example-account-id"]
+    tls_profile_ref: tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
 
 # Logging
 logging:

@@ -4,6 +4,7 @@ import {
   inferLegacyPersonaVariant,
 } from './persona-registry.js'
 import { resolvePersonaDecision, type PersonaDecision } from './persona-resolver.js'
+import { isSafeTLSProfileRef } from './egress-tls-profile.js'
 
 export type SharedPoolRouteKind = 'messages' | 'count_tokens' | 'event_logging_legacy' | 'event_logging_v2'
 export type SharedPoolPersonaRoute = 'messages' | 'count_tokens' | 'control_plane'
@@ -50,12 +51,14 @@ export type EgressBucketRecord = {
   proxy_identity_ref?: string
   proxy_identity_hash?: string
   allowed_account_ids?: string[]
+  tls_profile_ref?: string
 }
 
 export type EgressBucketResolution = {
   bucketId: string
   proxyUrl: string
   proxyIdentityRef: string
+  tlsProfileRef?: string
 }
 
 const COUNT_TOKENS_BETA = null
@@ -633,10 +636,12 @@ export function resolveEgressBucket(config: Config, bucketId: string | undefined
   }
   const proxyIdentityRef = bucket.proxy_identity_ref || bucket.proxy_identity_hash || buildScopedOpaqueRef('proxy-ref', bucket.proxy_url)
   if (!isSafeIdentityRef(proxyIdentityRef)) return { error: 'invalid_egress_proxy_identity_ref' }
+  if (bucket.tls_profile_ref !== undefined && !isSafeTLSProfileRef(bucket.tls_profile_ref)) return { error: 'invalid_egress_tls_profile_ref' }
   return {
     bucketId,
     proxyUrl: bucket.proxy_url,
     proxyIdentityRef,
+    ...(bucket.tls_profile_ref ? { tlsProfileRef: bucket.tls_profile_ref } : {}),
   }
 }
 

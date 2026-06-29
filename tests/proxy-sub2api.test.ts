@@ -18,7 +18,7 @@ const ccGatewayHeaders = {
 const defaultSessionId = '123e4567-e89b-42d3-a456-426614174999'
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
-const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-code-multiprovider-runtime/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
 
 type SharedContractFixture = {
   materials: Record<string, string>
@@ -96,6 +96,12 @@ function signedFormalPoolHeaders(context: Record<string, unknown>, secret = 'sch
 function loadSharedContractFixture(): SharedContractFixture {
   return JSON.parse(readFileSync(sharedContractFixturePath, 'utf-8')) as SharedContractFixture
 }
+
+test('sub2api shared contract fixture is loaded from current Phase B worktree and carries TLS profile ref', () => {
+  assert.equal(sharedContractFixturePath, '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json')
+  const fixture = loadSharedContractFixture()
+  assert.equal(fixture.valid_context.egress_tls_profile_ref, 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1')
+})
 
 function sharedFixtureContext(fixture: SharedContractFixture, overrides: Record<string, unknown> = {}) {
   return {
