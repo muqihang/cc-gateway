@@ -220,11 +220,11 @@ test('strict mode fails closed when attested TLS profile is missing or mismatche
 
 
 
-test('strict profile authority does not emit TLS parity verified before execution path proof', async () => {
+test('strict profile authority fails closed when the TLS sidecar execution path is unavailable', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(tlsProfileConfig(upstream.url, proxy.url))
-  const context = formalPoolContext({ nonce: 'strict-no-parity-claim' })
+  const context = formalPoolContext({ nonce: 'strict-no-sidecar-fail-closed' })
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: {
@@ -241,9 +241,10 @@ test('strict profile authority does not emit TLS parity verified before executio
       },
       body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
-    assert.equal(response.status, 200, response.body)
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_disabled')
     assert.notEqual(response.headers['x-cc-egress-tls-profile-status'], 'verified')
-    assert.equal(upstream.captured.length, 1)
+    assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)
     await close(upstream.server)

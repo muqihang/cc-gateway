@@ -503,6 +503,36 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
   }
 })
 
+test('TLS sidecar disabled under strict formal-pool TLS fails closed without Node direct fallback', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url, {
+    egress_tls_sidecar: {
+      enabled: false,
+      endpoint: sidecar.url,
+      control_token: controlToken,
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
+      allowed_routes: ['/v1/messages'],
+      allowed_profile_refs: [expectedTLSProfileRef],
+      expected_tls_summary_bucket: expectedTLSBucket,
+    },
+  }))
+  try {
+    const response = await postThroughGateway(gateway, { nonce: 'sidecar-disabled-strict' })
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_disabled')
+    assert.notEqual(response.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+    assert.notEqual(response.headers['x-cc-egress-tls-profile-status'], 'verified')
+    assert.equal(sidecar.captured.length, 0)
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
 test('TLS sidecar unavailable fails closed without Node direct fallback', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()

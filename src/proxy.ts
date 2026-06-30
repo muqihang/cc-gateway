@@ -1710,6 +1710,11 @@ async function handleRequest(
     }
   }
   const useTLSSidecar = config.mode === 'sub2api' && egressSidecarEnabled(config as any)
+  const activeTLSMode = tlsProfileMode((config as any).shared_pool)
+  if (config.mode === 'sub2api' && formalPoolAttestation && activeTLSMode.enabled && activeTLSMode.strict && !useTLSSidecar) {
+    writeControlPlaneError(res, 403, 'egress_tls_sidecar_disabled', 'Strict formal-pool TLS egress requires the TLS sidecar')
+    return
+  }
   const agentKey = config.mode === 'sub2api' && accountContext && egress
     ? proxyAgentCacheKey(accountContext, upstream, egress)
     : 'default'
