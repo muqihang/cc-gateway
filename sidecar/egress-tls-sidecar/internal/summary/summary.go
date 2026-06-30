@@ -28,6 +28,8 @@ type SafeSummary struct {
 	CipherCount                 int      `json:"cipher_count"`
 	ExtensionCount              int      `json:"extension_count"`
 	GREASEPresent               bool     `json:"grease_present"`
+	SNIPresent                  bool     `json:"sni_present"`
+	SNIHostBucket               string   `json:"sni_host_bucket"`
 	RawClientHelloOmittedReason string   `json:"raw_clienthello_omitted_reason"`
 	MockTLSTrustOverride        bool     `json:"mock_tls_trust_override"`
 }
@@ -43,13 +45,15 @@ func ExpectedClaudeCode2179() SafeSummary {
 		Version:                     "2.1.179",
 		ProfileRef:                  "tls-profile:claude-code-2.1.179-real-oracle-tcp-v1",
 		SummaryBucket:               "tls-bucket:claude-code-real-oracle-2179",
-		JA3Hash:                     "e97f5146a7009cc2918b50e903b6ff8d",
-		JA4:                         "t13d0017h1_18560269b2cb_f2afa5bfee90",
+		JA3Hash:                     "d871d02cecbde59abbf8f4806134addf",
+		JA4:                         "t13d0017h1_18560269b2cb_92d925a272a4",
 		ALPNProtocols:               []string{"http/1.1"},
 		TLSVersions:                 []string{"0x0304", "0x0303"},
 		CipherCount:                 17,
-		ExtensionCount:              12,
+		ExtensionCount:              14,
 		GREASEPresent:               false,
+		SNIPresent:                  true,
+		SNIHostBucket:               "anthropic_api",
 		RawClientHelloOmittedReason: "raw_clienthello_forbidden",
 		MockTLSTrustOverride:        false,
 	}
@@ -67,6 +71,8 @@ func CompareToExpected(observed SafeSummary, expected SafeSummary) Comparison {
 		{"cipher_count", observed.CipherCount == expected.CipherCount},
 		{"extension_count", observed.ExtensionCount == expected.ExtensionCount},
 		{"grease_present", observed.GREASEPresent == expected.GREASEPresent},
+		{"sni_present", observed.SNIPresent == expected.SNIPresent},
+		{"sni_host_bucket", observed.SNIHostBucket == expected.SNIHostBucket},
 	}
 	diffs := make([]string, 0)
 	for _, field := range fields {
@@ -109,6 +115,8 @@ func SummarizeClientHello(data []byte, meta Metadata) (SafeSummary, error) {
 		CipherCount:                 len(parsed.cipherSuites),
 		ExtensionCount:              len(parsed.extensions),
 		GREASEPresent:               grease,
+		SNIPresent:                  parsed.sniPresent,
+		SNIHostBucket:               parsed.sniHostBucket,
 		RawClientHelloOmittedReason: "raw_clienthello_forbidden",
 		MockTLSTrustOverride:        false,
 	}, nil
@@ -122,6 +130,8 @@ type clientHello struct {
 	pointFormats      []uint16
 	supportedVersions []uint16
 	alpnProtocols     []string
+	sniPresent        bool
+	sniHostBucket     string
 }
 
 func parseClientHello(data []byte) (clientHello, error) {
@@ -186,6 +196,8 @@ func parseClientHello(data []byte) (clientHello, error) {
 		p += ln
 		out.extensions = append(out.extensions, typ)
 		switch typ {
+		case 0:
+			out.sniPresent, out.sniHostBucket = sniBucket(ed)
 		case 10:
 			if len(ed) >= 2 {
 				gl := int(u16(ed, 0))
@@ -224,6 +236,28 @@ func parseClientHello(data []byte) (clientHello, error) {
 		}
 	}
 	return out, nil
+}
+
+func sniBucket(ed []byte) (bool, string) {
+	if len(ed) < 5 {
+		return false, "malformed"
+	}
+	listLen := int(u16(ed, 0))
+	if listLen+2 > len(ed) || ed[2] != 0 {
+		return false, "malformed"
+	}
+	nameLen := int(u16(ed, 3))
+	if 5+nameLen > len(ed) {
+		return false, "malformed"
+	}
+	name := string(ed[5 : 5+nameLen])
+	if strings.EqualFold(name, "api.anthropic.com") {
+		return true, "anthropic_api"
+	}
+	if listLen > 0 {
+		return true, "other"
+	}
+	return false, "not_present"
 }
 
 func ja3Hash(p clientHello) string {

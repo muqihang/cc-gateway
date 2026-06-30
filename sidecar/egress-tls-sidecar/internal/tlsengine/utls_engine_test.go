@@ -11,7 +11,7 @@ import (
 	"cc-gateway/egress-tls-sidecar/internal/summary"
 )
 
-func TestLogicalSNISidecarClientHelloIsRealAndMismatchIsFailClosed(t *testing.T) {
+func TestLogicalSNISidecarClientHelloMatchesPlan70Oracle(t *testing.T) {
 	p, ok := profile.Lookup("tls-profile:claude-code-2.1.179-real-oracle-tcp-v1")
 	if !ok {
 		t.Fatalf("profile missing")
@@ -58,8 +58,17 @@ func TestLogicalSNISidecarClientHelloIsRealAndMismatchIsFailClosed(t *testing.T)
 	if err != nil {
 		t.Fatalf("summarize ClientHello: %v", err)
 	}
-	if got.CipherCount != 17 || got.ExtensionCount != 13 {
+	if got.JA3Hash != "d871d02cecbde59abbf8f4806134addf" {
+		t.Fatalf("unexpected JA3: got %s", got.JA3Hash)
+	}
+	if got.JA4 != "t13d0017h1_18560269b2cb_92d925a272a4" {
+		t.Fatalf("unexpected JA4: got %s", got.JA4)
+	}
+	if got.CipherCount != 17 || got.ExtensionCount != 14 {
 		t.Fatalf("unexpected logical-SNI counts: %+v", got)
+	}
+	if !got.SNIPresent || got.SNIHostBucket != "anthropic_api" {
+		t.Fatalf("expected api.anthropic.com SNI bucket, got %+v", got)
 	}
 	if got.GREASEPresent {
 		t.Fatalf("logical-SNI profile must not add GREASE")
@@ -68,7 +77,7 @@ func TestLogicalSNISidecarClientHelloIsRealAndMismatchIsFailClosed(t *testing.T)
 		t.Fatalf("unexpected ALPN protocols: %+v", got.ALPNProtocols)
 	}
 	result := summary.CompareToExpected(got, p.Expected)
-	if result.Status != "BLOCKED_TLS_ENGINE_MISMATCH" {
-		t.Fatalf("expected mismatch fail-closed with logical SNI, got %+v", result)
+	if result.Status != "MATCH" {
+		t.Fatalf("expected sidecar to match Plan70 SNI oracle, got %+v", result)
 	}
 }

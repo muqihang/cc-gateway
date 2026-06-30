@@ -13,8 +13,17 @@ func TestLookupAcceptsClaudeCodeOracleProfile(t *testing.T) {
 	if p.ExpectedSummaryBucket != "tls-bucket:claude-code-real-oracle-2179" {
 		t.Fatalf("unexpected summary bucket %q", p.ExpectedSummaryBucket)
 	}
-	if p.Expected.JA3Hash != "e97f5146a7009cc2918b50e903b6ff8d" {
+	if p.Expected.JA3Hash != "d871d02cecbde59abbf8f4806134addf" {
 		t.Fatalf("unexpected expected JA3 %q", p.Expected.JA3Hash)
+	}
+	if p.Expected.JA4 != "t13d0017h1_18560269b2cb_92d925a272a4" {
+		t.Fatalf("unexpected expected JA4 %q", p.Expected.JA4)
+	}
+	if p.Expected.ExtensionCount != 14 {
+		t.Fatalf("unexpected expected extension count %d", p.Expected.ExtensionCount)
+	}
+	if !p.Expected.SNIPresent || p.Expected.SNIHostBucket != "anthropic_api" {
+		t.Fatalf("expected profile must require api.anthropic.com SNI bucket: %+v", p.Expected)
 	}
 	if !p.RequireLogicalSNI {
 		t.Fatalf("profile must require logical provider SNI for formal-pool egress")

@@ -60,6 +60,7 @@ func claudeCode2179LogicalSNISpec() *utls.ClientHelloSpec {
 		&utls.KeyShareExtension{KeyShares: keyShares},
 		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},
 		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},
+		&utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle},
 	}
 	return &utls.ClientHelloSpec{CipherSuites: ciphers, CompressionMethods: []uint8{0}, Extensions: extensions, TLSVersMax: utls.VersionTLS13, TLSVersMin: utls.VersionTLS10}
 }
