@@ -64,7 +64,7 @@ function signedSchedulerHeaders(headers: Record<string, string> = {}) {
     cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
     observed_client_profile: {
       schema_version: 'observed_client_profile.v1',
-      cli_version_bucket: 'unknown',
+      cli_version_bucket: '2.1.179',
       route_class: 'messages',
       billing_shape: 'absent',
       billing_block_count: 0,

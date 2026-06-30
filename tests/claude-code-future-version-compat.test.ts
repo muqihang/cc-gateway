@@ -136,7 +136,7 @@ function nativeLikeBody(version: string, overrides: Record<string, unknown> = {}
 }
 
 test('observed Claude Code versions at or above 2.1.179 pass only through strip_attribution and strip billing markers', async () => {
-  for (const version of ['2.1.179', '2.1.181', '2.1.185', '2.1.193', '2.1.195', '2.1.200']) {
+  for (const version of ['2.1.179', '2.1.180', '2.1.181', '2.1.185', '2.1.191', '2.1.193', '2.1.195', '2.1.200']) {
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
@@ -147,8 +147,32 @@ test('observed Claude Code versions at or above 2.1.179 pass only through strip_
       })
       assert.equal(response.status, 200, version)
       assert.equal(upstream.captured.length, 1, version)
+      assert.equal(upstream.captured[0].headers['user-agent'], 'claude-cli/2.1.179 (external, sdk-cli)', version)
+      assert.equal(upstream.captured[0].headers['anthropic-beta'], 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24', version)
       assert.doesNotMatch(upstream.captured[0].body, /x-anthropic-billing-header/i, version)
       assert.doesNotMatch(upstream.captured[0].body, /\bcch=/i, version)
+    } finally {
+      await close(gateway)
+      await close(upstream.server)
+      await close(proxy.server)
+    }
+  }
+})
+
+
+test('unknown or unparseable observed Claude Code versions fail closed under formal-pool strip_attribution', async () => {
+  for (const version of ['unknown', 'latest']) {
+    const upstream = await startFakeUpstream()
+    const proxy = await startFakeConnectProxy()
+    const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+    try {
+      const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+        headers: signedHeaders(contextFor(version)),
+        body: nativeLikeBody(version),
+      })
+      assert.equal(response.status, 403, version)
+      assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_observed_client_profile_unapproved', version)
+      assert.equal(upstream.captured.length, 0, version)
     } finally {
       await close(gateway)
       await close(upstream.server)

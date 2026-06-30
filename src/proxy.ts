@@ -62,6 +62,7 @@ const FORMAL_POOL_2179_NO_CCH_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_
 const FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch'
 const FORMAL_POOL_2179_NO_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch_oracle_cp1_degraded_v1'
 const FORMAL_POOL_2179_SIGNED_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch_oracle_cp1_degraded_v1'
+const FORMAL_POOL_OBSERVED_MIN_CLI_VERSION = '2.1.179'
 const CLAUDE_PLATFORM_AWS_PROVIDER_KIND = 'claude_platform_aws'
 const CLAUDE_PLATFORM_AWS_REQUEST_SHAPE_PROFILE_REF = 'request-shape:claude-platform-aws-v1-strip'
 const CLAUDE_PLATFORM_AWS_CACHE_PARITY_PROFILE_REF = 'cache-profile:claude-platform-aws-v1-strip'
@@ -3110,7 +3111,7 @@ function verifyObservedClientProfileAdmission(attested: AttestedFormalPoolContex
   if (requireExact2179 && version !== '2.1.179') {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool optional egress profiles require exact 2.1.179 observed client proof' }
   }
-  if (version && version !== 'unknown' && !isObservedClaudeCodeVersionAtLeast(version, '2.1.179')) {
+  if (!isObservedClaudeCodeVersionAtLeast(version, FORMAL_POOL_OBSERVED_MIN_CLI_VERSION)) {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client version is below the approved minimum for this profile' }
   }
   const billingShape = typeof profile.billing_shape === 'string' ? profile.billing_shape : ''
