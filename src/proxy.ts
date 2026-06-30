@@ -12,7 +12,7 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { callEgressSidecar, egressSidecarEnabled, prepareEgressSidecarRequest } from './egress-sidecar-client.js'
+import { callEgressSidecar, egressSidecarEnabled, egressSidecarTargetHost, prepareEgressSidecarRequest } from './egress-sidecar-client.js'
 import {
   canonicalClaudeCodeSessionId,
   accountIdentityRef,
@@ -1788,9 +1788,9 @@ async function handleRequest(
       profileRef,
       egressBucket: egress?.bucketId,
       proxyIdentityRef: egress?.proxyIdentityRef,
-      targetHost: upstreamUrl.hostname,
-      targetPort: Number(upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? '443' : '80')),
-      targetScheme: upstreamUrl.protocol === 'https:' ? 'https' : 'http',
+      targetHost: egressSidecarTargetHost(config as any, upstreamUrl.hostname),
+      targetPort: 443,
+      targetScheme: 'https',
       targetPath: upstreamUrl.pathname,
       route: target.pathname,
       method,

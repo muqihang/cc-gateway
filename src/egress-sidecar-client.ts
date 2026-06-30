@@ -10,6 +10,7 @@ export type EgressSidecarConfig = {
   allowed_target_hosts?: string[]
   allowed_routes?: string[]
   allowed_profile_refs?: string[]
+  logical_target_host?: string
   expected_tls_summary_bucket?: string
 }
 
@@ -19,18 +20,18 @@ export type EgressSidecarControl = {
   proxy_identity_ref: string
   target_host: string
   target_port: number
-  target_scheme: 'http' | 'https'
+  target_scheme: 'https'
   target_path: string
   route: string
   method: string
-  expected_tls_summary_bucket?: string
+  expected_tls_summary_bucket: string
 }
 
 export type EgressSidecarPrepared = {
   endpoint: URL
   controlToken: string
   control: EgressSidecarControl
-  expectedTLSBucket?: string
+  expectedTLSBucket: string
 }
 
 export type EgressSidecarResponse = {
@@ -38,6 +39,18 @@ export type EgressSidecarResponse = {
   headers: IncomingHttpHeaders
   body: Buffer
 }
+
+const ALLOWED_SIDECAR_CONFIG_KEYS = new Set([
+  'enabled',
+  'endpoint',
+  'control_token',
+  'allowed_target_hosts',
+  'allowed_routes',
+  'allowed_profile_refs',
+  'logical_target_host',
+  'expected_tls_summary_bucket',
+])
+const FORBIDDEN_CONTROL_OR_OVERRIDE_KEY = /(?:authorization|x-api-key|cookie|raw[_-]?body|clienthello|cipher|extension|proxy_url|proxy_username|proxy_password|proxy-authorization|x-forwarded|dial_host|dial_override|tls_server_name|server_name|account_uuid)/i
 
 const SAFE_REF = /^[A-Za-z0-9._:-]{1,160}$/
 
@@ -66,10 +79,22 @@ export function validateEgressSidecarConfig(config: { egress_tls_sidecar?: Egres
   for (const value of [...(sidecar.allowed_target_hosts || []), ...(sidecar.allowed_routes || [])]) {
     if (typeof value !== 'string' || !value || /[\r\n]/.test(value)) throw new Error('config: egress_tls_sidecar allowlists must be safe strings')
   }
-  if (sidecar.expected_tls_summary_bucket !== undefined && !isSafeBucket(sidecar.expected_tls_summary_bucket)) {
+  if (!sidecar.logical_target_host || !isSafeHost(sidecar.logical_target_host) || isLoopbackHost(sidecar.logical_target_host) || !sidecar.allowed_target_hosts?.includes(sidecar.logical_target_host)) {
+    throw new Error('config: egress_tls_sidecar.logical_target_host must be an allowlisted safe provider host')
+  }
+  for (const key of Object.keys(sidecar as Record<string, unknown>)) {
+    if (!ALLOWED_SIDECAR_CONFIG_KEYS.has(key) || FORBIDDEN_CONTROL_OR_OVERRIDE_KEY.test(key)) {
+      throw new Error(`config: egress_tls_sidecar.${key} is not an allowed sidecar config key`)
+    }
+  }
+  if (!sidecar.expected_tls_summary_bucket || !isSafeSummaryBucket(sidecar.expected_tls_summary_bucket)) {
     throw new Error('config: egress_tls_sidecar.expected_tls_summary_bucket must be a safe ref')
   }
+  const raw = sidecar as Record<string, unknown>
+  if ('target_scheme' in raw) throw new Error('config: egress_tls_sidecar.target_scheme must not override HTTPS provider routing')
+  if ('target_port' in raw) throw new Error('config: egress_tls_sidecar.target_port must not override provider port 443')
 }
+
 
 export function prepareEgressSidecarRequest(input: {
   config: { egress_tls_sidecar?: EgressSidecarConfig }
@@ -90,14 +115,21 @@ export function prepareEgressSidecarRequest(input: {
   if (!sidecar.control_token) return { ok: false, status: 403, code: 'egress_tls_sidecar_unauthenticated', message: 'TLS sidecar control token is missing' }
   if (!input.profileRef || !isSafeTLSProfileRef(input.profileRef)) return { ok: false, status: 403, code: 'egress_tls_sidecar_profile_missing', message: 'TLS profile ref is missing' }
   if (!sidecar.allowed_profile_refs?.includes(input.profileRef)) return { ok: false, status: 403, code: 'egress_tls_sidecar_profile_not_allowed', message: 'TLS profile ref is not allowlisted' }
+  if (!sidecar.logical_target_host || !isSafeHost(sidecar.logical_target_host) || isLoopbackHost(sidecar.logical_target_host) || !sidecar.allowed_target_hosts?.includes(sidecar.logical_target_host)) {
+    return { ok: false, status: 403, code: 'egress_tls_sidecar_logical_target_missing', message: 'TLS sidecar logical target host is missing or unsafe' }
+  }
+  if (!sidecar.expected_tls_summary_bucket || !isSafeSummaryBucket(sidecar.expected_tls_summary_bucket)) {
+    return { ok: false, status: 403, code: 'egress_tls_summary_bucket_missing', message: 'TLS sidecar expected summary bucket is missing' }
+  }
+  if (input.targetHost !== sidecar.logical_target_host) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target host is not the logical provider host' }
   if (!sidecar.allowed_target_hosts?.includes(input.targetHost)) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target host is not allowlisted' }
   if (!sidecar.allowed_routes?.includes(input.targetPath) || !sidecar.allowed_routes?.includes(input.route)) {
     return { ok: false, status: 403, code: 'egress_tls_sidecar_route_not_allowed', message: 'TLS sidecar route is not allowlisted' }
   }
   if (!input.egressBucket || !isSafeBucket(input.egressBucket)) return { ok: false, status: 403, code: 'egress_tls_sidecar_egress_mismatch', message: 'TLS sidecar egress bucket is unsafe' }
   if (!input.proxyIdentityRef || !isSafeBucket(input.proxyIdentityRef)) return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_mismatch', message: 'TLS sidecar proxy identity is unsafe' }
-  if (input.targetScheme !== 'http' && input.targetScheme !== 'https') return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target scheme is not allowed' }
-  if (!Number.isInteger(input.targetPort) || input.targetPort < 1 || input.targetPort > 65535) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target port is not allowed' }
+  if (input.targetScheme !== 'https') return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target scheme is not allowed' }
+  if (input.targetPort !== 443) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target port is not allowed' }
   const control: EgressSidecarControl = {
     profile_ref: input.profileRef,
     egress_bucket: input.egressBucket,
@@ -108,7 +140,7 @@ export function prepareEgressSidecarRequest(input: {
     target_path: input.targetPath,
     route: input.route,
     method: input.method,
-    ...(sidecar.expected_tls_summary_bucket ? { expected_tls_summary_bucket: sidecar.expected_tls_summary_bucket } : {}),
+    expected_tls_summary_bucket: sidecar.expected_tls_summary_bucket,
   }
   return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket } }
 }
@@ -138,8 +170,8 @@ export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: B
           resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_failure', message: 'TLS sidecar failed before upstream response' })
           return
         }
-        const observedBucket = typeof res.headers['x-cc-egress-tls-summary-bucket'] === 'string' ? res.headers['x-cc-egress-tls-summary-bucket'] : undefined
-        if (prepared.expectedTLSBucket && observedBucket !== prepared.expectedTLSBucket) {
+        const observedBucket = parseSingleSafeSummaryBucket(res.headers['x-cc-egress-tls-summary-bucket'])
+        if (observedBucket !== prepared.expectedTLSBucket) {
           resolve({ ok: false, status: 502, code: 'egress_tls_summary_mismatch', message: 'TLS sidecar summary bucket does not match expected profile' })
           return
         }
@@ -162,11 +194,37 @@ function parseLoopbackEndpoint(value: unknown): URL | null {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
   const hostname = parsed.hostname.toLowerCase()
-  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1' && hostname !== '[::1]') return null
+  if (hostname !== '127.0.0.1' && hostname !== '::1' && hostname !== '[::1]') return null
   if (parsed.username || parsed.password) return null
   return parsed
 }
 
+export function egressSidecarTargetHost(config: { egress_tls_sidecar?: EgressSidecarConfig }, fallbackHost: string): string {
+  const sidecar = config.egress_tls_sidecar
+  if (sidecar?.enabled === true && !sidecar.logical_target_host) return ''
+  const logical = sidecar?.logical_target_host
+  return logical && isSafeHost(logical) && !isLoopbackHost(logical) ? logical : fallbackHost
+}
+
+function parseSingleSafeSummaryBucket(value: string | string[] | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined
+  if (!isSafeSummaryBucket(value)) return undefined
+  return value
+}
+
 function isSafeBucket(value: string): boolean {
   return SAFE_REF.test(value) && !/[\r\n]/.test(value)
+}
+
+function isSafeHost(value: string): boolean {
+  return /^[A-Za-z0-9.-]{1,253}$/.test(value) && !/[\r\n/@:]/.test(value)
+}
+
+function isSafeSummaryBucket(value: string): boolean {
+  return value.startsWith('tls-bucket:') && isSafeBucket(value)
+}
+
+function isLoopbackHost(value: string): boolean {
+  const host = value.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
 }

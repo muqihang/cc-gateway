@@ -53,7 +53,7 @@ Strict TLS mode fails closed for missing, unknown, unsafe, or mismatched profile
 
 When `egress_tls_sidecar.enabled=true`, CC Gateway sends only safe control metadata to the local sidecar/connect-proxy: profile ref, egress bucket, proxy identity ref, target host/scheme/port/path, route, method, and expected TLS summary bucket. The sidecar endpoint must be loopback or Unix-socket scoped, authenticated, and allowlisted by target host, route, and profile ref. The streamed HTTP body may be forwarded but must not be persisted or logged by the sidecar. Sidecar unavailable, unauthenticated, target/profile/summary mismatch, or final-verifier failure must fail closed and must never fall back to Node direct HTTPS.
 
-Current Phase B status is local/mock plumbing only. The mock E2E proves CC Gateway final verifier -> sidecar -> local upstream routing with a safe summary bucket, but it does not prove deployed uTLS equivalence. Production TLS parity remains unclaimed until a deployed sidecar/profile equivalence plan and approved live canary are completed.
+Current Phase C status is `BLOCKED_TLS_ENGINE_MISMATCH`. Phase B local/mock plumbing remains fail-closed, and CP2 proved a real Go/uTLS ClientHello execution path under loopback-only guard. However, preserving the Plan 65 logical provider SNI/Host boundary makes the sidecar emit an SNI extension and therefore a safe summary that differs from the doc-63 Claude Code oracle (`ja3_hash`, `ja4`, and `extension_count`). Production TLS parity and safe-summary equivalence remain unclaimed. CP3/CP6 equivalence proof and any live canary are blocked until a new oracle/profile plan resolves the SNI-vs-oracle mismatch without weakening authority boundaries.
 
 ## Claude Code 2.1.179 stable production policy
 
@@ -109,7 +109,7 @@ Safe rollback modes are:
 Rollback must never fall back to direct Anthropic bypass, Node direct HTTPS after sidecar failure, client-selected
 authority headers, ungated sign-primary, or automatic `signed_cch` / `no_cch`
 promotion. Any real formal-pool smoke requires explicit user approval, a tiny
-cost envelope, safe audit fields only, and no 3012 changes.
+cost envelope, safe audit fields only, and no 3012/3017 changes.
 
 ## Known degraded claims
 
@@ -117,4 +117,4 @@ cost envelope, safe audit fields only, and no 3012 changes.
 - 2.1.179 strict native mimicry and sign-primary remain gated on oracle/profile evidence.
 - Full first-party control-plane parity remains separate from safe stub/suppress/block behavior.
 - Live 3017, deployed CC Gateway image equivalence, deployed TLS sidecar/profile equivalence, and high cache-hit-rate evidence require separate canary/live proof.
-- Phase B TLS plumbing is `PLUMBING_ONLY_FAIL_CLOSED_READY`; it is not `PRODUCTION_TLS_PARITY_READY_FOR_DEPLOYED_EQUIVALENCE`.
+- Phase B TLS plumbing is `PLUMBING_ONLY_FAIL_CLOSED_READY`; Phase C CP2 is `BLOCKED_TLS_ENGINE_MISMATCH`; neither is `PRODUCTION_TLS_PARITY_READY_FOR_DEPLOYED_EQUIVALENCE`.

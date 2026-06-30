@@ -7,6 +7,7 @@ import { request as httpsRequest } from 'https'
 import type { AddressInfo } from 'net'
 import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
+import { prepareEgressSidecarRequest, validateEgressSidecarConfig } from '../src/egress-sidecar-client.js'
 
 console.log('\ntests/egress-tls-sidecar.test.ts')
 
@@ -55,7 +56,8 @@ function sharedFixtureConfig(fixture: SharedContractFixture, upstreamUrl: string
       enabled: true,
       endpoint: sidecarUrl,
       control_token: controlToken,
-      allowed_target_hosts: ['127.0.0.1'],
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
       allowed_profile_refs: [String(fixture.account.egress_tls_profile_ref)],
       expected_tls_summary_bucket: expectedTLSBucket,
@@ -68,7 +70,7 @@ function sharedFixtureConfig(fixture: SharedContractFixture, upstreamUrl: string
         account_ref: fixture.account.account_ref,
         credential_ref: fixture.account.credential_ref,
         credential_binding_hmac: credentialBindingHmac(
-          'Bearer selected-oauth-credential-fixture',
+          'Bearer fixture',
           'oauth',
           fixture.materials.context_attestation_material,
         ),
@@ -106,7 +108,7 @@ function sharedFixtureHeaders(fixture: SharedContractFixture, context: Record<st
     'x-cc-credential-ref': String(fixture.account.credential_ref),
     'x-cc-egress-bucket': String(fixture.account.egress_bucket),
     'x-cc-policy-version': String(fixture.account.policy_version),
-    authorization: 'Bearer selected-oauth-credential-fixture',
+    authorization: 'Bearer fixture',
     'x-claude-code-session-id': String(fixture.valid_context.session_id),
     ...signedFormalPoolHeaders(context, fixture.materials.context_attestation_material),
     ...extraHeaders,
@@ -187,7 +189,8 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
       enabled: true,
       endpoint: sidecarUrl,
       control_token: controlToken,
-      allowed_target_hosts: ['127.0.0.1'],
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
       allowed_profile_refs: [expectedTLSProfileRef],
       expected_tls_summary_bucket: expectedTLSBucket,
@@ -205,7 +208,7 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
         account_uuid_ref: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         account_ref: 'hmac-sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
         credential_ref: 'opaque:credential-ref:v1:cred-a',
-        credential_binding_hmac: credentialBindingHmac('Bearer selected-token'),
+        credential_binding_hmac: credentialBindingHmac('Bearer fixture'),
         persona_variant: 'claude-code-2.1.179-macos-local',
         session_policy: 'preserve_downstream_session_id',
         policy_version: '2.1.179',
@@ -225,7 +228,7 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
   } as any)
 }
 
-async function startMockSidecar(options: { status?: number; token?: string; tlsBucket?: string; reject?: boolean; forwardToTarget?: boolean } = {}) {
+async function startMockSidecar(options: { status?: number; token?: string; tlsBucket?: string; reject?: boolean; forwardToTarget?: boolean; forwardToUrl?: string } = {}) {
   const captured: SidecarCapture[] = []
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = []
@@ -252,18 +255,17 @@ async function startMockSidecar(options: { status?: number; token?: string; tlsB
         res.end(JSON.stringify({ ok: true }))
         return
       }
-      const targetPort = Number(control.target_port)
-      const targetScheme = control.target_scheme
-      if (control.target_host !== '127.0.0.1' || targetScheme !== 'http' || !Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+      const mapped = options.forwardToTarget ? new URL(String((options as any).forwardToUrl || '')) : null
+      if (!mapped || control.target_host !== 'api.anthropic.com' || control.target_scheme !== 'https' || Number(control.target_port) !== 443) {
         res.writeHead(403, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'target_not_allowed' }))
         return
       }
-      const requestFn = targetScheme === 'https' ? httpsRequest : httpRequest
+      const requestFn = mapped.protocol === 'https:' ? httpsRequest : httpRequest
       const upstreamReq = requestFn({
-        protocol: `${targetScheme}:`,
-        hostname: control.target_host,
-        port: targetPort,
+        protocol: mapped.protocol,
+        hostname: mapped.hostname,
+        port: Number(mapped.port || (mapped.protocol === 'https:' ? '443' : '80')),
         path: control.target_path,
         method: control.method || 'POST',
         headers: {
@@ -305,13 +307,161 @@ async function postThroughGateway(gateway: ReturnType<typeof startProxy>, contex
       'x-cc-credential-ref': 'opaque:credential-ref:v1:cred-a',
       'x-cc-egress-bucket': 'bucket-a',
       'x-cc-policy-version': '2.1.179',
-      authorization: 'Bearer selected-token',
+      authorization: 'Bearer fixture',
       'x-claude-code-session-id': sessionId,
       ...signedFormalPoolHeaders(context),
     },
     body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
   })
 }
+
+
+test('TLS sidecar config rejects production-unsafe target scheme, non-443 port, and request-controlled override allowlists', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  try {
+    for (const [name, override] of [
+      ['http_scheme', { target_scheme: 'http' }],
+      ['non_443_port', { target_port: 8443 }],
+      ['request_dial_override', { dial_override: '127.0.0.1:1' }],
+      ['request_sni_override', { tls_server_name: 'evil.invalid' }],
+      ['request_alpn_override', { alpn_protocols: ['h2', 'http/1.1'] }],
+      ['localhost_endpoint', { endpoint: sidecar.url.replace('127.0.0.1', 'localhost') }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const config = sidecarConfig(upstream.url, sidecar.url, {
+        egress_tls_sidecar: {
+          enabled: true,
+          endpoint: sidecar.url,
+          control_token: controlToken,
+          allowed_target_hosts: ['127.0.0.1'],
+          allowed_routes: ['/v1/messages'],
+          allowed_profile_refs: [expectedTLSProfileRef],
+          expected_tls_summary_bucket: expectedTLSBucket,
+          ...override,
+        },
+      })
+      assert.throws(() => validateEgressSidecarConfig(config as any), /egress_tls_sidecar/i, name)
+    }
+  } finally {
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+test('TLS sidecar config requires logical provider host and expected summary bucket', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  try {
+    for (const [name, override] of [
+      ['missing_logical_target_host', { logical_target_host: undefined }],
+      ['localhost_logical_target_host', { logical_target_host: '127.0.0.1' }],
+      ['missing_expected_summary_bucket', { expected_tls_summary_bucket: undefined }],
+      ['malformed_expected_summary_bucket', { expected_tls_summary_bucket: 'not-a-safe-bucket' }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const baseSidecar = {
+        enabled: true,
+        endpoint: sidecar.url,
+        control_token: controlToken,
+        allowed_target_hosts: ['api.anthropic.com'],
+        logical_target_host: 'api.anthropic.com',
+        allowed_routes: ['/v1/messages'],
+        allowed_profile_refs: [expectedTLSProfileRef],
+        expected_tls_summary_bucket: expectedTLSBucket,
+      } as Record<string, unknown>
+      for (const [key, value] of Object.entries(override)) {
+        if (value === undefined) delete baseSidecar[key]
+        else baseSidecar[key] = value
+      }
+      const config = sidecarConfig(upstream.url, sidecar.url, { egress_tls_sidecar: baseSidecar })
+      assert.throws(() => validateEgressSidecarConfig(config as any), /egress_tls_sidecar/i, name)
+    }
+  } finally {
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+
+test('TLS sidecar request preparation rejects non-HTTPS and non-443 target authority', () => {
+  const base = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
+  const common = {
+    config: base,
+    profileRef: expectedTLSProfileRef,
+    egressBucket: 'bucket-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    targetHost: 'api.anthropic.com',
+    targetPath: '/v1/messages',
+    route: '/v1/messages',
+    method: 'POST',
+  }
+  assert.equal(prepareEgressSidecarRequest({ ...common, targetPort: 443, targetScheme: 'http' }).ok, false)
+  assert.equal(prepareEgressSidecarRequest({ ...common, targetPort: 8443, targetScheme: 'https' }).ok, false)
+})
+
+test('TLS sidecar request preparation rejects missing expected summary bucket', () => {
+  const config = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
+  delete config.egress_tls_sidecar.expected_tls_summary_bucket
+  const prepared = prepareEgressSidecarRequest({
+    config,
+    profileRef: expectedTLSProfileRef,
+    egressBucket: 'bucket-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    targetHost: 'api.anthropic.com',
+    targetPort: 443,
+    targetScheme: 'https',
+    targetPath: '/v1/messages',
+    route: '/v1/messages',
+    method: 'POST',
+  })
+  assert.equal(prepared.ok, false)
+  if (!prepared.ok) assert.equal(prepared.code, 'egress_tls_summary_bucket_missing')
+})
+
+test('TLS sidecar response missing malformed duplicate or conflicting summary bucket fails closed', async () => {
+  async function startSummaryHeaderSidecar(headerValue: string | string[] | undefined) {
+    const captured: SidecarCapture[] = []
+    const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+      req.on('end', () => {
+        const control = JSON.parse(String(req.headers['x-cc-egress-control'] || '{}'))
+        captured.push({ control, headers: req.headers, bodyLength: Buffer.concat(chunks).length })
+        if (req.headers['x-cc-egress-sidecar-token'] !== controlToken) {
+          res.writeHead(401, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'unauthenticated' }))
+          return
+        }
+        const headers: Record<string, string | string[]> = { 'content-type': 'application/json' }
+        if (headerValue !== undefined) headers['x-cc-egress-tls-summary-bucket'] = headerValue
+        res.writeHead(200, headers)
+        res.end(JSON.stringify({ ok: true }))
+      })
+    })
+    await listen(server)
+    const { port } = server.address() as AddressInfo
+    return { server, captured, url: `http://127.0.0.1:${port}` }
+  }
+  for (const [caseName, value] of [
+    ['missing', undefined],
+    ['malformed', 'not-a-safe-bucket'],
+    ['duplicate_same', [expectedTLSBucket, expectedTLSBucket]],
+    ['duplicate_conflict', [expectedTLSBucket, 'tls-bucket:other-safe']],
+  ] as Array<[string, string | string[] | undefined]>) {
+    const upstream = await startFakeUpstream()
+    const sidecar = await startSummaryHeaderSidecar(value)
+    const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+    try {
+      const response = await postThroughGateway(gateway, { nonce: `summary-${caseName}` })
+      assert.equal(response.status, 502, response.body)
+      assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_summary_mismatch', caseName)
+      assert.equal(upstream.captured.length, 0, caseName)
+    } finally {
+      await close(gateway)
+      await close(upstream.server)
+      await close(sidecar.server)
+    }
+  }
+})
 
 test('TLS sidecar path sends only safe authenticated control metadata and never uses Node direct fallback', async () => {
   const upstream = await startFakeUpstream()
@@ -339,9 +489,9 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
     assert.equal(control.expected_tls_summary_bucket, expectedTLSBucket)
     assert.equal(control.egress_bucket, 'bucket-a')
     assert.equal(control.proxy_identity_ref, 'opaque:proxy-ref:v1:bucket-a')
-    assert.equal(control.target_host, '127.0.0.1')
-    assert.equal(control.target_scheme, 'http')
-    assert(Number.isInteger(control.target_port))
+    assert.equal(control.target_host, 'api.anthropic.com')
+    assert.equal(control.target_scheme, 'https')
+    assert.equal(control.target_port, 443)
     assert.equal(control.target_path, '/v1/messages')
     const serialized = JSON.stringify(control)
     assert(!/authorization|x-api-key|cookie|raw[_-]?(prompt|body|response)|prompt|clientHello|pcap|private|hello/i.test(serialized), serialized)
@@ -369,7 +519,7 @@ test('TLS sidecar unavailable fails closed without Node direct fallback', async 
   }
 })
 
-test('TLS sidecar allowlist mismatch fails closed before sidecar request and without fallback', async () => {
+test('TLS sidecar logical target allowlist mismatch fails closed before sidecar request and without fallback', async () => {
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url, {
@@ -386,7 +536,7 @@ test('TLS sidecar allowlist mismatch fails closed before sidecar request and wit
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 403, response.body)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_target_not_allowed')
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_logical_target_missing')
     assert.equal(sidecar.captured.length, 0)
     assert.equal(upstream.captured.length, 0)
   } finally {
@@ -404,7 +554,8 @@ test('TLS sidecar profile mismatch fails closed before sidecar request and witho
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
-      allowed_target_hosts: ['127.0.0.1'],
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
       allowed_profile_refs: ['tls-profile:other-safe-profile'],
       expected_tls_summary_bucket: expectedTLSBucket,
@@ -451,7 +602,7 @@ test('mock E2E shared fixture reaches TLS sidecar and local upstream with cohere
     res.writeHead(200, { 'content-type': 'application/json', 'x-local-upstream-seen': 'true' })
     res.end(JSON.stringify({ ok: true, via: 'local-upstream' }))
   })
-  const sidecar = await startMockSidecar({ forwardToTarget: true })
+  const sidecar = await startMockSidecar({ forwardToTarget: true, forwardToUrl: upstream.url })
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, sidecar.url))
   const context = sharedFixtureContext(fixture)
   try {
