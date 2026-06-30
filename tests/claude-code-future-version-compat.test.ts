@@ -160,6 +160,111 @@ test('observed Claude Code versions at or above 2.1.179 pass only through strip_
 })
 
 
+
+test('observed Claude VSCode title-generation shape passes strip_attribution without changing canonical upstream identity', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+  try {
+    const context = contextFor('2.1.196', {
+      nonce: `future-compat-vscode-${Date.now()}`,
+      observed_client_profile: {
+        schema_version: 'observed_client_profile.v1',
+        cli_version_bucket: '2.1.196',
+        route_class: 'messages',
+        billing_shape: 'no_cch',
+        billing_block_count: 1,
+        cc_entrypoint_bucket: 'claude-vscode',
+        top_level_body_keys: ['max_tokens', 'messages', 'metadata', 'model', 'output_config', 'stream', 'system', 'thinking', 'tools'],
+        tool_count: 0,
+        stream: true,
+        thinking_present: true,
+        output_config_present: true,
+        context_management_present: false,
+      },
+    })
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: signedHeaders(context),
+      body: nativeLikeBody('2.1.196', {
+        model: 'claude-opus-4-8',
+        max_tokens: 64000,
+        output_config: {
+          effort: 'high',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { title: { type: 'string' } },
+              required: ['title'],
+            },
+          },
+        },
+        thinking: { type: 'disabled' },
+        tools: [],
+        system: [
+          { type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.196.b90; cc_entrypoint=claude-vscode;' },
+          { type: 'text', text: 'safe system fixture' },
+        ],
+      }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.equal(upstream.captured[0].headers['user-agent'], 'claude-cli/2.1.179 (external, sdk-cli)')
+    assert.equal(upstream.captured[0].headers['anthropic-beta'], 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24')
+    assert.doesNotMatch(upstream.captured[0].body, /x-anthropic-billing-header/i)
+    assert.doesNotMatch(upstream.captured[0].body, /\bcch=/i)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('observed Claude VSCode cannot self-promote to optional CCH profiles', async () => {
+  for (const tc of [
+    { ref: 'claude_code_2_1_179_first_party_signed_cch', policy: 'signed_cch' },
+    { ref: 'claude_code_2_1_179_custom_base_no_cch', policy: 'no_cch' },
+  ]) {
+    const upstream = await startFakeUpstream()
+    const proxy = await startFakeConnectProxy()
+    const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+    try {
+      const context = contextFor('2.1.196', {
+        trusted_egress_profile_ref: tc.ref,
+        billing_shape_policy: tc.policy,
+        observed_client_profile: {
+          schema_version: 'observed_client_profile.v1',
+          cli_version_bucket: '2.1.196',
+          route_class: 'messages',
+          billing_shape: 'no_cch',
+          billing_block_count: 1,
+          cc_entrypoint_bucket: 'claude-vscode',
+          top_level_body_keys: ['max_tokens', 'messages', 'metadata', 'model', 'output_config', 'stream', 'system', 'thinking', 'tools'],
+          tool_count: 0,
+          stream: true,
+          thinking_present: true,
+          output_config_present: true,
+          context_management_present: false,
+        },
+      })
+      const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+        headers: signedHeaders(context),
+        body: nativeLikeBody('2.1.196', {
+          system: [{ type: 'text', text: 'x-anthropic-billing-header: cc_version=2.1.196.b90; cc_entrypoint=claude-vscode;' }],
+        }),
+      })
+      assert.equal(response.status, 403, tc.policy)
+      assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_observed_client_profile_unapproved', tc.policy)
+      assert.equal(upstream.captured.length, 0, tc.policy)
+    } finally {
+      await close(gateway)
+      await close(upstream.server)
+      await close(proxy.server)
+    }
+  }
+})
+
 test('unknown or unparseable observed Claude Code versions fail closed under formal-pool strip_attribution', async () => {
   for (const version of ['unknown', 'latest']) {
     const upstream = await startFakeUpstream()

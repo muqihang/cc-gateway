@@ -2997,7 +2997,7 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
   if (profile.cli_version_bucket !== undefined && !isSafeObservedBucket(profile.cli_version_bucket)) return false
   if (profile.route_class !== undefined && !['messages', 'count_tokens', 'control_plane', 'event_logging_legacy', 'event_logging_v2'].includes(String(profile.route_class))) return false
   if (profile.billing_shape !== undefined && !['absent', 'no_cch', 'cch_present', 'unknown'].includes(String(profile.billing_shape))) return false
-  if (profile.cc_entrypoint_bucket !== undefined && !['absent', 'cli', 'sdk-cli', 'other', 'unknown'].includes(String(profile.cc_entrypoint_bucket))) return false
+  if (profile.cc_entrypoint_bucket !== undefined && !['absent', 'cli', 'sdk-cli', 'claude-vscode', 'other', 'unknown'].includes(String(profile.cc_entrypoint_bucket))) return false
   if (profile.stream !== undefined && typeof profile.stream !== 'boolean') return false
   for (const key of ['thinking_present', 'output_config_present', 'context_management_present']) {
     if (profile[key] !== undefined && typeof profile[key] !== 'boolean') return false
