@@ -1971,12 +1971,12 @@ function canonicalizeSystemEnvResidue(parsed: any): { ok: true } | { ok: false }
   const seenMarkers: string[] = []
   const rewriteText = (text: string, standaloneBlock: boolean): { ok: true; text: string } | { ok: false } => {
     if (containsEnvResidueLiteral(text)) return { ok: false }
-    const exact = text.match(/^Today(['\u2019\u2018\u02bc])s date is (\d{4})([-/])(\d{2})\3(\d{2})\.$/)
+    const exact = text.match(/^Today(['\u2019\u2018\u02bc\u02b9])s date is (\d{4})([-/])(\d{2})\3(\d{2})\.$/)
     if (exact) {
       seenMarkers.push(text)
       return { ok: true, text: canonical }
     }
-    if (/Today['\u2019\u2018\u02bc]s date is/i.test(text)) return { ok: false }
+    if (/Today['\u2019\u2018\u02bc\u02b9]s date is/i.test(text)) return { ok: false }
     if (!standaloneBlock && /date is/i.test(text) && /today/i.test(text)) return { ok: false }
     return { ok: true, text }
   }
@@ -2058,11 +2058,11 @@ function verifySystemEnvResidueCanonical(system: unknown): boolean {
       }
     }
   }
-  const markers = texts.filter((text) => /^Today['\u2019\u2018\u02bc]s date is /.test(text))
+  const markers = texts.filter((text) => /^Today['\u2019\u2018\u02bc\u02b9]s date is /.test(text))
   if (markers.length > 1) return false
   for (const text of texts) {
     if (containsEnvResidueLiteral(text)) return false
-    if (/Today['\u2019\u2018\u02bc]s date is /.test(text) && text !== canonical) return false
+    if (/Today['\u2019\u2018\u02bc\u02b9]s date is /.test(text) && text !== canonical) return false
   }
   return true
 }
