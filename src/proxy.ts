@@ -56,8 +56,11 @@ const FORMAL_POOL_ATTESTATION_MAX_SKEW_MS = 5 * 60 * 1000
 const FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST_ENV = 'CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST'
 const FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF = 'strip_attribution'
 const FORMAL_POOL_2179_PROFILE_POLICY_VERSION = 'claude_code_2_1_179_cp1_degraded_v1'
+const FORMAL_POOL_2197_PROFILE_POLICY_VERSION = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
 const FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
+const FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
 const FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_179_cache_parity_degraded_v1'
+const FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
 const FORMAL_POOL_ENV_RESIDUE_PROFILE_REF = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const FORMAL_POOL_LOCALE_PROFILE_REF = 'locale-profile:us-pacific-v1'
 const FORMAL_POOL_BASE_URL_RESIDUE_PROFILE_REF = 'base-url-residue-profile:official-anthropic-v1'
@@ -98,6 +101,7 @@ const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'apostrophe_bucket',
   'base_url_category_bucket',
   'proxy_env_bucket',
+  'mcp_configured_absent_diff_bucket',
 ])
 
 type RuntimeRegisterRequest = {
@@ -1387,7 +1391,7 @@ async function handleRequest(
   let routePolicy: ReturnType<typeof selectSharedPoolRoute> | null = null
   let formalPoolAttestation: AttestedFormalPoolContext | null = null
   let egressTLSProfileStatus: 'verified' | 'tls_profile_unverified' | null = null
-  const sharedPoolRoute: SharedPoolPersonaRoute = target.pathname === '/v1/messages/count_tokens' ? 'count_tokens' : 'messages'
+  const sharedPoolRoute: SharedPoolPersonaRoute = target.pathname === '/v1/messages/count_tokens' ? 'count_tokens' : (target.pathname === '/v1/models' ? 'control_plane' : 'messages')
 
   if (config.mode === 'sub2api') {
     routePolicy = selectSharedPoolRoute(method, target.pathname, target.search)
@@ -1399,7 +1403,7 @@ async function handleRequest(
       }
       routePolicy = awsRoutePolicy.routePolicy
     }
-    if (routePolicy.action === 'block') {
+    if (routePolicy.action === 'block' && routePolicy.code !== 'formal_pool_count_tokens_profile_unapproved' && routePolicy.code !== 'formal_pool_control_plane_unapproved') {
       writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported route: ${safePath}`)
       return
     }
@@ -1426,9 +1430,14 @@ async function handleRequest(
         writeControlPlaneError(res, 404, 'unsupported_route', 'Claude Platform on AWS phase 1 allows /v1/messages without internal query markers only')
         return
       }
+      if (routePolicy.action === 'block') {
+        writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported formal-pool control-plane route: ${safePath}`)
+        return
+      }
       const headerCheck = verifyFormalPoolAttestedHeaders(config, req, method, target, routePolicy, accountContext, formalPoolAttestation)
       if (!headerCheck.ok) {
-        writeControlPlaneError(res, headerCheck.status, headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
+        const plan76ModelError = plan76ModelVersionUnsupportedFromContext(formalPoolAttestation)
+        writeControlPlaneError(res, headerCheck.status, plan76ModelError || headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
         return
       }
       const profileCheck = verifyFormalPoolAttestedProfiles(config, formalPoolAttestation)
@@ -1455,7 +1464,8 @@ async function handleRequest(
       const selectedIdentity = accountIdentity
       const identityCheck = verifyFormalPoolAttestedAccountIdentity(formalPoolAttestation, selectedIdentity)
       if (!identityCheck.ok) {
-        writeControlPlaneError(res, identityCheck.status, identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
+        const plan76ModelError = plan76ModelVersionUnsupportedFromIdentity(formalPoolAttestation, selectedIdentity)
+        writeControlPlaneError(res, identityCheck.status, plan76ModelError || identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
         return
       }
       const credentialBindingCheck = verifySelectedCredentialBinding(req, config, accountContext, selectedIdentity, formalPoolAttestation.credential_ref, formalPoolAttestation.credential_binding_hmac)
@@ -1550,6 +1560,14 @@ async function handleRequest(
   }
   if (parsedBody && body.length > 0) {
     body = Buffer.from(JSON.stringify(parsedBody), 'utf-8')
+  }
+
+  if (config.mode === 'sub2api' && formalPoolAttestation) {
+    const plan76 = verifyPlan76FormalPoolBodyPolicy(target.pathname, parsedBody, formalPoolAttestation)
+    if (!plan76.ok) {
+      writeControlPlaneError(res, plan76.status, plan76.code, plan76.message)
+      return
+    }
   }
 
   if (config.mode === 'sub2api') {
@@ -2630,10 +2648,12 @@ function verifyFormalPoolFinalRequestShape(
     if (containsUnknownCacheControlPlacement(parsed)) return { ok: false, code: 'cache_parity_profile_mismatch' }
     return { ok: true }
   }
-  if (options.requestShapeProfileRef && options.requestShapeProfileRef !== FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF) {
+  const firstPartyShapeRefs = new Set([FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF, FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF])
+  const firstPartyCacheRefs = new Set([FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF, FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF])
+  if (options.requestShapeProfileRef && !firstPartyShapeRefs.has(options.requestShapeProfileRef)) {
     return { ok: false, code: 'request_shape_profile_mismatch' }
   }
-  if (options.cacheParityProfileRef && options.cacheParityProfileRef !== FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF) {
+  if (options.cacheParityProfileRef && !firstPartyCacheRefs.has(options.cacheParityProfileRef)) {
     return { ok: false, code: 'cache_parity_profile_mismatch' }
   }
   if (!options.requestShapeProfileRef && !options.cacheParityProfileRef) return { ok: true }
@@ -3304,6 +3324,7 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
   if (profile.apostrophe_bucket !== undefined && !['ascii', 'unicode_variant_1', 'unicode_variant_2', 'unicode_variant_3', 'other', 'not_observed'].includes(String(profile.apostrophe_bucket))) return false
   if (profile.base_url_category_bucket !== undefined && !['official_anthropic', 'neutral_gateway', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'unknown', 'not_observed'].includes(String(profile.base_url_category_bucket))) return false
   if (profile.proxy_env_bucket !== undefined && !['no_proxy_env', 'loopback_proxy_only', 'non_loopback_proxy_rejected', 'no_proxy_bypass_guarded', 'unknown'].includes(String(profile.proxy_env_bucket))) return false
+  if (profile.mcp_configured_absent_diff_bucket !== undefined && !['absent_no_diff', 'configured_no_upstream_diff', 'configured_marker_present', 'unknown', 'not_observed'].includes(String(profile.mcp_configured_absent_diff_bucket))) return false
   if (profile.local_env_residue_present !== undefined && typeof profile.local_env_residue_present !== 'boolean') return false
   if (profile.stream !== undefined && typeof profile.stream !== 'boolean') return false
   for (const key of ['thinking_present', 'output_config_present', 'context_management_present']) {
@@ -3325,6 +3346,67 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
 function isSafeObservedBucket(value: unknown): boolean {
   if (typeof value !== 'string') return false
   return /^(unknown|latest|\d+\.\d+\.\d+)$/.test(value)
+}
+
+
+function plan76ModelVersionUnsupportedFromContext(attested: AttestedFormalPoolContext): string | null {
+  if (attested.policy_version === '2.1.197' && (attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION || attested.persona_profile !== 'claude-code-2.1.197-macos-local')) return 'formal_pool_model_version_unsupported'
+  if (attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION && attested.policy_version !== '2.1.197') return 'formal_pool_model_version_unsupported'
+  return null
+}
+
+
+function plan76ModelVersionUnsupportedFromIdentity(attested: AttestedFormalPoolContext, identity: AccountIdentityRecord): string | null {
+  if (identity.policy_version === '2.1.197'
+    && (attested.policy_version !== '2.1.197'
+      || attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION
+      || attested.persona_profile !== 'claude-code-2.1.197-macos-local')) {
+    return 'formal_pool_model_version_unsupported'
+  }
+  return null
+}
+
+function verifyPlan76FormalPoolBodyPolicy(
+  pathname: string,
+  parsedBody: unknown,
+  attested: AttestedFormalPoolContext,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  if (pathname !== '/v1/messages') return { ok: true }
+  const body = parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody) ? parsedBody as Record<string, unknown> : null
+  if (!body) return { ok: true }
+  if (body.stream !== true || attested.observed_client_profile?.stream !== true) {
+    return { ok: false, status: 403, code: 'formal_pool_non_streaming_profile_unapproved', message: 'Formal-pool non-streaming profile is not approved' }
+  }
+  if (hasPlan76MCPShapeMarker(body, attested.observed_client_profile)) {
+    return { ok: false, status: 403, code: 'formal_pool_mcp_shape_unapproved', message: 'Formal-pool MCP configured shape is not approved' }
+  }
+  const model = typeof body.model === 'string' ? body.model : ''
+  if (model === 'claude-sonnet-5') {
+    if (attested.policy_version !== '2.1.197' || attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION || attested.request_shape_profile_ref !== FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || attested.cache_parity_profile_ref !== FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF) {
+      return { ok: false, status: 403, code: 'formal_pool_model_version_unsupported', message: 'Formal-pool Sonnet 5 requires the server-selected 2.1.197 canonical tuple' }
+    }
+  }
+  return { ok: true }
+}
+
+function hasPlan76MCPShapeMarker(body: Record<string, unknown>, observedProfile: Record<string, unknown>): boolean {
+  const marker = observedProfile.mcp_configured_absent_diff_bucket
+  if (marker === 'configured_marker_present') return true
+  const forbiddenTopLevel = ['mcp_servers', 'mcp', 'mcp_config', 'mcp_authority', 'mcp_tools']
+  if (forbiddenTopLevel.some((key) => Object.prototype.hasOwnProperty.call(body, key))) return true
+  return containsPlan76MCPMarker(body)
+}
+
+function containsPlan76MCPMarker(value: unknown, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false
+  if (typeof value === 'string') return hasPlan76MCPMarkerText(value)
+  if (Array.isArray(value)) return value.some((item) => containsPlan76MCPMarker(item, depth + 1))
+  if (typeof value !== 'object') return false
+  return Object.entries(value as Record<string, unknown>).some(([key, child]) => hasPlan76MCPMarkerText(key) || containsPlan76MCPMarker(child, depth + 1))
+}
+
+function hasPlan76MCPMarkerText(value: string): boolean {
+  return /\bmcp(?:[_-]?(?:server|config|authority|permission|tool))?s?\b/i.test(value)
 }
 
 function formalPoolBillingModeFromAttestation(attested: AttestedFormalPoolContext): FormalPoolBillingMode {
@@ -3394,6 +3476,18 @@ function verifyFormalPoolProfileRefs(config: Config, attested: AttestedFormalPoo
     }
     if (attested.upstream_auth_scheme !== 'x_api_key' && attested.upstream_auth_scheme !== 'sigv4') {
       return { ok: false, status: 403, code: 'claude_platform_aws_auth_profile_unproven', message: 'Claude Platform on AWS auth profile has not been proven by CP0' }
+    }
+    return { ok: true }
+  }
+  if (attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION) {
+    if (attested.policy_version !== '2.1.197' || attested.persona_profile !== 'claude-code-2.1.197-macos-local') {
+      return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool 2.1.197 profile policy must be server-selected as a complete tuple' }
+    }
+    if (attested.trusted_egress_profile_ref !== FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF || attested.billing_shape_policy !== 'strip') {
+      return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Formal-pool 2.1.197 promotion requires strip billing policy' }
+    }
+    if (attested.request_shape_profile_ref !== FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || attested.cache_parity_profile_ref !== FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF) {
+      return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool 2.1.197 request/cache profile is not approved' }
     }
     return { ok: true }
   }

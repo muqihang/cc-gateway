@@ -175,6 +175,7 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
       billing_shape: 'cch_present',
       billing_block_count: 1,
       cc_entrypoint_bucket: 'sdk-cli',
+      stream: true,
     },
     ...overrides,
   }
@@ -317,7 +318,7 @@ async function postThroughGateway(gateway: ReturnType<typeof startProxy>, contex
       'x-claude-code-session-id': sessionId,
       ...signedFormalPoolHeaders(context),
     },
-    body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+    body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
   })
 }
 
@@ -644,7 +645,7 @@ test('mock E2E shared fixture reaches TLS sidecar and local upstream with cohere
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedFixtureHeaders(fixture, context),
-      body: { metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 200, response.body)
     assert.equal(upstream.captured.length, 1, 'mock E2E sidecar must forward to the local upstream/collector exactly once')
@@ -678,6 +679,7 @@ test('mock E2E forged client TLS headers do not alter sidecar profile authority'
         'x-sub2api-tls-profile': 'tls-profile:client-forged-sub2api',
       }),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
         messages: [{ role: 'user', content: 'hello' }],
       },
@@ -705,6 +707,7 @@ test('mock E2E forged body TLS hint is rejected before sidecar authority or upst
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedFixtureHeaders(fixture, context),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
         egress_tls_profile_ref: 'tls-profile:client-forged-body',
         tls_profile: { ref: 'tls-profile:client-forged-nested' },
@@ -731,7 +734,7 @@ test('mock E2E forged query TLS hint is rejected before sidecar authority or ups
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true&egress_tls_profile_ref=tls-profile:client-forged-query'), {
       headers: sharedFixtureHeaders(fixture, context),
-      body: { metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 404, response.body)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'unsupported_route')
@@ -775,7 +778,7 @@ test('mock E2E account bucket profile mismatch fails closed before sidecar', asy
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedFixtureHeaders(fixture, context),
-      body: { metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403, response.body)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_context_mismatch')

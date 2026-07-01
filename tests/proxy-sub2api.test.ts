@@ -199,6 +199,7 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
     },
     ...overrides,
   }
@@ -314,7 +315,7 @@ test('sub2api Anthropic OAuth preserves selected authorization and strips all x-
         'x-cc-extra-secret': 'must-not-leak',
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -435,7 +436,7 @@ test('runtime registration uses account-owned device_id in upstream metadata', a
         'x-claude-code-session-id': runtimeSessionId,
         authorization: 'Bearer selected-token',
       }, { proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-device-owned', session_id: runtimeSessionId }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 200, response.body)
     const forwarded = JSON.parse(upstream.captured[0].body)
@@ -469,7 +470,7 @@ test('runtime registration makes a newly onboarded account routable without rest
         ...runtimeHeaders,
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(before.status, 403)
     assert.equal(before.headers['x-cc-gateway-error-code'], 'missing_account_identity')
@@ -502,7 +503,7 @@ test('runtime registration makes a newly onboarded account routable without rest
         ...runtimeHeaders,
         authorization: 'Bearer selected-token',
       }, { proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-bucket' }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(after.status, 200, after.body)
     assert.equal(upstream.captured.length, 1)
@@ -579,7 +580,7 @@ test('runtime registration permits same-account credential rotation with fresh i
         persona_profile: 'claude-code-2.1.179-macos-local',
         session_id: runtimeSessionId,
       }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(stale.status, 403, stale.body)
     assert.equal(stale.headers['x-cc-gateway-error-code'], 'credential_account_mismatch')
@@ -601,7 +602,7 @@ test('runtime registration permits same-account credential rotation with fresh i
         persona_profile: 'claude-code-2.1.179-macos-local',
         session_id: runtimeSessionId,
       }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(fresh.status, 200, fresh.body)
     assert.equal(upstream.captured.length, 1)
@@ -659,7 +660,7 @@ test('runtime registration persists and replays after gateway restart', async ()
         ...runtimeHeaders,
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(afterRestart.status, 200, afterRestart.body)
@@ -703,7 +704,7 @@ test('runtime registration rejects mappings without credential binding refs', as
         'x-cc-account-id': 'runtime-account-no-credential',
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(after.status, 403)
     assert.equal(after.headers['x-cc-gateway-error-code'], 'missing_account_identity')
@@ -744,7 +745,7 @@ test('runtime registration rejects raw numeric account ids before mutating runti
         'x-cc-account-id': '123',
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(after.status, 403)
     assert.equal(after.headers['x-cc-gateway-error-code'], 'missing_account_identity')
@@ -776,7 +777,7 @@ test('raw capture evidence headers include safe opaque ref only when capture art
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -825,6 +826,7 @@ test('full raw capture writes only safe summaries and no raw body material', asy
         authorization: 'Bearer selected-token',
       }),
       body: {
+        stream: true,
         model: 'claude-sonnet-4-6',
         messages: [{ role: 'user', content: rawPrompt }],
       },
@@ -886,7 +888,7 @@ test('disabled raw capture omits raw capture evidence ref header', async () => {
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -957,7 +959,7 @@ test('sub2api Anthropic OAuth strips incidental x-api-key', async () => {
         authorization: 'Bearer selected-token',
         'x-api-key': 'incidental-api-key',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -995,7 +997,7 @@ test('formal-pool attestation must bind credential ref to selected account ident
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 403)
@@ -1025,7 +1027,7 @@ test('formal-pool selected raw credential must match account credential binding 
         authorization: 'Bearer selected-token-wrong',
         'x-claude-code-session-id': sessionId,
       }, { session_id: sessionId, nonce: 'credential-binding-mismatch' }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403, response.body)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1063,7 +1065,7 @@ test('formal-pool attestation must bind policy version to selected account ident
         authorization: 'Bearer selected-token',
         'x-cc-policy-version': '2.1.150',
       }, { policy_version: '2.1.150', persona_profile: 'claude-code-2.1.170-macos-local' }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 403)
@@ -1087,7 +1089,7 @@ test('formal-pool session rejects valid re-attestation that switches account aut
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(first.status, 200, first.body)
 
@@ -1098,7 +1100,7 @@ test('formal-pool session rejects valid re-attestation that switches account aut
         'x-cc-credential-ref': 'opaque:credential-ref:v1:cred-b',
         'x-cc-egress-bucket': 'bucket-b',
       }),
-      body: { messages: [{ role: 'user', content: 'same session must not switch authority' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'same session must not switch authority' }] },
     })
 
     assert.equal(switched.status, 403)
@@ -1132,7 +1134,7 @@ test('formal-pool production fails closed when persistent session authority ledg
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174012',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 403)
@@ -1172,7 +1174,7 @@ test('formal-pool production fails closed when persistent session authority ledg
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174014',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403, response.body)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_session_ledger_unavailable')
@@ -1203,7 +1205,7 @@ test('formal-pool session authority ledger persists safe refs without raw sessio
     const attestedContext = JSON.parse(Buffer.from(headers['x-cc-formal-pool-context'], 'base64url').toString('utf-8'))
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers,
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 200, response.body)
 
@@ -1244,7 +1246,7 @@ test('failed persistent session ledger write does not poison in-memory authority
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': session,
       }),
-      body: { messages: [{ role: 'user', content: 'first write should fail' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'first write should fail' }] },
     })
     assert.equal(first.status, 500, first.body)
     assert.equal(first.headers['x-cc-gateway-error-code'], 'formal_pool_session_ledger_persist_failed')
@@ -1257,7 +1259,7 @@ test('failed persistent session ledger write does not poison in-memory authority
         'x-cc-credential-ref': 'opaque:credential-ref:v1:cred-b',
         'x-cc-egress-bucket': 'bucket-b',
       }),
-      body: { messages: [{ role: 'user', content: 'failed write must not create sticky memory' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'failed write must not create sticky memory' }] },
     })
     assert.equal(switched.status, 500, switched.body)
     assert.equal(switched.headers['x-cc-gateway-error-code'], 'formal_pool_session_ledger_persist_failed')
@@ -1288,7 +1290,7 @@ test('sub2api Anthropic API key preserves selected x-api-key and does not inject
         'x-cc-token-type': 'apikey',
         'x-api-key': 'selected-api-key',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -1317,7 +1319,7 @@ test('sub2api Anthropic API key strips incidental authorization', async () => {
         'x-api-key': 'selected-api-key',
         authorization: 'Bearer incidental-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -1341,7 +1343,7 @@ test('sub2api mode fails closed when provider is missing', async () => {
         ...ccGatewayHeaders,
         'x-cc-gateway-token': 'gateway-token',
       },
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 400)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1366,7 +1368,7 @@ test('sub2api mode fails closed when provider is unsupported', async () => {
         'x-cc-gateway-token': 'gateway-token',
         'x-cc-provider': 'gemini_native',
       },
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1393,7 +1395,7 @@ test('sub2api mode fails closed when Anthropic provider is disabled', async () =
         'x-cc-token-type': 'oauth',
         authorization: 'Bearer selected-token',
       },
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1458,7 +1460,7 @@ test('raw capture records Sub2API inbound and CC Gateway normalized routes', asy
         'x-sub2api-compat-capability-backed': 'false',
         authorization: 'Bearer selected-token',
       }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -1500,7 +1502,7 @@ test('raw capture ignores unsafe Sub2API route audit headers', async () => {
         'x-sub2api-compat-cc-gateway-route': '/v1/messages?beta=true&token=secret',
         authorization: 'Bearer selected-token',
       }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -1533,7 +1535,7 @@ test('sub2api rejects unattested scheduler x-cc context before rewrite', async (
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174999',
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'missing_formal_pool_context_attestation')
@@ -1565,7 +1567,7 @@ test('sub2api rejects scheduler context when attested account mismatches x-cc he
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': sessionId,
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_context_mismatch')
@@ -1610,7 +1612,7 @@ test('sub2api rejects every attested scheduler authority-field mismatch', async 
           'x-claude-code-session-id': sessionId,
           ...headerOverrides,
         },
-        body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+        body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
       })
       assert.equal(response.status, 403, caseName)
       assert.equal(response.headers['x-cc-gateway-error-code'], expectedCode, caseName)
@@ -1637,7 +1639,7 @@ test('sub2api rejects expired or replayed formal-pool scheduler context', async 
     authorization: 'Bearer selected-token',
     'x-claude-code-session-id': sessionId,
   }
-  const body = { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] }
+  const body = { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] }
 
   try {
     const expired = formalPoolContext({ session_id: sessionId, timestamp_ms: Date.now() - 10 * 60 * 1000, nonce: 'expired-nonce' })
@@ -1680,6 +1682,7 @@ test('sub2api accepts Sub2API shared formal-pool contract fixture', async () => 
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedFixtureHeaders(fixture, context),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
         model: 'claude-sonnet-4-6',
         messages: [{ role: 'user', content: 'hello' }],
@@ -1705,6 +1708,7 @@ test('sub2api accepts Sub2API shared formal-pool contract fixture', async () => 
 test('sub2api rejects Sub2API shared formal-pool contract negative vectors', async () => {
   const fixture = loadSharedContractFixture()
   const body = {
+    stream: true,
     metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
     model: 'claude-sonnet-4-6',
     messages: [{ role: 'user', content: 'hello' }],
@@ -1791,7 +1795,7 @@ test('in-memory formal-pool session authority ledger is scoped per startProxy in
         authorization: 'Bearer selected-token',
         'x-claude-code-session-id': sessionId,
       }, { session_id: sessionId, nonce: 'instance-a' }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello-a' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello-a' }] },
     })
     assert.equal(first.status, 200, first.body)
 
@@ -1810,7 +1814,7 @@ test('in-memory formal-pool session authority ledger is scoped per startProxy in
         proxy_identity_ref: 'opaque:proxy-ref:v1:bucket-b',
         nonce: 'instance-b',
       }),
-      body: { metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello-b' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello-b' }] },
     })
     assert.equal(second.status, 200, second.body)
     assert.equal(upstreamA.captured.length, 1)

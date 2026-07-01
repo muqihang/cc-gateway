@@ -6,11 +6,11 @@ import {
 import { resolvePersonaDecision, type PersonaDecision } from './persona-resolver.js'
 import { isSafeTLSProfileRef } from './egress-tls-profile.js'
 
-export type SharedPoolRouteKind = 'messages' | 'count_tokens' | 'event_logging_legacy' | 'event_logging_v2'
+export type SharedPoolRouteKind = 'messages' | 'count_tokens' | 'control_plane' | 'event_logging_legacy' | 'event_logging_v2'
 export type SharedPoolPersonaRoute = 'messages' | 'count_tokens' | 'control_plane'
 
 export type SharedPoolRoutePolicy =
-  | { action: 'forward'; kind: 'messages' }
+  | { action: 'forward'; kind: 'messages' | 'control_plane' }
   | { action: 'suppress'; kind: 'event_logging_legacy' | 'event_logging_v2' }
   | { action: 'block'; code: string; status: number }
 
@@ -215,6 +215,11 @@ export function selectSharedPoolRoute(method: string, pathname: string, search =
   if (method !== 'POST') {
     return { action: 'block', status: 404, code: 'unsupported_route' }
   }
+  if (pathname === '/v1/models') {
+    return search === '?beta=true'
+      ? { action: 'block', status: 403, code: 'formal_pool_control_plane_unapproved' }
+      : { action: 'block', status: 404, code: 'unsupported_route' }
+  }
   if (pathname === '/v1/messages') {
     return search === '?beta=true'
       ? { action: 'forward', kind: 'messages' }
@@ -222,7 +227,7 @@ export function selectSharedPoolRoute(method: string, pathname: string, search =
   }
   if (pathname === '/v1/messages/count_tokens') {
     return search === '?beta=true'
-      ? { action: 'block', status: 403, code: 'count_tokens_deferred' }
+      ? { action: 'block', status: 403, code: 'formal_pool_count_tokens_profile_unapproved' }
       : { action: 'block', status: 404, code: 'unsupported_route' }
   }
   if (pathname === '/api/event_logging/batch') {

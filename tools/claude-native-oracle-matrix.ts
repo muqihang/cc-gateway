@@ -177,7 +177,10 @@ async function runRealProfile(version: string, invocationMode: InvocationMode, r
       const env = oracleEnv(stub.url, invocationMode, variant.name)
       const cwd = mkdtempSync(join(tmpdir(), 'cc-native-oracle-cwd-'))
       const args = buildClaudePrintArgs(variant.outputFormat)
-      const result = await runCommand(command, args, env, variant.prompt, cwd, 120_000)
+      const sandboxProfile = writeLoopbackOnlySandboxProfile(stub.url)
+      const commandForRun = sandboxProfile ? 'sandbox-exec' : command
+      const argsForRun = sandboxProfile ? ['-f', sandboxProfile, command, ...args] : args
+      const result = await runCommand(commandForRun, argsForRun, env, variant.prompt, cwd, 120_000)
       if (result.code !== 0) degraded.add(`${variant.name}_cli_exit_nonzero`)
       for (const request of stub.captured.slice(before)) {
         captured.push({ ...request, profile: invocationMode, variant: variant.name })
@@ -579,6 +582,24 @@ function existingRuntimeBinary(runtimeRoot: string, version: string): string | n
     join(runtimeRoot, 'node_modules', '.bin', 'claude'),
   ]
   return platformBinaries.find((candidate) => existsSync(candidate)) || null
+}
+
+
+function writeLoopbackOnlySandboxProfile(baseUrl: string): string | null {
+  if (process.platform !== 'darwin') return null
+  if (process.env.CC_GATEWAY_NATIVE_ORACLE_SANDBOX !== '1') return null
+  const parsed = new URL(baseUrl)
+  const port = parsed.port || '80'
+  const dir = mkdtempSync(join(tmpdir(), 'cc-native-oracle-sandbox-'))
+  const profile = join(dir, 'loopback-only.sb')
+  writeFileSync(profile, `(version 1)
+(allow default)
+(deny network*)
+(allow network-outbound (remote tcp "localhost:${port}"))
+(allow network-outbound (remote tcp "127.0.0.1:${port}"))
+(allow network-inbound (local tcp "localhost:*"))
+`, { encoding: 'utf-8', mode: 0o600 })
+  return profile
 }
 
 function oracleEnv(baseUrl: string, invocationMode: InvocationMode, variant: string): NodeJS.ProcessEnv {

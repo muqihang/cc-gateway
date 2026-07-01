@@ -156,6 +156,7 @@ function context(overrides: Record<string, unknown> = {}) {
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
       local_env_residue_present: true,
       date_format_bucket: 'slash',
       apostrophe_bucket: 'unicode_variant_1',
@@ -211,7 +212,7 @@ function body(system: unknown = []) {
     model: 'claude-sonnet-4-6',
     max_tokens: 32,
     metadata: { user_id: JSON.stringify({ session_id: sessionId }) },
-    stream: false,
+    stream: true,
     system,
     messages: [{ role: 'user', content: [{ type: 'text', text: 'safe fixture' }] }],
   }

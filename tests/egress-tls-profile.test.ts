@@ -71,8 +71,17 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
       billing_shape: 'cch_present',
       billing_block_count: 1,
       cc_entrypoint_bucket: 'sdk-cli',
+      stream: true,
     },
     ...overrides,
+  }
+}
+
+function messageBody() {
+  return {
+    metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) },
+    stream: true,
+    messages: [{ role: 'user', content: 'hello' }],
   }
 }
 
@@ -211,7 +220,7 @@ test('strict mode fails closed when attested TLS profile is missing or mismatche
           'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174999',
           ...signedFormalPoolHeaders(context),
         },
-        body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
+        body: messageBody(),
       })
       assert.equal(response.status, 403, caseName)
       assert.equal(response.headers['x-cc-gateway-error-code'], expectedCode, caseName)
@@ -245,7 +254,7 @@ test('strict profile authority fails closed when the TLS sidecar execution path 
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174999',
         ...signedFormalPoolHeaders(context),
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: messageBody(),
     })
     assert.equal(response.status, 403, response.body)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_disabled')
@@ -283,7 +292,7 @@ test('degraded mode with matching TLS refs still marks tls_profile_unverified', 
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174999',
         ...signedFormalPoolHeaders(context),
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: messageBody(),
     })
     assert.equal(response.status, 200, response.body)
     assert.equal(response.headers['x-cc-egress-tls-profile-status'], 'tls_profile_unverified')
@@ -329,7 +338,7 @@ test('degraded mode permits plumbing only and marks tls_profile_unverified', asy
         'x-claude-code-session-id': '123e4567-e89b-42d3-a456-426614174999',
         ...signedFormalPoolHeaders(context),
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: '123e4567-e89b-42d3-a456-426614174999' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: messageBody(),
     })
     assert.equal(response.status, 200, response.body)
     assert.equal(response.headers['x-cc-egress-tls-profile-status'], 'tls_profile_unverified')

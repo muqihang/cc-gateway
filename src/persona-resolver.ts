@@ -67,7 +67,7 @@ const CONTEXT_1M_SUPPORTED_MODELS = new Set([
 ])
 const LEGACY_CCH_COMPATIBLE_VERSIONS = new Set(['2.1.150', '2.1.153', '2.1.169', '2.1.170'])
 const FINAL_2175_STALE_METADATA_VERSIONS = new Set(['2.1.150', '2.1.170'])
-const ORACLE_VERIFIED_2179_VERSIONS = new Set(['2.1.179'])
+const ORACLE_VERIFIED_FORMAL_POOL_VERSIONS = new Set(['2.1.179', '2.1.185', '2.1.197'])
 
 export function resolvePersonaDecision(input: ResolvePersonaDecisionInput): PersonaDecision {
   const shared = ((input.config.shared_pool || {}) as SharedPoolCandidateConfig)
@@ -158,10 +158,10 @@ function configuredProfileMismatch(
   const allowedFinalToNon1MDownshift = configured.id === DEFAULT_NON_1M_PERSONA_PROFILE_ID
     && identityProfile.id === DEFAULT_PERSONA_PROFILE_ID
     && identityPolicyVersion === configured.version
-  const allowed2179NativeSelection = configured.id === 'claude_code_2_1_179_native_degraded'
+  const allowedFormalPoolNativeSelection = ['claude_code_2_1_179_native_degraded', 'claude_code_2_1_185_native_degraded', 'claude_code_2_1_197_sonnet5'].includes(configured.id)
     && identityProfile.id === configured.id
     && identityPolicyVersion === configured.version
-  if (allowedFinalCanonicalization || allowedNon1MToFinalSelection || allowedFinalToNon1MDownshift || allowed2179NativeSelection) return null
+  if (allowedFinalCanonicalization || allowedNon1MToFinalSelection || allowedFinalToNon1MDownshift || allowedFormalPoolNativeSelection) return null
   return rejectDecision('quarantine_unknown_beta', identityProfile, identityPolicyVersion || identityProfile.version, input.trustedClient, input.route)
 }
 
@@ -185,7 +185,7 @@ function resolveVersionStatus(profileVersion: string, requestedVersion: string, 
   }
   const compatible = rolloutCompatibleVersion(profile, requested)
   if (!compatible) {
-    if (profile.raw === '2.1.179' && ORACLE_VERIFIED_2179_VERSIONS.has(requested.raw)) {
+    if (ORACLE_VERIFIED_FORMAL_POOL_VERSIONS.has(profile.raw) && requested.raw === profile.raw) {
       return { status: 'exact_known', effectiveVersion: requested.raw }
     }
     return { status: 'quarantine_unknown_major', effectiveVersion: requested.raw }
