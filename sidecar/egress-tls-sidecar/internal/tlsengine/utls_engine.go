@@ -42,8 +42,8 @@ func SendClientHelloSummary(ctx context.Context, req Request) (summary.SafeSumma
 	}
 	defer conn.Close()
 	rec := &recordingConn{Conn: conn}
-	u := utls.UClient(rec, &utls.Config{ServerName: req.TargetHost, NextProtos: []string{"http/1.1"}}, utls.HelloCustom)
-	if err := u.ApplyPreset(claudeCode2179LogicalSNISpec()); err != nil {
+	u := utls.UClient(rec, &utls.Config{ServerName: req.TargetHost, NextProtos: nextProtosForProfile(req.Profile)}, utls.HelloCustom)
+	if err := u.ApplyPreset(clientHelloSpecForProfile(req.Profile)); err != nil {
 		return summary.SafeSummary{}, fmt.Errorf("apply TLS preset: %w", err)
 	}
 	_ = u.HandshakeContext(ctx)
@@ -56,6 +56,20 @@ func SendClientHelloSummary(ctx context.Context, req Request) (summary.SafeSumma
 		return summary.SafeSummary{}, err
 	}
 	return got, nil
+}
+
+func nextProtosForProfile(p profile.Profile) []string {
+	if p.Ref == profile.ClaudeCode2197Ref {
+		return nil
+	}
+	return []string{"http/1.1"}
+}
+
+func clientHelloSpecForProfile(p profile.Profile) *utls.ClientHelloSpec {
+	if p.Ref == profile.ClaudeCode2197Ref {
+		return claudeCode2197LogicalSNISpec()
+	}
+	return claudeCode2179LogicalSNISpec()
 }
 
 type recordingConn struct {
@@ -99,6 +113,26 @@ func claudeCode2179LogicalSNISpec() *utls.ClientHelloSpec {
 		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},
 		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},
 		&utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle},
+	}
+	return &utls.ClientHelloSpec{CipherSuites: ciphers, CompressionMethods: []uint8{0}, Extensions: extensions, TLSVersMax: utls.VersionTLS13, TLSVersMin: utls.VersionTLS10}
+}
+
+func claudeCode2197LogicalSNISpec() *utls.ClientHelloSpec {
+	ciphers := []uint16{0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc009, 0xc013, 0xc00a, 0xc014, 0x009c, 0x009d, 0x002f, 0x0035}
+	sigs := []utls.SignatureScheme{0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201}
+	curves := []utls.CurveID{utls.X25519, utls.CurveP256, utls.CurveP384}
+	keyShares := []utls.KeyShare{{Group: utls.X25519}}
+	extensions := []utls.TLSExtension{
+		&utls.SNIExtension{},
+		&utls.ExtendedMasterSecretExtension{},
+		&utls.RenegotiationInfoExtension{},
+		&utls.SupportedCurvesExtension{Curves: curves},
+		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},
+		&utls.SessionTicketExtension{},
+		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: sigs},
+		&utls.KeyShareExtension{KeyShares: keyShares},
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},
+		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},
 	}
 	return &utls.ClientHelloSpec{CipherSuites: ciphers, CompressionMethods: []uint8{0}, Extensions: extensions, TLSVersMax: utls.VersionTLS13, TLSVersMin: utls.VersionTLS10}
 }

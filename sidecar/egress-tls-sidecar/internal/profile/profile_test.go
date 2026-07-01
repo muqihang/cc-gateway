@@ -30,6 +30,28 @@ func TestLookupAcceptsClaudeCodeOracleProfile(t *testing.T) {
 	}
 }
 
+func TestLookupAcceptsClaudeCode2197OracleProfile(t *testing.T) {
+	p, ok := Lookup("tls-profile:claude-code-2.1.197-real-oracle-tcp-v1")
+	if !ok {
+		t.Fatalf("Lookup() did not accept 2.1.197 oracle profile ref")
+	}
+	if p.Expected.JA3Hash != "203503b7023848ab87b9836c336b8e81" {
+		t.Fatalf("unexpected expected JA3 %q", p.Expected.JA3Hash)
+	}
+	if p.Expected.JA4 != "t13d001700_18560269b2cb_e226d9d66dce" {
+		t.Fatalf("unexpected expected JA4 %q", p.Expected.JA4)
+	}
+	if len(p.Expected.ALPNProtocols) != 0 {
+		t.Fatalf("2.1.197 oracle expected no ALPN protocols, got %+v", p.Expected.ALPNProtocols)
+	}
+	if p.Expected.ExtensionCount != 10 {
+		t.Fatalf("unexpected expected extension count %d", p.Expected.ExtensionCount)
+	}
+	if !p.Expected.SNIPresent || p.Expected.SNIHostBucket != "anthropic_api" {
+		t.Fatalf("expected profile must require api.anthropic.com SNI bucket: %+v", p.Expected)
+	}
+}
+
 func TestLookupRejectsUnknownProfilesAndRawMaterialMarkers(t *testing.T) {
 	if _, ok := Lookup("tls-profile:unknown"); ok {
 		t.Fatalf("unknown profile ref accepted")

@@ -59,6 +59,26 @@ func ExpectedClaudeCode2179() SafeSummary {
 	}
 }
 
+func ExpectedClaudeCode2197() SafeSummary {
+	return SafeSummary{
+		Source:                      "claude_code_cli",
+		Version:                     "2.1.197",
+		ProfileRef:                  "tls-profile:claude-code-2.1.197-real-oracle-tcp-v1",
+		SummaryBucket:               "tls-bucket:claude-code-real-oracle-2197",
+		JA3Hash:                     "203503b7023848ab87b9836c336b8e81",
+		JA4:                         "t13d001700_18560269b2cb_e226d9d66dce",
+		ALPNProtocols:               []string{},
+		TLSVersions:                 []string{"0x0304", "0x0303"},
+		CipherCount:                 17,
+		ExtensionCount:              10,
+		GREASEPresent:               false,
+		SNIPresent:                  true,
+		SNIHostBucket:               "anthropic_api",
+		RawClientHelloOmittedReason: "raw_clienthello_forbidden",
+		MockTLSTrustOverride:        false,
+	}
+}
+
 func CompareToExpected(observed SafeSummary, expected SafeSummary) Comparison {
 	fields := []struct {
 		name  string
