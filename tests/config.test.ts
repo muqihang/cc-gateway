@@ -297,6 +297,36 @@ egress_buckets:
   }
 })
 
+
+test('sub2api formal-pool env residue config accepts only canonical safe refs', () => {
+  const yaml = (envResidueYaml: string) => configYaml(`
+mode: sub2api
+auth:
+  gateway_token: gateway-token
+  internal_control_token: ${configInternalControlMaterial}
+shared_pool:
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+  env_residue:
+${envResidueYaml}
+${formalPoolMapsYaml}
+`).replace(/auth:\n  tokens:\n    - name: client\n      token: client-token\n/, '').replace(/oauth:\n  refresh_token: refresh-token\n/, '')
+
+  const canonical = loadConfig(writeConfigYaml(yaml(`    env_residue_profile_ref: env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1
+    locale_profile_ref: locale-profile:us-pacific-v1
+    base_url_residue_profile_ref: base-url-residue-profile:official-anthropic-v1`)))
+  assert.equal(canonical.shared_pool?.env_residue?.locale_profile_ref, 'locale-profile:us-pacific-v1')
+
+  assert.throws(
+    () => loadConfig(writeConfigYaml(yaml('    env_residue_profile_ref: env-residue-profile:unknown-fixture'))),
+    /canonical profile ref/,
+  )
+  assert.throws(
+    () => loadConfig(writeConfigYaml(yaml('    locale_profile_ref: locale-profile:Bearer-token-fixture'))),
+    /canonical profile ref/,
+  )
+})
+
 test('sub2api formal-pool requires independent context attestation secret material', () => {
   const formalPoolWithAttestationYaml = (authYaml: string) => configYaml(`
 mode: sub2api

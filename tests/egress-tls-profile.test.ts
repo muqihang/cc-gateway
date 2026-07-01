@@ -10,6 +10,9 @@ console.log('\ntests/egress-tls-profile.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
 const expectedTLSProfileRef = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1'
+const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
+const localeProfileRef = 'locale-profile:us-pacific-v1'
+const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
 
 function canonicalFormalPoolContext(value: Record<string, unknown>): string {
   return JSON.stringify(Object.keys(value).sort().reduce((acc, key) => {
@@ -58,6 +61,9 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
     billing_shape_policy: 'strip',
     request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
     cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
+    env_residue_profile_ref: envResidueProfileRef,
+    locale_profile_ref: localeProfileRef,
+    base_url_residue_profile_ref: baseUrlResidueProfileRef,
     observed_client_profile: {
       schema_version: 'observed_client_profile.v1',
       cli_version_bucket: '2.1.179',

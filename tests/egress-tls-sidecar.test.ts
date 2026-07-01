@@ -18,6 +18,9 @@ const expectedTLSProfileRef = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
 const sessionId = '123e4567-e89b-42d3-a456-426614174999'
 const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
+const localeProfileRef = 'locale-profile:us-pacific-v1'
+const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
 
 type SidecarCapture = {
   control: any
@@ -162,6 +165,9 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
     billing_shape_policy: 'strip',
     request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
     cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
+    env_residue_profile_ref: envResidueProfileRef,
+    locale_profile_ref: localeProfileRef,
+    base_url_residue_profile_ref: baseUrlResidueProfileRef,
     observed_client_profile: {
       schema_version: 'observed_client_profile.v1',
       cli_version_bucket: '2.1.179',

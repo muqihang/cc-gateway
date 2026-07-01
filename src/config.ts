@@ -134,6 +134,11 @@ export type Config = {
       enabled?: boolean
       strict?: boolean
     }
+    env_residue?: {
+      env_residue_profile_ref?: string
+      locale_profile_ref?: string
+      base_url_residue_profile_ref?: string
+    }
     production_budget?: {
       mode?: 'observe_only' | string
       enforcement_enabled?: boolean
@@ -359,6 +364,27 @@ function validateFormalPoolAttestationConfig(config: Config): void {
     requireNonWeakProductionMaterial('auth.internal_control_token', trimmedInternal)
     requireNonWeakProductionMaterial('shared_pool.context_attestation_secret', attestationSecret)
   }
+  const envResidue = sharedPool?.env_residue as Record<string, unknown> | undefined
+  if (envResidue !== undefined) {
+    if (envResidue.env_residue_profile_ref !== undefined) requireSafeEnvResidueRef('shared_pool.env_residue.env_residue_profile_ref', envResidue.env_residue_profile_ref, 'env-residue-profile:')
+    if (envResidue.locale_profile_ref !== undefined) requireSafeEnvResidueRef('shared_pool.env_residue.locale_profile_ref', envResidue.locale_profile_ref, 'locale-profile:')
+    if (envResidue.base_url_residue_profile_ref !== undefined) requireSafeEnvResidueRef('shared_pool.env_residue.base_url_residue_profile_ref', envResidue.base_url_residue_profile_ref, 'base-url-residue-profile:')
+  }
+}
+
+function requireSafeEnvResidueRef(label: string, value: unknown, prefix: string): string {
+  const canonical: Record<string, string> = {
+    'env-residue-profile:': 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+    'locale-profile:': 'locale-profile:us-pacific-v1',
+    'base-url-residue-profile:': 'base-url-residue-profile:official-anthropic-v1',
+  }
+  if (typeof value !== 'string'
+    || !isSafeInternalRoutingKey(value)
+    || !value.startsWith(prefix)
+    || value !== canonical[prefix]) {
+    throw new Error(`config: ${label} must be a safe canonical profile ref`)
+  }
+  return value
 }
 
 export function loadConfig(configPath?: string): Config {

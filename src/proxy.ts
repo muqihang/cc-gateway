@@ -58,6 +58,9 @@ const FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF = 'strip_attribution'
 const FORMAL_POOL_2179_PROFILE_POLICY_VERSION = 'claude_code_2_1_179_cp1_degraded_v1'
 const FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
 const FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_179_cache_parity_degraded_v1'
+const FORMAL_POOL_ENV_RESIDUE_PROFILE_REF = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
+const FORMAL_POOL_LOCALE_PROFILE_REF = 'locale-profile:us-pacific-v1'
+const FORMAL_POOL_BASE_URL_RESIDUE_PROFILE_REF = 'base-url-residue-profile:official-anthropic-v1'
 const FORMAL_POOL_2179_NO_CCH_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch'
 const FORMAL_POOL_2179_SIGNED_CCH_PROFILE_REF = 'claude_code_2_1_179_first_party_signed_cch'
 const FORMAL_POOL_2179_NO_CCH_ORACLE_PROFILE_REF = 'claude_code_2_1_179_custom_base_no_cch_oracle_cp1_degraded_v1'
@@ -89,6 +92,12 @@ const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'billing_block_count',
   'billing_shape',
   'cc_entrypoint_bucket',
+  'client_family_bucket',
+  'local_env_residue_present',
+  'date_format_bucket',
+  'apostrophe_bucket',
+  'base_url_category_bucket',
+  'proxy_env_bucket',
 ])
 
 type RuntimeRegisterRequest = {
@@ -170,6 +179,9 @@ type FormalPoolSessionAuthorityBinding = {
   persona_profile: string
   trusted_egress_profile_ref: string
   egress_tls_profile_ref?: string
+  env_residue_profile_ref: string
+  locale_profile_ref: string
+  base_url_residue_profile_ref: string
   profile_policy_version: string
   billing_shape_policy: FormalPoolBillingShapePolicy
   request_shape_profile_ref: string
@@ -1235,6 +1247,9 @@ type AttestedFormalPoolContext = {
   persona_profile: string
   trusted_egress_profile_ref: string
   egress_tls_profile_ref?: string
+  env_residue_profile_ref: string
+  locale_profile_ref: string
+  base_url_residue_profile_ref: string
   profile_policy_version: string
   billing_shape_policy: FormalPoolBillingShapePolicy
   request_shape_profile_ref: string
@@ -1317,6 +1332,17 @@ async function handleRequest(
     if (!upstreamSafety.ok && upstreamSafety.code !== 'real_aws_claude_platform_requires_post_attestation') {
       writeControlPlaneError(res, upstreamSafety.status, upstreamSafety.code, 'Upstream is not allowed for this CC Gateway preflight/canary mode')
       return
+    }
+    if (hasEnvResidueQuery(target.search)) {
+      writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      return
+    }
+    for (const [key, value] of Object.entries(req.headers)) {
+      const joined = Array.isArray(value) ? value.join(', ') : String(value || '')
+      if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(joined)) {
+        writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+        return
+      }
     }
   }
 
@@ -1556,6 +1582,16 @@ async function handleRequest(
         writeControlPlaneError(res, personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match effective persona profile')
         return
       }
+      const existingAuthorityCheck = verifyExistingFormalPoolSessionAuthorityBinding(config, runtimeState, formalPoolAttestation, accountIdentity!)
+      if (!existingAuthorityCheck.ok) {
+        writeControlPlaneError(res, existingAuthorityCheck.status, existingAuthorityCheck.code, existingAuthorityCheck.message)
+        return
+      }
+      const envResidueCheck = verifyFormalPoolEnvResidueProfiles(config, formalPoolAttestation)
+      if (!envResidueCheck.ok) {
+        writeControlPlaneError(res, envResidueCheck.status, envResidueCheck.code, envResidueCheck.message)
+        return
+      }
       const sessionAuthorityCheck = verifyFormalPoolSessionAuthorityBinding(config, runtimeState, formalPoolAttestation, accountIdentity!)
       if (!sessionAuthorityCheck.ok) {
         writeControlPlaneError(res, sessionAuthorityCheck.status, sessionAuthorityCheck.code, sessionAuthorityCheck.message)
@@ -1587,6 +1623,14 @@ async function handleRequest(
   if (config.mode === 'sub2api' && !['strip', 'no_cch', 'sign'].includes(String(billingMode))) {
     writeControlPlaneError(res, 403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
     return
+  }
+  if (config.mode === 'sub2api' && formalPoolAttestation) {
+    const envRewrite = canonicalizeFormalPoolEnvResidueBody(body)
+    if (!envRewrite.ok) {
+      writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      return
+    }
+    body = envRewrite.body
   }
 
   // Rewrite identity fields in body
@@ -1698,6 +1742,11 @@ async function handleRequest(
     }
   }
   if (config.mode === 'sub2api' && finalVerifierOptions) {
+    const envResidueVerifier = verifyCanonicalFormalPoolEnvResidueFinalRequest(upstreamUrl, forwardHeaders, body)
+    if (!envResidueVerifier.ok) {
+      writeControlPlaneError(res, 400, envResidueVerifier.code, 'Formal-pool env residue verifier failed')
+      return
+    }
     const verifier = verifyProviderAwareFinalRequest(config, upstreamUrl, forwardHeaders, body, finalVerifierOptions, accountIdentity ?? undefined, egress ?? undefined)
     rawVerifierResult = verifier
     if (!verifier.ok) {
@@ -1889,6 +1938,179 @@ async function handleRequest(
 type NoCchBillingPipelineResult =
   | { ok: true; body: Buffer; ccVersionSuffix: string }
   | { ok: false; code: 'no_cch_verifier_failed' }
+
+function canonicalClaudeCodeDateMarker(now = new Date(), timezone = 'America/Los_Angeles'): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now)
+  const year = parts.find((part) => part.type === 'year')?.value || '0000'
+  const month = parts.find((part) => part.type === 'month')?.value || '00'
+  const day = parts.find((part) => part.type === 'day')?.value || '00'
+  return `Today's date is ${year}-${month}-${day}.`
+}
+
+function canonicalizeFormalPoolEnvResidueBody(body: Buffer): { ok: true; body: Buffer } | { ok: false } {
+  if (!body.length) return { ok: true, body }
+  let parsed: any
+  try {
+    parsed = JSON.parse(body.toString('utf-8'))
+  } catch {
+    return { ok: true, body }
+  }
+  const result = canonicalizeSystemEnvResidue(parsed)
+  if (!result.ok) return { ok: false }
+  return { ok: true, body: Buffer.from(JSON.stringify(parsed), 'utf-8') }
+}
+
+function canonicalizeSystemEnvResidue(parsed: any): { ok: true } | { ok: false } {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.system === undefined) return { ok: true }
+  const canonical = canonicalClaudeCodeDateMarker()
+  const seenMarkers: string[] = []
+  const rewriteText = (text: string, standaloneBlock: boolean): { ok: true; text: string } | { ok: false } => {
+    if (containsEnvResidueLiteral(text)) return { ok: false }
+    const exact = text.match(/^Today(['\u2019\u2018\u02bc])s date is (\d{4})([-/])(\d{2})\3(\d{2})\.$/)
+    if (exact) {
+      seenMarkers.push(text)
+      return { ok: true, text: canonical }
+    }
+    if (/Today['\u2019\u2018\u02bc]s date is/i.test(text)) return { ok: false }
+    if (!standaloneBlock && /date is/i.test(text) && /today/i.test(text)) return { ok: false }
+    return { ok: true, text }
+  }
+  if (typeof parsed.system === 'string') {
+    const rewritten = rewriteText(parsed.system, true)
+    if (!rewritten.ok) return { ok: false }
+    parsed.system = rewritten.text
+  } else if (Array.isArray(parsed.system)) {
+    for (const item of parsed.system) {
+      if (typeof item === 'string') {
+        const rewritten = rewriteText(item, true)
+        if (!rewritten.ok) return { ok: false }
+        const index = parsed.system.indexOf(item)
+        if (index >= 0) parsed.system[index] = rewritten.text
+      } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const record = item as Record<string, unknown>
+        if ((record.type === undefined || record.type === 'text') && typeof record.text === 'string') {
+          const rewritten = rewriteText(record.text, true)
+          if (!rewritten.ok) return { ok: false }
+          record.text = rewritten.text
+        }
+      }
+    }
+  } else {
+    return { ok: true }
+  }
+  if (new Set(seenMarkers).size > 1) return { ok: false }
+  return { ok: true }
+}
+
+function containsEnvResidueLiteral(text: string): boolean {
+  return /\b(ANTHROPIC_BASE_URL|BASE_URL|PROXY_URL|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|TZ=)\b/i.test(text)
+}
+
+function hasEnvResidueQuery(search: string): boolean {
+  if (!search) return false
+  const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  for (const [key, value] of params.entries()) {
+    if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(value)) return true
+  }
+  return false
+}
+
+function verifyCanonicalFormalPoolEnvResidueFinalRequest(
+  upstreamUrl: URL,
+  headers: Record<string, string>,
+  body: Buffer,
+): { ok: true } | { ok: false; code: 'formal_pool_env_residue_verifier_failed' } {
+  if (hasEnvResidueQuery(upstreamUrl.search)) {
+    return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(String(value || ''))) {
+      return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+    }
+  }
+  if (!body.length) return { ok: true }
+  let parsed: any
+  try {
+    parsed = JSON.parse(body.toString('utf-8'))
+  } catch {
+    return { ok: true }
+  }
+  if (!verifySystemEnvResidueCanonical(parsed?.system)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+  if (containsStructuralEnvResidue(parsed)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+  return { ok: true }
+}
+
+function verifySystemEnvResidueCanonical(system: unknown): boolean {
+  const canonical = canonicalClaudeCodeDateMarker()
+  const texts: string[] = []
+  if (typeof system === 'string') texts.push(system)
+  else if (Array.isArray(system)) {
+    for (const item of system) {
+      if (typeof item === 'string') texts.push(item)
+      else if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const record = item as Record<string, unknown>
+        if ((record.type === undefined || record.type === 'text') && typeof record.text === 'string') texts.push(record.text)
+      }
+    }
+  }
+  const markers = texts.filter((text) => /^Today['\u2019\u2018\u02bc]s date is /.test(text))
+  if (markers.length > 1) return false
+  for (const text of texts) {
+    if (containsEnvResidueLiteral(text)) return false
+    if (/Today['\u2019\u2018\u02bc]s date is /.test(text) && text !== canonical) return false
+  }
+  return true
+}
+
+function containsStructuralEnvResidue(value: unknown, path: string[] = []): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item, index) => containsStructuralEnvResidue(item, [...path, String(index)]))
+  }
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  for (const [key, child] of Object.entries(record)) {
+    if (path[0] === 'messages' && (path[2] === 'content' || (path.length === 2 && key === 'content'))) continue
+    if (isEnvResidueStructuralKey(key)) return true
+    if (typeof child === 'string' && containsEnvResidueLiteral(child)) return true
+    if (containsStructuralEnvResidue(child, [...path, key])) return true
+  }
+  return false
+}
+
+function isEnvResidueStructuralKey(key: string): boolean {
+  const lower = key.toLowerCase()
+  const normalized = lower.replace(/[-:.]/g, '_')
+  const compact = lower.replace(/[-_:.]/g, '')
+  return normalized === 'anthropic_base_url'
+    || normalized === 'base_url'
+    || normalized === 'proxy_url'
+    || normalized === 'http_proxy'
+    || normalized === 'https_proxy'
+    || normalized === 'all_proxy'
+    || normalized === 'no_proxy'
+    || normalized === 'tz'
+    || normalized === 'timezone'
+    || normalized.includes('env_residue_profile')
+    || normalized.includes('locale_profile')
+    || normalized.includes('base_url_residue_profile')
+    || compact.includes('anthropicbaseurl')
+    || compact === 'baseurl'
+    || compact === 'proxyurl'
+    || compact.includes('httpproxy')
+    || compact.includes('httpsproxy')
+    || compact.includes('allproxy')
+    || compact.includes('noproxy')
+    || compact.includes('envresidueprofile')
+    || compact.includes('localeprofile')
+    || compact.includes('baseurlresidueprofile')
+    || compact === 'tz'
+    || compact === 'timezone'
+}
 
 function runNoCchBillingPipeline(body: Buffer, cliVersion: string): NoCchBillingPipelineResult {
   let parsed: any
@@ -2832,6 +3054,9 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
     'policy_version',
     'persona_profile',
     'trusted_egress_profile_ref',
+    'env_residue_profile_ref',
+    'locale_profile_ref',
+    'base_url_residue_profile_ref',
     'profile_policy_version',
     'billing_shape_policy',
     'request_shape_profile_ref',
@@ -2892,8 +3117,14 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
     }
   }
+  if (hasDuplicateFormalPoolSemanticFields(rawContext)) {
+    return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
+  }
   if ((obj.egress_tls_profile_ref !== undefined && !isSafeTLSProfileRef(obj.egress_tls_profile_ref))
     || (tlsMode.enabled && tlsMode.strict && !isSafeTLSProfileRef(obj.egress_tls_profile_ref))
+    || !isSafeEnvResidueProfileRef(obj.env_residue_profile_ref, 'env-residue-profile:')
+    || !isSafeEnvResidueProfileRef(obj.locale_profile_ref, 'locale-profile:')
+    || !isSafeEnvResidueProfileRef(obj.base_url_residue_profile_ref, 'base-url-residue-profile:')
     || !isSafeProfileRef(obj.trusted_egress_profile_ref)
     || !isSafeProfileRef(obj.profile_policy_version)
     || !isSafeProfileRef(obj.request_shape_profile_ref)
@@ -2930,6 +3161,9 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       persona_profile: obj.persona_profile,
       trusted_egress_profile_ref: obj.trusted_egress_profile_ref,
       ...(typeof obj.egress_tls_profile_ref === 'string' ? { egress_tls_profile_ref: obj.egress_tls_profile_ref } : {}),
+      env_residue_profile_ref: obj.env_residue_profile_ref,
+      locale_profile_ref: obj.locale_profile_ref,
+      base_url_residue_profile_ref: obj.base_url_residue_profile_ref,
       profile_policy_version: obj.profile_policy_version,
       billing_shape_policy: obj.billing_shape_policy,
       request_shape_profile_ref: obj.request_shape_profile_ref,
@@ -2960,6 +3194,68 @@ function isSafeProfileRef(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
   return trimmed === value && SAFE_PROFILE_REF.test(trimmed)
+}
+
+function isSafeEnvResidueProfileRef(value: unknown, prefix: string): value is string {
+  if (!isSafeProfileRef(value) || !value.startsWith(prefix)) return false
+  const lower = value.toLowerCase()
+  if (lower.includes('://') || lower.includes('@') || lower.includes('bearer') || lower.includes('token') || lower.includes('secret') || lower.includes('api-key') || lower.includes('apikey') || lower.includes('sk-')) return false
+  if (lower.includes('anthropic_base_url') || lower.includes('http_proxy') || lower.includes('https_proxy') || lower.includes('all_proxy') || lower.includes('no_proxy') || lower.includes('tz=')) return false
+  if (lower.includes('raw-domain-list')) return false
+  return true
+}
+
+function hasDuplicateFormalPoolSemanticFields(rawContext: string): boolean {
+  const counts = new Map<string, number>()
+  let depth = 0
+  for (let i = 0; i < rawContext.length; i++) {
+    const ch = rawContext[i]
+    if (ch === '{') {
+      depth++
+      continue
+    }
+    if (ch === '}') {
+      depth--
+      continue
+    }
+    if (ch !== '"' || depth !== 1) continue
+    let value = ''
+    let j = i + 1
+    let escaped = false
+    for (; j < rawContext.length; j++) {
+      const c = rawContext[j]
+      if (escaped) {
+        value += '\\' + c
+        escaped = false
+        continue
+      }
+      if (c === '\\') {
+        escaped = true
+        continue
+      }
+      if (c === '"') break
+      value += c
+    }
+    let k = j + 1
+    while (/\s/.test(rawContext[k] || '')) k++
+    if (rawContext[k] === ':') {
+      const semanticKey = decodeJSONPropertyKey(value)
+      const next = (counts.get(semanticKey) || 0) + 1
+      if (next > 1) return true
+      counts.set(semanticKey, next)
+    }
+    i = j
+  }
+  return false
+}
+
+function decodeJSONPropertyKey(rawKey: string): string {
+  try {
+    const decoded = JSON.parse(`"${rawKey}"`)
+    return typeof decoded === 'string' ? decoded : rawKey
+  } catch {
+    return rawKey
+  }
 }
 
 function isSafeProviderScopedRef(value: unknown, prefix: string): value is string {
@@ -3003,6 +3299,12 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
   if (profile.route_class !== undefined && !['messages', 'count_tokens', 'control_plane', 'event_logging_legacy', 'event_logging_v2'].includes(String(profile.route_class))) return false
   if (profile.billing_shape !== undefined && !['absent', 'no_cch', 'cch_present', 'unknown'].includes(String(profile.billing_shape))) return false
   if (profile.cc_entrypoint_bucket !== undefined && !['absent', 'cli', 'sdk-cli', 'claude-vscode', 'other', 'unknown'].includes(String(profile.cc_entrypoint_bucket))) return false
+  if (profile.client_family_bucket !== undefined && !['cli', 'desktop', 'vscode', 'unknown'].includes(String(profile.client_family_bucket))) return false
+  if (profile.date_format_bucket !== undefined && !['hyphen', 'slash', 'other', 'not_observed'].includes(String(profile.date_format_bucket))) return false
+  if (profile.apostrophe_bucket !== undefined && !['ascii', 'unicode_variant_1', 'unicode_variant_2', 'unicode_variant_3', 'other', 'not_observed'].includes(String(profile.apostrophe_bucket))) return false
+  if (profile.base_url_category_bucket !== undefined && !['official_anthropic', 'neutral_gateway', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'unknown', 'not_observed'].includes(String(profile.base_url_category_bucket))) return false
+  if (profile.proxy_env_bucket !== undefined && !['no_proxy_env', 'loopback_proxy_only', 'non_loopback_proxy_rejected', 'no_proxy_bypass_guarded', 'unknown'].includes(String(profile.proxy_env_bucket))) return false
+  if (profile.local_env_residue_present !== undefined && typeof profile.local_env_residue_present !== 'boolean') return false
   if (profile.stream !== undefined && typeof profile.stream !== 'boolean') return false
   for (const key of ['thinking_present', 'output_config_present', 'context_management_present']) {
     if (profile[key] !== undefined && typeof profile[key] !== 'boolean') return false
@@ -3103,6 +3405,44 @@ function verifyFormalPoolProfileRefs(config: Config, attested: AttestedFormalPoo
   }
   if (attested.cache_parity_profile_ref !== FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF) {
     return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool cache parity profile is not approved' }
+  }
+  return { ok: true }
+}
+
+function formalPoolEnvResidueConfig(config: Config): {
+  env_residue_profile_ref: string
+  locale_profile_ref: string
+  base_url_residue_profile_ref: string
+} {
+  const sharedPool = ((config as any).shared_pool || {}) as Record<string, any>
+  const envResidue = sharedPool.env_residue && typeof sharedPool.env_residue === 'object' ? sharedPool.env_residue : {}
+  return {
+    env_residue_profile_ref: typeof envResidue.env_residue_profile_ref === 'string' && envResidue.env_residue_profile_ref.trim()
+      ? envResidue.env_residue_profile_ref.trim()
+      : FORMAL_POOL_ENV_RESIDUE_PROFILE_REF,
+    locale_profile_ref: typeof envResidue.locale_profile_ref === 'string' && envResidue.locale_profile_ref.trim()
+      ? envResidue.locale_profile_ref.trim()
+      : FORMAL_POOL_LOCALE_PROFILE_REF,
+    base_url_residue_profile_ref: typeof envResidue.base_url_residue_profile_ref === 'string' && envResidue.base_url_residue_profile_ref.trim()
+      ? envResidue.base_url_residue_profile_ref.trim()
+      : FORMAL_POOL_BASE_URL_RESIDUE_PROFILE_REF,
+  }
+}
+
+function verifyFormalPoolEnvResidueProfiles(
+  config: Config,
+  attested: AttestedFormalPoolContext,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const expected = formalPoolEnvResidueConfig(config)
+  if (!isSafeEnvResidueProfileRef(attested.env_residue_profile_ref, 'env-residue-profile:')
+    || !isSafeEnvResidueProfileRef(attested.locale_profile_ref, 'locale-profile:')
+    || !isSafeEnvResidueProfileRef(attested.base_url_residue_profile_ref, 'base-url-residue-profile:')) {
+    return { ok: false, status: 403, code: 'formal_pool_env_residue_profile_unapproved', message: 'Formal-pool env residue profile refs are not safe' }
+  }
+  if (attested.env_residue_profile_ref !== expected.env_residue_profile_ref
+    || attested.locale_profile_ref !== expected.locale_profile_ref
+    || attested.base_url_residue_profile_ref !== expected.base_url_residue_profile_ref) {
+    return { ok: false, status: 403, code: 'formal_pool_env_residue_profile_unapproved', message: 'Formal-pool env residue profile refs are not approved for this account' }
   }
   return { ok: true }
 }
@@ -3347,33 +3687,7 @@ function verifyFormalPoolSessionAuthorityBinding(
   if (!sessionKey || !deviceRef || !nonceRef) {
     return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool session authority ledger is unavailable' }
   }
-  const binding: FormalPoolSessionAuthorityBinding = {
-    account_id: attested.account_id,
-    credential_ref: attested.credential_ref,
-    credential_source: attested.credential_source,
-    egress_bucket: attested.egress_bucket,
-    proxy_identity_ref: attested.proxy_identity_ref,
-    policy_version: attested.policy_version,
-    persona_profile: attested.persona_profile,
-    trusted_egress_profile_ref: attested.trusted_egress_profile_ref,
-    ...(attested.egress_tls_profile_ref ? { egress_tls_profile_ref: attested.egress_tls_profile_ref } : {}),
-    profile_policy_version: attested.profile_policy_version,
-    billing_shape_policy: attested.billing_shape_policy,
-    request_shape_profile_ref: attested.request_shape_profile_ref,
-    cache_parity_profile_ref: attested.cache_parity_profile_ref,
-    device_ref: deviceRef,
-    ...(attested.provider_kind ? { provider_kind: attested.provider_kind } : {}),
-    ...(attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
-      workspace_ref: attested.workspace_ref,
-      workspace_binding_hmac: attested.workspace_binding_hmac,
-      upstream_endpoint_ref: attested.upstream_endpoint_ref,
-      aws_region: attested.aws_region,
-      upstream_host: attested.upstream_host,
-      allowed_upstream_path: attested.allowed_upstream_path,
-      upstream_auth_scheme: attested.upstream_auth_scheme,
-      beta_policy_ref: attested.beta_policy_ref,
-    } : {}),
-  }
+  const binding = formalPoolSessionAuthorityBinding(attested, deviceRef)
   const ledgerFile = formalPoolSessionLedgerFilePath()
   if (formalPoolSessionLedgerPersistenceRequired(config) && !ledgerFile) {
     return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool production requires a persistent session authority ledger' }
@@ -3426,6 +3740,70 @@ function verifyFormalPoolSessionAuthorityBinding(
   return { ok: true }
 }
 
+function formalPoolSessionAuthorityBinding(attested: AttestedFormalPoolContext, deviceRef: string): FormalPoolSessionAuthorityBinding {
+  return {
+    account_id: attested.account_id,
+    credential_ref: attested.credential_ref,
+    credential_source: attested.credential_source,
+    egress_bucket: attested.egress_bucket,
+    proxy_identity_ref: attested.proxy_identity_ref,
+    policy_version: attested.policy_version,
+    persona_profile: attested.persona_profile,
+    trusted_egress_profile_ref: attested.trusted_egress_profile_ref,
+    ...(attested.egress_tls_profile_ref ? { egress_tls_profile_ref: attested.egress_tls_profile_ref } : {}),
+    env_residue_profile_ref: attested.env_residue_profile_ref,
+    locale_profile_ref: attested.locale_profile_ref,
+    base_url_residue_profile_ref: attested.base_url_residue_profile_ref,
+    profile_policy_version: attested.profile_policy_version,
+    billing_shape_policy: attested.billing_shape_policy,
+    request_shape_profile_ref: attested.request_shape_profile_ref,
+    cache_parity_profile_ref: attested.cache_parity_profile_ref,
+    device_ref: deviceRef,
+    ...(attested.provider_kind ? { provider_kind: attested.provider_kind } : {}),
+    ...(attested.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND ? {
+      workspace_ref: attested.workspace_ref,
+      workspace_binding_hmac: attested.workspace_binding_hmac,
+      upstream_endpoint_ref: attested.upstream_endpoint_ref,
+      aws_region: attested.aws_region,
+      upstream_host: attested.upstream_host,
+      allowed_upstream_path: attested.allowed_upstream_path,
+      upstream_auth_scheme: attested.upstream_auth_scheme,
+      beta_policy_ref: attested.beta_policy_ref,
+    } : {}),
+  }
+}
+
+function verifyExistingFormalPoolSessionAuthorityBinding(
+  config: Config,
+  runtimeState: ProxyRuntimeState,
+  attested: AttestedFormalPoolContext,
+  identity: AccountIdentityRecord,
+): { ok: true } | { ok: false; status: number; code: string; message: string } {
+  const sessionKey = formalPoolSessionAuthorityRef(config, 'session', attested.session_id)
+  const deviceRef = formalPoolSessionAuthorityRef(config, 'device', identity.device_id)
+  if (!sessionKey || !deviceRef) return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool session authority ledger is unavailable' }
+  const binding = formalPoolSessionAuthorityBinding(attested, deviceRef)
+  let previous = runtimeState.formalPoolSessionAuthorityLedger.get(sessionKey)
+  const ledgerFile = formalPoolSessionLedgerFilePath()
+  if (ledgerFile) {
+    let persisted: FormalPoolSessionAuthorityLedgerFile
+    try {
+      persisted = loadFormalPoolSessionAuthorityLedger(ledgerFile)
+    } catch {
+      return { ok: false, status: 403, code: 'formal_pool_session_ledger_unavailable', message: 'Formal-pool session authority ledger is unavailable' }
+    }
+    previous = persisted.sessions[sessionKey] || previous
+    if (previous && !sameFormalPoolSessionAuthorityBinding(previous, binding)) {
+      return { ok: false, status: 403, code: 'formal_pool_session_authority_mismatch', message: 'Formal-pool session authority changed across requests' }
+    }
+    return { ok: true }
+  }
+  if (previous && !sameFormalPoolSessionAuthorityBinding(previous, binding)) {
+    return { ok: false, status: 403, code: 'formal_pool_session_authority_mismatch', message: 'Formal-pool session authority changed across requests' }
+  }
+  return { ok: true }
+}
+
 function formalPoolSessionAuthorityRef(config: Config, scope: 'session' | 'device', value: string): string {
   const secret = formalPoolAttestationSecret(config)
   if (!secret || !value) return ''
@@ -3474,6 +3852,9 @@ function sameFormalPoolSessionAuthorityBinding(a: FormalPoolSessionAuthorityBind
     && a.persona_profile === b.persona_profile
     && a.trusted_egress_profile_ref === b.trusted_egress_profile_ref
     && (a.egress_tls_profile_ref || '') === (b.egress_tls_profile_ref || '')
+    && a.env_residue_profile_ref === b.env_residue_profile_ref
+    && a.locale_profile_ref === b.locale_profile_ref
+    && a.base_url_residue_profile_ref === b.base_url_residue_profile_ref
     && a.profile_policy_version === b.profile_policy_version
     && a.billing_shape_policy === b.billing_shape_policy
     && a.request_shape_profile_ref === b.request_shape_profile_ref
