@@ -466,6 +466,113 @@ ${formalPoolMapsYaml}
   }
 })
 
+
+
+test('sub2api production formal-pool rejects sidecar mock messages response bridge', () => {
+  const yaml = configYaml(`
+mode: sub2api
+shared_pool:
+  upstream_mode: production
+  production_upstream_enabled: true
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19084
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.179-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2179
+  mock_messages_response:
+    enabled: true
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    enabled: true
+${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\n`,
+  )
+  const path = writeConfigYaml(yaml)
+  assert.throws(() => loadConfig(path), /mock_messages_response.*production|production.*mock_messages_response/i)
+})
+
+test('sub2api local smoke formal-pool can explicitly enable sidecar mock messages response bridge', () => {
+  const yaml = configYaml(`
+mode: sub2api
+shared_pool:
+  upstream_mode: local-capture
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19284
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.179-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2179
+  mock_messages_response:
+    enabled: true
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    enabled: true
+${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /upstream:\n  url: "https:\/\/api\.anthropic\.com"\n/,
+    'upstream:\n  url: http://127.0.0.1:19285\n',
+  ).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\n`,
+  )
+  const path = writeConfigYaml(yaml)
+  const config = loadConfig(path)
+  assert.equal(config.egress_tls_sidecar?.mock_messages_response?.enabled, true)
+  assert.equal(config.egress_tls_sidecar?.mock_messages_response?.mode, 'local_smoke')
+})
+
+test('sidecar mock messages response bridge requires parent sidecar enabled', () => {
+  const yaml = configYaml(`
+mode: sub2api
+shared_pool:
+  upstream_mode: local-capture
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+egress_tls_sidecar:
+  enabled: false
+  endpoint: http://127.0.0.1:19284
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.179-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2179
+  mock_messages_response:
+    enabled: true
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    enabled: true
+${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /upstream:\n  url: "https:\/\/api\.anthropic\.com"\n/,
+    'upstream:\n  url: http://127.0.0.1:19285\n',
+  ).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\n`,
+  )
+  const path = writeConfigYaml(yaml)
+  assert.throws(() => loadConfig(path), /mock_messages_response.*sidecar.*enabled|sidecar.*enabled.*mock_messages_response/i)
+})
+
 test('config examples separate personal standalone from formal-pool sub2api', () => {
   const example = readFileSync(new URL('../config.example.yaml', import.meta.url), 'utf-8')
   const formalPoolExample = readFileSync(new URL('../config.sub2api.formal-pool.example.yaml', import.meta.url), 'utf-8')

@@ -1033,6 +1033,68 @@ function writeRawCaptureFile(sink: RawCaptureSink, name: string, payload: unknow
   return true
 }
 
+
+function mockMessagesResponseBridgeRequested(config: Config): boolean {
+  return (config as any).egress_tls_sidecar?.mock_messages_response?.enabled === true
+}
+
+function mockMessagesResponseBridgeSafety(config: Config): { ok: true } | { ok: false } {
+  const sidecar = (config as any).egress_tls_sidecar || {}
+  const mock = sidecar.mock_messages_response || {}
+  if (mock.enabled !== true) return { ok: true }
+  if (sidecar.enabled !== true) return { ok: false }
+  const sharedPool = ((config as any).shared_pool || {}) as Record<string, unknown>
+  const upstreamMode = String(sharedPool.upstream_mode || '')
+  const productionLike = upstreamMode === 'production'
+    || upstreamMode === 'real-canary'
+    || sharedPool.production_upstream_enabled === true
+    || sharedPool.real_canary_user_approved === true
+  if (config.mode !== 'sub2api' || mock.mode !== 'local_smoke' || productionLike || !['local-capture', 'preflight'].includes(upstreamMode)) {
+    return { ok: false }
+  }
+  if (sidecar.logical_target_host !== 'api.anthropic.com') return { ok: false }
+  if (!isLocalMockBridgeLoopbackUrl(config.upstream?.url)) return { ok: false }
+  if (!isLocalMockBridgeLoopbackUrl(sidecar.endpoint)) return { ok: false }
+  return { ok: true }
+}
+
+function mockMessagesResponseBridgeEnabled(config: Config): boolean {
+  return mockMessagesResponseBridgeSafety(config).ok
+    && (config as any).egress_tls_sidecar?.mock_messages_response?.enabled === true
+}
+
+function isLocalMockBridgeLoopbackUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.trim()) return false
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+  if (parsed.username || parsed.password) return false
+  const host = parsed.hostname.toLowerCase()
+  return host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === 'localhost'
+}
+
+function localSmokeMockMessagesResponseBody(personaDecision: ReturnType<typeof resolveSharedPoolPersonaDecision> | null, parsedBody: unknown): Buffer {
+  const requestedModel = parsedBody && typeof (parsedBody as any).model === 'string'
+    ? String((parsedBody as any).model)
+    : ''
+  const model = requestedModel || 'claude-sonnet-4-6'
+  void personaDecision
+  return Buffer.from(JSON.stringify({
+    id: 'msg_local_smoke_mock',
+    type: 'message',
+    role: 'assistant',
+    model,
+    content: [{ type: 'text', text: 'synthetic local smoke response' }],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  }), 'utf-8')
+}
+
 function applyGatewayEvidenceHeaders(
   headers: Record<string, string | string[] | undefined>,
   rawCapture?: RawCaptureSink,
@@ -1329,6 +1391,14 @@ async function handleRequest(
     }
     await handleRuntimeRegister(req, res, config, method)
     return
+  }
+
+  if (mockMessagesResponseBridgeRequested(config)) {
+    const mockBridgeSafety = mockMessagesResponseBridgeSafety(config)
+    if (!mockBridgeSafety.ok) {
+      writeControlPlaneError(res, 403, 'egress_tls_mock_response_bridge_unsafe', 'TLS sidecar mock response bridge is local-smoke only')
+      return
+    }
   }
 
   if (config.mode === 'sub2api') {
@@ -1877,12 +1947,22 @@ async function handleRequest(
       return
     }
     let responseHeaders = { ...sidecarResult.response.headers }
+    let responseBody = sidecarResult.response.body
+    if (mockMessagesResponseBridgeEnabled(config)) {
+      responseBody = localSmokeMockMessagesResponseBody(personaDecision, parsedBody)
+      responseHeaders = {
+        ...responseHeaders,
+        'content-type': 'application/json',
+        'content-length': String(responseBody.length),
+        'x-cc-mock-response-schema-bucket': 'anthropic-messages:synthetic-local-smoke-v1',
+      }
+    }
     delete responseHeaders['transfer-encoding']
     responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
     responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
-    if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, sidecarResult.response.body, rawCapture))
+    if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, responseBody, rawCapture))
     res.writeHead(sidecarResult.response.status, responseHeaders)
-    res.end(sidecarResult.response.body)
+    res.end(responseBody)
     if (config.logging.audit) audit(clientName, method, safePath, sidecarResult.response.status)
     return
   }

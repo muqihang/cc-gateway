@@ -323,6 +323,172 @@ async function postThroughGateway(gateway: ReturnType<typeof startProxy>, contex
 }
 
 
+
+
+test('sidecar mock messages response bridge is disabled by default and preserves verification response', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  try {
+    const response = await postThroughGateway(gateway)
+    assert.equal(response.status, 200, response.body)
+    assert.equal(sidecar.captured.length, 1)
+    assert.deepEqual(JSON.parse(response.body), { ok: true })
+    assert.equal(response.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+test('sidecar mock messages response bridge returns messages body only after TLS proof', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      upstream_mode: 'local-capture',
+      egress_tls: { enabled: true, strict: true },
+    },
+    egress_tls_sidecar: {
+      enabled: true,
+      endpoint: sidecar.url,
+      control_token: controlToken,
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
+      allowed_routes: ['/v1/messages'],
+      allowed_profile_refs: [expectedTLSProfileRef],
+      expected_tls_summary_bucket: expectedTLSBucket,
+      mock_messages_response: { enabled: true, mode: 'local_smoke' },
+    },
+  }))
+  try {
+    const response = await postThroughGateway(gateway)
+    assert.equal(response.status, 200, response.body)
+    assert.equal(sidecar.captured.length, 1)
+    assert.equal(upstream.captured.length, 0)
+    assert.equal(response.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+    assert.equal(response.headers['x-cc-mock-response-schema-bucket'], 'anthropic-messages:synthetic-local-smoke-v1')
+    const body = JSON.parse(response.body)
+    assert.equal(body.type, 'message')
+    assert.equal(body.role, 'assistant')
+    assert.equal(body.model, 'claude-sonnet-4-6')
+    assert.equal(body.content?.[0]?.type, 'text')
+    assert.match(body.content?.[0]?.text, /synthetic local smoke/i)
+    assert.deepEqual(body.usage, { input_tokens: 1, output_tokens: 1 })
+    assert.doesNotMatch(response.body, /hello/i)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+test('sidecar mock messages response bridge fails closed for direct provider upstream', async () => {
+  const sidecar = await startMockSidecar()
+  try {
+    const config = sidecarConfig('https://api.anthropic.com', sidecar.url, {
+      shared_pool: {
+        context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+        context_attestation_secret: attestationSecret,
+        upstream_mode: 'local-capture',
+        egress_tls: { enabled: true, strict: true },
+      },
+      egress_tls_sidecar: {
+        enabled: true,
+        endpoint: sidecar.url,
+        control_token: controlToken,
+        allowed_target_hosts: ['api.anthropic.com'],
+        logical_target_host: 'api.anthropic.com',
+        allowed_routes: ['/v1/messages'],
+        allowed_profile_refs: [expectedTLSProfileRef],
+        expected_tls_summary_bucket: expectedTLSBucket,
+        mock_messages_response: { enabled: true, mode: 'local_smoke' },
+      },
+    })
+    assert.throws(() => validateEgressSidecarConfig(config as any), /mock_messages_response.*local-only|local-only.*mock_messages_response/i)
+  } finally {
+    await close(sidecar.server)
+  }
+})
+
+test('sidecar mock messages response bridge fails closed at runtime if production-like config bypasses load validation', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      upstream_mode: 'production',
+      production_upstream_enabled: true,
+      egress_tls: { enabled: true, strict: true },
+    },
+    egress_tls_sidecar: {
+      enabled: true,
+      endpoint: sidecar.url,
+      control_token: controlToken,
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
+      allowed_routes: ['/v1/messages'],
+      allowed_profile_refs: [expectedTLSProfileRef],
+      expected_tls_summary_bucket: expectedTLSBucket,
+      mock_messages_response: { enabled: true, mode: 'local_smoke' },
+    },
+  }))
+  try {
+    const response = await postThroughGateway(gateway)
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_mock_response_bridge_unsafe')
+    assert.equal(sidecar.captured.length, 0)
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+test('sidecar mock messages response bridge fails closed before Node direct fallback outside sub2api when validation is bypassed', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const config = sidecarConfig(upstream.url, sidecar.url, {
+    mode: 'standalone',
+    auth: { tokens: [{ name: 'client', token: 'client-token' }] },
+    oauth: { access_token: 'gateway-token', refresh_token: 'refresh-token', expires_at: Date.now() + 3600_000 },
+    shared_pool: undefined,
+    account_identities: undefined,
+    egress_buckets: undefined,
+    egress_tls_sidecar: {
+      enabled: true,
+      endpoint: sidecar.url,
+      control_token: controlToken,
+      allowed_target_hosts: ['api.anthropic.com'],
+      logical_target_host: 'api.anthropic.com',
+      allowed_routes: ['/v1/messages'],
+      allowed_profile_refs: [expectedTLSProfileRef],
+      expected_tls_summary_bucket: expectedTLSBucket,
+      mock_messages_response: { enabled: true, mode: 'local_smoke' },
+    },
+  } as any)
+  const gateway = startProxy(config)
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: { 'x-api-key': 'client-token' },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_mock_response_bridge_unsafe')
+    assert.equal(sidecar.captured.length, 0)
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
 test('TLS sidecar config rejects production-unsafe target scheme, non-443 port, and request-controlled override allowlists', async () => {
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()

@@ -12,6 +12,10 @@ export type EgressSidecarConfig = {
   allowed_profile_refs?: string[]
   logical_target_host?: string
   expected_tls_summary_bucket?: string
+  mock_messages_response?: {
+    enabled?: boolean
+    mode?: 'local_smoke' | string
+  }
 }
 
 export type EgressSidecarControl = {
@@ -49,6 +53,7 @@ const ALLOWED_SIDECAR_CONFIG_KEYS = new Set([
   'allowed_profile_refs',
   'logical_target_host',
   'expected_tls_summary_bucket',
+  'mock_messages_response',
 ])
 const FORBIDDEN_CONTROL_OR_OVERRIDE_KEY = /(?:authorization|x-api-key|cookie|raw[_-]?body|clienthello|cipher|extension|proxy_url|proxy_username|proxy_password|proxy-authorization|x-forwarded|dial_host|dial_override|tls_server_name|server_name|account_uuid)/i
 
@@ -58,9 +63,18 @@ export function egressSidecarEnabled(config: { egress_tls_sidecar?: EgressSideca
   return config.egress_tls_sidecar?.enabled === true
 }
 
-export function validateEgressSidecarConfig(config: { egress_tls_sidecar?: EgressSidecarConfig }): void {
+export function validateEgressSidecarConfig(config: {
+  mode?: string
+  upstream?: { url?: string }
+  shared_pool?: { upstream_mode?: string; production_upstream_enabled?: boolean; real_canary_user_approved?: boolean }
+  egress_tls_sidecar?: EgressSidecarConfig
+}): void {
   const sidecar = config.egress_tls_sidecar
-  if (!sidecar || sidecar.enabled !== true) return
+  if (!sidecar) return
+  if (sidecar.mock_messages_response?.enabled === true && sidecar.enabled !== true) {
+    throw new Error('config: egress_tls_sidecar.mock_messages_response requires egress_tls_sidecar.enabled true')
+  }
+  if (sidecar.enabled !== true) return
   const endpoint = parseLoopbackEndpoint(sidecar.endpoint)
   if (!endpoint) throw new Error('config: egress_tls_sidecar.endpoint must be loopback http(s) or unix socket endpoint')
   if (!sidecar.control_token || typeof sidecar.control_token !== 'string' || sidecar.control_token.length < 24) {
@@ -93,6 +107,40 @@ export function validateEgressSidecarConfig(config: { egress_tls_sidecar?: Egres
   const raw = sidecar as Record<string, unknown>
   if ('target_scheme' in raw) throw new Error('config: egress_tls_sidecar.target_scheme must not override HTTPS provider routing')
   if ('target_port' in raw) throw new Error('config: egress_tls_sidecar.target_port must not override provider port 443')
+  validateMockMessagesResponseBridge(config, sidecar)
+}
+
+function validateMockMessagesResponseBridge(config: {
+  mode?: string
+  upstream?: { url?: string }
+  shared_pool?: { upstream_mode?: string; production_upstream_enabled?: boolean; real_canary_user_approved?: boolean }
+}, sidecar: EgressSidecarConfig): void {
+  const mock = sidecar.mock_messages_response
+  if (!mock || mock.enabled !== true) return
+  const mockRecord = mock as Record<string, unknown>
+  for (const key of Object.keys(mockRecord)) {
+    if (!['enabled', 'mode'].includes(key) || FORBIDDEN_CONTROL_OR_OVERRIDE_KEY.test(key)) {
+      throw new Error(`config: egress_tls_sidecar.mock_messages_response.${key} is not an allowed mock bridge config key`)
+    }
+  }
+  const sharedPool = config.shared_pool || {}
+  const upstreamMode = sharedPool.upstream_mode
+  const productionLike = upstreamMode === 'production'
+    || upstreamMode === 'real-canary'
+    || sharedPool.production_upstream_enabled === true
+    || sharedPool.real_canary_user_approved === true
+  if (mock.mode !== 'local_smoke') {
+    throw new Error('config: egress_tls_sidecar.mock_messages_response requires mode: local_smoke')
+  }
+  if (config.mode !== 'sub2api' || productionLike || !['local-capture', 'preflight'].includes(String(upstreamMode || ''))) {
+    throw new Error('config: egress_tls_sidecar.mock_messages_response is local-only and forbidden in production/provider-direct modes')
+  }
+  if (sidecar.logical_target_host !== 'api.anthropic.com') {
+    throw new Error('config: egress_tls_sidecar.mock_messages_response requires logical target api.anthropic.com')
+  }
+  if (!isLoopbackUpstreamUrl(config.upstream?.url)) {
+    throw new Error('config: egress_tls_sidecar.mock_messages_response requires a local-only loopback upstream URL')
+  }
 }
 
 
@@ -227,4 +275,17 @@ function isSafeSummaryBucket(value: string): boolean {
 function isLoopbackHost(value: string): boolean {
   const host = value.toLowerCase()
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
+}
+
+function isLoopbackUpstreamUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || !value.trim()) return false
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+  if (parsed.username || parsed.password) return false
+  return isLoopbackHost(parsed.hostname)
 }
