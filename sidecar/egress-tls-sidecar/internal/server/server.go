@@ -29,6 +29,11 @@ func NewHandler(cfg Config) http.Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/_health" {
+		w.Header().Set("content-type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method_not_allowed", http.StatusMethodNotAllowed)
 		return

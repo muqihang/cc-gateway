@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -40,6 +41,19 @@ func TestHandlerSendsRealUTLSClientHelloAndReturnsVerifiedBucket(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("collector did not capture ClientHello")
+	}
+}
+
+func TestHandlerHealthDoesNotRequireControlMaterial(t *testing.T) {
+	h := NewHandler(Config{Policy: safePolicy("wrong-bucket")})
+	req := httptest.NewRequest(http.MethodGet, "/_health", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", rec.Code)
+	}
+	if rec.Header().Get("content-type") != "application/json" {
+		t.Fatalf("unexpected content-type: %q", rec.Header().Get("content-type"))
 	}
 }
 

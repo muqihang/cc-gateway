@@ -54,6 +54,10 @@ func buildConfigFromEnv() (config, error) {
 	if len(egressBuckets) == 0 || len(proxyRefs) == 0 {
 		return config{}, errors.New("egress/proxy allowlists missing")
 	}
+	profileRefs := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROFILE_REFS"))
+	if len(profileRefs) == 0 {
+		profileRefs = []string{profile.ClaudeCode2179Ref, profile.ClaudeCode2197Ref}
+	}
 	return config{
 		Listen: listen,
 		HandlerConfig: server.Config{
@@ -61,7 +65,7 @@ func buildConfigFromEnv() (config, error) {
 				ControlToken:             token,
 				AllowedTargetHosts:       []string{"api.anthropic.com"},
 				AllowedRoutes:            []string{"/v1/messages"},
-				AllowedProfileRefs:       []string{profile.ClaudeCode2179Ref},
+				AllowedProfileRefs:       profileRefs,
 				AllowedEgressBuckets:     egressBuckets,
 				AllowedProxyIdentityRefs: proxyRefs,
 			},
