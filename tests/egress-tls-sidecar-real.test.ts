@@ -74,7 +74,7 @@ async function stopProcess(proc: ChildProcessWithoutNullStreams) {
   if (proc.exitCode === null) proc.kill('SIGKILL')
 }
 
-test('real Go uTLS sidecar local-only E2E matches Plan70 oracle and avoids Node direct fallback', async () => {
+test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages response', async () => {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
   const collector = await startClientHelloCollector()
   const realSidecar = await startRealSidecar(collector.address, String(fixture.account.egress_bucket), String(fixture.account.proxy_identity_ref))
@@ -92,7 +92,12 @@ test('real Go uTLS sidecar local-only E2E matches Plan70 oracle and avoids Node 
     oauth: undefined,
     logging: { level: 'error', audit: false },
     mode: 'sub2api',
-    shared_pool: { context_attestation_secret_ref: 'opaque:attestation-ref:v1:shared-fixture', context_attestation_secret: fixture.materials.context_attestation_material, egress_tls: { enabled: true, strict: true } },
+    shared_pool: {
+      upstream_mode: 'local-capture',
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:shared-fixture',
+      context_attestation_secret: fixture.materials.context_attestation_material,
+      egress_tls: { enabled: true, strict: true },
+    },
     egress_tls_sidecar: {
       enabled: true,
       endpoint: realSidecar.url,
@@ -102,6 +107,7 @@ test('real Go uTLS sidecar local-only E2E matches Plan70 oracle and avoids Node 
       allowed_routes: ['/v1/messages'],
       allowed_profile_refs: [String(fixture.account.egress_tls_profile_ref)],
       expected_tls_summary_bucket: expectedTLSBucket,
+      mock_messages_response: { enabled: true, mode: 'local_smoke' },
     },
     account_identities: {
       [String(fixture.account.account_id)]: {
@@ -137,10 +143,20 @@ test('real Go uTLS sidecar local-only E2E matches Plan70 oracle and avoids Node 
         'x-cc-formal-pool-context': base64url(canonicalContext),
         'x-cc-formal-pool-signature': `hmac-sha256:${hmac(canonicalContext, fixture.materials.context_attestation_material)}`,
       },
-      body: { metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: {
+        model: 'claude-sonnet-4-6',
+        stream: true,
+        metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
+        messages: [{ role: 'user', content: 'hello' }],
+      },
     })
     assert.equal(response.status, 200, response.body)
     assert.equal(response.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+    assert.equal(response.headers['x-cc-mock-response-schema-bucket'], 'anthropic-messages:synthetic-local-smoke-v1')
+    assert.equal(response.json?.type, 'message')
+    assert.equal(response.json?.role, 'assistant')
+    assert.ok(Array.isArray(response.json?.content), 'mock response must use Anthropic Messages content array')
+    assert.equal(response.json?.usage?.input_tokens, 1)
     assert.equal(upstream.captured.length, 0, 'Node direct upstream fallback must be zero')
     assert.equal(collector.captured.length, 1, 'real sidecar must emit one ClientHello to local collector')
   } finally {

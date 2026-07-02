@@ -45,7 +45,7 @@ func TestHandlerSendsRealUTLSClientHelloAndReturnsVerifiedBucket(t *testing.T) {
 }
 
 func TestHandlerHealthDoesNotRequireControlMaterial(t *testing.T) {
-	h := NewHandler(Config{Policy: safePolicy("wrong-bucket")})
+	h := NewHandler(Config{Policy: safePolicy()})
 	req := httptest.NewRequest(http.MethodGet, "/_health", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
