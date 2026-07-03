@@ -613,6 +613,83 @@ test('runtime registration permits same-account credential rotation with fresh i
   }
 })
 
+test('runtime registration permits safe 2.1.179 to 2.1.197 canonical promotion with fresh internal proof', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-canonical-promotion'
+  const runtimeDeviceId = '9'.repeat(64)
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const oldRuntime = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer old-selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: runtimeDeviceId,
+        egress_bucket: 'bucket-runtime-canonical-promotion',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-canonical-promotion',
+        credential_ref: 'opaque:credential-ref:v1:canonical-old',
+        credential_binding_hmac: credentialBindingHmac('Bearer old-selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.179',
+        persona_variant: 'claude-code-2.1.179-macos-local',
+      },
+    })
+    assert.equal(oldRuntime.status, 200, oldRuntime.body)
+
+    const promoted = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer new-selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: runtimeDeviceId,
+        egress_bucket: 'bucket-runtime-canonical-promotion',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-canonical-promotion',
+        credential_ref: 'opaque:credential-ref:v1:canonical-new',
+        credential_binding_hmac: credentialBindingHmac('Bearer new-selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.197',
+        persona_variant: 'claude-code-2.1.197-macos-local',
+      },
+    })
+    assert.equal(promoted.status, 200, promoted.body)
+
+    const unsafeDrift = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer new-selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: runtimeDeviceId,
+        egress_bucket: 'bucket-runtime-canonical-promotion',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-canonical-promotion',
+        credential_ref: 'opaque:credential-ref:v1:canonical-new',
+        credential_binding_hmac: credentialBindingHmac('Bearer new-selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.198',
+        persona_variant: 'claude-code-2.1.198-macos-local',
+      },
+    })
+    assert.equal(unsafeDrift.status, 409)
+    assert.equal(unsafeDrift.headers['x-cc-gateway-error-code'], 'runtime_mapping_authority_exists')
+    assert.ok(!unsafeDrift.body.includes('new-selected-token'))
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('runtime registration persists and replays after gateway restart', async () => {
   const mappingDir = mkdtempSync(join(tmpdir(), 'cc-gateway-runtime-mapping-'))
   const previousMappingFile = process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE

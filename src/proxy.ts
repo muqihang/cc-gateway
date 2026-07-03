@@ -708,7 +708,8 @@ function findRuntimeMappingConflict(
     }
     const existingAuthority = { ...existing, ...existingBucket }
     if (!sameRuntimeMappingAuthority(existingAuthority, mapping)
-      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existingAuthority, mapping)) {
+      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existingAuthority, mapping)
+      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existingAuthority, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
@@ -748,7 +749,8 @@ function findRuntimeMappingFileConflict(
     const sameBucket = existing.egress_bucket === mapping.egress_bucket
     if ((sameAccount || sameBucket)
       && !sameRuntimeMappingAuthority(existing, mapping)
-      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existing, mapping)) {
+      && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existing, mapping)
+      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existing, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
@@ -783,6 +785,42 @@ function sameRuntimeMappingAuthorityAllowingCredentialRotation(a: RuntimeMapping
     && (a.aws_access_key_id || '') === (b.aws_access_key_id || '')
     && (a.aws_secret_access_key || '') === (b.aws_secret_access_key || '')
     && (a.aws_session_token || '') === (b.aws_session_token || '')
+}
+
+function sameRuntimeMappingAuthorityAllowingCanonicalPromotion(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
+  if (!isAllowedRuntimeCanonicalPromotion(a, b)) return false
+  return a.account_id === b.account_id
+    && a.account_ref === b.account_ref
+    && a.account_uuid_ref === b.account_uuid_ref
+    && (a.email_ref || '') === (b.email_ref || '')
+    && a.token_type === b.token_type
+    && a.egress_bucket === b.egress_bucket
+    && a.proxy_url === b.proxy_url
+    && a.proxy_identity_ref === b.proxy_identity_ref
+    && a.session_policy === b.session_policy
+    && a.device_id === b.device_id
+    && (a.provider_kind || '') === (b.provider_kind || '')
+    && (a.workspace_ref || '') === (b.workspace_ref || '')
+    && (a.workspace_binding_hmac || '') === (b.workspace_binding_hmac || '')
+    && (a.upstream_endpoint_ref || '') === (b.upstream_endpoint_ref || '')
+    && (a.aws_region || '') === (b.aws_region || '')
+    && (a.upstream_host || '') === (b.upstream_host || '')
+    && (a.allowed_upstream_path || '') === (b.allowed_upstream_path || '')
+    && (a.upstream_auth_scheme || '') === (b.upstream_auth_scheme || '')
+    && (a.beta_policy_ref || '') === (b.beta_policy_ref || '')
+    && (a.request_shape_profile_ref || '') === (b.request_shape_profile_ref || '')
+    && (a.cache_parity_profile_ref || '') === (b.cache_parity_profile_ref || '')
+    && (a.anthropic_workspace_id || '') === (b.anthropic_workspace_id || '')
+    && (a.aws_access_key_id || '') === (b.aws_access_key_id || '')
+    && (a.aws_secret_access_key || '') === (b.aws_secret_access_key || '')
+    && (a.aws_session_token || '') === (b.aws_session_token || '')
+}
+
+function isAllowedRuntimeCanonicalPromotion(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
+  if (b.policy_version !== '2.1.197' || b.persona_variant !== 'claude-code-2.1.197-macos-local') return false
+  if (a.policy_version === '2.1.179' && a.persona_variant === 'claude-code-2.1.179-macos-local') return true
+  if (a.policy_version === '2.1.185' && a.persona_variant === 'claude-code-2.1.185-macos-local') return true
+  return false
 }
 
 function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
