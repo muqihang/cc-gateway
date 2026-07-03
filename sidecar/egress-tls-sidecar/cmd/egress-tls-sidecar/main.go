@@ -45,9 +45,26 @@ func buildConfigFromEnv() (config, error) {
 	if len(token) < 24 {
 		return config{}, errors.New("control token missing")
 	}
+	dialMode := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_DIAL_MODE"))
+	if dialMode == "" {
+		dialMode = "production"
+	}
 	override := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC"))
-	if override == "" || !isLoopbackListen(override) {
-		return config{}, errors.New("test dial override must be explicit loopback")
+	dialOverrides := map[string]string(nil)
+	allowTestDialOverride := false
+	switch dialMode {
+	case "production":
+		if override != "" {
+			return config{}, errors.New("test dial override is forbidden in production mode")
+		}
+	case "test":
+		if override == "" || !isLoopbackListen(override) {
+			return config{}, errors.New("test dial override must be explicit loopback")
+		}
+		dialOverrides = map[string]string{"api.anthropic.com:443": override}
+		allowTestDialOverride = true
+	default:
+		return config{}, errors.New("dial mode must be production or test")
 	}
 	egressBuckets := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS"))
 	proxyRefs := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS"))
@@ -69,8 +86,8 @@ func buildConfigFromEnv() (config, error) {
 				AllowedEgressBuckets:     egressBuckets,
 				AllowedProxyIdentityRefs: proxyRefs,
 			},
-			DialOverrides:         map[string]string{"api.anthropic.com:443": override},
-			AllowTestDialOverride: true,
+			DialOverrides:         dialOverrides,
+			AllowTestDialOverride: allowTestDialOverride,
 		},
 	}, nil
 }

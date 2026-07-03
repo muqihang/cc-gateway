@@ -501,6 +501,44 @@ ${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: htt
   assert.throws(() => loadConfig(path), /mock_messages_response.*production|production.*mock_messages_response/i)
 })
 
+test('sub2api production formal-pool can enable production TLS sidecar with mock bridge disabled', () => {
+  const yaml = configYaml(`
+mode: sub2api
+shared_pool:
+  upstream_mode: production
+  production_upstream_enabled: true
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19484
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs:
+    - tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    - tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2197
+  mock_messages_response:
+    enabled: false
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+    enabled: true
+${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\n`,
+  )
+  const config = loadConfig(writeConfigYaml(yaml))
+  assert.equal(config.egress_tls_sidecar?.enabled, true)
+  assert.equal(config.egress_tls_sidecar?.mock_messages_response?.enabled, false)
+  assert.deepEqual(config.egress_tls_sidecar?.allowed_target_hosts, ['api.anthropic.com'])
+  assert.deepEqual(config.egress_tls_sidecar?.allowed_routes, ['/v1/messages'])
+})
+
 test('sub2api local smoke formal-pool can explicitly enable sidecar mock messages response bridge', () => {
   const yaml = configYaml(`
 mode: sub2api
