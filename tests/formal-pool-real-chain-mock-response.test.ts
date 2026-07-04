@@ -235,7 +235,7 @@ test('real-chain mock bridge fail-closed cases stop before sidecar', async () =>
       path: '/v1/messages?beta=true',
       headers: headers(),
       body: body({ mcp_config: { enabled: true } }),
-      code: 'formal_pool_mcp_shape_unapproved',
+      code: 'formal_pool_mcp_legacy_shape_unapproved',
     },
     {
       name: 'sonnet5-2179',

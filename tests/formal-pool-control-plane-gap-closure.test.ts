@@ -253,15 +253,12 @@ test('formal-pool count_tokens fails closed with Plan76 stable error before upst
   }
 })
 
-test('formal-pool MCP configured authority/body marker fails closed before upstream', async () => {
+test('formal-pool structured unsafe MCP configured markers fail closed before upstream', async () => {
   for (const version of ['2.1.179', '2.1.185', '2.1.197'] as const) {
-    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_shape_unapproved', body({ mcp_servers: { synthetic: { command: 'safe-local-fixture' } } }), {
+    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_legacy_shape_unapproved', body({ mcp_servers: { synthetic: { command: 'safe-local-fixture' } } }), {
       observed_client_profile: observedProfile({ cli_version_bucket: version, mcp_configured_absent_diff_bucket: 'configured_marker_present' }),
     })
-    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_shape_unapproved', body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }), safe_nested: { mcpAuthority: 'synthetic-local' } } }), {
-      observed_client_profile: observedProfile({ cli_version_bucket: version, mcp_configured_absent_diff_bucket: 'configured_no_upstream_diff' }),
-    })
-    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_shape_unapproved', body({ system: [{ type: 'text', text: 'synthetic mcp server marker' }] }), {
+    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_legacy_shape_unapproved', body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }), safe_nested: { mcpAuthority: 'synthetic-local' } } }), {
       observed_client_profile: observedProfile({ cli_version_bucket: version, mcp_configured_absent_diff_bucket: 'configured_no_upstream_diff' }),
     })
   }

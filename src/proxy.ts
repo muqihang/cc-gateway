@@ -1,5 +1,6 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
+import { isIP } from 'net'
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
@@ -61,6 +62,7 @@ const FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_179_messages
 const FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
 const FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_179_cache_parity_degraded_v1'
 const FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
+const FORMAL_POOL_2197_TLS_PROFILE_REF = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
 const FORMAL_POOL_ENV_RESIDUE_PROFILE_REF = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const FORMAL_POOL_LOCALE_PROFILE_REF = 'locale-profile:us-pacific-v1'
 const FORMAL_POOL_BASE_URL_RESIDUE_PROFILE_REF = 'base-url-residue-profile:official-anthropic-v1'
@@ -81,6 +83,8 @@ const CLAUDE_PLATFORM_AWS_BINDING_DOMAIN = 'claude_platform_aws_workspace_bindin
 const CLAUDE_PLATFORM_AWS_SIGV4_SERVICE = 'aws-external-anthropic'
 const CLAUDE_PLATFORM_AWS_SIGV4_ALGORITHM = 'AWS4-HMAC-SHA256'
 const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
+const FORMAL_POOL_MCP_CONNECTOR_POLICY_REF = 'mcp-connector-policy:official-remote-https-v1'
+const FORMAL_POOL_MCP_BETA = 'mcp-client-2025-11-20'
 const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'schema_version',
   'cli_version_bucket',
@@ -102,6 +106,10 @@ const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'base_url_category_bucket',
   'proxy_env_bucket',
   'mcp_configured_absent_diff_bucket',
+  'mcp_shape_bucket',
+  'mcp_server_count_bucket',
+  'mcp_toolset_count_bucket',
+  'mcp_auth_bucket',
 ])
 
 type RuntimeRegisterRequest = {
@@ -1162,6 +1170,22 @@ function localSmokeMockMessagesResponseBody(personaDecision: ReturnType<typeof r
   }), 'utf-8')
 }
 
+function appendMCPConnectorBeta(betaHeader: string | undefined): string {
+  const existing = String(betaHeader || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const withoutMCP = existing.filter((part) => part !== FORMAL_POOL_MCP_BETA)
+  return [...withoutMCP, FORMAL_POOL_MCP_BETA].join(',')
+}
+
+function applyMCPConnectorEvidenceHeaders(headers: Record<string, any>, evidence: FormalPoolMCPConnectorEvidence): Record<string, any> {
+  headers['x-cc-mcp-connector-decision-bucket'] = evidence.decisionBucket
+  headers['x-cc-mcp-server-count-bucket'] = evidence.serverCountBucket
+  headers['x-cc-mcp-auth-bucket'] = evidence.authBucket
+  return headers
+}
+
 function applyGatewayEvidenceHeaders(
   headers: Record<string, string | string[] | undefined>,
   rawCapture?: RawCaptureSink,
@@ -1387,6 +1411,7 @@ type AttestedFormalPoolContext = {
   billing_shape_policy: FormalPoolBillingShapePolicy
   request_shape_profile_ref: string
   cache_parity_profile_ref: string
+  mcp_connector_policy_ref?: string
   observed_client_profile: Record<string, unknown>
   session_id: string
   timestamp_ms: number
@@ -1655,6 +1680,7 @@ async function handleRequest(
   let rawCCH: string | null = null
   let rawVerifierResult: unknown = null
   let finalVerifierOptions: FinalOutputVerifierOptions | null = null
+  let mcpConnectorEvidence = absentMCPConnectorEvidence()
 
   if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
     const controlPlaneCheck = verifySuppressedControlPlaneRequest(
@@ -1700,7 +1726,8 @@ async function handleRequest(
   }
 
   if (config.mode === 'sub2api' && formalPoolAttestation) {
-    const plan76 = verifyPlan76FormalPoolBodyPolicy(target.pathname, parsedBody, formalPoolAttestation)
+    const plan76 = verifyPlan76FormalPoolBodyPolicy(config, target.pathname, parsedBody, formalPoolAttestation)
+    mcpConnectorEvidence = plan76.mcp || absentMCPConnectorEvidence()
     if (!plan76.ok) {
       writeControlPlaneError(res, plan76.status, plan76.code, plan76.message)
       return
@@ -1823,6 +1850,9 @@ async function handleRequest(
   if (sessionId && config.mode === 'sub2api') {
     rewrittenHeaders['X-Claude-Code-Session-Id'] = sessionId
   }
+  if (config.mode === 'sub2api' && mcpConnectorEvidence.decisionBucket === 'official_url_connector_allowed') {
+    rewrittenHeaders['anthropic-beta'] = appendMCPConnectorBeta(rewrittenHeaders['anthropic-beta'])
+  }
 
   const signingInputBody = body.toString('utf-8')
   if (config.mode === 'sub2api' && billingMode === 'no_cch') {
@@ -1855,6 +1885,9 @@ async function handleRequest(
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
       attestation: formalPoolAttestation ?? undefined,
     }
+    if (mcpConnectorEvidence.decisionBucket === 'official_url_connector_allowed') {
+      finalVerifierOptions.expectedBeta = appendMCPConnectorBeta(finalVerifierOptions.expectedBeta)
+    }
   } else if (config.mode === 'sub2api') {
     finalVerifierOptions = {
       route: sharedPoolRoute,
@@ -1866,6 +1899,9 @@ async function handleRequest(
       requestShapeProfileRef: formalPoolAttestation?.request_shape_profile_ref,
       cacheParityProfileRef: formalPoolAttestation?.cache_parity_profile_ref,
       attestation: formalPoolAttestation ?? undefined,
+    }
+    if (mcpConnectorEvidence.decisionBucket === 'official_url_connector_allowed') {
+      finalVerifierOptions.expectedBeta = appendMCPConnectorBeta(finalVerifierOptions.expectedBeta)
     }
   }
 
@@ -2026,6 +2062,7 @@ async function handleRequest(
     }
     delete responseHeaders['transfer-encoding']
     responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
+    responseHeaders = applyMCPConnectorEvidenceHeaders(responseHeaders, mcpConnectorEvidence)
     responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
     if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, responseBody, rawCapture))
     res.writeHead(sidecarResult.response.status, responseHeaders)
@@ -2048,6 +2085,7 @@ async function handleRequest(
       let responseHeaders = { ...proxyRes.headers }
       if (egressTLSProfileStatus === 'tls_profile_unverified') responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
       delete responseHeaders['transfer-encoding']
+      responseHeaders = applyMCPConnectorEvidenceHeaders(responseHeaders, mcpConnectorEvidence)
       responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
 
       if (rawCapture.dir) {
@@ -2764,6 +2802,7 @@ function verifyFormalPoolFinalRequestShape(
     billingMode: FormalPoolBillingMode
     requestShapeProfileRef?: string
     cacheParityProfileRef?: string
+    attestation?: AttestedFormalPoolContext
   },
 ): { ok: true } | { ok: false; code: string } {
   if (options.route !== 'messages') return { ok: true }
@@ -2818,6 +2857,9 @@ function verifyFormalPoolFinalRequestShape(
     'tool_choice',
     'tools',
   ])
+  if (options.attestation?.mcp_connector_policy_ref === FORMAL_POOL_MCP_CONNECTOR_POLICY_REF && isFormalPoolMCPConnectorCanonicalTuple(options.attestation)) {
+    allowedTopLevel.add('mcp_servers')
+  }
   for (const key of Object.keys(parsed)) {
     if (!allowedTopLevel.has(key)) return { ok: false, code: 'request_shape_profile_mismatch' }
   }
@@ -3299,6 +3341,7 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
     || !isSafeProfileRef(obj.profile_policy_version)
     || !isSafeProfileRef(obj.request_shape_profile_ref)
     || !isSafeProfileRef(obj.cache_parity_profile_ref)
+    || (obj.mcp_connector_policy_ref !== undefined && obj.mcp_connector_policy_ref !== FORMAL_POOL_MCP_CONNECTOR_POLICY_REF)
     || !isFormalPoolBillingShapePolicy(obj.billing_shape_policy)
     || !isSafeObservedClientProfile(obj.observed_client_profile)) {
     return { ok: false, status: 403, code: 'malformed_formal_pool_context_attestation' }
@@ -3338,6 +3381,7 @@ function parseFormalPoolContext(req: IncomingMessage, config: Config): { ok: tru
       billing_shape_policy: obj.billing_shape_policy,
       request_shape_profile_ref: obj.request_shape_profile_ref,
       cache_parity_profile_ref: obj.cache_parity_profile_ref,
+      ...(typeof obj.mcp_connector_policy_ref === 'string' ? { mcp_connector_policy_ref: obj.mcp_connector_policy_ref } : {}),
       observed_client_profile: obj.observed_client_profile as Record<string, unknown>,
       session_id: obj.session_id,
       timestamp_ms: obj.timestamp_ms,
@@ -3475,6 +3519,11 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
   if (profile.base_url_category_bucket !== undefined && !['official_anthropic', 'neutral_gateway', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'unknown', 'not_observed'].includes(String(profile.base_url_category_bucket))) return false
   if (profile.proxy_env_bucket !== undefined && !['no_proxy_env', 'loopback_proxy_only', 'non_loopback_proxy_rejected', 'no_proxy_bypass_guarded', 'unknown'].includes(String(profile.proxy_env_bucket))) return false
   if (profile.mcp_configured_absent_diff_bucket !== undefined && !['absent_no_diff', 'configured_no_upstream_diff', 'configured_marker_present', 'unknown', 'not_observed'].includes(String(profile.mcp_configured_absent_diff_bucket))) return false
+  if (profile.mcp_shape_bucket !== undefined && !['absent', 'official_remote_url_connector', 'local_config_shape', 'unsafe_or_unknown'].includes(String(profile.mcp_shape_bucket))) return false
+  for (const key of ['mcp_server_count_bucket', 'mcp_toolset_count_bucket']) {
+    if (profile[key] !== undefined && !['0', '1', '2_5', '6_plus'].includes(String(profile[key]))) return false
+  }
+  if (profile.mcp_auth_bucket !== undefined && !['absent', 'present_redacted'].includes(String(profile.mcp_auth_bucket))) return false
   if (profile.local_env_residue_present !== undefined && typeof profile.local_env_residue_present !== 'boolean') return false
   if (profile.stream !== undefined && typeof profile.stream !== 'boolean') return false
   for (const key of ['thinking_present', 'output_config_present', 'context_management_present']) {
@@ -3516,47 +3565,230 @@ function plan76ModelVersionUnsupportedFromIdentity(attested: AttestedFormalPoolC
   return null
 }
 
+type FormalPoolMCPConnectorEvidence = {
+  decisionBucket: string
+  serverCountBucket: string
+  authBucket: string
+}
+
+function absentMCPConnectorEvidence(): FormalPoolMCPConnectorEvidence {
+  return { decisionBucket: 'absent', serverCountBucket: '0', authBucket: 'absent' }
+}
+
 function verifyPlan76FormalPoolBodyPolicy(
+  config: Config,
   pathname: string,
   parsedBody: unknown,
   attested: AttestedFormalPoolContext,
-): { ok: true } | { ok: false; status: number; code: string; message: string } {
-  if (pathname !== '/v1/messages') return { ok: true }
+): { ok: true; mcp: FormalPoolMCPConnectorEvidence } | { ok: false; status: number; code: string; message: string; mcp?: FormalPoolMCPConnectorEvidence } {
+  if (pathname !== '/v1/messages') return { ok: true, mcp: absentMCPConnectorEvidence() }
   const body = parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody) ? parsedBody as Record<string, unknown> : null
-  if (!body) return { ok: true }
+  if (!body) return { ok: true, mcp: absentMCPConnectorEvidence() }
   if (body.stream !== true || attested.observed_client_profile?.stream !== true) {
     return { ok: false, status: 403, code: 'formal_pool_non_streaming_profile_unapproved', message: 'Formal-pool non-streaming profile is not approved' }
   }
-  if (hasPlan76MCPShapeMarker(body, attested.observed_client_profile)) {
-    return { ok: false, status: 403, code: 'formal_pool_mcp_shape_unapproved', message: 'Formal-pool MCP configured shape is not approved' }
-  }
+  const mcpDecision = verifyFormalPoolMCPConnectorPolicy(body, attested.observed_client_profile || {}, attested, config)
+  if (!mcpDecision.ok) return mcpDecision
   const model = typeof body.model === 'string' ? body.model : ''
   if (model === 'claude-sonnet-5') {
     if (attested.policy_version !== '2.1.197' || attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION || attested.request_shape_profile_ref !== FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || attested.cache_parity_profile_ref !== FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF) {
       return { ok: false, status: 403, code: 'formal_pool_model_version_unsupported', message: 'Formal-pool Sonnet 5 requires the server-selected 2.1.197 canonical tuple' }
     }
   }
-  return { ok: true }
+  return { ok: true, mcp: mcpDecision.mcp }
 }
 
-function hasPlan76MCPShapeMarker(body: Record<string, unknown>, observedProfile: Record<string, unknown>): boolean {
+function verifyFormalPoolMCPConnectorPolicy(
+  body: Record<string, unknown>,
+  observedProfile: Record<string, unknown>,
+  attested: AttestedFormalPoolContext,
+  config: Config,
+): { ok: true; mcp: FormalPoolMCPConnectorEvidence } | { ok: false; status: 403; code: string; message: string; mcp: FormalPoolMCPConnectorEvidence } {
+  const classified = classifyFormalPoolMCPConnectorShape(body, observedProfile, attested, config)
+  if (!classified.ok) {
+    return {
+      ok: false,
+      status: 403,
+      code: classified.code,
+      message: classified.message,
+      mcp: classified.mcp,
+    }
+  }
+  return { ok: true, mcp: classified.mcp }
+}
+
+type FormalPoolMCPConnectorDecision =
+  | { ok: true; mcp: FormalPoolMCPConnectorEvidence }
+  | { ok: false; code: string; message: string; mcp: FormalPoolMCPConnectorEvidence }
+
+function rejectMCPConnector(code: string, decisionBucket: string, message = 'Formal-pool MCP connector shape is not approved', evidence: Partial<FormalPoolMCPConnectorEvidence> = {}): FormalPoolMCPConnectorDecision {
+  return {
+    ok: false,
+    code,
+    message,
+    mcp: {
+      ...absentMCPConnectorEvidence(),
+      ...evidence,
+      decisionBucket,
+    },
+  }
+}
+
+function classifyFormalPoolMCPConnectorShape(
+  body: Record<string, unknown>,
+  observedProfile: Record<string, unknown>,
+  attested: AttestedFormalPoolContext,
+  config: Config,
+): FormalPoolMCPConnectorDecision {
   const marker = observedProfile.mcp_configured_absent_diff_bucket
-  if (marker === 'configured_marker_present') return true
-  const forbiddenTopLevel = ['mcp_servers', 'mcp', 'mcp_config', 'mcp_authority', 'mcp_tools']
-  if (forbiddenTopLevel.some((key) => Object.prototype.hasOwnProperty.call(body, key))) return true
-  return containsPlan76MCPMarker(body)
+  const hasMCPServers = Object.prototype.hasOwnProperty.call(body, 'mcp_servers')
+  const hasMCPToolset = Array.isArray(body.tools) && body.tools.some((tool) => !!tool && typeof tool === 'object' && (tool as Record<string, unknown>).type === 'mcp_toolset')
+  const hasForbiddenTopLevel = ['mcp', 'mcp_config', 'mcp_authority', 'mcp_tools', 'mcpServers'].some((key) => Object.prototype.hasOwnProperty.call(body, key))
+  const hasStructuralMCPConfigKey = containsStructuralMCPConfigKey(body)
+  if (!hasMCPServers && !hasMCPToolset && !hasForbiddenTopLevel && marker !== 'configured_marker_present' && !hasStructuralMCPConfigKey) {
+    return { ok: true, mcp: absentMCPConnectorEvidence() }
+  }
+  const authBucket = containsRawMCPCredentialKey([body.mcp_servers, body.tools]) ? 'present_rejected' : 'absent'
+  const serverCountBucket = mcpCountBucket(Array.isArray(body.mcp_servers) ? body.mcp_servers.length : 0)
+  const evidence = { serverCountBucket, authBucket }
+  if (hasForbiddenTopLevel || marker === 'configured_marker_present' || (!hasMCPServers && !hasMCPToolset && hasStructuralMCPConfigKey)) return rejectMCPConnector('formal_pool_mcp_legacy_shape_unapproved', 'legacy_shape_rejected', undefined, evidence)
+  const connector = (config as any).formal_pool?.mcp_connector as { enabled?: boolean; allowed_hosts?: string[]; allowed_models?: string[]; max_servers?: number } | undefined
+  if (connector?.enabled !== true) return rejectMCPConnector('formal_pool_mcp_connector_disabled', 'connector_disabled', undefined, evidence)
+  if (attested.mcp_connector_policy_ref !== FORMAL_POOL_MCP_CONNECTOR_POLICY_REF) return rejectMCPConnector('formal_pool_mcp_connector_account_disabled', 'account_policy_missing', undefined, evidence)
+  if (!isFormalPoolMCPConnectorCanonicalTuple(attested)) return rejectMCPConnector('formal_pool_mcp_canonical_tuple_required', 'canonical_tuple_rejected', undefined, evidence)
+  if (!connector.allowed_models?.includes(String(body.model || ''))) return rejectMCPConnector('formal_pool_mcp_model_unapproved', 'model_rejected', undefined, evidence)
+  return validateOfficialRemoteMCPConnector(body, connector, evidence)
 }
 
-function containsPlan76MCPMarker(value: unknown, depth = 0): boolean {
+function isFormalPoolMCPConnectorCanonicalTuple(attested: Pick<AttestedFormalPoolContext, 'policy_version' | 'persona_profile' | 'profile_policy_version' | 'request_shape_profile_ref' | 'cache_parity_profile_ref' | 'egress_tls_profile_ref'>): boolean {
+  return attested.policy_version === '2.1.197'
+    && attested.persona_profile === 'claude-code-2.1.197-macos-local'
+    && attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION
+    && attested.request_shape_profile_ref === FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF
+    && attested.cache_parity_profile_ref === FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF
+    && attested.egress_tls_profile_ref === FORMAL_POOL_2197_TLS_PROFILE_REF
+}
+
+function containsStructuralMCPConfigKey(value: unknown, depth = 0): boolean {
   if (depth > 8 || value === null || value === undefined) return false
-  if (typeof value === 'string') return hasPlan76MCPMarkerText(value)
-  if (Array.isArray(value)) return value.some((item) => containsPlan76MCPMarker(item, depth + 1))
+  if (Array.isArray(value)) return value.some((item) => containsStructuralMCPConfigKey(item, depth + 1))
   if (typeof value !== 'object') return false
-  return Object.entries(value as Record<string, unknown>).some(([key, child]) => hasPlan76MCPMarkerText(key) || containsPlan76MCPMarker(child, depth + 1))
+  return Object.entries(value as Record<string, unknown>).some(([key, child]) => {
+    if (/^(mcpServers|mcp|mcp_servers|mcp_config|mcpAuthority|mcp_authority|mcpTools|mcp_tools)$/i.test(key)) return true
+    return containsStructuralMCPConfigKey(child, depth + 1)
+  })
 }
 
-function hasPlan76MCPMarkerText(value: string): boolean {
-  return /\bmcp(?:[_-]?(?:server|config|authority|permission|tool))?s?\b/i.test(value)
+function validateOfficialRemoteMCPConnector(
+  body: Record<string, unknown>,
+  connector: { allowed_hosts?: string[]; max_servers?: number },
+  evidence: Partial<FormalPoolMCPConnectorEvidence>,
+): FormalPoolMCPConnectorDecision {
+  if (!Array.isArray(body.mcp_servers)) return rejectMCPConnector('formal_pool_mcp_schema_unapproved', 'schema_rejected', undefined, evidence)
+  const maxServers = connector.max_servers || 1
+  if (body.mcp_servers.length < 1 || body.mcp_servers.length > maxServers) return rejectMCPConnector('formal_pool_mcp_schema_unapproved', 'schema_rejected', undefined, { ...evidence, serverCountBucket: mcpCountBucket(body.mcp_servers.length) })
+  if (containsRawMCPCredentialKey([body.mcp_servers, body.tools])) return rejectMCPConnector('formal_pool_mcp_raw_credential_unapproved', 'raw_credential_rejected', undefined, { ...evidence, authBucket: 'present_rejected' })
+  const approvedNames = new Set<string>()
+  for (const server of body.mcp_servers) {
+    const result = validateOfficialRemoteMCPServer(server, connector.allowed_hosts || [])
+    if (!result.ok) return rejectMCPConnector(result.code, result.bucket, undefined, evidence)
+    if (approvedNames.has(result.name)) return rejectMCPConnector('formal_pool_mcp_schema_unapproved', 'schema_rejected', undefined, evidence)
+    approvedNames.add(result.name)
+  }
+  if (!Array.isArray(body.tools)) return rejectMCPConnector('formal_pool_mcp_toolset_unapproved', 'toolset_rejected', undefined, evidence)
+  let mcpToolsetCount = 0
+  for (const tool of body.tools) {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
+    const record = tool as Record<string, unknown>
+    if (record.type !== 'mcp_toolset') continue
+    mcpToolsetCount++
+    const keys = Object.keys(record)
+    if (!keys.every((key) => key === 'type' || key === 'mcp_server_name')) return rejectMCPConnector('formal_pool_mcp_toolset_unapproved', 'toolset_rejected', undefined, evidence)
+    if (typeof record.mcp_server_name !== 'string' || !approvedNames.has(record.mcp_server_name)) return rejectMCPConnector('formal_pool_mcp_toolset_unapproved', 'toolset_rejected', undefined, evidence)
+  }
+  if (mcpToolsetCount !== approvedNames.size) return rejectMCPConnector('formal_pool_mcp_toolset_unapproved', 'toolset_rejected', undefined, evidence)
+  if (body.tool_choice !== undefined) return rejectMCPConnector('formal_pool_mcp_tool_choice_unapproved', 'tool_choice_rejected', undefined, evidence)
+  if (containsMCPCacheControl(body.mcp_servers) || containsMCPCacheControl(body.tools, true)) return rejectMCPConnector('formal_pool_mcp_cache_control_unapproved', 'cache_control_rejected', undefined, evidence)
+  return {
+    ok: true,
+    mcp: {
+      decisionBucket: 'official_url_connector_allowed',
+      serverCountBucket: mcpCountBucket(body.mcp_servers.length),
+      authBucket: 'absent',
+    },
+  }
+}
+
+function validateOfficialRemoteMCPServer(server: unknown, allowedHosts: string[]): { ok: true; name: string } | { ok: false; code: string; bucket: string } {
+  if (!server || typeof server !== 'object' || Array.isArray(server)) return { ok: false, code: 'formal_pool_mcp_schema_unapproved', bucket: 'schema_rejected' }
+  const record = server as Record<string, unknown>
+  const keys = Object.keys(record)
+  if (record.type !== 'url') return { ok: false, code: 'formal_pool_mcp_local_stdio_unapproved', bucket: 'local_stdio_rejected' }
+  if (record.cache_control !== undefined) return { ok: false, code: 'formal_pool_mcp_cache_control_unapproved', bucket: 'cache_control_rejected' }
+  if (keys.some((key) => ['command', 'args', 'cwd'].includes(key))) return { ok: false, code: 'formal_pool_mcp_local_command_unapproved', bucket: 'local_command_rejected' }
+  if (keys.some((key) => key === 'env')) return { ok: false, code: 'formal_pool_mcp_raw_credential_unapproved', bucket: 'raw_credential_rejected' }
+  if (!keys.every((key) => key === 'type' || key === 'name' || key === 'url')) return { ok: false, code: 'formal_pool_mcp_schema_unapproved', bucket: 'schema_rejected' }
+  if (typeof record.name !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(record.name)) return { ok: false, code: 'formal_pool_mcp_schema_unapproved', bucket: 'schema_rejected' }
+  const parsed = safeMCPURL(record.url)
+  if (!parsed.ok) return { ok: false, code: parsed.code, bucket: 'unsafe_url_rejected' }
+  if (!allowedHosts.includes(parsed.host)) return { ok: false, code: 'formal_pool_mcp_host_unapproved', bucket: 'host_rejected' }
+  return { ok: true, name: record.name }
+}
+
+function safeMCPURL(value: unknown): { ok: true; host: string } | { ok: false; code: string } {
+  if (typeof value !== 'string' || value.length > 2048) return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  if (parsed.port && parsed.port !== '443') return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  if (parsed.search || parsed.hash) return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  let decodedPath = ''
+  try {
+    decodedPath = decodeURIComponent(parsed.pathname)
+  } catch {
+    return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  }
+  if (/(?:authorization|api[_-]?key|token|cookie|secret|password|credential)/i.test(decodedPath)) {
+    return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  }
+  const host = parsed.hostname.toLowerCase()
+  if (!host || host.endsWith('.') || host === 'localhost' || host.endsWith('.localhost') || isIP(host) !== 0 || host.startsWith('[') || host.endsWith(']')) {
+    return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  }
+  if (isBlockedSpecialHost(host)) return { ok: false, code: 'formal_pool_mcp_unsafe_url_unapproved' }
+  return { ok: true, host }
+}
+
+function isBlockedSpecialHost(host: string): boolean {
+  return host === '169.254.169.254' || host === 'metadata.google.internal'
+}
+
+function containsRawMCPCredentialKey(value: unknown, depth = 0): boolean {
+  if (depth > 8 || value === null || value === undefined) return false
+  if (Array.isArray(value)) return value.some((item) => containsRawMCPCredentialKey(item, depth + 1))
+  if (typeof value !== 'object') return false
+  return Object.entries(value as Record<string, unknown>).some(([key, child]) => /^(authorization_token|authorization|api_key|token|headers|cookie|secret|password|env)$/i.test(key) || containsRawMCPCredentialKey(child, depth + 1))
+}
+
+function containsMCPCacheControl(value: unknown, onlyMCPToolset = false): boolean {
+  if (!Array.isArray(value)) return false
+  return value.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const record = item as Record<string, unknown>
+    if (onlyMCPToolset && record.type !== 'mcp_toolset') return false
+    return record.cache_control !== undefined
+  })
+}
+
+function mcpCountBucket(count: number): string {
+  if (count <= 0) return '0'
+  if (count === 1) return '1'
+  if (count <= 5) return '2_5'
+  return '6_plus'
 }
 
 function formalPoolBillingModeFromAttestation(attested: AttestedFormalPoolContext): FormalPoolBillingMode {

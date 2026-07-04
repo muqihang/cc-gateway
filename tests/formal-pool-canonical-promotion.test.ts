@@ -23,6 +23,8 @@ const cache2179 = 'claude_code_2_1_179_cache_parity_degraded_v1'
 const cache2197 = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
 const profilePolicy2179 = 'claude_code_2_1_179_cp1_degraded_v1'
 const profilePolicy2197 = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
+const mcpPolicyRef = 'mcp-connector-policy:official-remote-https-v1'
+const mcpHost = ['docs', 'example', 'com'].join('.')
 
 type CanonicalVersion = '2.1.179' | '2.1.185' | '2.1.197'
 
@@ -249,10 +251,30 @@ function plan76Config(upstreamUrl: string, proxyUrl: string, versions: Canonical
   } as any)
 }
 
-async function withGateway<T>(versions: CanonicalVersion[], fn: (gateway: ReturnType<typeof startProxy>, upstream: Awaited<ReturnType<typeof startFakeUpstream>>, proxy: Awaited<ReturnType<typeof startFakeConnectProxy>>) => Promise<T>) {
+function withMCPConnectorEnabled(config: ReturnType<typeof plan76Config>) {
+  return {
+    ...config,
+    formal_pool: {
+      enabled: true,
+      mcp_connector: {
+        enabled: true,
+        mode: 'official_remote_https',
+        allowed_hosts: [mcpHost],
+        allowed_models: ['claude-sonnet-4-6'],
+      },
+    },
+  } as any
+}
+
+async function withGateway<T>(
+  versions: CanonicalVersion[],
+  fn: (gateway: ReturnType<typeof startProxy>, upstream: Awaited<ReturnType<typeof startFakeUpstream>>, proxy: Awaited<ReturnType<typeof startFakeConnectProxy>>) => Promise<T>,
+  options: { mcpConnectorEnabled?: boolean } = {},
+) {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
-  const gateway = startProxy(plan76Config(upstream.url, proxy.url, versions))
+  const config = plan76Config(upstream.url, proxy.url, versions)
+  const gateway = startProxy(options.mcpConnectorEnabled ? withMCPConnectorEnabled(config) : config)
   try {
     return await fn(gateway, upstream, proxy)
   } finally {
@@ -425,6 +447,37 @@ test('observed client 2.1.197 with server canonical 2.1.185 uses fallback and fa
   })
 })
 
+test('fallback 2.1.185 tuple cannot opt into MCP connector even when model is otherwise allowed', async () => {
+  await withGateway(['2.1.185'], async (gateway, upstream) => {
+    const s = sessionId('1186')
+    const response = await request(gateway, '2.1.185', s, {
+      contextOverrides: {
+        mcp_connector_policy_ref: mcpPolicyRef,
+        observed_client_profile: observedProfile('2.1.197', {
+          top_level_body_keys: ['max_tokens', 'mcp_servers', 'messages', 'metadata', 'model', 'stream', 'system', 'tools'],
+          thinking_present: false,
+          output_config_present: false,
+          context_management_present: false,
+          mcp_shape_bucket: 'official_remote_url_connector',
+          mcp_server_count_bucket: '1',
+          mcp_toolset_count_bucket: '1',
+          mcp_auth_bucket: 'absent',
+        }),
+      },
+      bodyOverrides: {
+        thinking: undefined,
+        context_management: undefined,
+        output_config: undefined,
+        mcp_servers: [{ type: 'url', name: 'srv_1', url: new URL('/mcp', `https://${mcpHost}`).toString() }],
+        tools: [{ type: 'mcp_toolset', mcp_server_name: 'srv_1' }],
+      },
+    })
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_mcp_canonical_tuple_required')
+    assert.equal(upstream.captured.length, 0)
+  }, { mcpConnectorEnabled: true })
+})
+
 test('rollback 2.1.179 tuple is accepted and rewrites upstream as rollback identity', async () => {
   await withGateway(['2.1.179'], async (gateway, upstream) => {
     const s = sessionId('2179')
@@ -509,7 +562,7 @@ test('CP4 count_tokens MCP non-streaming and control-plane policies remain enfor
 
     const mcp = await request(gateway, '2.1.197', sessionId('1003'), { bodyOverrides: { mcp_servers: { synthetic: { command: 'safe-local-fixture' } } } })
     assert.equal(mcp.status, 403, mcp.body)
-    assert.equal(mcp.headers['x-cc-gateway-error-code'], 'formal_pool_mcp_shape_unapproved')
+    assert.equal(mcp.headers['x-cc-gateway-error-code'], 'formal_pool_mcp_connector_disabled')
 
     const controlPlane = await httpJson(serverUrl(gateway, '/v1/models?beta=true'), {
       headers: headers('2.1.197', {

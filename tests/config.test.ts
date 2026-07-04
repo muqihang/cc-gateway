@@ -27,6 +27,50 @@ egress_buckets:
     allowed_account_ids: [account-a]
 `
 
+function formalPoolMCPConnectorConfigYaml(
+  mcpConnectorYaml = '',
+  sidecarYaml = `
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19484
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs:
+    - tls-profile:claude-code-2.1.179-real-oracle-tcp-v1
+    - tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2197
+  mock_messages_response:
+    enabled: false
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+    enabled: true
+`,
+) {
+  return configYaml(`
+mode: sub2api
+auth:
+  gateway_token: gateway-token
+  internal_control_token: ${configInternalControlMaterial}
+shared_pool:
+  upstream_mode: production
+  production_upstream_enabled: true
+  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+formal_pool:
+  enabled: true
+${mcpConnectorYaml}
+${sidecarYaml}
+${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    '',
+  )
+}
+
 test('defaults old config without mode to standalone', () => {
   const config = loadConfig(writeConfigYaml(configYaml()))
   assert.equal(config.mode, 'standalone')
@@ -537,6 +581,224 @@ ${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: htt
   assert.equal(config.egress_tls_sidecar?.mock_messages_response?.enabled, false)
   assert.deepEqual(config.egress_tls_sidecar?.allowed_target_hosts, ['api.anthropic.com'])
   assert.deepEqual(config.egress_tls_sidecar?.allowed_routes, ['/v1/messages'])
+})
+
+test('formal-pool mcp connector policy is disabled by default in production', () => {
+  const config = loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml()))
+  assert.equal(config.formal_pool?.mcp_connector?.enabled ?? false, false)
+})
+
+test('production rejects disabled mcp connector carrying forbidden or unknown config', () => {
+  const cases = [
+    [
+      'disabled raw authorization token',
+      `  mcp_connector:
+    enabled: false
+    authorization_token: fixture-token
+`,
+      /formal_pool_mcp_connector_control_key_forbidden/,
+    ],
+    [
+      'disabled target override',
+      `  mcp_connector:
+    enabled: false
+    target_url: https://other.example.invalid
+`,
+      /formal_pool_mcp_connector_control_key_forbidden/,
+    ],
+    [
+      'disabled unknown key',
+      `  mcp_connector:
+    enabled: false
+    extra_future_toggle: true
+`,
+      /formal_pool_mcp_connector_unknown_key/,
+    ],
+    [
+      'disabled latent authorization opt-in',
+      `  mcp_connector:
+    enabled: false
+    allow_authorization_token: true
+`,
+      /formal_pool_mcp_connector_auth_credentials_forbidden/,
+    ],
+  ] as const
+
+  for (const [name, snippet, expected] of cases) {
+    assert.throws(
+      () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(snippet))),
+      expected,
+      name,
+    )
+  }
+})
+
+test('production rejects mcp connector enabled without explicit host allowlist', () => {
+  assert.throws(
+    () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_models:
+      - claude-opus-4-8
+`))),
+    /formal_pool_mcp_connector_allowlist_required/,
+  )
+})
+
+test('production rejects mcp connector enabled without explicit model allowlist', () => {
+  assert.throws(
+    () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+`))),
+    /formal_pool_mcp_connector_model_allowlist_required/,
+  )
+})
+
+test('production rejects mcp connector when sidecar is disabled, mock bridge enabled, or dial override present', () => {
+  const cases = [
+    [
+      'sidecar_disabled',
+      `
+egress_tls_sidecar:
+  enabled: false
+`,
+      /formal_pool_mcp_connector_requires_sidecar/,
+    ],
+    [
+      'mock_bridge_enabled',
+      `
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19484
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.197-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2197
+  mock_messages_response:
+    enabled: true
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+    enabled: true
+`,
+      /formal_pool_mcp_connector_mock_bridge_forbidden|mock_messages_response.*production|production.*mock_messages_response/,
+    ],
+    [
+      'dial_override',
+      `
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19484
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts: [api.anthropic.com]
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.197-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2197
+  dial_override:
+    api.anthropic.com: 127.0.0.1:19685
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+    enabled: true
+`,
+      /dial_override/,
+    ],
+  ] as const
+
+  for (const [name, sidecarYaml, expected] of cases) {
+    assert.throws(
+      () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+    allowed_models:
+      - claude-opus-4-8
+`, sidecarYaml))),
+      expected,
+      name,
+    )
+  }
+})
+
+test('production rejects mcp connector with unknown auth or target control keys', () => {
+  const forbiddenSnippets = [
+    ['authorization_token', '    authorization_token: fixture-token\n', /formal_pool_mcp_connector_control_key_forbidden/],
+    ['headers', '    headers:\n      Authorization: fixture-token\n', /formal_pool_mcp_connector_control_key_forbidden/],
+    ['api_key', '    api_key: fixture-key\n', /formal_pool_mcp_connector_control_key_forbidden/],
+    ['target_url', '    target_url: https://other.example.invalid\n', /formal_pool_mcp_connector_control_key_forbidden/],
+    ['dial_override', '    dial_override: 127.0.0.1:19685\n', /formal_pool_mcp_connector_control_key_forbidden/],
+    ['unknown_key', '    extra_future_toggle: true\n', /formal_pool_mcp_connector_unknown_key/],
+  ] as const
+
+  for (const [name, snippet, expected] of forbiddenSnippets) {
+    assert.throws(
+      () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+    allowed_models:
+      - claude-opus-4-8
+${snippet}`))),
+      expected,
+      name,
+    )
+  }
+})
+
+test('production mcp connector requires sidecar target host allowlist exactly api.anthropic.com', () => {
+  assert.throws(
+    () => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+    allowed_models:
+      - claude-opus-4-8
+`, `
+egress_tls_sidecar:
+  enabled: true
+  endpoint: http://127.0.0.1:19484
+  control_token: ${configInternalControlMaterial}
+  allowed_target_hosts:
+    - api.anthropic.com
+    - other.example.invalid
+  logical_target_host: api.anthropic.com
+  allowed_routes: [/v1/messages]
+  allowed_profile_refs: [tls-profile:claude-code-2.1.197-real-oracle-tcp-v1]
+  expected_tls_summary_bucket: tls-bucket:claude-code-real-oracle-2197
+  mock_messages_response:
+    enabled: false
+    mode: local_smoke
+tls_profiles:
+  oracle:
+    profile_ref: tls-profile:claude-code-2.1.197-real-oracle-tcp-v1
+    enabled: true
+`))),
+    /formal_pool_mcp_connector_requires_anthropic_sidecar_target/,
+  )
+})
+
+test('production accepts explicit mcp connector allowlist with complete sidecar and no mock bridge', () => {
+  const config = loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+    allowed_models:
+      - claude-opus-4-8
+`)))
+  assert.equal(config.formal_pool?.mcp_connector?.enabled, true)
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_hosts, ['docs.example.com'])
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['claude-opus-4-8'])
 })
 
 test('sub2api local smoke formal-pool can explicitly enable sidecar mock messages response bridge', () => {

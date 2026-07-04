@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs'
+import { isIP } from 'net'
 import { parse } from 'yaml'
 import { resolve } from 'path'
 import { assertNoRawTLSProfileMaterial, isSafeTLSProfileRef, validateTLSProfilesConfig, type TLSProfileConfig } from './egress-tls-profile.js'
@@ -47,6 +48,16 @@ export type EgressBucketConfig = {
   proxy_identity_hash?: string
   allowed_account_ids?: string[]
   tls_profile_ref?: string
+}
+
+export type FormalPoolMCPConnectorConfig = {
+  enabled?: boolean
+  mode?: 'official_remote_https' | string
+  allowed_hosts?: string[]
+  allowed_models?: string[]
+  allow_authorization_token?: false
+  require_beta?: true
+  max_servers?: number
 }
 
 export type Config = {
@@ -145,6 +156,10 @@ export type Config = {
       p0_hard_block_only?: boolean
     }
   }
+  formal_pool?: {
+    enabled?: boolean
+    mcp_connector?: FormalPoolMCPConnectorConfig
+  }
   account_identities?: Record<string, AccountIdentityConfig>
   egress_buckets?: Record<string, EgressBucketConfig>
   tls_profiles?: Record<string, TLSProfileConfig>
@@ -163,6 +178,16 @@ const TOKEN_LIKE_MATERIAL = /(?:sk-ant-|sk-[A-Za-z0-9]|Bearer\s+|Basic\s+|oauth|
 const SAFE_INTERNAL_ROUTING_KEY = /^[A-Za-z0-9._:-]{1,128}$/
 const CREDENTIAL_BINDING_HMAC = /^hmac-sha256:[a-f0-9]{64}$/i
 const WEAK_CONTROL_MATERIAL = /(?:change[-_ ]?me|placeholder|example|sample|dummy|test|local-tests|formal-pool-attestation-secret-test|internal-control-token-for-local-tests)/i
+const FORMAL_POOL_MCP_CONNECTOR_ALLOWED_KEYS = new Set([
+  'enabled',
+  'mode',
+  'allowed_hosts',
+  'allowed_models',
+  'allow_authorization_token',
+  'require_beta',
+  'max_servers',
+])
+const FORMAL_POOL_MCP_FORBIDDEN_CONTROL_KEY = /(?:authorization|api[_-]?key|token|cookie|headers?|secret|password|credential|proxy|target[_-]?(?:url|host|authority)|host|sni|server[_-]?name|dial[_-]?override|dial[_-]?host)/i
 
 function hasOwnKeys(value: unknown): boolean {
   return !!value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length > 0
@@ -180,6 +205,7 @@ function hasFormalPoolSharedPoolConfig(sharedPool: unknown): boolean {
 export function hasFormalPoolConfig(config: Config): boolean {
   return hasOwnKeys((config as any).account_identities)
     || hasOwnKeys((config as any).egress_buckets)
+    || hasOwnKeys((config as any).formal_pool)
     || hasFormalPoolSharedPoolConfig((config as any).shared_pool)
 }
 
@@ -334,7 +360,117 @@ export function validateFormalPoolMode(config: Config): void {
     }
   }
   validateEgressSidecarConfig(config as any)
+  validateFormalPoolMCPConnectorConfig(config)
   validateFormalPoolAttestationConfig(config)
+}
+
+function validateFormalPoolMCPConnectorConfig(config: Config): void {
+  const formalPool = (config as any).formal_pool as Record<string, unknown> | undefined
+  const rawConnector = formalPool?.mcp_connector
+  if (rawConnector === undefined) return
+  if (!rawConnector || typeof rawConnector !== 'object' || Array.isArray(rawConnector)) {
+    throw new Error('config: formal_pool.mcp_connector must be an object')
+  }
+  const connector = rawConnector as FormalPoolMCPConnectorConfig
+  for (const key of Object.keys(connector as Record<string, unknown>)) {
+    if (!FORMAL_POOL_MCP_CONNECTOR_ALLOWED_KEYS.has(key)) {
+      if (FORMAL_POOL_MCP_FORBIDDEN_CONTROL_KEY.test(key)) {
+        throw new Error('config: formal_pool_mcp_connector_control_key_forbidden')
+      }
+      throw new Error('config: formal_pool_mcp_connector_unknown_key')
+    }
+  }
+  if (containsForbiddenMCPConnectorControlKey(connector)) {
+    throw new Error('config: formal_pool_mcp_connector_control_key_forbidden')
+  }
+  if (connector.allow_authorization_token !== undefined && connector.allow_authorization_token !== false) {
+    throw new Error('config: formal_pool_mcp_connector_auth_credentials_forbidden')
+  }
+  if (connector.enabled !== true) return
+  if (config.mode !== 'sub2api') {
+    throw new Error('config: formal_pool_mcp_connector_sub2api_only')
+  }
+  if (connector.mode !== 'official_remote_https') {
+    throw new Error('config: formal_pool_mcp_connector_mode_unapproved')
+  }
+  const sharedPool = (config as any).shared_pool as Record<string, unknown> | undefined
+  const upstreamMode = String(sharedPool?.upstream_mode || '')
+  if (!['production', 'local-capture', 'preflight'].includes(upstreamMode)) {
+    throw new Error('config: formal_pool_mcp_connector_bad_upstream_mode')
+  }
+  const sidecar = (config as any).egress_tls_sidecar as EgressSidecarConfig | undefined
+  if (!sidecar || sidecar.enabled !== true) {
+    throw new Error('config: formal_pool_mcp_connector_requires_sidecar')
+  }
+  if (sidecar.mock_messages_response?.enabled === true) {
+    throw new Error('config: formal_pool_mcp_connector_mock_bridge_forbidden')
+  }
+  if (hasForbiddenDialOverrideConfig(sidecar)) {
+    throw new Error('config: formal_pool_mcp_connector_dial_override_forbidden')
+  }
+  if (sidecar.logical_target_host !== 'api.anthropic.com'
+    || !Array.isArray(sidecar.allowed_target_hosts)
+    || sidecar.allowed_target_hosts.length !== 1
+    || sidecar.allowed_target_hosts[0] !== 'api.anthropic.com') {
+    throw new Error('config: formal_pool_mcp_connector_requires_anthropic_sidecar_target')
+  }
+  if (!Array.isArray(connector.allowed_hosts) || connector.allowed_hosts.length === 0) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  const allowedHosts = connector.allowed_hosts.map((host) => normalizeMCPAllowedHost(host))
+  if (new Set(allowedHosts).size !== allowedHosts.length) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  connector.allowed_hosts = allowedHosts
+  if (!Array.isArray(connector.allowed_models) || connector.allowed_models.length === 0) {
+    throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
+  }
+  for (const model of connector.allowed_models) {
+    if (typeof model !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(model)) {
+      throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
+    }
+  }
+  if (connector.require_beta !== undefined && connector.require_beta !== true) {
+    throw new Error('config: formal_pool_mcp_connector_requires_beta')
+  }
+  if (connector.max_servers !== undefined && (!Number.isInteger(connector.max_servers) || connector.max_servers < 1 || connector.max_servers > 5)) {
+    throw new Error('config: formal_pool_mcp_connector_server_limit_unapproved')
+  }
+}
+
+function containsForbiddenMCPConnectorControlKey(value: unknown, depth = 0): boolean {
+  if (depth > 6 || !value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some((item) => containsForbiddenMCPConnectorControlKey(item, depth + 1))
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (!(depth === 0 && FORMAL_POOL_MCP_CONNECTOR_ALLOWED_KEYS.has(key)) && FORMAL_POOL_MCP_FORBIDDEN_CONTROL_KEY.test(key)) return true
+    if (containsForbiddenMCPConnectorControlKey(child, depth + 1)) return true
+  }
+  return false
+}
+
+function hasForbiddenDialOverrideConfig(value: unknown, depth = 0): boolean {
+  if (depth > 6 || !value || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some((item) => hasForbiddenDialOverrideConfig(item, depth + 1))
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (/dial[_-]?override|dial[_-]?host|server[_-]?name|tls[_-]?server[_-]?name/i.test(key)) return true
+    if (hasForbiddenDialOverrideConfig(child, depth + 1)) return true
+  }
+  return false
+}
+
+function normalizeMCPAllowedHost(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  const host = value.trim().toLowerCase()
+  if (!host || host !== value || host.endsWith('.') || host.includes('://') || host.includes('@') || host.includes('/') || host.includes('\\')) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || isIP(host) !== 0 || host.startsWith('[') || host.endsWith(']')) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  if (!/^[a-z0-9.-]{1,253}$/.test(host) || host.split('.').some((label) => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  return host
 }
 
 function validateFormalPoolAttestationConfig(config: Config): void {
