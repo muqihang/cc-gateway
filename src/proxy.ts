@@ -115,6 +115,7 @@ type RuntimeRegisterRequest = {
   egress_bucket?: unknown
   proxy_url?: unknown
   proxy_identity_ref?: unknown
+  egress_tls_profile_ref?: unknown
   persona_variant?: unknown
   session_policy?: unknown
   policy_version?: unknown
@@ -147,6 +148,7 @@ type RuntimeMappingRecord = {
   egress_bucket: string
   proxy_url: string
   proxy_identity_ref: string
+  egress_tls_profile_ref?: string
   persona_variant: string
   session_policy: 'preserve_downstream_session_id'
   policy_version: string
@@ -350,6 +352,7 @@ function normalizeRuntimeAccountMapping(
   const egressBucket = stringField(input.egress_bucket)
   const proxyUrl = stringField(input.proxy_url)
   const proxyIdentityRef = stringField(input.proxy_identity_ref)
+  const egressTLSProfileRef = stringField(input.egress_tls_profile_ref)
   const policyVersion = stringField(input.policy_version) || String(config.env.version || '')
   const personaVariant = stringField(input.persona_variant) || `claude-code-${policyVersion}-macos-local`
   const sessionPolicy = stringField(input.session_policy) || 'preserve_downstream_session_id'
@@ -378,6 +381,17 @@ function normalizeRuntimeAccountMapping(
   }
   if (!egressBucket || !isSafeInternalRoutingKey(egressBucket)) return { status: 400, code: 'invalid_egress_bucket', message: 'Runtime egress bucket must be a safe internal routing key' }
   if (!proxyIdentityRef || !isSafeIdentityRef(proxyIdentityRef)) return { status: 400, code: 'invalid_proxy_identity_ref', message: 'Runtime proxy identity ref must be a safe ref' }
+  const tlsMode = tlsProfileMode((config as any).shared_pool)
+  if (egressTLSProfileRef) {
+    if (!isSafeTLSProfileRef(egressTLSProfileRef)) {
+      return { status: 400, code: 'invalid_egress_tls_profile_ref', message: 'Runtime egress TLS profile ref must be a safe tls-profile ref' }
+    }
+    if (!isKnownEnabledTLSProfileRef(config as any, egressTLSProfileRef)) {
+      return { status: 400, code: 'unknown_egress_tls_profile_ref', message: 'Runtime egress TLS profile ref must reference an enabled TLS profile' }
+    }
+  } else if (tlsMode.enabled && tlsMode.strict) {
+    return { status: 400, code: 'missing_egress_tls_profile_ref', message: 'Strict TLS runtime registration requires an egress TLS profile ref' }
+  }
   if (!policyVersion) return { status: 400, code: 'missing_policy_version', message: 'Runtime registration requires policy version' }
   if (!/^[a-f0-9]{64}$/i.test(deviceId)) return { status: 400, code: 'missing_device_id', message: 'Runtime registration requires account-owned 64-hex device_id' }
   if (sessionPolicy !== 'preserve_downstream_session_id') {
@@ -429,6 +443,7 @@ function normalizeRuntimeAccountMapping(
     egress_bucket: egressBucket,
     proxy_url: proxyUrl,
     proxy_identity_ref: proxyIdentityRef,
+    ...(egressTLSProfileRef ? { egress_tls_profile_ref: egressTLSProfileRef } : {}),
     persona_variant: personaVariant,
     session_policy: sessionPolicy as 'preserve_downstream_session_id',
     policy_version: policyVersion,
@@ -488,6 +503,7 @@ function applyRuntimeAccountMapping(config: Config, mapping: RuntimeMappingRecor
     proxy_url: mapping.proxy_url,
     proxy_identity_ref: mapping.proxy_identity_ref,
     allowed_account_ids: [mapping.account_id],
+    ...(mapping.egress_tls_profile_ref ? { tls_profile_ref: mapping.egress_tls_profile_ref } : {}),
   }
 }
 
@@ -709,7 +725,8 @@ function findRuntimeMappingConflict(
     const existingAuthority = { ...existing, ...existingBucket }
     if (!sameRuntimeMappingAuthority(existingAuthority, mapping)
       && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existingAuthority, mapping)
-      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existingAuthority, mapping)) {
+      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existingAuthority, mapping)
+      && !sameRuntimeMappingAuthorityAllowingTLSProfileBackfill(existingAuthority, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
@@ -727,13 +744,14 @@ function findRuntimeMappingConflict(
 function findExistingRuntimeBucketForAccount(
   config: Config,
   accountId: string,
-): Pick<RuntimeMappingRecord, 'egress_bucket' | 'proxy_url' | 'proxy_identity_ref'> | null {
+): Pick<RuntimeMappingRecord, 'egress_bucket' | 'proxy_url' | 'proxy_identity_ref' | 'egress_tls_profile_ref'> | null {
   for (const [bucketId, bucket] of Object.entries(config.egress_buckets || {})) {
     if (bucket.allowed_account_ids?.includes(accountId)) {
       return {
         egress_bucket: bucketId,
         proxy_url: bucket.proxy_url,
         proxy_identity_ref: bucket.proxy_identity_ref || bucket.proxy_identity_hash || '',
+        ...(bucket.tls_profile_ref ? { egress_tls_profile_ref: bucket.tls_profile_ref } : {}),
       }
     }
   }
@@ -750,7 +768,8 @@ function findRuntimeMappingFileConflict(
     if ((sameAccount || sameBucket)
       && !sameRuntimeMappingAuthority(existing, mapping)
       && !sameRuntimeMappingAuthorityAllowingCredentialRotation(existing, mapping)
-      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existing, mapping)) {
+      && !sameRuntimeMappingAuthorityAllowingCanonicalPromotion(existing, mapping)
+      && !sameRuntimeMappingAuthorityAllowingTLSProfileBackfill(existing, mapping)) {
       return { status: 409, code: 'runtime_mapping_authority_exists', message: 'Runtime account authority mapping already exists' }
     }
   }
@@ -766,6 +785,7 @@ function sameRuntimeMappingAuthorityAllowingCredentialRotation(a: RuntimeMapping
     && a.egress_bucket === b.egress_bucket
     && a.proxy_url === b.proxy_url
     && a.proxy_identity_ref === b.proxy_identity_ref
+    && (a.egress_tls_profile_ref || '') === (b.egress_tls_profile_ref || '')
     && a.persona_variant === b.persona_variant
     && a.session_policy === b.session_policy
     && a.policy_version === b.policy_version
@@ -797,6 +817,7 @@ function sameRuntimeMappingAuthorityAllowingCanonicalPromotion(a: RuntimeMapping
     && a.egress_bucket === b.egress_bucket
     && a.proxy_url === b.proxy_url
     && a.proxy_identity_ref === b.proxy_identity_ref
+    && (a.egress_tls_profile_ref || '') === (b.egress_tls_profile_ref || '')
     && a.session_policy === b.session_policy
     && a.device_id === b.device_id
     && (a.provider_kind || '') === (b.provider_kind || '')
@@ -823,6 +844,13 @@ function isAllowedRuntimeCanonicalPromotion(a: RuntimeMappingRecord, b: RuntimeM
   return false
 }
 
+function sameRuntimeMappingAuthorityAllowingTLSProfileBackfill(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
+  if (a.egress_tls_profile_ref || !b.egress_tls_profile_ref) return false
+  return sameRuntimeMappingAuthority({ ...a, egress_tls_profile_ref: b.egress_tls_profile_ref }, b)
+    || sameRuntimeMappingAuthorityAllowingCredentialRotation({ ...a, egress_tls_profile_ref: b.egress_tls_profile_ref }, b)
+    || sameRuntimeMappingAuthorityAllowingCanonicalPromotion({ ...a, egress_tls_profile_ref: b.egress_tls_profile_ref }, b)
+}
+
 function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingRecord): boolean {
   return a.account_id === b.account_id
     && a.account_ref === b.account_ref
@@ -834,6 +862,7 @@ function sameRuntimeMappingAuthority(a: RuntimeMappingRecord, b: RuntimeMappingR
     && a.egress_bucket === b.egress_bucket
     && a.proxy_url === b.proxy_url
     && a.proxy_identity_ref === b.proxy_identity_ref
+    && (a.egress_tls_profile_ref || '') === (b.egress_tls_profile_ref || '')
     && a.persona_variant === b.persona_variant
     && a.session_policy === b.session_policy
     && a.policy_version === b.policy_version

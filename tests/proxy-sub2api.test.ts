@@ -515,6 +515,204 @@ test('runtime registration uses account-owned device_id in upstream metadata', a
   }
 })
 
+test('runtime registration propagates strict TLS profile ref into dynamic egress bucket', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-strict-tls'
+  const runtimeSessionId = '123e4567-e89b-42d3-a456-426614174014'
+  const tlsProfileRef = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      egress_tls: { enabled: true, strict: true },
+    },
+    tls_profiles: {
+      'claude-code-real-oracle-2197': { profile_ref: tlsProfileRef, source: 'observed-oracle-2197', enabled: true },
+    },
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: 'f'.repeat(64),
+        egress_bucket: 'bucket-runtime-strict-tls',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-strict-tls',
+        credential_ref: 'opaque:credential-ref:v1:strict-tls',
+        credential_binding_hmac: credentialBindingHmac('Bearer selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.197',
+        persona_variant: 'claude-code-2.1.197-macos-local',
+        egress_tls_profile_ref: tlsProfileRef,
+      },
+    })
+    assert.equal(registered.status, 200, registered.body)
+
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: schedulerHeaders({
+        ...ccGatewayHeaders,
+        'x-cc-account-id': runtimeAccountRef,
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:strict-tls',
+        'x-cc-egress-bucket': 'bucket-runtime-strict-tls',
+        'x-cc-policy-version': '2.1.197',
+        'x-claude-code-session-id': runtimeSessionId,
+        authorization: 'Bearer selected-token',
+      }, {
+        account_id: runtimeAccountRef,
+        credential_ref: 'opaque:credential-ref:v1:strict-tls',
+        egress_bucket: 'bucket-runtime-strict-tls',
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-strict-tls',
+        policy_version: '2.1.197',
+        persona_profile: 'claude-code-2.1.197-macos-local',
+        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        egress_tls_profile_ref: tlsProfileRef,
+        session_id: runtimeSessionId,
+        observed_client_profile: {
+          schema_version: 'observed_client_profile.v1',
+          cli_version_bucket: '2.1.197',
+          route_class: 'messages',
+          billing_shape: 'absent',
+          billing_block_count: 0,
+          cc_entrypoint_bucket: 'absent',
+          stream: true,
+        },
+      }),
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_disabled')
+    assert.notEqual(response.headers['x-cc-gateway-error-code'], 'missing_egress_tls_profile_ref')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
+test('runtime registration backfills missing TLS profile ref on existing runtime mapping', async () => {
+  const mappingDir = mkdtempSync(join(tmpdir(), 'cc-gateway-runtime-tls-backfill-'))
+  const previousMappingFile = process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
+  process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE = join(mappingDir, 'runtime-mappings.json')
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const runtimeAccountRef = 'hmac-sha256:runtime-account-tls-backfill'
+  const runtimeSessionId = '123e4567-e89b-42d3-a456-426614174015'
+  const tlsProfileRef = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
+
+  writeFileSync(process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE, JSON.stringify({
+    version: 1,
+    mappings: {
+      [runtimeAccountRef]: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        credential_ref: 'opaque:credential-ref:v1:tls-backfill',
+        credential_binding_hmac: credentialBindingHmac('Bearer selected-token'),
+        token_type: 'oauth',
+        egress_bucket: 'bucket-runtime-tls-backfill',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-tls-backfill',
+        persona_variant: 'claude-code-2.1.197-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.197',
+        device_id: 'a'.repeat(64),
+      },
+    },
+  }, null, 2))
+
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    shared_pool: {
+      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+      context_attestation_secret: attestationSecret,
+      egress_tls: { enabled: true, strict: true },
+    },
+    tls_profiles: {
+      'claude-code-real-oracle-2197': { profile_ref: tlsProfileRef, source: 'observed-oracle-2197', enabled: true },
+    },
+    account_identities: {},
+    egress_buckets: {},
+  }))
+
+  try {
+    const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
+      headers: { 'x-cc-gateway-token': 'gateway-token', 'x-cc-internal-control-token': internalControlToken, authorization: 'Bearer selected-token' },
+      body: {
+        account_id: runtimeAccountRef,
+        account_ref: runtimeAccountRef,
+        account_uuid_ref: runtimeAccountRef,
+        device_id: 'a'.repeat(64),
+        egress_bucket: 'bucket-runtime-tls-backfill',
+        proxy_url: proxy.url,
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-tls-backfill',
+        credential_ref: 'opaque:credential-ref:v1:tls-backfill',
+        credential_binding_hmac: credentialBindingHmac('Bearer selected-token'),
+        token_type: 'oauth',
+        policy_version: '2.1.197',
+        persona_variant: 'claude-code-2.1.197-macos-local',
+        egress_tls_profile_ref: tlsProfileRef,
+      },
+    })
+    assert.equal(registered.status, 200, registered.body)
+
+    const persisted = JSON.parse(readFileSync(process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE, 'utf-8'))
+    assert.equal(persisted.mappings[runtimeAccountRef].egress_tls_profile_ref, tlsProfileRef)
+
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: schedulerHeaders({
+        ...ccGatewayHeaders,
+        'x-cc-account-id': runtimeAccountRef,
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:tls-backfill',
+        'x-cc-egress-bucket': 'bucket-runtime-tls-backfill',
+        'x-cc-policy-version': '2.1.197',
+        'x-claude-code-session-id': runtimeSessionId,
+        authorization: 'Bearer selected-token',
+      }, {
+        account_id: runtimeAccountRef,
+        credential_ref: 'opaque:credential-ref:v1:tls-backfill',
+        egress_bucket: 'bucket-runtime-tls-backfill',
+        proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-tls-backfill',
+        policy_version: '2.1.197',
+        persona_profile: 'claude-code-2.1.197-macos-local',
+        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        egress_tls_profile_ref: tlsProfileRef,
+        session_id: runtimeSessionId,
+        observed_client_profile: {
+          schema_version: 'observed_client_profile.v1',
+          cli_version_bucket: '2.1.197',
+          route_class: 'messages',
+          billing_shape: 'absent',
+          billing_block_count: 0,
+          cc_entrypoint_bucket: 'absent',
+          stream: true,
+        },
+      }),
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: runtimeSessionId }) }, messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(response.status, 403, response.body)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_disabled')
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    if (previousMappingFile === undefined) delete process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE
+    else process.env.CC_GATEWAY_RUNTIME_MAPPING_FILE = previousMappingFile
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('runtime registration makes a newly onboarded account routable without restart', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
