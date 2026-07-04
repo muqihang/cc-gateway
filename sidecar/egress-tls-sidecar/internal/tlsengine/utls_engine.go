@@ -35,7 +35,7 @@ type ForwardRequest struct {
 type ForwardResponse struct {
 	StatusCode int
 	Headers    http.Header
-	Body       []byte
+	Body       io.ReadCloser
 	Summary    summary.SafeSummary
 }
 
@@ -61,9 +61,9 @@ func ForwardHTTP(ctx context.Context, req ForwardRequest) (ForwardResponse, erro
 	if err != nil {
 		return ForwardResponse{}, err
 	}
-	defer u.Close()
 	safeSummary, err := summarizeRecordedClientHello(req.Request, rec)
 	if err != nil {
+		_ = u.Close()
 		return ForwardResponse{}, err
 	}
 	h := req.Headers.Clone()
@@ -76,25 +76,37 @@ func ForwardHTTP(ctx context.Context, req ForwardRequest) (ForwardResponse, erro
 	h.Del("Upgrade")
 	outReq, err := http.NewRequestWithContext(ctx, req.Method, "https://"+req.TargetHost+req.Path, bytes.NewReader(req.Body))
 	if err != nil {
+		_ = u.Close()
 		return ForwardResponse{}, err
 	}
 	outReq.Header = h
 	outReq.Host = req.TargetHost
 	outReq.ContentLength = int64(len(req.Body))
 	if err := outReq.Write(u); err != nil {
+		_ = u.Close()
 		return ForwardResponse{}, fmt.Errorf("write upstream request: %w", err)
 	}
 	br := bufio.NewReader(u)
 	resp, err := http.ReadResponse(br, outReq)
 	if err != nil {
+		_ = u.Close()
 		return ForwardResponse{}, fmt.Errorf("read upstream response: %w", err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ForwardResponse{}, fmt.Errorf("read upstream response body: %w", err)
+	return ForwardResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: &forwardBody{ReadCloser: resp.Body, conn: u}, Summary: safeSummary}, nil
+}
+
+type forwardBody struct {
+	io.ReadCloser
+	conn io.Closer
+}
+
+func (b *forwardBody) Close() error {
+	bodyErr := b.ReadCloser.Close()
+	connErr := b.conn.Close()
+	if bodyErr != nil {
+		return bodyErr
 	}
-	return ForwardResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Summary: safeSummary}, nil
+	return connErr
 }
 
 func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, error) {

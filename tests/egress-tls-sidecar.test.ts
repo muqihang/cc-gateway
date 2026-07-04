@@ -1,8 +1,7 @@
 import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
-import { createServer, type IncomingMessage, type ServerResponse } from 'http'
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
 import { readFileSync } from 'fs'
-import { request as httpRequest } from 'http'
 import { request as httpsRequest } from 'https'
 import type { AddressInfo } from 'net'
 import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
@@ -235,7 +234,7 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
   } as any)
 }
 
-async function startMockSidecar(options: { status?: number; token?: string; tlsBucket?: string; reject?: boolean; forwardToTarget?: boolean; forwardToUrl?: string } = {}) {
+async function startMockSidecar(options: { status?: number; token?: string; tlsBucket?: string; reject?: boolean; forwardToTarget?: boolean; forwardToUrl?: string; chunks?: string[]; chunkDelayMs?: number } = {}) {
   const captured: SidecarCapture[] = []
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = []
@@ -259,7 +258,11 @@ async function startMockSidecar(options: { status?: number; token?: string; tlsB
           'content-type': 'application/json',
           'x-cc-egress-tls-summary-bucket': options.tlsBucket || expectedTLSBucket,
         })
-        res.end(JSON.stringify({ ok: true }))
+        if (options.chunks?.length) {
+          void writeChunks(res, options.chunks, options.chunkDelayMs || 0)
+        } else {
+          res.end(JSON.stringify({ ok: true }))
+        }
         return
       }
       const mapped = options.forwardToTarget ? new URL(String((options as any).forwardToUrl || '')) : null
@@ -280,15 +283,11 @@ async function startMockSidecar(options: { status?: number; token?: string; tlsB
           'content-length': String(body.length),
         },
       }, (upstreamRes) => {
-        const responseChunks: Buffer[] = []
-        upstreamRes.on('data', (chunk) => responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-        upstreamRes.on('end', () => {
-          res.writeHead(upstreamRes.statusCode || 502, {
-            ...upstreamRes.headers,
-            'x-cc-egress-tls-summary-bucket': options.tlsBucket || expectedTLSBucket,
-          })
-          res.end(Buffer.concat(responseChunks))
+        res.writeHead(upstreamRes.statusCode || 502, {
+          ...upstreamRes.headers,
+          'x-cc-egress-tls-summary-bucket': options.tlsBucket || expectedTLSBucket,
         })
+        upstreamRes.pipe(res)
       })
       upstreamReq.on('error', () => {
         res.writeHead(502, { 'content-type': 'application/json' })
@@ -301,6 +300,48 @@ async function startMockSidecar(options: { status?: number; token?: string; tlsB
   await listen(server)
   const { port } = server.address() as AddressInfo
   return { server, captured, url: `http://127.0.0.1:${port}` }
+}
+
+
+async function writeChunks(res: ServerResponse, chunks: string[], delayMs: number) {
+  for (const chunk of chunks) {
+    res.write(chunk)
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+  res.end()
+}
+
+
+async function firstGatewayChunk(url: string, context: Record<string, unknown>): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+  const payload = Buffer.from(JSON.stringify({ stream: true, metadata: { user_id: JSON.stringify({ session_id: sessionId }) }, messages: [{ role: 'user', content: 'hello' }] }), 'utf-8')
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        'x-cc-gateway-token': 'gateway-token',
+        'x-cc-provider': 'anthropic',
+        'x-cc-account-id': 'account-a',
+        'x-cc-token-type': 'oauth',
+        'x-cc-credential-ref': 'opaque:credential-ref:v1:cred-a',
+        'x-cc-egress-bucket': 'bucket-a',
+        'x-cc-policy-version': '2.1.179',
+        authorization: 'Bearer fixture',
+        'x-claude-code-session-id': sessionId,
+        ...signedFormalPoolHeaders(context),
+      },
+    }, (res) => {
+      res.once('data', (chunk) => {
+        resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk) })
+        res.destroy()
+      })
+      res.on('error', reject)
+      res.on('end', () => reject(new Error('gateway response ended before first chunk')))
+    })
+    req.on('error', reject)
+    req.end(payload)
+  })
 }
 
 async function postThroughGateway(gateway: ReturnType<typeof startProxy>, contextOverrides: Record<string, unknown> = {}) {
@@ -675,6 +716,45 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
     assert.equal(forwardedHeaders.authorization, 'Bearer fixture')
     assert.equal(Object.prototype.hasOwnProperty.call(forwardedHeaders, 'host'), false)
     assert.equal(forwardedHeaders['content-type'], 'application/json')
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+
+test('TLS sidecar forwarded upstream 429 with TLS proof is preserved instead of converted to 502', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar({ status: 429 })
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  try {
+    const response = await postThroughGateway(gateway, { nonce: 'sidecar-forwarded-429' })
+    assert.equal(response.status, 429, response.body)
+    assert.equal(response.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+    assert.notEqual(response.headers['x-cc-gateway-error-code'], 'egress_tls_sidecar_failure')
+    assert.match(response.body, /ok/)
+    assert.equal(upstream.captured.length, 0)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
+  }
+})
+
+test('TLS sidecar response streams first chunk before terminal upstream chunk', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar({
+    chunks: ['event: message_start\n\n', 'event: message_stop\n\n'],
+    chunkDelayMs: 250,
+  })
+  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  try {
+    const firstChunk = await firstGatewayChunk(serverUrl(gateway, '/v1/messages?beta=true'), formalPoolContext({ nonce: 'sidecar-stream-first-chunk' }))
+    assert.equal(firstChunk.status, 200)
+    assert.equal(firstChunk.headers['x-cc-egress-tls-summary-bucket'], expectedTLSBucket)
+    assert.match(firstChunk.body, /message_start/)
+    assert.doesNotMatch(firstChunk.body, /message_stop/)
   } finally {
     await close(gateway)
     await close(upstream.server)

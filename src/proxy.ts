@@ -13,7 +13,7 @@ import { getAccessToken } from './oauth.js'
 import { rewriteBody, rewriteHeaders } from './rewriter.js'
 import { audit, log } from './logger.js'
 import { getProxyAgent } from './proxy-agent.js'
-import { callEgressSidecar, egressSidecarEnabled, egressSidecarTargetHost, prepareEgressSidecarRequest } from './egress-sidecar-client.js'
+import { callEgressSidecar, egressSidecarEnabled, egressSidecarTargetHost, openEgressSidecar, prepareEgressSidecarRequest } from './egress-sidecar-client.js'
 import {
   canonicalClaudeCodeSessionId,
   accountIdentityRef,
@@ -2044,30 +2044,67 @@ async function handleRequest(
       writeControlPlaneError(res, prepared.status, prepared.code, prepared.message)
       return
     }
-    const sidecarResult = await callEgressSidecar(prepared.prepared, body, forwardHeaders)
-    if (!sidecarResult.ok) {
-      writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
-      return
-    }
-    let responseHeaders = { ...sidecarResult.response.headers }
-    let responseBody = sidecarResult.response.body
     if (mockMessagesResponseBridgeEnabled(config)) {
-      responseBody = localSmokeMockMessagesResponseBody(personaDecision, parsedBody)
-      responseHeaders = {
-        ...responseHeaders,
+      const sidecarResult = await callEgressSidecar(prepared.prepared, body, forwardHeaders)
+      if (!sidecarResult.ok) {
+        writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
+        return
+      }
+      const responseBody = localSmokeMockMessagesResponseBody(personaDecision, parsedBody)
+      let responseHeaders: Record<string, string | string[] | undefined> = {
+        ...sidecarResult.response.headers,
         'content-type': 'application/json',
         'content-length': String(responseBody.length),
         'x-cc-mock-response-schema-bucket': 'anthropic-messages:synthetic-local-smoke-v1',
       }
+      delete responseHeaders['transfer-encoding']
+      responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
+      responseHeaders = applyMCPConnectorEvidenceHeaders(responseHeaders, mcpConnectorEvidence)
+      responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
+      if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, responseBody, rawCapture))
+      res.writeHead(sidecarResult.response.status, responseHeaders)
+      res.end(responseBody)
+      if (config.logging.audit) audit(clientName, method, safePath, sidecarResult.response.status)
+      return
     }
+    const sidecarResult = await openEgressSidecar(prepared.prepared, body, forwardHeaders)
+    if (!sidecarResult.ok) {
+      writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
+      return
+    }
+    const status = sidecarResult.response.status
+    let responseHeaders: Record<string, string | string[] | undefined> = { ...sidecarResult.response.headers }
     delete responseHeaders['transfer-encoding']
     responseHeaders['x-cc-egress-tls-profile-status'] = 'tls_profile_unverified'
     responseHeaders = applyMCPConnectorEvidenceHeaders(responseHeaders, mcpConnectorEvidence)
     responseHeaders = applyGatewayEvidenceHeaders(responseHeaders, rawCapture)
-    if (rawCapture.dir) writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(sidecarResult.response.status, responseHeaders, responseBody, rawCapture))
-    res.writeHead(sidecarResult.response.status, responseHeaders)
-    res.end(responseBody)
-    if (config.logging.audit) audit(clientName, method, safePath, sidecarResult.response.status)
+    if (rawCapture.dir) {
+      const chunks: Buffer[] = []
+      res.writeHead(status, responseHeaders)
+      sidecarResult.response.stream.on('data', (chunk) => {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        chunks.push(buffer)
+        if (!res.destroyed && !res.write(buffer)) {
+          sidecarResult.response.stream.pause()
+        }
+      })
+      res.on('drain', () => {
+        sidecarResult.response.stream.resume()
+      })
+      sidecarResult.response.stream.on('end', () => {
+        const responseBody = Buffer.concat(chunks)
+        writeRawCaptureFile(rawCapture, '02_upstream_response.json', rawResponseCapturePayload(status, responseHeaders, responseBody, rawCapture))
+        if (!res.destroyed) res.end()
+        if (config.logging.audit) audit(clientName, method, safePath, status)
+      })
+      sidecarResult.response.stream.on('error', () => {
+        if (!res.destroyed) res.destroy()
+      })
+    } else {
+      res.writeHead(status, responseHeaders)
+      sidecarResult.response.stream.pipe(res)
+      if (config.logging.audit) audit(clientName, method, safePath, status)
+    }
     return
   }
 

@@ -103,6 +103,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream_forward_failed", http.StatusBadGateway)
 		return
 	}
+	defer forwarded.Body.Close()
 	if cmp := summary.CompareToExpected(forwarded.Summary, p.Expected); cmp.Status != "MATCH" {
 		http.Error(w, "tls_summary_mismatch", http.StatusBadGateway)
 		return
@@ -110,7 +111,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	copyForwardHeaders(w.Header(), forwarded.Headers)
 	w.Header().Set("x-cc-egress-tls-summary-bucket", p.ExpectedSummaryBucket)
 	w.WriteHeader(forwarded.StatusCode)
-	_, _ = w.Write(forwarded.Body)
+	_, _ = io.Copy(flushingWriter{ResponseWriter: w}, forwarded.Body)
+}
+
+type flushingWriter struct {
+	http.ResponseWriter
+}
+
+func (w flushingWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return n, err
 }
 
 func SummarizeCapturedClientHello(_ context.Context, data []byte) (CapturedSummary, error) {

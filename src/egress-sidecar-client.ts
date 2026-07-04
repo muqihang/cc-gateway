@@ -1,4 +1,4 @@
-import { request as httpRequest, type IncomingHttpHeaders } from 'http'
+import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'http'
 import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import { isSafeTLSProfileRef } from './egress-tls-profile.js'
@@ -42,6 +42,12 @@ export type EgressSidecarResponse = {
   status: number
   headers: IncomingHttpHeaders
   body: Buffer
+}
+
+export type EgressSidecarStreamResponse = {
+  status: number
+  headers: IncomingHttpHeaders
+  stream: IncomingMessage
 }
 
 const ALLOWED_SIDECAR_CONFIG_KEYS = new Set([
@@ -194,6 +200,21 @@ export function prepareEgressSidecarRequest(input: {
 }
 
 export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer, upstreamHeaders: Record<string, string | string[] | number | undefined> = {}): Promise<{ ok: true; response: EgressSidecarResponse } | { ok: false; status: number; code: string; message: string }> {
+  const opened = await openEgressSidecar(prepared, body, upstreamHeaders)
+  if (!opened.ok) return opened
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    opened.response.stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    opened.response.stream.on('end', () => resolve({ ok: true, response: {
+      status: opened.response.status,
+      headers: opened.response.headers,
+      body: Buffer.concat(chunks),
+    } }))
+    opened.response.stream.on('error', () => resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_failure', message: 'TLS sidecar stream failed during upstream response' }))
+  })
+}
+
+export async function openEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer, upstreamHeaders: Record<string, string | string[] | number | undefined> = {}): Promise<{ ok: true; response: EgressSidecarStreamResponse } | { ok: false; status: number; code: string; message: string }> {
   const endpoint = new URL(prepared.endpoint.toString())
   const requestFn = endpoint.protocol === 'https:' ? httpsRequest : httpRequest
   return new Promise((resolve) => {
@@ -207,29 +228,25 @@ export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: B
         'x-cc-egress-upstream-headers': encodeSidecarUpstreamHeaders(upstreamHeaders),
       },
     }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
-      res.on('end', () => {
-        const status = res.statusCode || 502
-        if (status === 401 || status === 403) {
-          resolve({ ok: false, status: 502, code: status === 401 ? 'egress_tls_sidecar_unauthenticated' : 'egress_tls_sidecar_rejected', message: 'TLS sidecar rejected authenticated egress' })
-          return
-        }
-        if (status < 200 || status >= 300) {
-          resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_failure', message: 'TLS sidecar failed before upstream response' })
-          return
-        }
-        const observedBucket = parseSingleSafeSummaryBucket(res.headers['x-cc-egress-tls-summary-bucket'])
-        if (observedBucket !== prepared.expectedTLSBucket) {
-          resolve({ ok: false, status: 502, code: 'egress_tls_summary_mismatch', message: 'TLS sidecar summary bucket does not match expected profile' })
-          return
-        }
-        resolve({ ok: true, response: { status, headers: res.headers, body: Buffer.concat(chunks) } })
-      })
+      const status = res.statusCode || 502
+      const observedBucket = parseSingleSafeSummaryBucket(res.headers['x-cc-egress-tls-summary-bucket'])
+      if (observedBucket === prepared.expectedTLSBucket) {
+        resolve({ ok: true, response: { status, headers: res.headers, stream: res } })
+        return
+      }
+      res.resume()
+      if (status === 401 || status === 403) {
+        resolve({ ok: false, status: 502, code: status === 401 ? 'egress_tls_sidecar_unauthenticated' : 'egress_tls_sidecar_rejected', message: 'TLS sidecar rejected authenticated egress' })
+        return
+      }
+      if (status < 200 || status >= 300) {
+        resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_failure', message: 'TLS sidecar failed before upstream response' })
+        return
+      }
+      resolve({ ok: false, status: 502, code: 'egress_tls_summary_mismatch', message: 'TLS sidecar summary bucket does not match expected profile' })
     })
     req.on('error', () => resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_unavailable', message: 'TLS sidecar is unavailable' }))
-    req.write(body)
-    req.end()
+    req.end(body)
   })
 }
 
