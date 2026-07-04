@@ -801,6 +801,20 @@ test('production accepts explicit mcp connector allowlist with complete sidecar 
   assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['claude-opus-4-8'])
 })
 
+test('production accepts explicit mcp connector wildcard allowlists only as opt-in config', () => {
+  const config = loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - "*"
+    allowed_models:
+      - "*"
+`)))
+  assert.equal(config.formal_pool?.mcp_connector?.enabled, true)
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_hosts, ['*'])
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['*'])
+})
+
 test('sub2api local smoke formal-pool can explicitly enable sidecar mock messages response bridge', () => {
   const yaml = configYaml(`
 mode: sub2api

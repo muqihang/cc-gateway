@@ -3656,7 +3656,7 @@ function classifyFormalPoolMCPConnectorShape(
   if (connector?.enabled !== true) return rejectMCPConnector('formal_pool_mcp_connector_disabled', 'connector_disabled', undefined, evidence)
   if (attested.mcp_connector_policy_ref !== FORMAL_POOL_MCP_CONNECTOR_POLICY_REF) return rejectMCPConnector('formal_pool_mcp_connector_account_disabled', 'account_policy_missing', undefined, evidence)
   if (!isFormalPoolMCPConnectorCanonicalTuple(attested)) return rejectMCPConnector('formal_pool_mcp_canonical_tuple_required', 'canonical_tuple_rejected', undefined, evidence)
-  if (!connector.allowed_models?.includes(String(body.model || ''))) return rejectMCPConnector('formal_pool_mcp_model_unapproved', 'model_rejected', undefined, evidence)
+  if (!mcpAllowlistMatches(connector.allowed_models, String(body.model || ''))) return rejectMCPConnector('formal_pool_mcp_model_unapproved', 'model_rejected', undefined, evidence)
   return validateOfficialRemoteMCPConnector(body, connector, evidence)
 }
 
@@ -3731,8 +3731,12 @@ function validateOfficialRemoteMCPServer(server: unknown, allowedHosts: string[]
   if (typeof record.name !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(record.name)) return { ok: false, code: 'formal_pool_mcp_schema_unapproved', bucket: 'schema_rejected' }
   const parsed = safeMCPURL(record.url)
   if (!parsed.ok) return { ok: false, code: parsed.code, bucket: 'unsafe_url_rejected' }
-  if (!allowedHosts.includes(parsed.host)) return { ok: false, code: 'formal_pool_mcp_host_unapproved', bucket: 'host_rejected' }
+  if (!mcpAllowlistMatches(allowedHosts, parsed.host)) return { ok: false, code: 'formal_pool_mcp_host_unapproved', bucket: 'host_rejected' }
   return { ok: true, name: record.name }
+}
+
+function mcpAllowlistMatches(allowlist: string[] | undefined, value: string): boolean {
+  return Array.isArray(allowlist) && (allowlist.includes('*') || allowlist.includes(value))
 }
 
 function safeMCPURL(value: unknown): { ok: true; host: string } | { ok: false; code: string } {

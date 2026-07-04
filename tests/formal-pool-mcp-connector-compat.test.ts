@@ -286,6 +286,49 @@ test('formal-pool official remote MCP connector passes only when explicitly enab
   assert.doesNotMatch(sidecarCaptured[0].bodyText, /x-anthropic-billing-header|cch=/i)
 })
 
+test('formal-pool MCP connector wildcard config permits public HTTPS hosts but keeps URL safety gates', async () => {
+  const publicHost = ['tools', 'vendor', 'example'].join('.')
+  const allowed = await sendFormalPoolRequest({
+    configOverrides: {
+      formal_pool: {
+        enabled: true,
+        mcp_connector: {
+          enabled: true,
+          mode: 'official_remote_https',
+          allowed_hosts: ['*'],
+          allowed_models: ['*'],
+        },
+      },
+    },
+    body: nativeMCPConnectorBody({
+      mcp_servers: [{ type: 'url', name: mcpServerName, url: new URL('/mcp', `https://${publicHost}`).toString() }],
+    }),
+  })
+  assert.equal(allowed.response.status, 200, allowed.response.body)
+  assert.equal(allowed.response.headers['x-cc-mcp-connector-decision-bucket'], 'official_url_connector_allowed')
+  assert.equal(allowed.sidecarCount, 1)
+
+  const unsafe = await sendFormalPoolRequest({
+    configOverrides: {
+      formal_pool: {
+        enabled: true,
+        mcp_connector: {
+          enabled: true,
+          mode: 'official_remote_https',
+          allowed_hosts: ['*'],
+          allowed_models: ['*'],
+        },
+      },
+    },
+    body: nativeMCPConnectorBody({
+      mcp_servers: [{ type: 'url', name: mcpServerName, url: 'https://127.0.0.1/mcp' }],
+    }),
+  })
+  assert.equal(unsafe.response.status, 403, unsafe.response.body)
+  assert.equal(unsafe.response.headers['x-cc-gateway-error-code'], 'formal_pool_mcp_unsafe_url_unapproved')
+  assert.equal(unsafe.sidecarCount, 0)
+})
+
 test('formal-pool MCP connector is rejected when config disabled or account policy ref missing', async () => {
   const disabled = await sendFormalPoolRequest({
     configOverrides: { formal_pool: { enabled: true, mcp_connector: { enabled: false } } },

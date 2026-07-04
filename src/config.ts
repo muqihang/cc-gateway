@@ -425,11 +425,11 @@ function validateFormalPoolMCPConnectorConfig(config: Config): void {
   if (!Array.isArray(connector.allowed_models) || connector.allowed_models.length === 0) {
     throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
   }
-  for (const model of connector.allowed_models) {
-    if (typeof model !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(model)) {
-      throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
-    }
+  const allowedModels = connector.allowed_models.map((model) => normalizeMCPAllowedModel(model))
+  if (new Set(allowedModels).size !== allowedModels.length) {
+    throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
   }
+  connector.allowed_models = allowedModels
   if (connector.require_beta !== undefined && connector.require_beta !== true) {
     throw new Error('config: formal_pool_mcp_connector_requires_beta')
   }
@@ -461,6 +461,7 @@ function hasForbiddenDialOverrideConfig(value: unknown, depth = 0): boolean {
 function normalizeMCPAllowedHost(value: unknown): string {
   if (typeof value !== 'string') throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   const host = value.trim().toLowerCase()
+  if (host === '*') return host
   if (!host || host !== value || host.endsWith('.') || host.includes('://') || host.includes('@') || host.includes('/') || host.includes('\\')) {
     throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   }
@@ -471,6 +472,16 @@ function normalizeMCPAllowedHost(value: unknown): string {
     throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   }
   return host
+}
+
+function normalizeMCPAllowedModel(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
+  const model = value.trim()
+  if (model === '*') return model
+  if (!model || model !== value || !/^[A-Za-z0-9._:-]{1,128}$/.test(model)) {
+    throw new Error('config: formal_pool_mcp_connector_model_allowlist_required')
+  }
+  return model
 }
 
 function validateFormalPoolAttestationConfig(config: Config): void {
