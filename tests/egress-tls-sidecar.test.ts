@@ -669,6 +669,12 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
     const serialized = JSON.stringify(control)
     assert(!/authorization|x-api-key|cookie|raw[_-]?(prompt|body|response)|prompt|clientHello|pcap|private|hello/i.test(serialized), serialized)
     assert.equal(sidecar.captured[0].headers['x-cc-egress-sidecar-token'], controlToken)
+    const encodedHeaders = sidecar.captured[0].headers['x-cc-egress-upstream-headers']
+    assert.equal(typeof encodedHeaders, 'string')
+    const forwardedHeaders = JSON.parse(Buffer.from(encodedHeaders as string, 'base64url').toString('utf-8'))
+    assert.equal(forwardedHeaders.authorization, 'Bearer fixture')
+    assert.equal(Object.prototype.hasOwnProperty.call(forwardedHeaders, 'host'), false)
+    assert.equal(forwardedHeaders['content-type'], 'application/json')
   } finally {
     await close(gateway)
     await close(upstream.server)

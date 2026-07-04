@@ -193,7 +193,7 @@ export function prepareEgressSidecarRequest(input: {
   return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket } }
 }
 
-export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer): Promise<{ ok: true; response: EgressSidecarResponse } | { ok: false; status: number; code: string; message: string }> {
+export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer, upstreamHeaders: Record<string, string | string[] | number | undefined> = {}): Promise<{ ok: true; response: EgressSidecarResponse } | { ok: false; status: number; code: string; message: string }> {
   const endpoint = new URL(prepared.endpoint.toString())
   const requestFn = endpoint.protocol === 'https:' ? httpsRequest : httpRequest
   return new Promise((resolve) => {
@@ -204,6 +204,7 @@ export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: B
         'content-length': String(body.length),
         'x-cc-egress-sidecar-token': prepared.controlToken,
         'x-cc-egress-control': JSON.stringify(prepared.control),
+        'x-cc-egress-upstream-headers': encodeSidecarUpstreamHeaders(upstreamHeaders),
       },
     }, (res) => {
       const chunks: Buffer[] = []
@@ -230,6 +231,33 @@ export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: B
     req.write(body)
     req.end()
   })
+}
+
+function encodeSidecarUpstreamHeaders(headers: Record<string, string | string[] | number | undefined>): string {
+  const normalized: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined || isForbiddenSidecarForwardHeader(name)) continue
+    if (Array.isArray(value)) {
+      normalized[name] = value.join(', ')
+    } else {
+      normalized[name] = String(value)
+    }
+  }
+  return Buffer.from(JSON.stringify(normalized), 'utf-8').toString('base64url')
+}
+
+function isForbiddenSidecarForwardHeader(name: string): boolean {
+  const lower = name.toLowerCase()
+  return lower === 'host'
+    || lower === 'content-length'
+    || lower === 'connection'
+    || lower === 'proxy-connection'
+    || lower === 'keep-alive'
+    || lower === 'transfer-encoding'
+    || lower === 'upgrade'
+    || lower === 'proxy-authorization'
+    || lower === 'cookie'
+    || lower.startsWith('x-forwarded-')
 }
 
 function parseLoopbackEndpoint(value: unknown): URL | null {

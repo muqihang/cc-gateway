@@ -2044,7 +2044,7 @@ async function handleRequest(
       writeControlPlaneError(res, prepared.status, prepared.code, prepared.message)
       return
     }
-    const sidecarResult = await callEgressSidecar(prepared.prepared, body)
+    const sidecarResult = await callEgressSidecar(prepared.prepared, body, forwardHeaders)
     if (!sidecarResult.ok) {
       writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
       return

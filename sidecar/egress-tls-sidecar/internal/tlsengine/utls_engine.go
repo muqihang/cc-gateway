@@ -1,9 +1,14 @@
 package tlsengine
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,34 +24,118 @@ type Request struct {
 	AllowTestDialOverride bool
 }
 
+type ForwardRequest struct {
+	Request
+	Method  string
+	Path    string
+	Headers http.Header
+	Body    []byte
+}
+
+type ForwardResponse struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Summary    summary.SafeSummary
+}
+
 func SendClientHello(ctx context.Context, req Request) error {
 	_, err := SendClientHelloSummary(ctx, req)
 	return err
 }
 
 func SendClientHelloSummary(ctx context.Context, req Request) (summary.SafeSummary, error) {
+	u, rec, err := dialUTLS(ctx, req)
+	if err != nil {
+		return summary.SafeSummary{}, err
+	}
+	defer u.Close()
+	return summarizeRecordedClientHello(req, rec)
+}
+
+func ForwardHTTP(ctx context.Context, req ForwardRequest) (ForwardResponse, error) {
+	if req.Method != http.MethodPost || req.Path == "" || !strings.HasPrefix(req.Path, "/") || strings.Contains(req.Path, "\r") || strings.Contains(req.Path, "\n") {
+		return ForwardResponse{}, fmt.Errorf("unsafe HTTP forward request")
+	}
+	u, rec, err := dialUTLS(ctx, req.Request)
+	if err != nil {
+		return ForwardResponse{}, err
+	}
+	defer u.Close()
+	safeSummary, err := summarizeRecordedClientHello(req.Request, rec)
+	if err != nil {
+		return ForwardResponse{}, err
+	}
+	h := req.Headers.Clone()
+	h.Set("Host", req.TargetHost)
+	h.Set("Content-Length", fmt.Sprintf("%d", len(req.Body)))
+	h.Del("Connection")
+	h.Del("Proxy-Connection")
+	h.Del("Keep-Alive")
+	h.Del("Transfer-Encoding")
+	h.Del("Upgrade")
+	outReq, err := http.NewRequestWithContext(ctx, req.Method, "https://"+req.TargetHost+req.Path, bytes.NewReader(req.Body))
+	if err != nil {
+		return ForwardResponse{}, err
+	}
+	outReq.Header = h
+	outReq.Host = req.TargetHost
+	outReq.ContentLength = int64(len(req.Body))
+	if err := outReq.Write(u); err != nil {
+		return ForwardResponse{}, fmt.Errorf("write upstream request: %w", err)
+	}
+	br := bufio.NewReader(u)
+	resp, err := http.ReadResponse(br, outReq)
+	if err != nil {
+		return ForwardResponse{}, fmt.Errorf("read upstream response: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ForwardResponse{}, fmt.Errorf("read upstream response body: %w", err)
+	}
+	return ForwardResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: body, Summary: safeSummary}, nil
+}
+
+func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, error) {
 	if req.Profile.Ref == "" || req.TargetHost == "" {
-		return summary.SafeSummary{}, fmt.Errorf("missing TLS engine request authority")
+		return nil, nil, fmt.Errorf("missing TLS engine request authority")
 	}
 	dialAddr := req.TargetHost + ":443"
 	if req.DialAddress != "" {
 		if !req.AllowTestDialOverride {
-			return summary.SafeSummary{}, fmt.Errorf("test dial override disabled")
+			return nil, nil, fmt.Errorf("test dial override disabled")
 		}
 		dialAddr = req.DialAddress
 	}
 	d := &net.Dialer{Timeout: 2 * time.Second}
 	conn, err := d.DialContext(ctx, "tcp", dialAddr)
 	if err != nil {
-		return summary.SafeSummary{}, err
+		return nil, nil, err
 	}
-	defer conn.Close()
 	rec := &recordingConn{Conn: conn}
-	u := utls.UClient(rec, &utls.Config{ServerName: req.TargetHost, NextProtos: nextProtosForProfile(req.Profile)}, utls.HelloCustom)
-	if err := u.ApplyPreset(clientHelloSpecForProfile(req.Profile)); err != nil {
-		return summary.SafeSummary{}, fmt.Errorf("apply TLS preset: %w", err)
+	cfg := &utls.Config{ServerName: req.TargetHost, NextProtos: nextProtosForProfile(req.Profile)}
+	if req.DialAddress != "" && req.AllowTestDialOverride {
+		cfg.InsecureSkipVerify = true
 	}
-	_ = u.HandshakeContext(ctx)
+	u := utls.UClient(rec, cfg, utls.HelloCustom)
+	if err := u.ApplyPreset(clientHelloSpecForProfile(req.Profile)); err != nil {
+		_ = u.Close()
+		return nil, nil, fmt.Errorf("apply TLS preset: %w", err)
+	}
+	if err := u.HandshakeContext(ctx); err != nil {
+		_ = u.Close()
+		// Existing proof-only tests intentionally use a raw ClientHello collector, so
+		// keep allowing test dial overrides to capture the written ClientHello without
+		// requiring a complete TLS server.
+		if !(req.DialAddress != "" && req.AllowTestDialOverride) {
+			return nil, nil, err
+		}
+	}
+	return u, rec, nil
+}
+
+func summarizeRecordedClientHello(req Request, rec *recordingConn) (summary.SafeSummary, error) {
 	raw := rec.bytes()
 	if len(raw) == 0 {
 		return summary.SafeSummary{}, fmt.Errorf("ClientHello was not written")
