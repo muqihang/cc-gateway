@@ -2918,6 +2918,9 @@ function readTrustedHealthcheckPersonaProfile(req: IncomingMessage, clientName: 
 function isSupportedHealthcheckPersonaForPolicy(profile: string, policyVersion: string): boolean {
   const normalizedProfile = profile.trim()
   const normalizedPolicyVersion = policyVersion.trim()
+  if (normalizedPolicyVersion === '2.1.197') {
+    return normalizedProfile === 'claude-code-2.1.197-macos-local'
+  }
   if (normalizedPolicyVersion === '2.1.179') {
     return normalizedProfile === HEALTHCHECK_2179_NATIVE_DEGRADED_PROFILE
   }

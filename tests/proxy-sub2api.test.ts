@@ -304,6 +304,72 @@ function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<
   } as any)
 }
 
+test('formal-pool healthcheck accepts server-selected 2.1.197 persona with streaming Haiku shape', async () => {
+  const upstream = await startFakeUpstream()
+  const proxy = await startFakeConnectProxy()
+  const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, {
+    account_identities: {
+      'account-1': {
+        device_id: 'b'.repeat(64),
+        account_uuid_hash: 'hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        email_hash: 'hmac-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+        account_hash: 'hmac-sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        credential_ref: 'opaque:credential-ref:v1:cred-a',
+        credential_binding_hmac: credentialBindingHmac('Bearer selected-token'),
+        persona_variant: 'claude-code-2.1.197-macos-local',
+        session_policy: 'preserve_downstream_session_id',
+        policy_version: '2.1.197',
+      },
+    },
+    env: { ...baseConfig().env, version: '2.1.197', version_base: '2.1.197' },
+  }))
+
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: schedulerHeaders({
+        authorization: 'Bearer selected-token',
+        'x-cc-policy-version': '2.1.197',
+        'x-cc-internal-control-token': internalControlToken,
+        'x-sub2api-healthcheck-persona': 'claude-code-2.1.197-macos-local',
+      }, {
+        policy_version: '2.1.197',
+        persona_profile: 'claude-code-2.1.197-macos-local',
+        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        observed_client_profile: {
+          schema_version: 'observed_client_profile.v1',
+          cli_version_bucket: '2.1.197',
+          route_class: 'messages',
+          billing_shape: 'absent',
+          billing_block_count: 0,
+          cc_entrypoint_bucket: 'absent',
+          stream: true,
+        },
+      }),
+      body: {
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 64,
+        stream: true,
+        messages: [{ role: 'user', content: 'healthcheck' }],
+        tools: [],
+      },
+    })
+
+    assert.notEqual(response.headers['x-cc-gateway-error-code'], 'unsupported_healthcheck_persona')
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    const forwarded = JSON.parse(upstream.captured[0].body)
+    assert.equal(forwarded.model, 'claude-haiku-4-5-20251001')
+    assert.equal(forwarded.stream, true)
+    assert.equal(upstream.captured[0].headers['anthropic-beta']?.includes('context-1m'), false)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(proxy.server)
+  }
+})
+
 test('sub2api Anthropic OAuth preserves selected authorization and strips all x-cc headers', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
