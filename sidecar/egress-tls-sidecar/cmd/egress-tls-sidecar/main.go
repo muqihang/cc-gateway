@@ -52,6 +52,7 @@ func buildConfigFromEnv() (config, error) {
 	override := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC"))
 	dialOverrides := map[string]string(nil)
 	allowTestDialOverride := false
+	requireProxyEgress := true
 	switch dialMode {
 	case "production":
 		if override != "" {
@@ -63,6 +64,7 @@ func buildConfigFromEnv() (config, error) {
 		}
 		dialOverrides = map[string]string{"api.anthropic.com:443": override}
 		allowTestDialOverride = true
+		requireProxyEgress = false
 	default:
 		return config{}, errors.New("dial mode must be production or test")
 	}
@@ -88,6 +90,7 @@ func buildConfigFromEnv() (config, error) {
 			},
 			DialOverrides:         dialOverrides,
 			AllowTestDialOverride: allowTestDialOverride,
+			RequireProxyEgress:    requireProxyEgress,
 		},
 	}, nil
 }

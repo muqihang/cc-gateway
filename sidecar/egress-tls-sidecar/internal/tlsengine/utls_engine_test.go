@@ -3,6 +3,7 @@ package tlsengine
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -79,5 +80,116 @@ func TestLogicalSNISidecarClientHelloMatchesPlan70Oracle(t *testing.T) {
 	result := summary.CompareToExpected(got, p.Expected)
 	if result.Status != "MATCH" {
 		t.Fatalf("expected sidecar to match Plan70 SNI oracle, got %+v", result)
+	}
+}
+
+func TestDialViaHTTPConnectProxyUsesProxyAndNeverDirectTarget(t *testing.T) {
+	proxySawConnect := make(chan string, 1)
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyLn.Close()
+	go func() {
+		conn, err := proxyLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err == nil {
+			proxySawConnect <- line
+		}
+	}()
+
+	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer targetLn.Close()
+	targetSawDirect := make(chan struct{}, 1)
+	go func() {
+		conn, err := targetLn.Accept()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		targetSawDirect <- struct{}{}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = dialProxyTunnel(ctx, "http://"+proxyLn.Addr().String(), "api.anthropic.com", 443)
+	if err == nil {
+		t.Fatalf("expected proxy tunnel to fail after fake proxy closes")
+	}
+	select {
+	case line := <-proxySawConnect:
+		if line != "CONNECT api.anthropic.com:443 HTTP/1.1\r\n" {
+			t.Fatalf("unexpected CONNECT line %q", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("proxy did not receive CONNECT")
+	}
+	select {
+	case <-targetSawDirect:
+		t.Fatalf("target listener received a direct connection")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestDialProxyTunnelRejectsProviderHostAsProxy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := dialProxyTunnel(ctx, "https://api.anthropic.com:443", "api.anthropic.com", 443); err == nil {
+		t.Fatalf("expected provider host proxy URL to be rejected before any network dial")
+	}
+}
+
+func TestDialViaHTTPConnectProxyReturnsUsableTunnel(t *testing.T) {
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyLn.Close()
+	go func() {
+		conn, err := proxyLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		reader := bufio.NewReader(conn)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil || line == "\r\n" {
+				break
+			}
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(reader, buf); err == nil && string(buf) == "ping" {
+			_, _ = conn.Write([]byte("pong"))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := dialProxyTunnel(ctx, "http://"+proxyLn.Addr().String(), "api.anthropic.com", 443)
+	if err != nil {
+		t.Fatalf("dialProxyTunnel() error = %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write tunnel: %v", err)
+	}
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("read tunnel: %v", err)
+	}
+	if string(buf) != "pong" {
+		t.Fatalf("unexpected tunnel echo %q", string(buf))
 	}
 }

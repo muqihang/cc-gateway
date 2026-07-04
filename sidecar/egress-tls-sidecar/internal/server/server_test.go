@@ -106,6 +106,34 @@ func TestHandlerForwardsHTTPResponseAfterTLSProof(t *testing.T) {
 	}
 }
 
+func TestHandlerProductionModeRequiresProxyURLAndDoesNotDirectDial(t *testing.T) {
+	collectorAddr, captured := startClientHelloCollector(t)
+	h := NewHandler(Config{Policy: safePolicy(), RequireProxyEgress: true})
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/egress", bytes.NewBufferString(`{"ok":true}`))
+	req.Header.Set("x-cc-egress-sidecar-token", testToken)
+	req.Header.Set("x-cc-egress-control", safeControlJSON())
+	_ = collectorAddr
+	h.ServeHTTP(res, req)
+	if res.Code < 400 {
+		t.Fatalf("expected production sidecar to fail closed without proxy URL, got %d", res.Code)
+	}
+	if got := res.Header().Get("x-cc-egress-tls-summary-bucket"); got != "" {
+		t.Fatalf("failed request must not report verified bucket, got %q", got)
+	}
+	select {
+	case summary := <-captured:
+		t.Fatalf("direct dial occurred without proxy: %+v", summary)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestSafeProxyURLHeaderRejectsProviderHostAsProxy(t *testing.T) {
+	if _, err := safeProxyURLHeader("https://api.anthropic.com:443"); err == nil {
+		t.Fatalf("expected provider host proxy URL to be rejected")
+	}
+}
+
 func TestReadRequestBodyLimitedRejectsOversizedBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/egress", bytes.NewBufferString("123456"))
 	body, err := readRequestBodyLimited(req, 5)

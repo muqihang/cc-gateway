@@ -21,6 +21,9 @@ func TestBuildConfigProductionModeDoesNotRequireTestDialOverride(t *testing.T) {
 	if len(cfg.HandlerConfig.DialOverrides) != 0 {
 		t.Fatalf("production mode must not install dial overrides: %#v", cfg.HandlerConfig.DialOverrides)
 	}
+	if !cfg.HandlerConfig.RequireProxyEgress {
+		t.Fatalf("production mode must require proxy egress and forbid direct dial")
+	}
 	if got := cfg.HandlerConfig.Policy.AllowedTargetHosts; len(got) != 1 || got[0] != "api.anthropic.com" {
 		t.Fatalf("production target allowlist = %#v", got)
 	}
@@ -57,6 +60,9 @@ func TestBuildConfigTestModeRequiresLoopbackDialOverride(t *testing.T) {
 	}
 	if !cfg.HandlerConfig.AllowTestDialOverride {
 		t.Fatalf("test dial override must be explicit and test-only")
+	}
+	if cfg.HandlerConfig.RequireProxyEgress {
+		t.Fatalf("test dial override mode must not require production proxy egress")
 	}
 	if got := cfg.HandlerConfig.Policy.AllowedProfileRefs; len(got) != 2 || got[0] != profile.ClaudeCode2179Ref || got[1] != profile.ClaudeCode2197Ref {
 		t.Fatalf("expected 2.1.179 and 2.1.197 default profile refs, got %#v", got)

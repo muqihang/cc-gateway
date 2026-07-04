@@ -36,6 +36,7 @@ export type EgressSidecarPrepared = {
   controlToken: string
   control: EgressSidecarControl
   expectedTLSBucket: string
+  proxyUrl: string
 }
 
 export type EgressSidecarResponse = {
@@ -155,6 +156,7 @@ export function prepareEgressSidecarRequest(input: {
   profileRef?: string
   egressBucket?: string
   proxyIdentityRef?: string
+  proxyUrl?: string
   targetHost: string
   targetPort: number
   targetScheme: 'http' | 'https'
@@ -182,6 +184,7 @@ export function prepareEgressSidecarRequest(input: {
   }
   if (!input.egressBucket || !isSafeBucket(input.egressBucket)) return { ok: false, status: 403, code: 'egress_tls_sidecar_egress_mismatch', message: 'TLS sidecar egress bucket is unsafe' }
   if (!input.proxyIdentityRef || !isSafeBucket(input.proxyIdentityRef)) return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_mismatch', message: 'TLS sidecar proxy identity is unsafe' }
+  if (!input.proxyUrl || !isSafeProxyUrl(input.proxyUrl)) return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_missing', message: 'TLS sidecar requires server-selected proxy egress' }
   if (input.targetScheme !== 'https') return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target scheme is not allowed' }
   if (input.targetPort !== 443) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target port is not allowed' }
   const control: EgressSidecarControl = {
@@ -196,7 +199,7 @@ export function prepareEgressSidecarRequest(input: {
     method: input.method,
     expected_tls_summary_bucket: sidecar.expected_tls_summary_bucket,
   }
-  return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket } }
+  return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket, proxyUrl: input.proxyUrl } }
 }
 
 export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer, upstreamHeaders: Record<string, string | string[] | number | undefined> = {}): Promise<{ ok: true; response: EgressSidecarResponse } | { ok: false; status: number; code: string; message: string }> {
@@ -225,6 +228,7 @@ export async function openEgressSidecar(prepared: EgressSidecarPrepared, body: B
         'content-length': String(body.length),
         'x-cc-egress-sidecar-token': prepared.controlToken,
         'x-cc-egress-control': JSON.stringify(prepared.control),
+        'x-cc-egress-proxy-url': prepared.proxyUrl,
         'x-cc-egress-upstream-headers': encodeSidecarUpstreamHeaders(upstreamHeaders),
       },
     }, (res) => {
@@ -303,6 +307,21 @@ function parseSingleSafeSummaryBucket(value: string | string[] | undefined): str
   if (typeof value !== 'string') return undefined
   if (!isSafeSummaryBucket(value)) return undefined
   return value
+}
+
+
+function isSafeProxyUrl(value: string): boolean {
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048 || value.includes('\r') || value.includes('\n')) return false
+  try {
+    const parsed = new URL(value)
+    if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(parsed.protocol)) return false
+    const proxyHost = parsed.hostname.toLowerCase()
+    if (!proxyHost || proxyHost.includes('\r') || proxyHost.includes('\n')) return false
+    if (proxyHost === 'api.anthropic.com') return false
+    return true
+  } catch {
+    return false
+  }
 }
 
 function isSafeBucket(value: string): boolean {

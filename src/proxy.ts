@@ -2033,6 +2033,7 @@ async function handleRequest(
       profileRef,
       egressBucket: egress?.bucketId,
       proxyIdentityRef: egress?.proxyIdentityRef,
+      proxyUrl: egress?.proxyUrl,
       targetHost: egressSidecarTargetHost(config as any, upstreamUrl.hostname),
       targetPort: 443,
       targetScheme: 'https',

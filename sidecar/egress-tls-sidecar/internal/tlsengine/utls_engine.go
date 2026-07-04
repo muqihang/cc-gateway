@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +19,7 @@ import (
 	"cc-gateway/egress-tls-sidecar/internal/profile"
 	"cc-gateway/egress-tls-sidecar/internal/summary"
 	utls "github.com/refraction-networking/utls"
+	xproxy "golang.org/x/net/proxy"
 )
 
 type Request struct {
@@ -22,6 +27,8 @@ type Request struct {
 	TargetHost            string
 	DialAddress           string
 	AllowTestDialOverride bool
+	ProxyURL              string
+	RequireProxy          bool
 }
 
 type ForwardRequest struct {
@@ -120,8 +127,19 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 		}
 		dialAddr = req.DialAddress
 	}
-	d := &net.Dialer{Timeout: 2 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", dialAddr)
+	var conn net.Conn
+	var err error
+	if req.DialAddress != "" {
+		d := &net.Dialer{Timeout: 2 * time.Second}
+		conn, err = d.DialContext(ctx, "tcp", dialAddr)
+	} else if req.ProxyURL != "" {
+		conn, err = dialProxyTunnel(ctx, req.ProxyURL, req.TargetHost, 443)
+	} else if req.RequireProxy {
+		return nil, nil, fmt.Errorf("production proxy egress required")
+	} else {
+		d := &net.Dialer{Timeout: 2 * time.Second}
+		conn, err = d.DialContext(ctx, "tcp", dialAddr)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -145,6 +163,119 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 		}
 	}
 	return u, rec, nil
+}
+
+
+func dialProxyTunnel(ctx context.Context, proxyURL string, targetHost string, targetPort int) (net.Conn, error) {
+	if targetHost == "" || targetPort != 443 {
+		return nil, fmt.Errorf("unsafe proxy tunnel target")
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil || parsed.Hostname() == "" || strings.ContainsAny(proxyURL, "\r\n") {
+		return nil, fmt.Errorf("invalid proxy URL")
+	}
+	if strings.EqualFold(parsed.Hostname(), "api.anthropic.com") {
+		return nil, fmt.Errorf("proxy URL must not be provider host")
+	}
+	proxyAddr := net.JoinHostPort(parsed.Hostname(), proxyPort(parsed))
+	switch parsed.Scheme {
+	case "http", "https":
+		return dialHTTPConnectProxy(ctx, parsed, proxyAddr, targetHost, targetPort)
+	case "socks5", "socks5h":
+		return dialSOCKS5Proxy(ctx, parsed, proxyAddr, targetHost, targetPort)
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme")
+	}
+}
+
+func dialHTTPConnectProxy(ctx context.Context, parsed *url.URL, proxyAddr, targetHost string, targetPort int) (net.Conn, error) {
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	rawConn, err := d.DialContext(ctx, "tcp", proxyAddr)
+	if err != nil {
+		return nil, err
+	}
+	conn := rawConn
+	if parsed.Scheme == "https" {
+		tlsConn := tls.Client(rawConn, &tls.Config{ServerName: parsed.Hostname(), MinVersion: tls.VersionTLS12})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+		conn = tlsConn
+	}
+	targetAddr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+	var b strings.Builder
+	fmt.Fprintf(&b, "CONNECT %s HTTP/1.1\r\n", targetAddr)
+	fmt.Fprintf(&b, "Host: %s\r\n", targetAddr)
+	b.WriteString("Proxy-Connection: Keep-Alive\r\n")
+	if parsed.User != nil {
+		username := parsed.User.Username()
+		password, _ := parsed.User.Password()
+		basic := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		fmt.Fprintf(&b, "Proxy-Authorization: Basic %s\r\n", basic)
+	}
+	b.WriteString("\r\n")
+	if _, err := io.WriteString(conn, b.String()); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	connectReq, _ := http.NewRequest(http.MethodConnect, "http://"+targetAddr, nil)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), connectReq)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		return nil, fmt.Errorf("proxy CONNECT rejected")
+	}
+	return conn, nil
+}
+
+func dialSOCKS5Proxy(ctx context.Context, parsed *url.URL, proxyAddr, targetHost string, targetPort int) (net.Conn, error) {
+	forward := &net.Dialer{Timeout: 5 * time.Second}
+	var auth *xproxy.Auth
+	if parsed.User != nil {
+		password, _ := parsed.User.Password()
+		auth = &xproxy.Auth{User: parsed.User.Username(), Password: password}
+	}
+	dialer, err := xproxy.SOCKS5("tcp", proxyAddr, auth, forward)
+	if err != nil {
+		return nil, err
+	}
+	type contextDialer interface {
+		DialContext(context.Context, string, string) (net.Conn, error)
+	}
+	targetAddr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
+	if cd, ok := dialer.(contextDialer); ok {
+		return cd.DialContext(ctx, "tcp", targetAddr)
+	}
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		conn, err := dialer.Dial("tcp", targetAddr)
+		ch <- result{conn: conn, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-ch:
+		return result.conn, result.err
+	}
+}
+
+func proxyPort(parsed *url.URL) string {
+	if port := parsed.Port(); port != "" {
+		return port
+	}
+	if parsed.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 func summarizeRecordedClientHello(req Request, rec *recordingConn) (summary.SafeSummary, error) {

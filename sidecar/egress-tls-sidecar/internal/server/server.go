@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ type Config struct {
 	Policy                control.Policy
 	DialOverrides         map[string]string
 	AllowTestDialOverride bool
+	RequireProxyEgress    bool
 	ForwardTimeout        time.Duration
 }
 
@@ -56,6 +58,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawForwardHeaders := r.Header.Get("x-cc-egress-upstream-headers")
+	proxyURL, proxyErr := safeProxyURLHeader(r.Header.Get("x-cc-egress-proxy-url"))
+	if proxyErr != nil {
+		http.Error(w, "proxy_rejected", http.StatusForbidden)
+		return
+	}
 	dialAddr := ""
 	if h.cfg.DialOverrides != nil {
 		dialAddr = h.cfg.DialOverrides[ctrl.TargetHost+":443"]
@@ -66,7 +73,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	baseReq := tlsengine.Request{Profile: p, TargetHost: ctrl.TargetHost, DialAddress: dialAddr, AllowTestDialOverride: h.cfg.AllowTestDialOverride}
+	baseReq := tlsengine.Request{Profile: p, TargetHost: ctrl.TargetHost, DialAddress: dialAddr, AllowTestDialOverride: h.cfg.AllowTestDialOverride, ProxyURL: proxyURL, RequireProxy: h.cfg.RequireProxyEgress}
 	if rawForwardHeaders == "" {
 		got, err := tlsengine.SendClientHelloSummary(ctx, baseReq)
 		if err != nil {
@@ -112,6 +119,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("x-cc-egress-tls-summary-bucket", p.ExpectedSummaryBucket)
 	w.WriteHeader(forwarded.StatusCode)
 	_, _ = io.Copy(flushingWriter{ResponseWriter: w}, forwarded.Body)
+}
+
+
+func safeProxyURLHeader(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) > 2048 || strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("unsafe proxy URL")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" {
+		return "", fmt.Errorf("unsafe proxy URL")
+	}
+	if strings.EqualFold(parsed.Hostname(), "api.anthropic.com") {
+		return "", fmt.Errorf("proxy URL must not be provider host")
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return value, nil
+	default:
+		return "", fmt.Errorf("unsupported proxy URL scheme")
+	}
 }
 
 type flushingWriter struct {

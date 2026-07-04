@@ -603,6 +603,7 @@ test('TLS sidecar request preparation rejects non-HTTPS and non-443 target autho
     profileRef: expectedTLSProfileRef,
     egressBucket: 'bucket-a',
     proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    proxyUrl: 'http://127.0.0.1:9',
     targetHost: 'api.anthropic.com',
     targetPath: '/v1/messages',
     route: '/v1/messages',
@@ -610,6 +611,43 @@ test('TLS sidecar request preparation rejects non-HTTPS and non-443 target autho
   }
   assert.equal(prepareEgressSidecarRequest({ ...common, targetPort: 443, targetScheme: 'http' }).ok, false)
   assert.equal(prepareEgressSidecarRequest({ ...common, targetPort: 8443, targetScheme: 'https' }).ok, false)
+})
+
+test('TLS sidecar request preparation rejects proxy URL that targets provider host', () => {
+  const config = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
+  const prepared = prepareEgressSidecarRequest({
+    config,
+    profileRef: expectedTLSProfileRef,
+    egressBucket: 'bucket-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    proxyUrl: 'https://api.anthropic.com:443',
+    targetHost: 'api.anthropic.com',
+    targetPort: 443,
+    targetScheme: 'https',
+    targetPath: '/v1/messages',
+    route: '/v1/messages',
+    method: 'POST',
+  })
+  assert.equal(prepared.ok, false)
+  if (!prepared.ok) assert.equal(prepared.code, 'egress_tls_sidecar_proxy_missing')
+})
+
+test('TLS sidecar request preparation requires server-selected proxy URL for production sidecar egress', () => {
+  const config = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
+  const prepared = prepareEgressSidecarRequest({
+    config,
+    profileRef: expectedTLSProfileRef,
+    egressBucket: 'bucket-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    targetHost: 'api.anthropic.com',
+    targetPort: 443,
+    targetScheme: 'https',
+    targetPath: '/v1/messages',
+    route: '/v1/messages',
+    method: 'POST',
+  })
+  assert.equal(prepared.ok, false)
+  if (!prepared.ok) assert.equal(prepared.code, 'egress_tls_sidecar_proxy_missing')
 })
 
 test('TLS sidecar request preparation rejects missing expected summary bucket', () => {
@@ -620,6 +658,7 @@ test('TLS sidecar request preparation rejects missing expected summary bucket', 
     profileRef: expectedTLSProfileRef,
     egressBucket: 'bucket-a',
     proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    proxyUrl: 'http://127.0.0.1:9',
     targetHost: 'api.anthropic.com',
     targetPort: 443,
     targetScheme: 'https',
@@ -710,6 +749,8 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
     const serialized = JSON.stringify(control)
     assert(!/authorization|x-api-key|cookie|raw[_-]?(prompt|body|response)|prompt|clientHello|pcap|private|hello/i.test(serialized), serialized)
     assert.equal(sidecar.captured[0].headers['x-cc-egress-sidecar-token'], controlToken)
+    assert.equal(sidecar.captured[0].headers['x-cc-egress-proxy-url'], 'http://127.0.0.1:9')
+    assert.equal(Object.prototype.hasOwnProperty.call(control, 'proxy_url'), false, 'proxy URL must not be request-controlled control JSON')
     const encodedHeaders = sidecar.captured[0].headers['x-cc-egress-upstream-headers']
     assert.equal(typeof encodedHeaders, 'string')
     const forwardedHeaders = JSON.parse(Buffer.from(encodedHeaders as string, 'base64url').toString('utf-8'))
