@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -128,6 +131,37 @@ func TestHandlerProductionModeRequiresProxyURLAndDoesNotDirectDial(t *testing.T)
 	}
 }
 
+func TestHandlerProductionModeRejectsForgedProxyBinding(t *testing.T) {
+	h := NewHandler(Config{Policy: safePolicy(), RequireProxyEgress: true, ProxyBindingSecret: "proxy-binding-material-v1-local-safe-fixture-123456"})
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/egress", bytes.NewBufferString(`{"ok":true}`))
+	req.Header.Set("x-cc-egress-sidecar-token", testToken)
+	req.Header.Set("x-cc-egress-control", safeControlJSON())
+	req.Header.Set("x-cc-egress-proxy-url", "http://127.0.0.1:9")
+	req.Header.Set("x-cc-egress-proxy-binding", proxyBindingForTest("wrong-secret", "bucket-a", "opaque:proxy-ref:v1:bucket-a", "http://127.0.0.1:9", "api.anthropic.com", 443))
+	h.ServeHTTP(res, req)
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("expected forged proxy binding to be rejected with 403, got %d body %s", res.Code, res.Body.String())
+	}
+}
+
+func TestVerifyProxyBindingBindsEgressBucket(t *testing.T) {
+	var ctrl control.Control
+	if err := json.Unmarshal([]byte(safeControlJSON()), &ctrl); err != nil {
+		t.Fatal(err)
+	}
+	secret := "proxy-binding-material-v1-local-safe-fixture-123456"
+	proxyURL := "http://127.0.0.1:9"
+	valid := proxyBindingForTest(secret, ctrl.EgressBucket, ctrl.ProxyIdentityRef, proxyURL, ctrl.TargetHost, ctrl.TargetPort)
+	if !verifyProxyBinding(secret, ctrl, proxyURL, valid) {
+		t.Fatalf("expected valid egress-bound proxy binding to verify")
+	}
+	wrongBucket := proxyBindingForTest(secret, "bucket-other", ctrl.ProxyIdentityRef, proxyURL, ctrl.TargetHost, ctrl.TargetPort)
+	if verifyProxyBinding(secret, ctrl, proxyURL, wrongBucket) {
+		t.Fatalf("expected proxy binding for a different egress bucket to be rejected")
+	}
+}
+
 func TestSafeProxyURLHeaderRejectsProviderHostAsProxy(t *testing.T) {
 	if _, err := safeProxyURLHeader("https://api.anthropic.com:443"); err == nil {
 		t.Fatalf("expected provider host proxy URL to be rejected")
@@ -223,4 +257,20 @@ func encodeUpstreamHeadersForTest(headers map[string]string) string {
 		panic(err)
 	}
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func proxyBindingForTest(secret, egressBucket, proxyIdentityRef, proxyURL, targetHost string, targetPort int) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("cc-egress-sidecar-proxy-binding-v1"))
+	mac.Write([]byte{0})
+	mac.Write([]byte(egressBucket))
+	mac.Write([]byte{0})
+	mac.Write([]byte(proxyIdentityRef))
+	mac.Write([]byte{0})
+	mac.Write([]byte(proxyURL))
+	mac.Write([]byte{0})
+	mac.Write([]byte(targetHost))
+	mac.Write([]byte{0})
+	mac.Write([]byte("443"))
+	return "hmac-sha256:" + fmt.Sprintf("%x", mac.Sum(nil))
 }

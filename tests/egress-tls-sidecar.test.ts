@@ -13,6 +13,7 @@ console.log('\ntests/egress-tls-sidecar.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
 const controlToken = 'sidecar-control-material-v1-local-safe-fixture-123456'
+const proxyBindingSecret = 'proxy-binding-material-v1-local-safe-fixture-123456'
 const expectedTLSProfileRef = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1'
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
 const sessionId = '123e4567-e89b-42d3-a456-426614174999'
@@ -20,6 +21,22 @@ const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-z
 const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
+
+function expectedProxyBindingForTest(secret: string, control: Record<string, unknown>, proxyUrl: string): string {
+  const hmac = createHmac('sha256', secret)
+  hmac.update('cc-egress-sidecar-proxy-binding-v1')
+  hmac.update('\0')
+  hmac.update(String(control.egress_bucket))
+  hmac.update('\0')
+  hmac.update(String(control.proxy_identity_ref))
+  hmac.update('\0')
+  hmac.update(proxyUrl)
+  hmac.update('\0')
+  hmac.update(String(control.target_host))
+  hmac.update('\0')
+  hmac.update(String(control.target_port))
+  return `hmac-sha256:${hmac.digest('hex')}`
+}
 
 type SidecarCapture = {
   control: any
@@ -58,6 +75,7 @@ function sharedFixtureConfig(fixture: SharedContractFixture, upstreamUrl: string
       enabled: true,
       endpoint: sidecarUrl,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -195,6 +213,7 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
       enabled: true,
       endpoint: sidecarUrl,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -397,6 +416,7 @@ test('sidecar mock messages response bridge returns messages body only after TLS
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -470,6 +490,7 @@ test('sidecar mock messages response bridge fails closed at runtime if productio
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -505,6 +526,7 @@ test('sidecar mock messages response bridge fails closed before Node direct fall
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -632,6 +654,26 @@ test('TLS sidecar request preparation rejects proxy URL that targets provider ho
   if (!prepared.ok) assert.equal(prepared.code, 'egress_tls_sidecar_proxy_missing')
 })
 
+test('TLS sidecar request preparation requires proxy binding secret before sidecar egress', () => {
+  const config = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
+  delete config.egress_tls_sidecar.proxy_binding_secret
+  const prepared = prepareEgressSidecarRequest({
+    config,
+    profileRef: expectedTLSProfileRef,
+    egressBucket: 'bucket-a',
+    proxyIdentityRef: 'opaque:proxy-ref:v1:bucket-a',
+    proxyUrl: 'http://127.0.0.1:9',
+    targetHost: 'api.anthropic.com',
+    targetPort: 443,
+    targetScheme: 'https',
+    targetPath: '/v1/messages',
+    route: '/v1/messages',
+    method: 'POST',
+  })
+  assert.equal(prepared.ok, false)
+  if (!prepared.ok) assert.equal(prepared.code, 'egress_tls_sidecar_proxy_binding_missing')
+})
+
 test('TLS sidecar request preparation requires server-selected proxy URL for production sidecar egress', () => {
   const config = sidecarConfig('http://127.0.0.1:1', 'http://127.0.0.1:1') as any
   const prepared = prepareEgressSidecarRequest({
@@ -750,6 +792,9 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
     assert(!/authorization|x-api-key|cookie|raw[_-]?(prompt|body|response)|prompt|clientHello|pcap|private|hello/i.test(serialized), serialized)
     assert.equal(sidecar.captured[0].headers['x-cc-egress-sidecar-token'], controlToken)
     assert.equal(sidecar.captured[0].headers['x-cc-egress-proxy-url'], 'http://127.0.0.1:9')
+    const proxyBinding = String(sidecar.captured[0].headers['x-cc-egress-proxy-binding'])
+    assert.match(proxyBinding, /^hmac-sha256:[a-f0-9]{64}$/)
+    assert.equal(proxyBinding, expectedProxyBindingForTest(proxyBindingSecret, control, 'http://127.0.0.1:9'))
     assert.equal(Object.prototype.hasOwnProperty.call(control, 'proxy_url'), false, 'proxy URL must not be request-controlled control JSON')
     const encodedHeaders = sidecar.captured[0].headers['x-cc-egress-upstream-headers']
     assert.equal(typeof encodedHeaders, 'string')
@@ -811,6 +856,7 @@ test('TLS sidecar disabled under strict formal-pool TLS fails closed without Nod
       enabled: false,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -857,6 +903,7 @@ test('TLS sidecar logical target allowlist mismatch fails closed before sidecar 
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['example.invalid'],
       allowed_routes: ['/v1/messages'],
       allowed_profile_refs: [expectedTLSProfileRef],
@@ -884,6 +931,7 @@ test('TLS sidecar profile mismatch fails closed before sidecar request and witho
       enabled: true,
       endpoint: sidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],

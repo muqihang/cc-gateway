@@ -177,6 +177,9 @@ egress_tls_sidecar:
   enabled: false
   endpoint: http://127.0.0.1:18081
   control_token: "replace-with-independent-local-sidecar-control-token"
+  proxy_binding_secret: "replace-with-independent-production-proxy-binding-secret"
+  # Production mode requires this independent HMAC secret so CC Gateway and
+  # the sidecar bind each request to the server-selected account proxy.
   # Logical provider host is used for SNI/Host. It is not a dial override.
   # Phase C CP2 found this logical-SNI requirement currently mismatches doc-63
   # TLS oracle summary, so this config must remain disabled until a new profile

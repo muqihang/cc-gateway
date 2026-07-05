@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +26,7 @@ type Config struct {
 	DialOverrides         map[string]string
 	AllowTestDialOverride bool
 	RequireProxyEgress    bool
+	ProxyBindingSecret    string
 	ForwardTimeout        time.Duration
 }
 
@@ -62,6 +66,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if proxyErr != nil {
 		http.Error(w, "proxy_rejected", http.StatusForbidden)
 		return
+	}
+	if h.cfg.RequireProxyEgress {
+		if proxyURL == "" {
+			http.Error(w, "proxy_required", http.StatusForbidden)
+			return
+		}
+		if !verifyProxyBinding(h.cfg.ProxyBindingSecret, ctrl, proxyURL, r.Header.Get("x-cc-egress-proxy-binding")) {
+			http.Error(w, "proxy_binding_rejected", http.StatusForbidden)
+			return
+		}
 	}
 	dialAddr := ""
 	if h.cfg.DialOverrides != nil {
@@ -121,6 +135,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(flushingWriter{ResponseWriter: w}, forwarded.Body)
 }
 
+func verifyProxyBinding(secret string, ctrl control.Control, proxyURL string, provided string) bool {
+	if len(secret) < 24 || proxyURL == "" || !strings.HasPrefix(provided, "hmac-sha256:") {
+		return false
+	}
+	providedHex := strings.TrimPrefix(provided, "hmac-sha256:")
+	providedBytes, err := hex.DecodeString(providedHex)
+	if err != nil || len(providedBytes) != sha256.Size {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("cc-egress-sidecar-proxy-binding-v1"))
+	mac.Write([]byte{0})
+	mac.Write([]byte(ctrl.EgressBucket))
+	mac.Write([]byte{0})
+	mac.Write([]byte(ctrl.ProxyIdentityRef))
+	mac.Write([]byte{0})
+	mac.Write([]byte(proxyURL))
+	mac.Write([]byte{0})
+	mac.Write([]byte(ctrl.TargetHost))
+	mac.Write([]byte{0})
+	mac.Write([]byte(fmt.Sprintf("%d", ctrl.TargetPort)))
+	return hmac.Equal(providedBytes, mac.Sum(nil))
+}
 
 func safeProxyURLHeader(value string) (string, error) {
 	value = strings.TrimSpace(value)

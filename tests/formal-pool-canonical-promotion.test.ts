@@ -369,6 +369,7 @@ egress_tls_sidecar:
   enabled: true
   endpoint: http://127.0.0.1:19081
   control_token: independent-sidecar-control-token-plan76
+  proxy_binding_secret: proxy-binding-material-v1-plan76-safe-fixture-abcdef
   allowed_target_hosts: ["api.anthropic.com"]
   logical_target_host: api.anthropic.com
   allowed_routes: ["/v1/messages"]

@@ -10,6 +10,7 @@ console.log('\ntests/formal-pool-real-chain-mock-response.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-local-safe-fixture-123456'
 const internalControlToken = 'internal-control-material-v1-local-safe-fixture-123456'
 const controlToken = 'sidecar-control-material-v1-local-safe-fixture-123456'
+const proxyBindingSecret = 'proxy-binding-material-v1-local-safe-fixture-123456'
 const expectedTLSProfileRef = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1'
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
 const sessionId = '123e4567-e89b-42d3-a456-426614174999'
@@ -99,6 +100,7 @@ function gatewayConfig(upstreamUrl: string, sidecarUrl: string) {
       enabled: true,
       endpoint: sidecarUrl,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],

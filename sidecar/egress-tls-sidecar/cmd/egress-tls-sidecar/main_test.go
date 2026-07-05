@@ -11,6 +11,7 @@ func TestBuildConfigProductionModeDoesNotRequireTestDialOverride(t *testing.T) {
 	t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+	t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", "proxy-binding-material-v1-local-safe-fixture-123456")
 	cfg, err := buildConfigFromEnv()
 	if err != nil {
 		t.Fatalf("buildConfigFromEnv() error = %v", err)
@@ -32,11 +33,41 @@ func TestBuildConfigProductionModeDoesNotRequireTestDialOverride(t *testing.T) {
 	}
 }
 
+func TestBuildConfigProductionModeRequiresProxyBindingSecret(t *testing.T) {
+	t.Setenv("EGRESS_TLS_SIDECAR_LISTEN", "127.0.0.1:0")
+	t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
+	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
+	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+	if _, err := buildConfigFromEnv(); err == nil {
+		t.Fatalf("expected production mode to require proxy binding secret")
+	}
+}
+
+func TestBuildConfigProductionModeRejectsWeakOrReusedProxyBindingSecret(t *testing.T) {
+	for name, secret := range map[string]string{
+		"short":       "short-material",
+		"placeholder": "placeholder-proxy-binding-secret-material",
+		"reused":      "sidecar-control-material-v1-local-safe-fixture-123456",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("EGRESS_TLS_SIDECAR_LISTEN", "127.0.0.1:0")
+			t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
+			t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
+			t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+			t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", secret)
+			if _, err := buildConfigFromEnv(); err == nil {
+				t.Fatalf("expected production mode to reject weak/reused proxy binding secret")
+			}
+		})
+	}
+}
+
 func TestBuildConfigProductionModeRejectsTestDialOverride(t *testing.T) {
 	t.Setenv("EGRESS_TLS_SIDECAR_LISTEN", "127.0.0.1:0")
 	t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+	t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", "proxy-binding-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_DIAL_MODE", "production")
 	t.Setenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC", "127.0.0.1:12345")
 	if _, err := buildConfigFromEnv(); err == nil {
@@ -49,6 +80,7 @@ func TestBuildConfigTestModeRequiresLoopbackDialOverride(t *testing.T) {
 	t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+	t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", "proxy-binding-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_DIAL_MODE", "test")
 	t.Setenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC", "127.0.0.1:12345")
 	cfg, err := buildConfigFromEnv()
@@ -74,6 +106,7 @@ func TestBuildConfigAcceptsExplicitAllowedProfileRefs(t *testing.T) {
 	t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+	t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", "proxy-binding-material-v1-local-safe-fixture-123456")
 	t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROFILE_REFS", profile.ClaudeCode2197Ref)
 	cfg, err := buildConfigFromEnv()
 	if err != nil {
@@ -97,6 +130,7 @@ func TestBuildConfigRejectsNonLoopbackListenAndMissingOverride(t *testing.T) {
 			t.Setenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN", "sidecar-control-material-v1-local-safe-fixture-123456")
 			t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS", "bucket-a")
 			t.Setenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS", "opaque:proxy-ref:v1:bucket-a")
+			t.Setenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET", "proxy-binding-material-v1-local-safe-fixture-123456")
 			for k, v := range env {
 				t.Setenv(k, v)
 			}

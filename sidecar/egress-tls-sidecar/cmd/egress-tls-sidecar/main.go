@@ -73,6 +73,15 @@ func buildConfigFromEnv() (config, error) {
 	if len(egressBuckets) == 0 || len(proxyRefs) == 0 {
 		return config{}, errors.New("egress/proxy allowlists missing")
 	}
+	proxyBindingSecret := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET"))
+	if requireProxyEgress {
+		if weakProductionMaterial(proxyBindingSecret) {
+			return config{}, errors.New("proxy binding secret missing or weak")
+		}
+		if proxyBindingSecret == token {
+			return config{}, errors.New("proxy binding secret must be independent")
+		}
+	}
 	profileRefs := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROFILE_REFS"))
 	if len(profileRefs) == 0 {
 		profileRefs = []string{profile.ClaudeCode2179Ref, profile.ClaudeCode2197Ref}
@@ -91,6 +100,7 @@ func buildConfigFromEnv() (config, error) {
 			DialOverrides:         dialOverrides,
 			AllowTestDialOverride: allowTestDialOverride,
 			RequireProxyEgress:    requireProxyEgress,
+			ProxyBindingSecret:    proxyBindingSecret,
 		},
 	}, nil
 }
@@ -114,4 +124,17 @@ func isLoopbackListen(addr string) bool {
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))
 	return ip != nil && ip.IsLoopback()
+}
+
+func weakProductionMaterial(value string) bool {
+	if len(value) < 32 {
+		return true
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"change-me", "change_me", "placeholder", "example", "sample", "dummy", "test"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }

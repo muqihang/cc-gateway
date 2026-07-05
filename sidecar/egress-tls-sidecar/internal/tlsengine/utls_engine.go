@@ -165,7 +165,6 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 	return u, rec, nil
 }
 
-
 func dialProxyTunnel(ctx context.Context, proxyURL string, targetHost string, targetPort int) (net.Conn, error) {
 	if targetHost == "" || targetPort != 443 {
 		return nil, fmt.Errorf("unsafe proxy tunnel target")

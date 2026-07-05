@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'http'
 import { request as httpsRequest } from 'https'
+import { createHmac } from 'crypto'
 import { URL } from 'url'
 import { isSafeTLSProfileRef } from './egress-tls-profile.js'
 
@@ -12,6 +13,7 @@ export type EgressSidecarConfig = {
   allowed_profile_refs?: string[]
   logical_target_host?: string
   expected_tls_summary_bucket?: string
+  proxy_binding_secret?: string
   mock_messages_response?: {
     enabled?: boolean
     mode?: 'local_smoke' | string
@@ -37,6 +39,7 @@ export type EgressSidecarPrepared = {
   control: EgressSidecarControl
   expectedTLSBucket: string
   proxyUrl: string
+  proxyBinding: string
 }
 
 export type EgressSidecarResponse = {
@@ -60,11 +63,43 @@ const ALLOWED_SIDECAR_CONFIG_KEYS = new Set([
   'allowed_profile_refs',
   'logical_target_host',
   'expected_tls_summary_bucket',
+  'proxy_binding_secret',
   'mock_messages_response',
 ])
 const FORBIDDEN_CONTROL_OR_OVERRIDE_KEY = /(?:authorization|x-api-key|cookie|raw[_-]?body|clienthello|cipher|extension|proxy_url|proxy_username|proxy_password|proxy-authorization|x-forwarded|dial_host|dial_override|tls_server_name|server_name|account_uuid)/i
 
 const SAFE_REF = /^[A-Za-z0-9._:-]{1,160}$/
+
+const WEAK_PROXY_BINDING_SECRET = /(?:change[-_ ]?me|placeholder|example|sample|dummy|test|local-tests)/i
+
+function weakProxyBindingSecret(value: string): boolean {
+  return WEAK_PROXY_BINDING_SECRET.test(value)
+}
+
+function validateProductionProxyBindingSecret(config: {
+  shared_pool?: { context_attestation_secret?: string; context_attestation_secret_env?: string }
+  auth?: { gateway_token?: string; internal_control_token?: string; tokens?: Array<{ token?: string }> }
+}, sidecar: EgressSidecarConfig): void {
+  const secret = typeof sidecar.proxy_binding_secret === 'string' ? sidecar.proxy_binding_secret.trim() : ''
+  if (secret.length < 32 || weakProxyBindingSecret(secret)) {
+    throw new Error('config: egress_tls_sidecar.proxy_binding_secret must be high-entropy non-placeholder material in production sidecar mode')
+  }
+  const compare = new Set<string>()
+  for (const candidate of [
+    sidecar.control_token,
+    config.auth?.gateway_token,
+    config.auth?.internal_control_token,
+    ...(config.auth?.tokens || []).map((token) => token?.token),
+    config.shared_pool?.context_attestation_secret,
+    config.shared_pool?.context_attestation_secret_env ? process.env[config.shared_pool.context_attestation_secret_env] : undefined,
+    process.env.CC_GATEWAY_CONTEXT_ATTESTATION_SECRET,
+  ]) {
+    if (typeof candidate === 'string' && candidate.trim()) compare.add(candidate.trim())
+  }
+  if (compare.has(secret)) {
+    throw new Error('config: egress_tls_sidecar.proxy_binding_secret must be independent from sidecar control, internal control, attestation, and gateway/client tokens')
+  }
+}
 
 export function egressSidecarEnabled(config: { egress_tls_sidecar?: EgressSidecarConfig }): boolean {
   return config.egress_tls_sidecar?.enabled === true
@@ -73,7 +108,8 @@ export function egressSidecarEnabled(config: { egress_tls_sidecar?: EgressSideca
 export function validateEgressSidecarConfig(config: {
   mode?: string
   upstream?: { url?: string }
-  shared_pool?: { upstream_mode?: string; production_upstream_enabled?: boolean; real_canary_user_approved?: boolean }
+  shared_pool?: { upstream_mode?: string; production_upstream_enabled?: boolean; real_canary_user_approved?: boolean; context_attestation_secret?: string; context_attestation_secret_env?: string }
+  auth?: { gateway_token?: string; internal_control_token?: string; tokens?: Array<{ token?: string }> }
   egress_tls_sidecar?: EgressSidecarConfig
 }): void {
   const sidecar = config.egress_tls_sidecar
@@ -111,6 +147,9 @@ export function validateEgressSidecarConfig(config: {
   if (!sidecar.expected_tls_summary_bucket || !isSafeSummaryBucket(sidecar.expected_tls_summary_bucket)) {
     throw new Error('config: egress_tls_sidecar.expected_tls_summary_bucket must be a safe ref')
   }
+  const sharedPoolForBinding = config.shared_pool || {}
+  const productionSidecar = sharedPoolForBinding.upstream_mode === 'production' || sharedPoolForBinding.production_upstream_enabled === true
+  if (productionSidecar) validateProductionProxyBindingSecret(config, sidecar)
   const raw = sidecar as Record<string, unknown>
   if ('target_scheme' in raw) throw new Error('config: egress_tls_sidecar.target_scheme must not override HTTPS provider routing')
   if ('target_port' in raw) throw new Error('config: egress_tls_sidecar.target_port must not override provider port 443')
@@ -185,6 +224,9 @@ export function prepareEgressSidecarRequest(input: {
   if (!input.egressBucket || !isSafeBucket(input.egressBucket)) return { ok: false, status: 403, code: 'egress_tls_sidecar_egress_mismatch', message: 'TLS sidecar egress bucket is unsafe' }
   if (!input.proxyIdentityRef || !isSafeBucket(input.proxyIdentityRef)) return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_mismatch', message: 'TLS sidecar proxy identity is unsafe' }
   if (!input.proxyUrl || !isSafeProxyUrl(input.proxyUrl)) return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_missing', message: 'TLS sidecar requires server-selected proxy egress' }
+  if (!sidecar.proxy_binding_secret || typeof sidecar.proxy_binding_secret !== 'string' || sidecar.proxy_binding_secret.trim().length < 32 || weakProxyBindingSecret(sidecar.proxy_binding_secret)) {
+    return { ok: false, status: 403, code: 'egress_tls_sidecar_proxy_binding_missing', message: 'TLS sidecar proxy binding secret is missing' }
+  }
   if (input.targetScheme !== 'https') return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target scheme is not allowed' }
   if (input.targetPort !== 443) return { ok: false, status: 403, code: 'egress_tls_sidecar_target_not_allowed', message: 'TLS sidecar target port is not allowed' }
   const control: EgressSidecarControl = {
@@ -199,7 +241,8 @@ export function prepareEgressSidecarRequest(input: {
     method: input.method,
     expected_tls_summary_bucket: sidecar.expected_tls_summary_bucket,
   }
-  return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket, proxyUrl: input.proxyUrl } }
+  const proxyBinding = computeProxyBinding(sidecar.proxy_binding_secret, control, input.proxyUrl)
+  return { ok: true, prepared: { endpoint, controlToken: sidecar.control_token, control, expectedTLSBucket: sidecar.expected_tls_summary_bucket, proxyUrl: input.proxyUrl, proxyBinding } }
 }
 
 export async function callEgressSidecar(prepared: EgressSidecarPrepared, body: Buffer, upstreamHeaders: Record<string, string | string[] | number | undefined> = {}): Promise<{ ok: true; response: EgressSidecarResponse } | { ok: false; status: number; code: string; message: string }> {
@@ -229,6 +272,7 @@ export async function openEgressSidecar(prepared: EgressSidecarPrepared, body: B
         'x-cc-egress-sidecar-token': prepared.controlToken,
         'x-cc-egress-control': JSON.stringify(prepared.control),
         'x-cc-egress-proxy-url': prepared.proxyUrl,
+        'x-cc-egress-proxy-binding': prepared.proxyBinding,
         'x-cc-egress-upstream-headers': encodeSidecarUpstreamHeaders(upstreamHeaders),
       },
     }, (res) => {
@@ -252,6 +296,23 @@ export async function openEgressSidecar(prepared: EgressSidecarPrepared, body: B
     req.on('error', () => resolve({ ok: false, status: 502, code: 'egress_tls_sidecar_unavailable', message: 'TLS sidecar is unavailable' }))
     req.end(body)
   })
+}
+
+
+function computeProxyBinding(secret: string, control: EgressSidecarControl, proxyUrl: string): string {
+  const hmac = createHmac('sha256', secret)
+  hmac.update('cc-egress-sidecar-proxy-binding-v1')
+  hmac.update('\0')
+  hmac.update(control.egress_bucket)
+  hmac.update('\0')
+  hmac.update(control.proxy_identity_ref)
+  hmac.update('\0')
+  hmac.update(proxyUrl)
+  hmac.update('\0')
+  hmac.update(control.target_host)
+  hmac.update('\0')
+  hmac.update(String(control.target_port))
+  return `hmac-sha256:${hmac.digest('hex')}`
 }
 
 function encodeSidecarUpstreamHeaders(headers: Record<string, string | string[] | number | undefined>): string {

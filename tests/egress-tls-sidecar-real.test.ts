@@ -1,7 +1,8 @@
 import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { createServer } from 'net'
+import { createServer as createNetServer } from 'net'
+import { createServer as createHttpsServer } from 'https'
 import { once } from 'events'
 import type { AddressInfo, Socket } from 'net'
 import { mkdtempSync, readFileSync } from 'fs'
@@ -16,6 +17,7 @@ const repoRoot = new URL('..', import.meta.url).pathname
 const sidecarDir = join(repoRoot, 'sidecar/egress-tls-sidecar')
 const fixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
 const controlToken = 'sidecar-control-material-v1-local-safe-fixture-123456'
+const proxyBindingSecret = 'proxy-binding-material-v1-local-safe-fixture-123456'
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
 
 function base64url(value: string): string { return Buffer.from(value, 'utf8').toString('base64url') }
@@ -27,11 +29,28 @@ function credentialBinding(raw: string, secret: string): string {
 
 async function startClientHelloCollector() {
   const captured: Buffer[] = []
-  const server = createServer((socket: Socket) => {
+  const server = createNetServer((socket: Socket) => {
     socket.once('data', (chunk) => {
       captured.push(Buffer.from(chunk))
       socket.destroy()
     })
+  })
+  await listen(server as any)
+  const { port } = server.address() as AddressInfo
+  return { server, captured, address: `127.0.0.1:${port}` }
+}
+
+async function startLocalTLSMessagesUpstream() {
+  const certDir = mkdtempSync(join(tmpdir(), 'plan88-local-tls-upstream-'))
+  const key = join(certDir, 'key.pem')
+  const cert = join(certDir, 'cert.pem')
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-subj', '/CN=api.anthropic.com', '-days', '1'], { stdio: 'ignore' })
+  const captured: Array<{ method?: string; url?: string }> = []
+  const server = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
+    captured.push({ method: req.method, url: req.url })
+    req.resume()
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ type: 'message', role: 'assistant', content: [], model: 'safe-local-fixture', usage: { input_tokens: 1, output_tokens: 1 } }))
   })
   await listen(server as any)
   const { port } = server.address() as AddressInfo
@@ -51,6 +70,7 @@ async function startRealSidecar(collectorAddress: string, egressBucket: string, 
       EGRESS_TLS_SIDECAR_CONTROL_TOKEN: controlToken,
       EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS: egressBucket,
       EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS: proxyRef,
+      EGRESS_TLS_SIDECAR_DIAL_MODE: 'test',
       EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC: collectorAddress,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -76,8 +96,8 @@ async function stopProcess(proc: ChildProcessWithoutNullStreams) {
 
 test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages response', async () => {
   const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
-  const collector = await startClientHelloCollector()
-  const realSidecar = await startRealSidecar(collector.address, String(fixture.account.egress_bucket), String(fixture.account.proxy_identity_ref))
+  const localTLSUpstream = await startLocalTLSMessagesUpstream()
+  const realSidecar = await startRealSidecar(localTLSUpstream.address, String(fixture.account.egress_bucket), String(fixture.account.proxy_identity_ref))
   const upstream = await startFakeUpstream()
   const context = {
     ...fixture.valid_context,
@@ -102,6 +122,7 @@ test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages
       enabled: true,
       endpoint: realSidecar.url,
       control_token: controlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
@@ -158,11 +179,11 @@ test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages
     assert.ok(Array.isArray(response.json?.content), 'mock response must use Anthropic Messages content array')
     assert.equal(response.json?.usage?.input_tokens, 1)
     assert.equal(upstream.captured.length, 0, 'Node direct upstream fallback must be zero')
-    assert.equal(collector.captured.length, 1, 'real sidecar must emit one ClientHello to local collector')
+    assert.equal(localTLSUpstream.captured.length, 1, 'real sidecar must reach exactly one local TLS upstream')
   } finally {
     await close(gateway)
     await close(upstream.server)
-    await close(collector.server as any)
+    await close(localTLSUpstream.server as any)
     await stopProcess(realSidecar.proc)
   }
 })

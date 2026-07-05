@@ -10,6 +10,7 @@ console.log('\ntests/formal-pool-mcp-connector-compat.test.ts')
 const attestationSecret = 'scheduler-hmac-material-v1-plan86-safe-fixture-abcdef'
 const internalControlToken = 'internal-control-plan86-safe-fixture-abcdef'
 const sidecarControlToken = 'sidecar-control-plan86-safe-fixture-abcdef'
+const proxyBindingSecret = 'proxy-binding-plan86-safe-fixture-abcdef123456'
 const sessionId = '123e4567-e89b-42d3-a456-426614174086'
 const selectedCredential = 'Bearer selected-token-plan86'
 const credentialRef = 'opaque:credential-ref:v1:plan86-cred-a'
@@ -188,6 +189,7 @@ function gatewayConfig(sidecarUrl: string, overrides: Record<string, unknown> = 
       enabled: true,
       endpoint: sidecarUrl,
       control_token: sidecarControlToken,
+      proxy_binding_secret: proxyBindingSecret,
       allowed_target_hosts: ['api.anthropic.com'],
       logical_target_host: 'api.anthropic.com',
       allowed_routes: ['/v1/messages'],
