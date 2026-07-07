@@ -310,6 +310,25 @@ function writeControlPlaneError(res: ServerResponse, status: number, code: strin
   res.end(body)
 }
 
+function byteSizeBucket(bytes: number | undefined): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return 'unknown'
+  const thresholds = [
+    [1024, 'lte_1kb'],
+    [16 * 1024, 'lte_16kb'],
+    [64 * 1024, 'lte_64kb'],
+    [256 * 1024, 'lte_256kb'],
+    [1024 * 1024, 'lte_1mb'],
+    [2 * 1024 * 1024, 'lte_2mb'],
+    [4 * 1024 * 1024, 'lte_4mb'],
+    [8 * 1024 * 1024, 'lte_8mb'],
+    [16 * 1024 * 1024, 'lte_16mb'],
+  ] as const
+  for (const [limit, label] of thresholds) {
+    if (bytes <= limit) return label
+  }
+  return 'gt_16mb'
+}
+
 async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, config: Config, method: string) {
   if (config.mode !== 'sub2api') {
     writeControlPlaneError(res, 404, 'unsupported_route', 'Runtime registration is only available in sub2api mode')
@@ -326,7 +345,10 @@ async function handleRuntimeRegister(req: IncomingMessage, res: ServerResponse, 
   }
   const bodyResult = await readRequestBody(req, 64 * 1024)
   if ('error' in bodyResult) {
-    writeControlPlaneError(res, 413, 'body_too_large', 'Runtime registration body exceeds configured cap')
+    writeControlPlaneError(res, 413, 'body_too_large', 'Runtime registration body exceeds configured cap', undefined, {
+      body_size_bucket: byteSizeBucket(bodyResult.observedBytes),
+      body_limit_bucket: byteSizeBucket(bodyResult.maxBytes),
+    })
     return
   }
   let parsed: RuntimeRegisterRequest
@@ -1534,13 +1556,17 @@ async function handleRequest(
       return
     }
     if (hasEnvResidueQuery(target.search)) {
-      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed', {
+        env_residue_verifier_stage: 'query',
+      })
       return
     }
     for (const [key, value] of Object.entries(req.headers)) {
       const joined = Array.isArray(value) ? value.join(', ') : String(value || '')
       if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(joined)) {
-        writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+        writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed', {
+          env_residue_verifier_stage: 'header',
+        })
         return
       }
     }
@@ -1706,7 +1732,10 @@ async function handleRequest(
 
   const bodyResult = await readRequestBody(req, config.mode === 'sub2api' ? getSharedPoolMaxBodyBytes(config) : undefined)
   if ('error' in bodyResult) {
-    writeRequestControlPlaneError(413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
+    writeRequestControlPlaneError(413, 'body_too_large', 'Shared-pool request body exceeds configured cap', {
+      body_size_bucket: byteSizeBucket(bodyResult.observedBytes),
+      body_limit_bucket: byteSizeBucket(bodyResult.maxBytes),
+    })
     return
   }
   let body = bodyResult.body
@@ -1845,7 +1874,10 @@ async function handleRequest(
     const envRewrite = canonicalizeFormalPoolEnvResidueBody(body)
     if (!envRewrite.ok) {
       envResidueSanitizerSummary = envRewrite.summary
-      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed', {
+        env_residue_verifier_stage: 'body_system',
+        env_residue_sanitizer_result: envResidueSanitizerSummary,
+      })
       return
     }
     envResidueSanitizerSummary = envRewrite.summary
@@ -1972,7 +2004,9 @@ async function handleRequest(
   if (config.mode === 'sub2api' && finalVerifierOptions) {
     const envResidueVerifier = verifyCanonicalFormalPoolEnvResidueFinalRequest(upstreamUrl, forwardHeaders, body)
     if (!envResidueVerifier.ok) {
-      writeRequestControlPlaneError(400, envResidueVerifier.code, 'Formal-pool env residue verifier failed')
+      writeRequestControlPlaneError(400, envResidueVerifier.code, 'Formal-pool env residue verifier failed', {
+        env_residue_verifier_stage: envResidueVerifier.stage,
+      })
       return
     }
     const verifier = verifyProviderAwareFinalRequest(config, upstreamUrl, forwardHeaders, body, finalVerifierOptions, accountIdentity ?? undefined, egress ?? undefined)
@@ -2390,13 +2424,13 @@ function verifyCanonicalFormalPoolEnvResidueFinalRequest(
   upstreamUrl: URL,
   headers: Record<string, string>,
   body: Buffer,
-): { ok: true } | { ok: false; code: 'formal_pool_env_residue_verifier_failed' } {
+): { ok: true } | { ok: false; code: 'formal_pool_env_residue_verifier_failed'; stage: string } {
   if (hasEnvResidueQuery(upstreamUrl.search)) {
-    return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+    return { ok: false, code: 'formal_pool_env_residue_verifier_failed', stage: 'query' }
   }
   for (const [key, value] of Object.entries(headers)) {
     if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(String(value || ''))) {
-      return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+      return { ok: false, code: 'formal_pool_env_residue_verifier_failed', stage: 'header' }
     }
   }
   if (!body.length) return { ok: true }
@@ -2406,8 +2440,8 @@ function verifyCanonicalFormalPoolEnvResidueFinalRequest(
   } catch {
     return { ok: true }
   }
-  if (!verifySystemEnvResidueCanonical(parsed?.system)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
-  if (containsStructuralEnvResidue(parsed)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed' }
+  if (!verifySystemEnvResidueCanonical(parsed?.system)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed', stage: 'body_system' }
+  if (containsStructuralEnvResidue(parsed)) return { ok: false, code: 'formal_pool_env_residue_verifier_failed', stage: 'body_structural' }
   return { ok: true }
 }
 
@@ -4603,17 +4637,19 @@ function buildFixedUpstreamUrl(target: RequestTarget, upstream: URL): URL {
   return upstreamUrl
 }
 
-async function readRequestBody(req: IncomingMessage, maxBytes?: number): Promise<{ body: Buffer } | { error: 'body_too_large' }> {
+async function readRequestBody(req: IncomingMessage, maxBytes?: number): Promise<{ body: Buffer } | { error: 'body_too_large'; observedBytes: number; maxBytes?: number }> {
   const chunks: Buffer[] = []
   let total = 0
   for await (const chunk of req) {
     const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
     total += buffer.length
     if (maxBytes !== undefined && total > maxBytes) {
-      for await (const _ of req) {
+      for await (const rest of req) {
+        const restBuffer = typeof rest === 'string' ? Buffer.from(rest) : rest
+        total += restBuffer.length
         // Drain remaining bytes so the client receives the control-plane response.
       }
-      return { error: 'body_too_large' }
+      return { error: 'body_too_large', observedBytes: total, maxBytes }
     }
     chunks.push(buffer)
   }
@@ -4623,7 +4659,10 @@ async function readRequestBody(req: IncomingMessage, maxBytes?: number): Promise
 async function drainRequestWithinLimit(req: IncomingMessage, maxBytes: number, res: ServerResponse): Promise<void> {
   const result = await readRequestBody(req, maxBytes)
   if ('error' in result) {
-    writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
+    writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap', undefined, {
+      body_size_bucket: byteSizeBucket(result.observedBytes),
+      body_limit_bucket: byteSizeBucket(result.maxBytes),
+    })
   }
 }
 

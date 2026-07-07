@@ -953,10 +953,16 @@ test('egress proxy failure is a control-plane error and does not expose raw prox
 })
 
 
-test('body cap fails closed before forwarding shared-pool messages', async () => {
+test('body cap fails closed before forwarding shared-pool messages with safe size buckets', async () => {
+  const { mkdtempSync, readFileSync } = await import('fs')
+  const { tmpdir } = await import('os')
+  const { join } = await import('path')
   const upstream = await startFakeUpstream()
   const config = sharedConfig()
   config.shared_pool = sharedPoolConfig({ max_body_bytes: 16 }) as any
+  const captureDir = mkdtempSync(join(tmpdir(), 'cc-gateway-body-cap-capture-'))
+  const oldCaptureDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = captureDir
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
 
   try {
@@ -967,8 +973,15 @@ test('body cap fails closed before forwarding shared-pool messages', async () =>
     assert.equal(response.status, 413)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
     assert.equal(response.headers['x-cc-gateway-error-code'], 'body_too_large')
+    const controlPlane = JSON.parse(readFileSync(join(captureDir, '00_control_plane_error.json'), 'utf-8'))
+    assert.equal(controlPlane.body_size_bucket, 'lte_1kb')
+    assert.equal(controlPlane.body_limit_bucket, 'lte_1kb')
+    assert.equal(controlPlane.raw_body_omitted_reason, 'control_plane_error_raw_body_forbidden')
+    assert.ok(!JSON.stringify(controlPlane).includes('intentionally over the tiny cap'))
     assert.equal(upstream.captured.length, 0)
   } finally {
+    if (oldCaptureDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldCaptureDir
     await close(gateway)
     await close(upstream.server)
   }

@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
@@ -527,6 +527,31 @@ test('unrecognized system marker or env literal variants fail closed with env re
     }
     assert.equal(upstream.captured.length, 0)
   })
+})
+
+
+test('env residue verifier failure safe summary records stage bucket without raw marker', async () => {
+  const captureDir = mkdtempSync(join(tmpdir(), 'cc-gateway-env-residue-capture-'))
+  const oldCaptureDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+  process.env.CC_GATEWAY_RAW_CAPTURE_DIR = captureDir
+  try {
+    await withGateway(async (gateway, upstream) => {
+      const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+        headers: headers({ nonce: `bad-system-capture-${Date.now()}` }),
+        body: body([{ type: 'text', text: "Today's date is 2026-6-29." }]),
+      })
+      assert.equal(response.status, 400, response.body)
+      assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_env_residue_verifier_failed')
+      const controlPlane = JSON.parse(readFileSync(join(captureDir, '00_control_plane_error.json'), 'utf-8'))
+      assert.equal(controlPlane.env_residue_verifier_stage, 'body_system')
+      assert.equal(controlPlane.raw_body_omitted_reason, 'control_plane_error_raw_body_forbidden')
+      assert.ok(!JSON.stringify(controlPlane).includes('2026-6-29'))
+      assert.equal(upstream.captured.length, 0)
+    })
+  } finally {
+    if (oldCaptureDir === undefined) delete process.env.CC_GATEWAY_RAW_CAPTURE_DIR
+    else process.env.CC_GATEWAY_RAW_CAPTURE_DIR = oldCaptureDir
+  }
 })
 
 test('headers and query env residue control-plane injection fail closed before upstream', async () => {

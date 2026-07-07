@@ -94,7 +94,7 @@ const SHARED_POOL_HEADER_ALLOWLIST = [
   'authorization',
 ] as const
 
-export const DEFAULT_SHARED_POOL_MAX_BODY_BYTES = 2 * 1024 * 1024
+export const DEFAULT_SHARED_POOL_MAX_BODY_BYTES = 16 * 1024 * 1024
 
 export function canonicalPersonaHeaders(
   config: Config,
