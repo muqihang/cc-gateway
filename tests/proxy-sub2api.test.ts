@@ -2413,7 +2413,7 @@ test('formal-pool signed/no-CCH egress profiles require explicit 2.1.179 oracle 
   }
 })
 
-test('formal-pool request-shape/cache profile gates fail closed on unknown future refs and observed unknown body keys', async () => {
+test('formal-pool request-shape/cache profile gates fail closed on unknown future refs and final body keys', async () => {
   const unknownRefUpstream = await startFakeUpstream()
   const unknownRefProxy = await startFakeConnectProxy()
   const unknownRefGateway = startProxy(attested2179Sub2apiConfig(unknownRefUpstream.url, unknownRefProxy.url))
@@ -2446,13 +2446,14 @@ test('formal-pool request-shape/cache profile gates fail closed on unknown futur
           cli_version_bucket: '2.1.179',
           route_class: 'messages',
           billing_shape: 'absent',
+          stream: true,
           unknown_top_level_body_key_count: 1,
         },
       }),
-      body: native2179Body({ system: [{ type: 'text', text: 'safe system fixture' }] }),
+      body: native2179Body({ future_client_field: 'cleaning-missed', system: [{ type: 'text', text: 'safe system fixture' }] }),
     })
-    assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_observed_client_profile_unapproved')
+    assert.equal(response.status, 400)
+    assert.equal(response.headers['x-cc-gateway-error-code'], 'request_shape_profile_mismatch')
     assert.equal(unknownBodyUpstream.captured.length, 0)
   } finally {
     await close(unknownBodyGateway)

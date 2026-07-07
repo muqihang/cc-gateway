@@ -4109,7 +4109,7 @@ function verifyFormalPoolEnvResidueProfiles(
 
 function verifyObservedClientProfileAdmission(attested: AttestedFormalPoolContext, requireExact2179 = false): { ok: true } | { ok: false; status: number; code: string; message: string } {
   const profile = attested.observed_client_profile
-  if ((profile.unknown_top_level_body_key_count as number | undefined) && Number(profile.unknown_top_level_body_key_count) > 0) {
+  if (requireExact2179 && (profile.unknown_top_level_body_key_count as number | undefined) && Number(profile.unknown_top_level_body_key_count) > 0) {
     return { ok: false, status: 403, code: 'formal_pool_observed_client_profile_unapproved', message: 'Formal-pool observed client profile contains unknown body keys' }
   }
   const version = typeof profile.cli_version_bucket === 'string' ? profile.cli_version_bucket : ''

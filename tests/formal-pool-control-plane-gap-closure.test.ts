@@ -336,6 +336,25 @@ test('2.1.197 server-selected canonical Sonnet 5 path forwards and strips CCH/bi
   })
 })
 
+test('2.1.197 server-selected canonical path admits observed 2.1.198 after future observed keys are cleaned', async () => {
+  await withGateway('2.1.197', async (gateway, upstream) => {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers('2.1.197', {
+        observed_client_profile: observedProfile({
+          cli_version_bucket: '2.1.198',
+          top_level_body_keys: ['context_management', 'future_client_field', 'max_tokens', 'messages', 'metadata', 'model', 'output_config', 'stream', 'system', 'thinking', 'tools'],
+          unknown_top_level_body_key_count: 1,
+        }),
+      }),
+      body: body({ system: [{ type: 'text', text: 'safe system fixture for future observed client' }] }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.match(String(upstream.captured[0].headers['user-agent']), /^claude-cli\/2\.1\.197 /)
+    assert.doesNotMatch(upstream.captured[0].body, /future_client_field/i)
+  })
+})
+
 test('Plan75 residue marker buckets are observed-only and structural body residue is sanitized', async () => {
   await withGateway('2.1.197', async (gateway, upstream) => {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
