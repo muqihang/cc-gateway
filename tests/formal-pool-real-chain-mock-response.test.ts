@@ -260,13 +260,6 @@ test('real-chain mock bridge fail-closed cases stop before sidecar', async () =>
       body: body(),
       code: 'formal_pool_control_plane_unapproved',
     },
-    {
-      name: 'env-residue',
-      path: '/v1/messages?beta=true',
-      headers: headers(),
-      body: body({ anthropic_base_url: 'https://synthetic.invalid' }),
-      code: 'formal_pool_env_residue_verifier_failed',
-    },
   ]
 
   for (const tc of cases) {
@@ -275,7 +268,7 @@ test('real-chain mock bridge fail-closed cases stop before sidecar', async () =>
     const gateway = startProxy(gatewayConfig(upstream.url, sidecar.url))
     try {
       const response = await httpJson(serverUrl(gateway, tc.path), { headers: tc.headers, body: tc.body })
-      assert.equal(response.status, tc.name === 'env-residue' ? 400 : 403, `${tc.name}: ${response.body}`)
+      assert.equal(response.status, 403, `${tc.name}: ${response.body}`)
       assert.equal(response.headers['x-cc-gateway-error-code'], tc.code, tc.name)
       assert.equal(sidecar.captured.length, 0, tc.name)
       assert.equal(upstream.captured.length, 0, tc.name)
@@ -284,6 +277,27 @@ test('real-chain mock bridge fail-closed cases stop before sidecar', async () =>
       await close(upstream.server)
       await close(sidecar.server)
     }
+  }
+})
+
+test('real-chain mock bridge sanitizes structural env residue before sidecar', async () => {
+  const upstream = await startFakeUpstream()
+  const sidecar = await startMockSidecar()
+  const gateway = startProxy(gatewayConfig(upstream.url, sidecar.url))
+  try {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers(),
+      body: body({ anthropic_base_url: 'https://synthetic.invalid' }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 0)
+    assert.equal(sidecar.captured.length, 1)
+    assert.doesNotMatch(sidecar.captured[0].body, /synthetic\.invalid/i)
+    assert.doesNotMatch(sidecar.captured[0].body, /anthropic_base_url/i)
+  } finally {
+    await close(gateway)
+    await close(upstream.server)
+    await close(sidecar.server)
   }
 })
 

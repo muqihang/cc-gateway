@@ -18,11 +18,11 @@ const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
 const requestShape2179 = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
-const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
+const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1'
 const cache2179 = 'claude_code_2_1_179_cache_parity_degraded_v1'
-const cache2197 = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
+const cache2197 = 'claude_code_2_1_197_cache_parity_native_v1'
 const profilePolicy2179 = 'claude_code_2_1_179_cp1_degraded_v1'
-const profilePolicy2197 = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
+const profilePolicy2197 = 'claude_code_2_1_197_plan76_native_policy_v1'
 const mcpPolicyRef = 'mcp-connector-policy:official-remote-https-v1'
 const mcpHost = ['docs', 'example', 'com'].join('.')
 

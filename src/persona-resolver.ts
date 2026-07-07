@@ -158,7 +158,7 @@ function configuredProfileMismatch(
   const allowedFinalToNon1MDownshift = configured.id === DEFAULT_NON_1M_PERSONA_PROFILE_ID
     && identityProfile.id === DEFAULT_PERSONA_PROFILE_ID
     && identityPolicyVersion === configured.version
-  const allowedFormalPoolNativeSelection = ['claude_code_2_1_179_native_degraded', 'claude_code_2_1_185_native_degraded', 'claude_code_2_1_197_sonnet5'].includes(configured.id)
+  const allowedFormalPoolNativeSelection = ['claude_code_2_1_179_native_degraded', 'claude_code_2_1_185_native_degraded', 'claude_code_2_1_197_native'].includes(configured.id)
     && identityProfile.id === configured.id
     && identityPolicyVersion === configured.version
   if (allowedFinalCanonicalization || allowedNon1MToFinalSelection || allowedFinalToNon1MDownshift || allowedFormalPoolNativeSelection) return null

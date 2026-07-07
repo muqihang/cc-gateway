@@ -39,6 +39,7 @@ import { evaluateUpstreamSafety } from './upstream-safety.js'
 import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
 import { isKnownEnabledTLSProfileRef, isSafeTLSProfileRef, tlsProfileMode } from './egress-tls-profile.js'
 import { resolvePersonaProfileId } from './persona-registry.js'
+import { claudeCodeEnvResidueTaxonomySummary, classifyClaudeCodeEnvResidue } from './claude-code-env-residue-taxonomy.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
@@ -57,11 +58,14 @@ const FORMAL_POOL_ATTESTATION_MAX_SKEW_MS = 5 * 60 * 1000
 const FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST_ENV = 'CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FAIL_WRITE_FOR_TEST'
 const FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF = 'strip_attribution'
 const FORMAL_POOL_2179_PROFILE_POLICY_VERSION = 'claude_code_2_1_179_cp1_degraded_v1'
-const FORMAL_POOL_2197_PROFILE_POLICY_VERSION = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
+const FORMAL_POOL_2197_PROFILE_POLICY_VERSION = 'claude_code_2_1_197_plan76_native_policy_v1'
+const FORMAL_POOL_2197_LEGACY_PROFILE_POLICY_VERSION = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
 const FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
-const FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
+const FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1'
+const FORMAL_POOL_2197_LEGACY_REQUEST_SHAPE_PROFILE_REF = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
 const FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_179_cache_parity_degraded_v1'
-const FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
+const FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_197_cache_parity_native_v1'
+const FORMAL_POOL_2197_LEGACY_CACHE_PARITY_PROFILE_REF = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
 const FORMAL_POOL_2197_TLS_PROFILE_REF = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
 const FORMAL_POOL_ENV_RESIDUE_PROFILE_REF = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const FORMAL_POOL_LOCALE_PROFILE_REF = 'locale-profile:us-pacific-v1'
@@ -85,6 +89,18 @@ const CLAUDE_PLATFORM_AWS_SIGV4_ALGORITHM = 'AWS4-HMAC-SHA256'
 const SAFE_PROFILE_REF = /^[A-Za-z0-9._:-]{1,160}$/
 const FORMAL_POOL_MCP_CONNECTOR_POLICY_REF = 'mcp-connector-policy:official-remote-https-v1'
 const FORMAL_POOL_MCP_BETA = 'mcp-client-2025-11-20'
+
+function isFormalPool2197ProfilePolicyVersion(value: unknown): boolean {
+  return value === FORMAL_POOL_2197_PROFILE_POLICY_VERSION || value === FORMAL_POOL_2197_LEGACY_PROFILE_POLICY_VERSION
+}
+
+function isFormalPool2197RequestShapeProfileRef(value: unknown): boolean {
+  return value === FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || value === FORMAL_POOL_2197_LEGACY_REQUEST_SHAPE_PROFILE_REF
+}
+
+function isFormalPool2197CacheParityProfileRef(value: unknown): boolean {
+  return value === FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF || value === FORMAL_POOL_2197_LEGACY_CACHE_PARITY_PROFILE_REF
+}
 const OBSERVED_CLIENT_PROFILE_SAFE_KEYS = new Set([
   'schema_version',
   'cli_version_bucket',
@@ -268,7 +284,7 @@ export function startProxy(config: Config) {
   return server
 }
 
-function writeControlPlaneError(res: ServerResponse, status: number, code: string, message: string) {
+function writeControlPlaneError(res: ServerResponse, status: number, code: string, message: string, rawCapture?: RawCaptureSink, evidence: Record<string, unknown> = {}) {
   const body = JSON.stringify({
     type: 'error',
     error: {
@@ -276,6 +292,15 @@ function writeControlPlaneError(res: ServerResponse, status: number, code: strin
       code,
       message: redactSensitiveText(message),
     },
+  })
+  writeRawCaptureFile(rawCapture || { dir: null, captureRef: null, generated: false, fullRaw: false }, '00_control_plane_error.json', {
+    status,
+    code,
+    kind: 'control_plane',
+    ...evidence,
+    taxonomy_summary: claudeCodeEnvResidueTaxonomySummary(),
+    body_omitted_reason: 'control_plane_error_body_forbidden',
+    raw_body_omitted_reason: 'control_plane_error_raw_body_forbidden',
   })
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -1441,6 +1466,15 @@ async function handleRequest(
   const safePath = redactRequestPath(path)
   const clientIp = req.socket.remoteAddress || 'unknown'
   const rawCapture = createRawCaptureSink(method, target.pathname)
+  const writeRequestControlPlaneError = (status: number, code: string, message: string, evidence: Record<string, unknown> = {}) => {
+    writeControlPlaneError(res, status, code, message, rawCapture, {
+      method,
+      route: target.pathname,
+      query_keys: safeQueryKeys(target.search),
+      header_names: safeHeaderNames(req.headers as Record<string, string | string[] | undefined>),
+      ...evidence,
+    })
+  }
   res.setHeader('X-CC-Gateway-Seen', '1')
 
   log('info', `← ${method} ${safePath} from ${clientIp}`)
@@ -1478,7 +1512,7 @@ async function handleRequest(
 
   if (target.pathname === RUNTIME_REGISTER_PATH) {
     if (config.mode === 'sub2api' && !isTrustedInternalControl(req, config)) {
-      writeControlPlaneError(res, 403, 'missing_internal_control_attestation', 'Runtime account registration requires internal control attestation')
+      writeRequestControlPlaneError(403, 'missing_internal_control_attestation', 'Runtime account registration requires internal control attestation')
       return
     }
     await handleRuntimeRegister(req, res, config, method)
@@ -1488,7 +1522,7 @@ async function handleRequest(
   if (mockMessagesResponseBridgeRequested(config)) {
     const mockBridgeSafety = mockMessagesResponseBridgeSafety(config)
     if (!mockBridgeSafety.ok) {
-      writeControlPlaneError(res, 403, 'egress_tls_mock_response_bridge_unsafe', 'TLS sidecar mock response bridge is local-smoke only')
+      writeRequestControlPlaneError(403, 'egress_tls_mock_response_bridge_unsafe', 'TLS sidecar mock response bridge is local-smoke only')
       return
     }
   }
@@ -1496,17 +1530,17 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     const upstreamSafety = evaluateUpstreamSafety(config, method, target.pathname)
     if (!upstreamSafety.ok && upstreamSafety.code !== 'real_aws_claude_platform_requires_post_attestation') {
-      writeControlPlaneError(res, upstreamSafety.status, upstreamSafety.code, 'Upstream is not allowed for this CC Gateway preflight/canary mode')
+      writeRequestControlPlaneError(upstreamSafety.status, upstreamSafety.code, 'Upstream is not allowed for this CC Gateway preflight/canary mode')
       return
     }
     if (hasEnvResidueQuery(target.search)) {
-      writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
       return
     }
     for (const [key, value] of Object.entries(req.headers)) {
       const joined = Array.isArray(value) ? value.join(', ') : String(value || '')
       if (isEnvResidueStructuralKey(key) || containsEnvResidueLiteral(joined)) {
-        writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+        writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
         return
       }
     }
@@ -1516,7 +1550,7 @@ async function handleRequest(
   const clientName = authenticateForMode(req, config)
   if (!clientName) {
     if (config.mode === 'sub2api') {
-      writeControlPlaneError(res, 401, 'missing_gateway_token', 'Unauthorized - provide gateway token via x-cc-gateway-token header')
+      writeRequestControlPlaneError(401, 'missing_gateway_token', 'Unauthorized - provide gateway token via x-cc-gateway-token header')
     } else {
       res.writeHead(401, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: 'Unauthorized - provide client token via x-api-key header' }))
@@ -1528,20 +1562,20 @@ async function handleRequest(
   log('info', `Client "${clientName}" → ${method} ${safePath}`)
   const configuredBillingMode = (config as any).shared_pool?.billing_cch_mode || 'strip'
   if (config.mode === 'sub2api' && configuredBillingMode === 'disabled') {
-    writeControlPlaneError(res, 403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
+    writeRequestControlPlaneError(403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
     return
   }
   let billingMode: FormalPoolBillingMode | 'disabled' | string = configuredBillingMode
   const trustedInternalControl = isTrustedInternalControl(req, config)
   if (config.mode === 'sub2api' && hasProtectedInternalControlInput(req) && !trustedInternalControl) {
-    writeControlPlaneError(res, 403, 'missing_internal_control_attestation', 'Internal Sub2API control headers require internal control attestation')
+    writeRequestControlPlaneError(403, 'missing_internal_control_attestation', 'Internal Sub2API control headers require internal control attestation')
     return
   }
   const trustedPersonaClient = isTrustedPersonaClient(req, trustedInternalControl)
   const requestedContext1M = readTrustedContext1MRequest(req, clientName, trustedInternalControl)
   const healthcheckPersonaProfile = readTrustedHealthcheckPersonaProfile(req, clientName, trustedInternalControl)
   if (healthcheckPersonaProfile && !isSupportedHealthcheckPersonaForPolicy(healthcheckPersonaProfile, readHeader(req, 'x-cc-policy-version') || String(config.env.version || ''))) {
-    writeControlPlaneError(res, 403, 'unsupported_healthcheck_persona', 'Unsupported internal healthcheck persona profile')
+    writeRequestControlPlaneError(403, 'unsupported_healthcheck_persona', 'Unsupported internal healthcheck persona profile')
     return
   }
 
@@ -1560,19 +1594,19 @@ async function handleRequest(
     if (routePolicy.action === 'block') {
       const awsRoutePolicy = maybeAllowClaudePlatformAWSMessagesRoute(req, config, method, target, routePolicy)
       if ('status' in awsRoutePolicy) {
-        writeControlPlaneError(res, awsRoutePolicy.status, awsRoutePolicy.code, 'Formal-pool scheduler context attestation is required')
+        writeRequestControlPlaneError(awsRoutePolicy.status, awsRoutePolicy.code, 'Formal-pool scheduler context attestation is required')
         return
       }
       routePolicy = awsRoutePolicy.routePolicy
     }
     if (routePolicy.action === 'block' && routePolicy.code !== 'formal_pool_count_tokens_profile_unapproved' && routePolicy.code !== 'formal_pool_control_plane_unapproved') {
-      writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported route: ${safePath}`)
+      writeRequestControlPlaneError(routePolicy.status, routePolicy.code, `Unsupported route: ${safePath}`)
       return
     }
 
     const parsed = parseAccountContext(req, config)
     if ('error' in parsed) {
-      writeControlPlaneError(res, parsed.status, parsed.code, parsed.error)
+      writeRequestControlPlaneError(parsed.status, parsed.code, parsed.error)
       return
     }
     accountContext = parsed.context
@@ -1580,31 +1614,31 @@ async function handleRequest(
     if (formalPoolAttestationRequired(config)) {
       const attestation = parseFormalPoolContext(req, config)
       if (!attestation.ok) {
-        writeControlPlaneError(res, attestation.status, attestation.code, 'Formal-pool scheduler context attestation is required')
+        writeRequestControlPlaneError(attestation.status, attestation.code, 'Formal-pool scheduler context attestation is required')
         return
       }
       formalPoolAttestation = attestation.context
       if (isConfiguredClaudePlatformAWSUpstream(upstream) && formalPoolAttestation.provider_kind !== CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
-        writeControlPlaneError(res, 403, 'real_aws_claude_platform_provider_mismatch', 'AWS Claude Platform upstream requires Claude Platform on AWS provider attestation')
+        writeRequestControlPlaneError(403, 'real_aws_claude_platform_provider_mismatch', 'AWS Claude Platform upstream requires Claude Platform on AWS provider attestation')
         return
       }
       if (formalPoolAttestation.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && target.search !== '') {
-        writeControlPlaneError(res, 404, 'unsupported_route', 'Claude Platform on AWS phase 1 allows /v1/messages without internal query markers only')
+        writeRequestControlPlaneError(404, 'unsupported_route', 'Claude Platform on AWS phase 1 allows /v1/messages without internal query markers only')
         return
       }
       if (routePolicy.action === 'block') {
-        writeControlPlaneError(res, routePolicy.status, routePolicy.code, `Unsupported formal-pool control-plane route: ${safePath}`)
+        writeRequestControlPlaneError(routePolicy.status, routePolicy.code, `Unsupported formal-pool control-plane route: ${safePath}`)
         return
       }
       const headerCheck = verifyFormalPoolAttestedHeaders(config, req, method, target, routePolicy, accountContext, formalPoolAttestation)
       if (!headerCheck.ok) {
         const plan76ModelError = plan76ModelVersionUnsupportedFromContext(formalPoolAttestation)
-        writeControlPlaneError(res, headerCheck.status, plan76ModelError || headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
+        writeRequestControlPlaneError(headerCheck.status, plan76ModelError || headerCheck.code, 'Formal-pool scheduler context does not match selected request context')
         return
       }
       const profileCheck = verifyFormalPoolAttestedProfiles(config, formalPoolAttestation)
       if (!profileCheck.ok) {
-        writeControlPlaneError(res, profileCheck.status, profileCheck.code, profileCheck.message)
+        writeRequestControlPlaneError(profileCheck.status, profileCheck.code, profileCheck.message)
         return
       }
       billingMode = formalPoolBillingModeFromAttestation(formalPoolAttestation)
@@ -1612,7 +1646,7 @@ async function handleRequest(
 
     accountIdentity = resolveAccountIdentity(config, accountContext.accountId)
     if (!accountIdentity) {
-      writeControlPlaneError(res, 403, 'missing_account_identity', 'Missing per-account identity for selected upstream account')
+      writeRequestControlPlaneError(403, 'missing_account_identity', 'Missing per-account identity for selected upstream account')
       return
     }
     if (healthcheckPersonaProfile) {
@@ -1627,31 +1661,31 @@ async function handleRequest(
       const identityCheck = verifyFormalPoolAttestedAccountIdentity(formalPoolAttestation, selectedIdentity)
       if (!identityCheck.ok) {
         const plan76ModelError = plan76ModelVersionUnsupportedFromIdentity(formalPoolAttestation, selectedIdentity)
-        writeControlPlaneError(res, identityCheck.status, plan76ModelError || identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
+        writeRequestControlPlaneError(identityCheck.status, plan76ModelError || identityCheck.code, 'Formal-pool scheduler context does not match selected account identity')
         return
       }
       const credentialBindingCheck = verifySelectedCredentialBinding(req, config, accountContext, selectedIdentity, formalPoolAttestation.credential_ref, formalPoolAttestation.credential_binding_hmac)
       if (!credentialBindingCheck.ok) {
-        writeControlPlaneError(res, credentialBindingCheck.status, credentialBindingCheck.code, 'Selected upstream credential does not match selected account identity')
+        writeRequestControlPlaneError(credentialBindingCheck.status, credentialBindingCheck.code, 'Selected upstream credential does not match selected account identity')
         return
       }
       const personaCheck = verifyFormalPoolAttestedPersona(formalPoolAttestation, selectedIdentity.persona_variant)
       if (!personaCheck.ok) {
-        writeControlPlaneError(res, personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match selected persona profile')
+        writeRequestControlPlaneError(personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match selected persona profile')
         return
       }
     }
 
     const resolvedEgress = resolveEgressBucket(config, accountContext.egressBucket, accountContext.accountId)
     if ('error' in resolvedEgress) {
-      writeControlPlaneError(res, 403, resolvedEgress.error, 'Egress bucket is not eligible for the selected upstream account')
+      writeRequestControlPlaneError(403, resolvedEgress.error, 'Egress bucket is not eligible for the selected upstream account')
       return
     }
     egress = resolvedEgress
     if (formalPoolAttestation) {
       const egressCheck = verifyFormalPoolAttestedHeaders(config, req, method, target, routePolicy, accountContext, formalPoolAttestation, egress)
       if (!egressCheck.ok) {
-        writeControlPlaneError(res, egressCheck.status, egressCheck.code, 'Formal-pool scheduler context does not match selected egress context')
+        writeRequestControlPlaneError(egressCheck.status, egressCheck.code, 'Formal-pool scheduler context does not match selected egress context')
         return
       }
       const tlsMode = tlsProfileMode((config as any).shared_pool)
@@ -1672,7 +1706,7 @@ async function handleRequest(
 
   const bodyResult = await readRequestBody(req, config.mode === 'sub2api' ? getSharedPoolMaxBodyBytes(config) : undefined)
   if ('error' in bodyResult) {
-    writeControlPlaneError(res, 413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
+    writeRequestControlPlaneError(413, 'body_too_large', 'Shared-pool request body exceeds configured cap')
     return
   }
   let body = bodyResult.body
@@ -1681,6 +1715,7 @@ async function handleRequest(
   let rawVerifierResult: unknown = null
   let finalVerifierOptions: FinalOutputVerifierOptions | null = null
   let mcpConnectorEvidence = absentMCPConnectorEvidence()
+  let envResidueSanitizerSummary = emptyFormalPoolEnvResidueSanitizerSummary()
 
   if (config.mode === 'sub2api' && routePolicy?.action === 'suppress') {
     const controlPlaneCheck = verifySuppressedControlPlaneRequest(
@@ -1692,7 +1727,7 @@ async function handleRequest(
       trustedPersonaClient,
     )
     if (!controlPlaneCheck.ok) {
-      writeControlPlaneError(res, controlPlaneCheck.status, controlPlaneCheck.code, controlPlaneCheck.message)
+      writeRequestControlPlaneError(controlPlaneCheck.status, controlPlaneCheck.code, controlPlaneCheck.message)
       return
     }
     res.writeHead(204, { 'X-CC-Gateway-Event-Policy': 'suppress' })
@@ -1711,13 +1746,13 @@ async function handleRequest(
   }
   const sessionId = accountIdentity ? normalizeSharedPoolSessionId(parsedBody, readHeader(req, 'x-claude-code-session-id'), accountIdentity) : undefined
   if (config.mode === 'sub2api' && !sessionId) {
-    writeControlPlaneError(res, 400, 'session_binding_failed', 'Unable to bind X-Claude-Code-Session-Id to metadata.user_id')
+    writeRequestControlPlaneError(400, 'session_binding_failed', 'Unable to bind X-Claude-Code-Session-Id to metadata.user_id')
     return
   }
   if (config.mode === 'sub2api' && formalPoolAttestation) {
     const sessionCheck = verifyFormalPoolAttestedSession(config, runtimeState, formalPoolAttestation, sessionId)
     if (!sessionCheck.ok) {
-      writeControlPlaneError(res, sessionCheck.status, sessionCheck.code, 'Formal-pool scheduler context does not match canonical session')
+      writeRequestControlPlaneError(sessionCheck.status, sessionCheck.code, 'Formal-pool scheduler context does not match canonical session')
       return
     }
   }
@@ -1729,7 +1764,7 @@ async function handleRequest(
     const plan76 = verifyPlan76FormalPoolBodyPolicy(config, target.pathname, parsedBody, formalPoolAttestation)
     mcpConnectorEvidence = plan76.mcp || absentMCPConnectorEvidence()
     if (!plan76.ok) {
-      writeControlPlaneError(res, plan76.status, plan76.code, plan76.message)
+      writeRequestControlPlaneError(plan76.status, plan76.code, plan76.message)
       return
     }
   }
@@ -1737,7 +1772,7 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     if (billingMode === 'sign' && formalPoolRequestUsesPolicyVersion('2.1.177', config, accountContext, accountIdentity, formalPoolAttestation)) {
       if (!isSignPrimaryAllowedForVersion('2.1.177', config)) {
-        writeControlPlaneError(res, 403, 'sign_primary_2177_oracle_missing', 'Manual signing mode is disabled or signer verification failed')
+        writeRequestControlPlaneError(403, 'sign_primary_2177_oracle_missing', 'Manual signing mode is disabled or signer verification failed')
         return
       }
     }
@@ -1755,28 +1790,28 @@ async function handleRequest(
       const code = personaDecision.status === 'reject_context_1m_unsupported_model'
         ? 'context_1m_unsupported_model'
         : `persona_${personaDecision.status}`
-      writeControlPlaneError(res, 403, code, 'Persona policy rejected request')
+      writeRequestControlPlaneError(403, code, 'Persona policy rejected request')
       return
     }
     if (formalPoolAttestation) {
       const personaCheck = verifyFormalPoolAttestedPersona(formalPoolAttestation, accountIdentity?.persona_variant, personaDecision.profile.id, personaDecision.profile.messageBetaProfile)
       if (!personaCheck.ok) {
-        writeControlPlaneError(res, personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match effective persona profile')
+        writeRequestControlPlaneError(personaCheck.status, personaCheck.code, 'Formal-pool scheduler context does not match effective persona profile')
         return
       }
       const existingAuthorityCheck = verifyExistingFormalPoolSessionAuthorityBinding(config, runtimeState, formalPoolAttestation, accountIdentity!)
       if (!existingAuthorityCheck.ok) {
-        writeControlPlaneError(res, existingAuthorityCheck.status, existingAuthorityCheck.code, existingAuthorityCheck.message)
+        writeRequestControlPlaneError(existingAuthorityCheck.status, existingAuthorityCheck.code, existingAuthorityCheck.message)
         return
       }
       const envResidueCheck = verifyFormalPoolEnvResidueProfiles(config, formalPoolAttestation)
       if (!envResidueCheck.ok) {
-        writeControlPlaneError(res, envResidueCheck.status, envResidueCheck.code, envResidueCheck.message)
+        writeRequestControlPlaneError(envResidueCheck.status, envResidueCheck.code, envResidueCheck.message)
         return
       }
       const sessionAuthorityCheck = verifyFormalPoolSessionAuthorityBinding(config, runtimeState, formalPoolAttestation, accountIdentity!)
       if (!sessionAuthorityCheck.ok) {
-        writeControlPlaneError(res, sessionAuthorityCheck.status, sessionAuthorityCheck.code, sessionAuthorityCheck.message)
+        writeRequestControlPlaneError(sessionAuthorityCheck.status, sessionAuthorityCheck.code, sessionAuthorityCheck.message)
         return
       }
     }
@@ -1785,7 +1820,7 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     const canaryCostEnvelope = evaluateCanaryCostEnvelope(config, body)
     if (!canaryCostEnvelope.ok) {
-      writeControlPlaneError(res, canaryCostEnvelope.status, canaryCostEnvelope.code, 'Canary request exceeds the configured cost envelope')
+      writeRequestControlPlaneError(canaryCostEnvelope.status, canaryCostEnvelope.code, 'Canary request exceeds the configured cost envelope')
       return
     }
   }
@@ -1793,25 +1828,27 @@ async function handleRequest(
   if (config.mode === 'sub2api') {
     const retryContract = verifyRetryFinalOutputContract(req, billingMode)
     if (!retryContract.ok) {
-      writeControlPlaneError(res, retryContract.status, retryContract.code, retryContract.message)
+      writeRequestControlPlaneError(retryContract.status, retryContract.code, retryContract.message)
       return
     }
   }
 
   if (config.mode === 'sub2api' && billingMode === 'disabled') {
-    writeControlPlaneError(res, 403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
+    writeRequestControlPlaneError(403, 'billing_cch_mode_disabled', 'Shared-pool billing/CCH mode is disabled')
     return
   }
   if (config.mode === 'sub2api' && !['strip', 'no_cch', 'sign'].includes(String(billingMode))) {
-    writeControlPlaneError(res, 403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
+    writeRequestControlPlaneError(403, 'unsupported_billing_cch_mode', 'Unsupported shared-pool billing/CCH mode')
     return
   }
   if (config.mode === 'sub2api' && formalPoolAttestation) {
     const envRewrite = canonicalizeFormalPoolEnvResidueBody(body)
     if (!envRewrite.ok) {
-      writeControlPlaneError(res, 400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
+      envResidueSanitizerSummary = envRewrite.summary
+      writeRequestControlPlaneError(400, 'formal_pool_env_residue_verifier_failed', 'Formal-pool env residue verifier failed')
       return
     }
+    envResidueSanitizerSummary = envRewrite.summary
     body = envRewrite.body
   }
 
@@ -1858,7 +1895,7 @@ async function handleRequest(
   if (config.mode === 'sub2api' && billingMode === 'no_cch') {
     const noCch = runNoCchBillingPipeline(body, personaDecision?.effectiveVersion || String(config.env.version))
     if (!noCch.ok) {
-      writeControlPlaneError(res, 400, noCch.code, 'Shared-pool no-CCH verifier failed')
+      writeRequestControlPlaneError(400, noCch.code, 'Shared-pool no-CCH verifier failed')
       return
     }
     body = noCch.body
@@ -1868,7 +1905,7 @@ async function handleRequest(
       cliVersion: personaDecision?.effectiveVersion || String(config.env.version),
     })
     if (!signing.ok) {
-      writeControlPlaneError(res, 403, signing.code, 'Manual signing mode is disabled or signer verification failed')
+      writeRequestControlPlaneError(403, signing.code, 'Manual signing mode is disabled or signer verification failed')
       return
     }
     body = signing.body
@@ -1928,31 +1965,31 @@ async function handleRequest(
   if (formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND && formalPoolAttestation.upstream_auth_scheme === 'sigv4') {
     const signed = signClaudePlatformAWSFinalRequest(config, upstreamUrl, forwardHeaders, body, formalPoolAttestation, accountIdentity ?? undefined)
     if (!signed.ok) {
-      writeControlPlaneError(res, 403, signed.code, 'Claude Platform on AWS SigV4 signing failed')
+      writeRequestControlPlaneError(403, signed.code, 'Claude Platform on AWS SigV4 signing failed')
       return
     }
   }
   if (config.mode === 'sub2api' && finalVerifierOptions) {
     const envResidueVerifier = verifyCanonicalFormalPoolEnvResidueFinalRequest(upstreamUrl, forwardHeaders, body)
     if (!envResidueVerifier.ok) {
-      writeControlPlaneError(res, 400, envResidueVerifier.code, 'Formal-pool env residue verifier failed')
+      writeRequestControlPlaneError(400, envResidueVerifier.code, 'Formal-pool env residue verifier failed')
       return
     }
     const verifier = verifyProviderAwareFinalRequest(config, upstreamUrl, forwardHeaders, body, finalVerifierOptions, accountIdentity ?? undefined, egress ?? undefined)
     rawVerifierResult = verifier
     if (!verifier.ok) {
       if (formalPoolAttestation?.provider_kind === CLAUDE_PLATFORM_AWS_PROVIDER_KIND) {
-        writeControlPlaneError(res, 403, verifier.code, 'Claude Platform on AWS final verifier failed')
+        writeRequestControlPlaneError(403, verifier.code, 'Claude Platform on AWS final verifier failed')
         return
       }
-      writeControlPlaneError(res, 400, verifier.code, 'Shared-pool final-output verifier failed')
+      writeRequestControlPlaneError(400, verifier.code, 'Shared-pool final-output verifier failed')
       return
     }
   }
   const useTLSSidecar = config.mode === 'sub2api' && egressSidecarEnabled(config as any)
   const activeTLSMode = tlsProfileMode((config as any).shared_pool)
   if (config.mode === 'sub2api' && formalPoolAttestation && activeTLSMode.enabled && activeTLSMode.strict && !useTLSSidecar) {
-    writeControlPlaneError(res, 403, 'egress_tls_sidecar_disabled', 'Strict formal-pool TLS egress requires the TLS sidecar')
+    writeRequestControlPlaneError(403, 'egress_tls_sidecar_disabled', 'Strict formal-pool TLS egress requires the TLS sidecar')
     return
   }
   const agentKey = config.mode === 'sub2api' && accountContext && egress
@@ -1964,7 +2001,7 @@ async function handleRequest(
       ? getProxyAgent(agentKey, egress.proxyUrl)
       : getProxyAgent(agentKey))
   if (config.mode === 'sub2api' && !useTLSSidecar && !agent) {
-    writeControlPlaneError(res, 403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
+    writeRequestControlPlaneError(403, 'missing_egress_proxy', 'Configured egress proxy is unavailable')
     return
   }
 
@@ -2019,6 +2056,9 @@ async function handleRequest(
       sign_to_strip_fallback: false,
       direct_fallback: false,
     },
+    env_residue_sanitizer: envResidueSanitizerSummary,
+    taxonomy_summary: claudeCodeEnvResidueTaxonomySummary(),
+    mcp_connector_decision_bucket: mcpConnectorEvidence.decisionBucket,
   }
   if (rawCapture.fullRaw) {
     finalOutputCapturePayload.raw_capture_scope = 'safe_summary_only_full_raw_disabled_by_policy'
@@ -2042,13 +2082,13 @@ async function handleRequest(
       method,
     })
     if (!prepared.ok) {
-      writeControlPlaneError(res, prepared.status, prepared.code, prepared.message)
+      writeRequestControlPlaneError(prepared.status, prepared.code, prepared.message)
       return
     }
     if (mockMessagesResponseBridgeEnabled(config)) {
       const sidecarResult = await callEgressSidecar(prepared.prepared, body, forwardHeaders)
       if (!sidecarResult.ok) {
-        writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
+        writeRequestControlPlaneError(sidecarResult.status, sidecarResult.code, sidecarResult.message)
         return
       }
       const responseBody = localSmokeMockMessagesResponseBody(personaDecision, parsedBody)
@@ -2070,7 +2110,7 @@ async function handleRequest(
     }
     const sidecarResult = await openEgressSidecar(prepared.prepared, body, forwardHeaders)
     if (!sidecarResult.ok) {
-      writeControlPlaneError(res, sidecarResult.status, sidecarResult.code, sidecarResult.message)
+      writeRequestControlPlaneError(sidecarResult.status, sidecarResult.code, sidecarResult.message)
       return
     }
     const status = sidecarResult.response.status
@@ -2159,7 +2199,7 @@ async function handleRequest(
     log('error', `Upstream error: ${safeMessage}`)
     if (!res.headersSent) {
       if (config.mode === 'sub2api') {
-        writeControlPlaneError(res, 502, 'egress_proxy_failure', 'Configured egress proxy failed before upstream response')
+        writeRequestControlPlaneError(502, 'egress_proxy_failure', 'Configured egress proxy failed before upstream response')
       } else {
         res.writeHead(502, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'Bad gateway', detail: safeMessage }))
@@ -2180,6 +2220,24 @@ type NoCchBillingPipelineResult =
   | { ok: true; body: Buffer; ccVersionSuffix: string }
   | { ok: false; code: 'no_cch_verifier_failed' }
 
+type FormalPoolEnvResidueSanitizerSummary = {
+  changed: boolean
+  removed_field_count: number
+  removed_field_count_bucket: string
+  residue_bucket: string
+  taxonomy: ReturnType<typeof claudeCodeEnvResidueTaxonomySummary>
+}
+
+function emptyFormalPoolEnvResidueSanitizerSummary(): FormalPoolEnvResidueSanitizerSummary {
+  return {
+    changed: false,
+    removed_field_count: 0,
+    removed_field_count_bucket: '0',
+    residue_bucket: 'not_observed',
+    taxonomy: claudeCodeEnvResidueTaxonomySummary(),
+  }
+}
+
 function canonicalClaudeCodeDateMarker(now = new Date(), timezone = 'America/Los_Angeles'): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
@@ -2193,17 +2251,26 @@ function canonicalClaudeCodeDateMarker(now = new Date(), timezone = 'America/Los
   return `Today's date is ${year}-${month}-${day}.`
 }
 
-function canonicalizeFormalPoolEnvResidueBody(body: Buffer): { ok: true; body: Buffer } | { ok: false } {
-  if (!body.length) return { ok: true, body }
+function canonicalizeFormalPoolEnvResidueBody(body: Buffer): { ok: true; body: Buffer; summary: FormalPoolEnvResidueSanitizerSummary } | { ok: false; summary: FormalPoolEnvResidueSanitizerSummary } {
+  const summary = emptyFormalPoolEnvResidueSanitizerSummary()
+  if (!body.length) return { ok: true, body, summary }
   let parsed: any
   try {
     parsed = JSON.parse(body.toString('utf-8'))
   } catch {
-    return { ok: true, body }
+    return { ok: true, body, summary }
   }
   const result = canonicalizeSystemEnvResidue(parsed)
-  if (!result.ok) return { ok: false }
-  return { ok: true, body: Buffer.from(JSON.stringify(parsed), 'utf-8') }
+  if (!result.ok) return { ok: false, summary }
+  const sanitizer = sanitizeStructuralEnvResidueFields(parsed)
+  const nextSummary: FormalPoolEnvResidueSanitizerSummary = {
+    ...summary,
+    changed: sanitizer.removedCount > 0,
+    removed_field_count: sanitizer.removedCount,
+    removed_field_count_bucket: residueCountBucket(sanitizer.removedCount),
+    residue_bucket: sanitizer.bucket,
+  }
+  return { ok: true, body: Buffer.from(JSON.stringify(parsed), 'utf-8'), summary: nextSummary }
 }
 
 function canonicalizeSystemEnvResidue(parsed: any): { ok: true } | { ok: false } {
@@ -2250,6 +2317,64 @@ function canonicalizeSystemEnvResidue(parsed: any): { ok: true } | { ok: false }
 
 function containsEnvResidueLiteral(text: string): boolean {
   return /\b(ANTHROPIC_BASE_URL|BASE_URL|PROXY_URL|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|TZ=)\b/i.test(text)
+}
+
+function sanitizeStructuralEnvResidueFields(value: unknown): { removedCount: number; bucket: string } {
+  let removedCount = 0
+  let bucket = 'not_observed'
+  const observe = (candidate: unknown) => {
+    const classified = classifyClaudeCodeEnvResidue(candidate)
+    bucket = combineEnvResidueBuckets(bucket, classified.bucket)
+  }
+  const walk = (node: unknown, path: string[]): void => {
+    if (!node || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index++) walk(node[index], [...path, String(index)])
+      return
+    }
+    const record = node as Record<string, unknown>
+    for (const [key, child] of Object.entries(record)) {
+      const childPath = [...path, key]
+      if (isMessagesContentPath(childPath)) continue
+      if (isEnvResidueStructuralKey(key) || (typeof child === 'string' && containsEnvResidueLiteral(child))) {
+        if (shouldSanitizeEnvResidueField(childPath)) {
+          observe(child)
+          delete record[key]
+          removedCount++
+          continue
+        }
+      }
+      walk(child, childPath)
+    }
+  }
+  walk(value, [])
+  return { removedCount, bucket }
+}
+
+function shouldSanitizeEnvResidueField(path: string[]): boolean {
+  const top = path[0]
+  if (top === 'tools' || top === 'mcp_servers') return false
+  return !isMessagesContentPath(path)
+}
+
+function isMessagesContentPath(path: string[]): boolean {
+  return path[0] === 'messages' && path.includes('content')
+}
+
+function residueCountBucket(count: number): string {
+  if (count <= 0) return '0'
+  if (count === 1) return '1'
+  if (count <= 5) return '2_5'
+  return '6_plus'
+}
+
+function combineEnvResidueBuckets(current: string, next: string): string {
+  const priority = ['not_observed', 'unknown', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'cn_tld', 'keyword', 'exact_domain_list', 'exact_domain_and_keyword', 'neutral_gateway', 'official_anthropic']
+  if (current === 'not_observed') return next
+  if (next === 'not_observed') return current
+  const currentIndex = priority.indexOf(current)
+  const nextIndex = priority.indexOf(next)
+  return (nextIndex > currentIndex ? next : current) || current
 }
 
 function hasEnvResidueQuery(search: string): boolean {
@@ -2872,8 +2997,8 @@ function verifyFormalPoolFinalRequestShape(
     if (containsUnknownCacheControlPlacement(parsed)) return { ok: false, code: 'cache_parity_profile_mismatch' }
     return { ok: true }
   }
-  const firstPartyShapeRefs = new Set([FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF, FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF])
-  const firstPartyCacheRefs = new Set([FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF, FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF])
+  const firstPartyShapeRefs = new Set([FORMAL_POOL_2179_REQUEST_SHAPE_PROFILE_REF, FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF, FORMAL_POOL_2197_LEGACY_REQUEST_SHAPE_PROFILE_REF])
+  const firstPartyCacheRefs = new Set([FORMAL_POOL_2179_CACHE_PARITY_PROFILE_REF, FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF, FORMAL_POOL_2197_LEGACY_CACHE_PARITY_PROFILE_REF])
   if (options.requestShapeProfileRef && !firstPartyShapeRefs.has(options.requestShapeProfileRef)) {
     return { ok: false, code: 'request_shape_profile_mismatch' }
   }
@@ -3554,7 +3679,7 @@ function isSafeObservedClientProfile(value: unknown): value is Record<string, un
   if (profile.client_family_bucket !== undefined && !['cli', 'desktop', 'vscode', 'unknown'].includes(String(profile.client_family_bucket))) return false
   if (profile.date_format_bucket !== undefined && !['hyphen', 'slash', 'other', 'not_observed'].includes(String(profile.date_format_bucket))) return false
   if (profile.apostrophe_bucket !== undefined && !['ascii', 'unicode_variant_1', 'unicode_variant_2', 'unicode_variant_3', 'other', 'not_observed'].includes(String(profile.apostrophe_bucket))) return false
-  if (profile.base_url_category_bucket !== undefined && !['official_anthropic', 'neutral_gateway', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'unknown', 'not_observed'].includes(String(profile.base_url_category_bucket))) return false
+  if (profile.base_url_category_bucket !== undefined && !['official_anthropic', 'neutral_gateway', 'cn_tld', 'exact_domain_list', 'keyword', 'exact_domain_and_keyword', 'china_tld', 'china_org_domain', 'china_cloud_domain', 'ai_lab_keyword', 'claude_proxy_resale_like', 'unknown', 'not_observed'].includes(String(profile.base_url_category_bucket))) return false
   if (profile.proxy_env_bucket !== undefined && !['no_proxy_env', 'loopback_proxy_only', 'non_loopback_proxy_rejected', 'no_proxy_bypass_guarded', 'unknown'].includes(String(profile.proxy_env_bucket))) return false
   if (profile.mcp_configured_absent_diff_bucket !== undefined && !['absent_no_diff', 'configured_no_upstream_diff', 'configured_marker_present', 'unknown', 'not_observed'].includes(String(profile.mcp_configured_absent_diff_bucket))) return false
   if (profile.mcp_shape_bucket !== undefined && !['absent', 'official_remote_url_connector', 'local_config_shape', 'unsafe_or_unknown'].includes(String(profile.mcp_shape_bucket))) return false
@@ -3587,8 +3712,8 @@ function isSafeObservedBucket(value: unknown): boolean {
 
 
 function plan76ModelVersionUnsupportedFromContext(attested: AttestedFormalPoolContext): string | null {
-  if (attested.policy_version === '2.1.197' && (attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION || attested.persona_profile !== 'claude-code-2.1.197-macos-local')) return 'formal_pool_model_version_unsupported'
-  if (attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION && attested.policy_version !== '2.1.197') return 'formal_pool_model_version_unsupported'
+  if (attested.policy_version === '2.1.197' && (!isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version) || attested.persona_profile !== 'claude-code-2.1.197-macos-local')) return 'formal_pool_model_version_unsupported'
+  if (isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version) && attested.policy_version !== '2.1.197') return 'formal_pool_model_version_unsupported'
   return null
 }
 
@@ -3596,7 +3721,7 @@ function plan76ModelVersionUnsupportedFromContext(attested: AttestedFormalPoolCo
 function plan76ModelVersionUnsupportedFromIdentity(attested: AttestedFormalPoolContext, identity: AccountIdentityRecord): string | null {
   if (identity.policy_version === '2.1.197'
     && (attested.policy_version !== '2.1.197'
-      || attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION
+      || !isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version)
       || attested.persona_profile !== 'claude-code-2.1.197-macos-local')) {
     return 'formal_pool_model_version_unsupported'
   }
@@ -3629,7 +3754,7 @@ function verifyPlan76FormalPoolBodyPolicy(
   if (!mcpDecision.ok) return mcpDecision
   const model = typeof body.model === 'string' ? body.model : ''
   if (model === 'claude-sonnet-5') {
-    if (attested.policy_version !== '2.1.197' || attested.profile_policy_version !== FORMAL_POOL_2197_PROFILE_POLICY_VERSION || attested.request_shape_profile_ref !== FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || attested.cache_parity_profile_ref !== FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF) {
+    if (attested.policy_version !== '2.1.197' || !isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version) || !isFormalPool2197RequestShapeProfileRef(attested.request_shape_profile_ref) || !isFormalPool2197CacheParityProfileRef(attested.cache_parity_profile_ref)) {
       return { ok: false, status: 403, code: 'formal_pool_model_version_unsupported', message: 'Formal-pool Sonnet 5 requires the server-selected 2.1.197 canonical tuple' }
     }
   }
@@ -3701,9 +3826,9 @@ function classifyFormalPoolMCPConnectorShape(
 function isFormalPoolMCPConnectorCanonicalTuple(attested: Pick<AttestedFormalPoolContext, 'policy_version' | 'persona_profile' | 'profile_policy_version' | 'request_shape_profile_ref' | 'cache_parity_profile_ref' | 'egress_tls_profile_ref'>): boolean {
   return attested.policy_version === '2.1.197'
     && attested.persona_profile === 'claude-code-2.1.197-macos-local'
-    && attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION
-    && attested.request_shape_profile_ref === FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF
-    && attested.cache_parity_profile_ref === FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF
+    && isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version)
+    && isFormalPool2197RequestShapeProfileRef(attested.request_shape_profile_ref)
+    && isFormalPool2197CacheParityProfileRef(attested.cache_parity_profile_ref)
     && attested.egress_tls_profile_ref === FORMAL_POOL_2197_TLS_PROFILE_REF
 }
 
@@ -3769,12 +3894,29 @@ function validateOfficialRemoteMCPServer(server: unknown, allowedHosts: string[]
   if (typeof record.name !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(record.name)) return { ok: false, code: 'formal_pool_mcp_schema_unapproved', bucket: 'schema_rejected' }
   const parsed = safeMCPURL(record.url)
   if (!parsed.ok) return { ok: false, code: parsed.code, bucket: 'unsafe_url_rejected' }
-  if (!mcpAllowlistMatches(allowedHosts, parsed.host)) return { ok: false, code: 'formal_pool_mcp_host_unapproved', bucket: 'host_rejected' }
+  if (!mcpHostAllowlistMatches(allowedHosts, parsed.host)) return { ok: false, code: 'formal_pool_mcp_host_unapproved', bucket: 'host_rejected' }
   return { ok: true, name: record.name }
 }
 
 function mcpAllowlistMatches(allowlist: string[] | undefined, value: string): boolean {
   return Array.isArray(allowlist) && (allowlist.includes('*') || allowlist.includes(value))
+}
+
+function mcpHostAllowlistMatches(allowlist: string[] | undefined, value: string): boolean {
+  if (!Array.isArray(allowlist)) return false
+  return allowlist.some((entry) => {
+    const normalized = String(entry || '').trim().toLowerCase()
+    if (!normalized || normalized === '*') return false
+    if (normalized.startsWith('*.')) {
+      const suffix = normalized.slice(2)
+      return value === suffix || value.endsWith(`.${suffix}`)
+    }
+    if (normalized.startsWith('.')) {
+      const suffix = normalized.slice(1)
+      return value === suffix || value.endsWith(`.${suffix}`)
+    }
+    return value === normalized
+  })
 }
 
 function safeMCPURL(value: unknown): { ok: true; host: string } | { ok: false; code: string } {
@@ -3903,14 +4045,14 @@ function verifyFormalPoolProfileRefs(config: Config, attested: AttestedFormalPoo
     }
     return { ok: true }
   }
-  if (attested.profile_policy_version === FORMAL_POOL_2197_PROFILE_POLICY_VERSION) {
+  if (isFormalPool2197ProfilePolicyVersion(attested.profile_policy_version)) {
     if (attested.policy_version !== '2.1.197' || attested.persona_profile !== 'claude-code-2.1.197-macos-local') {
       return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool 2.1.197 profile policy must be server-selected as a complete tuple' }
     }
     if (attested.trusted_egress_profile_ref !== FORMAL_POOL_DEFAULT_EGRESS_PROFILE_REF || attested.billing_shape_policy !== 'strip') {
       return { ok: false, status: 403, code: 'formal_pool_billing_policy_mismatch', message: 'Formal-pool 2.1.197 promotion requires strip billing policy' }
     }
-    if (attested.request_shape_profile_ref !== FORMAL_POOL_2197_REQUEST_SHAPE_PROFILE_REF || attested.cache_parity_profile_ref !== FORMAL_POOL_2197_CACHE_PARITY_PROFILE_REF) {
+    if (!isFormalPool2197RequestShapeProfileRef(attested.request_shape_profile_ref) || !isFormalPool2197CacheParityProfileRef(attested.cache_parity_profile_ref)) {
       return { ok: false, status: 403, code: 'formal_pool_profile_ref_unapproved', message: 'Formal-pool 2.1.197 request/cache profile is not approved' }
     }
     return { ok: true }

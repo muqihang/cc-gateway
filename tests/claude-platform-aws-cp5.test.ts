@@ -110,6 +110,9 @@ function awsFormalPoolContext(overrides: Record<string, unknown> = {}) {
     policy_version: '2.1.175',
     persona_profile: 'claude-code-2.1.175-macos-local',
     trusted_egress_profile_ref: 'strip_attribution',
+    env_residue_profile_ref: 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+    locale_profile_ref: 'locale-profile:us-pacific-v1',
+    base_url_residue_profile_ref: 'base-url-residue-profile:official-anthropic-v1',
     profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
     billing_shape_policy: 'strip',
     request_shape_profile_ref: requestShapeProfileRef,
@@ -131,6 +134,7 @@ function awsFormalPoolContext(overrides: Record<string, unknown> = {}) {
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
     },
     ...overrides,
   }
@@ -158,6 +162,7 @@ function awsSchedulerHeaders(
 
 function awsBody(sessionId = defaultSessionId) {
   return {
+    stream: true,
     metadata: { user_id: JSON.stringify({ session_id: sessionId }) },
     model: 'claude-sonnet-4-6',
     max_tokens: 32,
@@ -244,6 +249,9 @@ function firstPartyFormalPoolContext(overrides: Record<string, unknown> = {}) {
     policy_version: '2.1.175',
     persona_profile: 'claude-code-2.1.175-macos-local',
     trusted_egress_profile_ref: 'strip_attribution',
+    env_residue_profile_ref: 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+    locale_profile_ref: 'locale-profile:us-pacific-v1',
+    base_url_residue_profile_ref: 'base-url-residue-profile:official-anthropic-v1',
     profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
     billing_shape_policy: 'strip',
     request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
@@ -258,6 +266,7 @@ function firstPartyFormalPoolContext(overrides: Record<string, unknown> = {}) {
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
     },
     ...overrides,
   }

@@ -56,6 +56,9 @@ function signedSharedHeaders() {
     timestamp_ms: Date.now(),
     nonce: `nonce-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     trusted_egress_profile_ref: 'strip_attribution',
+    env_residue_profile_ref: 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+    locale_profile_ref: 'locale-profile:us-pacific-v1',
+    base_url_residue_profile_ref: 'base-url-residue-profile:official-anthropic-v1',
     profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
     billing_shape_policy: 'strip',
     request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
@@ -67,6 +70,10 @@ function signedSharedHeaders() {
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
+      thinking_present: false,
+      output_config_present: false,
+      context_management_present: false,
     },
   }
   const canonical = canonicalFormalPoolContext(context)
@@ -247,10 +254,10 @@ test('messages-shaped preflight with identity and bucket uses localhost mock onl
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy(config)
   try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: signedSharedHeaders(),
-      body: { metadata: {}, messages: [{ role: 'user', content: 'hello' }] },
-    })
+	  const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+	    headers: signedSharedHeaders(),
+	    body: { stream: true, metadata: {}, messages: [{ role: 'user', content: 'hello' }] },
+	  })
     assert.equal(response.status, 200)
     assert.equal(upstream.captured.length, 1)
   } finally {

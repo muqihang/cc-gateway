@@ -486,6 +486,26 @@ test('messages content is not scanned or rewritten for local env residue', async
   })
 })
 
+test('metadata env residue fields are sanitized and bucketed without blocking normal requests', async () => {
+  await withGateway(async (gateway, upstream) => {
+    const requestBody = body([]) as any
+    requestBody.metadata.ANTHROPIC_BASE_URL = 'https://deepseek.sankuai.com/v1'
+    requestBody.metadata.TZ = 'Asia/Shanghai'
+    requestBody.metadata.proxyUrl = 'http://127.0.0.1:9999'
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers(),
+      body: requestBody,
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    const parsed = JSON.parse(upstream.captured[0].body)
+    const serialized = JSON.stringify(parsed)
+    assert.doesNotMatch(serialized, /ANTHROPIC_BASE_URL|deepseek|sankuai|Asia\/Shanghai|proxyUrl/i)
+    const userId = JSON.parse(parsed.metadata.user_id)
+    assert.equal(userId.session_id, sessionId)
+  })
+})
+
 test('unrecognized system marker or env literal variants fail closed with env residue verifier code', async () => {
   const badSystems: unknown[] = [
     [{ type: 'text', text: "Today's date is 2026-6-29." }],
@@ -509,7 +529,7 @@ test('unrecognized system marker or env literal variants fail closed with env re
   })
 })
 
-test('headers query and structural body env residue fail closed before upstream', async () => {
+test('headers and query env residue control-plane injection fail closed before upstream', async () => {
   await withGateway(async (gateway, upstream) => {
     const cases = [
       { path: '/v1/messages?beta=true&ANTHROPIC_BASE_URL=fixture', headers: headers(), requestBody: body([]) },
@@ -529,30 +549,73 @@ test('headers query and structural body env residue fail closed before upstream'
       { path: '/v1/messages?beta=true', headers: { ...headers(), timezone: 'Asia/Urumqi' }, requestBody: body([]) },
       { path: '/v1/messages?beta=true', headers: { ...headers(), 'base-url': 'fixture' }, requestBody: body([]) },
       { path: '/v1/messages?beta=true', headers: { ...headers(), 'proxy-url': 'fixture' }, requestBody: body([]) },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, TZ: 'fixture' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, TZ: 'Asia/Shanghai' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, timeZone: 'Pacific/Forged' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, timeZone: 'Asia/Urumqi' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, baseUrl: 'fixture' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, ANTHROPIC_BASE_URL: 'https://model-lab.invalid' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, proxyUrl: 'fixture' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), metadata: { ...(body([]) as any).metadata, envResidueProfileRef: 'env-residue-profile:client-forged' } } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), messages: [{ role: 'user', envResidueProfileRef: 'env-residue-profile:client-forged', content: [{ type: 'text', text: 'safe fixture' }] }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), messages: [{ role: 'user', metadata: { proxyUrl: 'fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), messages: [{ role: 'user', metadata: { note: 'PROXY_URL=fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), messages: [{ role: 'user', metadata: { note: 'BASE_URL=fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), tools: [{ name: 'Fixture', metadata: { baseUrlResidueProfileRef: 'base-url-residue-profile:client-forged' } }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), tools: [{ name: 'Fixture', input_schema: { type: 'object', properties: { value: { type: 'string', HTTP_PROXY: 'fixture' } } } }] } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([{ type: 'text', text: 'safe system fixture', ANTHROPIC_BASE_URL: 'fixture' }]) } },
-      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([{ type: 'text', text: 'safe system fixture', envResidueProfileRef: 'env-residue-profile:client-forged' }]) } },
     ]
     for (const item of cases) {
       const response = await httpJson(serverUrl(gateway, item.path), {
-        headers: { ...headers({ nonce: `structural-${Date.now()}-${Math.random()}` }), ...item.headers },
+        headers: { ...headers({ nonce: `control-plane-${Date.now()}-${Math.random()}` }), ...item.headers },
         body: item.requestBody,
       })
       assert.equal(response.status, 400, response.body)
       assert.equal(response.headers['x-cc-gateway-error-code'], 'formal_pool_env_residue_verifier_failed')
+    }
+    assert.equal(upstream.captured.length, 0)
+  })
+})
+
+test('structural body env residue is sanitized without blocking normal requests', async () => {
+  await withGateway(async (gateway, upstream) => {
+    const cases = [
+      { metadata: { TZ: 'fixture' } },
+      { metadata: { TZ: 'Asia/Shanghai' } },
+      { metadata: { timeZone: 'Pacific/Forged' } },
+      { metadata: { timeZone: 'Asia/Urumqi' } },
+      { metadata: { baseUrl: 'fixture' } },
+      { metadata: { ANTHROPIC_BASE_URL: 'https://model-lab.invalid' } },
+      { metadata: { ANTHROPIC_BASE_URL: 'https://deepseek.sankuai.com/v1' } },
+      { metadata: { proxyUrl: 'fixture' } },
+      { metadata: { envResidueProfileRef: 'env-residue-profile:client-forged' } },
+      { messages: [{ role: 'user', envResidueProfileRef: 'env-residue-profile:client-forged', content: [{ type: 'text', text: 'safe fixture' }] }] },
+      { messages: [{ role: 'user', metadata: { proxyUrl: 'fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] },
+      { messages: [{ role: 'user', metadata: { note: 'PROXY_URL=fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] },
+      { messages: [{ role: 'user', metadata: { note: 'BASE_URL=fixture' }, content: [{ type: 'text', text: 'safe fixture' }] }] },
+      { system: [{ type: 'text', text: 'safe system fixture', ANTHROPIC_BASE_URL: 'fixture' }] },
+      { system: [{ type: 'text', text: 'safe system fixture', envResidueProfileRef: 'env-residue-profile:client-forged' }] },
+    ]
+    for (const patch of cases) {
+      const requestBody = { ...body([]), ...(patch as any) } as any
+      if ((patch as any).metadata) requestBody.metadata = { ...(body([]) as any).metadata, ...(patch as any).metadata }
+      const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+        headers: headers({ nonce: `structural-clean-${Date.now()}-${Math.random()}` }),
+        body: requestBody,
+      })
+      assert.equal(response.status, 200, response.body)
+    }
+    assert.equal(upstream.captured.length, cases.length)
+    for (const captured of upstream.captured) {
+      const serialized = captured.body
+      assert.doesNotMatch(serialized, /ANTHROPIC_BASE_URL|envResidueProfileRef|deepseek|sankuai|Asia\/Shanghai|Asia\/Urumqi|Pacific\/Forged|PROXY_URL=fixture|BASE_URL=fixture|proxyUrl|baseUrl/i)
+    }
+  })
+})
+
+test('actual tool and MCP outbound-control residue still fails closed before upstream', async () => {
+  await withGateway(async (gateway, upstream) => {
+    const cases = [
+      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), tools: [{ name: 'Fixture', metadata: { baseUrlResidueProfileRef: 'base-url-residue-profile:client-forged' } }] } },
+      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), tools: [{ name: 'Fixture', input_schema: { type: 'object', properties: { value: { type: 'string', HTTP_PROXY: 'fixture' } } } }] } },
+      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), mcp_servers: [{ name: 'bad', url: 'https://example.com', env: { ANTHROPIC_BASE_URL: 'fixture' } }] } },
+      { path: '/v1/messages?beta=true', headers: headers(), requestBody: { ...body([]), mcp_servers: [{ name: 'bad', url: 'https://example.com', authorization: 'Bearer fixture' }] } },
+    ]
+    for (const item of cases) {
+      const response = await httpJson(serverUrl(gateway, item.path), {
+        headers: { ...headers({ nonce: `outbound-control-${Date.now()}-${Math.random()}` }), ...item.headers },
+        body: item.requestBody,
+      })
+      assert.ok([400, 403].includes(response.status), response.body)
+      assert.ok([
+        'formal_pool_env_residue_verifier_failed',
+        'formal_pool_mcp_connector_disabled',
+      ].includes(String(response.headers['x-cc-gateway-error-code'])))
     }
     assert.equal(upstream.captured.length, 0)
   })

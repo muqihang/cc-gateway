@@ -461,14 +461,18 @@ function hasForbiddenDialOverrideConfig(value: unknown, depth = 0): boolean {
 function normalizeMCPAllowedHost(value: unknown): string {
   if (typeof value !== 'string') throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   const host = value.trim().toLowerCase()
-  if (host === '*') return host
-  if (!host || host !== value || host.endsWith('.') || host.includes('://') || host.includes('@') || host.includes('/') || host.includes('\\')) {
+  if (!host || host === '*' || host !== value || host.endsWith('.') || host.includes('://') || host.includes('@') || host.includes('/') || host.includes('\\')) {
     throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   }
-  if (host === 'localhost' || host.endsWith('.localhost') || isIP(host) !== 0 || host.startsWith('[') || host.endsWith(']')) {
+  const matchHost = host.startsWith('*.') ? host.slice(2) : host.startsWith('.') ? host.slice(1) : host
+  if (!matchHost || matchHost === host && host.startsWith('*')) {
     throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   }
-  if (!/^[a-z0-9.-]{1,253}$/.test(host) || host.split('.').some((label) => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
+  if (matchHost === 'localhost' || matchHost.endsWith('.localhost') || isIP(matchHost) !== 0 || matchHost.startsWith('[') || matchHost.endsWith(']')) {
+    throw new Error('config: formal_pool_mcp_connector_allowlist_required')
+  }
+  const labels = matchHost.split('.')
+  if (!/^[a-z0-9.-]{1,253}$/.test(matchHost) || labels.length < 2 || labels.some((label) => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
     throw new Error('config: formal_pool_mcp_connector_allowlist_required')
   }
   return host

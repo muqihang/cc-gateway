@@ -334,9 +334,9 @@ test('formal-pool healthcheck accepts server-selected 2.1.197 persona with strea
       }, {
         policy_version: '2.1.197',
         persona_profile: 'claude-code-2.1.197-macos-local',
-        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
-        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
-        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        profile_policy_version: 'claude_code_2_1_197_plan76_native_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_native_v1',
         observed_client_profile: {
           schema_version: 'observed_client_profile.v1',
           cli_version_bucket: '2.1.197',
@@ -571,9 +571,9 @@ test('runtime registration propagates strict TLS profile ref into dynamic egress
         proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-strict-tls',
         policy_version: '2.1.197',
         persona_profile: 'claude-code-2.1.197-macos-local',
-        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
-        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
-        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        profile_policy_version: 'claude_code_2_1_197_plan76_native_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_native_v1',
         egress_tls_profile_ref: tlsProfileRef,
         session_id: runtimeSessionId,
         observed_client_profile: {
@@ -684,9 +684,9 @@ test('runtime registration backfills missing TLS profile ref on existing runtime
         proxy_identity_ref: 'opaque:proxy-ref:v1:runtime-tls-backfill',
         policy_version: '2.1.197',
         persona_profile: 'claude-code-2.1.197-macos-local',
-        profile_policy_version: 'claude_code_2_1_197_plan76_sonnet5_policy_v1',
-        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1',
-        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_sonnet5_v1',
+        profile_policy_version: 'claude_code_2_1_197_plan76_native_policy_v1',
+        request_shape_profile_ref: 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1',
+        cache_parity_profile_ref: 'claude_code_2_1_197_cache_parity_native_v1',
         egress_tls_profile_ref: tlsProfileRef,
         session_id: runtimeSessionId,
         observed_client_profile: {

@@ -92,6 +92,9 @@ function schedulerHeaders(
     timestamp_ms: Date.now(),
     nonce: `checkpoint3-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     trusted_egress_profile_ref: 'strip_attribution',
+    env_residue_profile_ref: 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+    locale_profile_ref: 'locale-profile:us-pacific-v1',
+    base_url_residue_profile_ref: 'base-url-residue-profile:official-anthropic-v1',
     profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
     billing_shape_policy: 'strip',
     request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
@@ -103,6 +106,7 @@ function schedulerHeaders(
       billing_shape: 'absent',
       billing_block_count: 0,
       cc_entrypoint_bucket: 'absent',
+      stream: true,
     },
     ...contextOverrides,
   }
@@ -166,6 +170,7 @@ function signedCch2179Profile(overrides: Record<string, unknown> = {}) {
       billing_shape: 'cch_present',
       billing_block_count: 1,
       cc_entrypoint_bucket: 'sdk-cli',
+      stream: true,
     },
     ...overrides,
   }
@@ -199,6 +204,7 @@ function noCch2179Profile(overrides: Record<string, unknown> = {}) {
       billing_shape: 'no_cch',
       billing_block_count: 1,
       cc_entrypoint_bucket: 'sdk-cli',
+      stream: true,
     },
     ...overrides,
   }
@@ -340,7 +346,7 @@ test('runtime registration rejects malformed credential binding HMAC before appl
         proxy_identity_ref: formalPoolProxyRef,
         persona_profile: 'claude-code-2.1.146-macos-local',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(selected.headers['x-cc-gateway-error-code'], 'missing_account_identity')
   } finally {
@@ -383,7 +389,7 @@ test('runtime registration rejects credential binding HMAC that does not match t
         proxy_identity_ref: formalPoolProxyRef,
         persona_profile: 'claude-code-2.1.146-macos-local',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(selected.headers['x-cc-gateway-error-code'], 'missing_account_identity')
     assert.equal(upstream.captured.length, 0)
@@ -529,6 +535,7 @@ test('signed/no-CCH oracle profiles require exact 2.1.179 tuple before upstream 
     const signedLegacy = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-legacy-not-2179-tuple', policy_version: '2.1.146' })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'legacy version must not enter 2179 signed lane' }] }],
       },
@@ -540,6 +547,7 @@ test('signed/no-CCH oracle profiles require exact 2.1.179 tuple before upstream 
     const noCchLegacy = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, noCch2179Profile({ nonce: 'no-cch-legacy-not-2179-tuple', policy_version: '2.1.146' })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'legacy version must not enter 2179 no-cch lane' }] }],
       },
@@ -583,6 +591,7 @@ test('signed/no-CCH oracle profiles reject unknown observed client version inste
         },
       })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'unknown observed version must fail optional profile' }] }],
       },
@@ -776,18 +785,18 @@ test('sub2api blocks messages with non-allowlisted query and defers count_tokens
   try {
     const badQuery = await httpJson(serverUrl(gateway, '/v1/messages?beta=false'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-unapproved-evidence-gate' })),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(badQuery.status, 404)
     assert.equal(badQuery.headers['x-cc-gateway-error-code'], 'unsupported_route')
 
     const countTokens = await httpJson(serverUrl(gateway, '/v1/messages/count_tokens?beta=true'), {
       headers: schedulerHeaders(),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(countTokens.status, 403)
     assert.equal(countTokens.headers['x-cc-gateway-error-kind'], 'control-plane')
-    assert.equal(countTokens.headers['x-cc-gateway-error-code'], 'count_tokens_deferred')
+    assert.equal(countTokens.headers['x-cc-gateway-error-code'], 'formal_pool_count_tokens_profile_unapproved')
     assert.equal(upstream.captured.length, 0)
   } finally {
     await close(gateway)
@@ -876,7 +885,7 @@ test('missing per-account identity fails closed', async () => {
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders(),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-code'], 'missing_account_identity')
@@ -894,7 +903,7 @@ test('unknown or disabled egress bucket fails closed before any direct connectio
   try {
     const unknown = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', { 'x-cc-egress-bucket': 'bucket-missing' }, { egress_bucket: 'bucket-missing' }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(unknown.status, 403)
     assert.equal(unknown.headers['x-cc-gateway-error-code'], 'unknown_egress_bucket')
@@ -905,7 +914,7 @@ test('unknown or disabled egress bucket fails closed before any direct connectio
     try {
       const disabled = await httpJson(serverUrl(disabledGateway, '/v1/messages?beta=true'), {
         headers: schedulerHeaders(),
-        body: { messages: [{ role: 'user', content: 'hello' }] },
+        body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
       })
       assert.equal(disabled.status, 403)
       assert.equal(disabled.headers['x-cc-gateway-error-code'], 'disabled_egress_bucket')
@@ -930,7 +939,7 @@ test('egress proxy failure is a control-plane error and does not expose raw prox
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, { proxy_identity_ref: 'opaque:proxy-ref:v1:bucket-fail' }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 502)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -953,7 +962,7 @@ test('body cap fails closed before forwarding shared-pool messages', async () =>
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders(),
-      body: { messages: [{ role: 'user', content: 'this body is intentionally over the tiny cap' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'this body is intentionally over the tiny cap' }] },
     })
     assert.equal(response.status, 413)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -980,6 +989,7 @@ test('retry contract fails closed when a body-mutating retry did not re-enter fi
         'x-cc-retry-body-mutated': 'true',
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) },
         messages: [{ role: 'user', content: 'retry mutated body' }],
       },
@@ -1011,6 +1021,7 @@ test('retry contract re-enters strip final-output pipeline for approved body-mut
         'x-cc-retry-final-output-reentered': 'true',
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ device_id: 'downstream-device', account_uuid: 'downstream-account', session_id: 'session-old' }) },
         system: 'x-anthropic-billing-header: cc_version=2.1.146.abc; cch=12345;\nkept',
         messages: [{ role: 'user', content: 'retry re-entered body' }],
@@ -1047,6 +1058,7 @@ test('retry contract rejects changed policy/gates and sign-to-strip downgrades',
         'x-cc-retry-header-policy-changed': 'true',
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) },
         messages: [{ role: 'user', content: 'retry policy changed' }],
       },
@@ -1062,6 +1074,7 @@ test('retry contract rejects changed policy/gates and sign-to-strip downgrades',
         'x-cc-retry-previous-billing-cch-mode': 'sign',
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) },
         messages: [{ role: 'user', content: 'retry mode changed' }],
       },
@@ -1092,6 +1105,7 @@ test('strip verifier removes billing/CCH and rewrites per-account metadata befor
         'x-anthropic-billing-header': 'cc_version=2.1.146.abc; cch=12345',
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ device_id: 'client-device', account_uuid: 'acct-client', session_id: 'session-old' }) },
         system: 'x-anthropic-billing-header: cc_version=2.1.146.abc; cch=12345;\nkept',
         messages: [{ role: 'user', content: 'hello' }],
@@ -1128,6 +1142,7 @@ test('strip verifier fails closed if billing markers remain after rewrite', asyn
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders(),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ device_id: 'downstream-device', session_id: 'session-old' }) },
         messages: [{ role: 'user', content: 'literal cch=12345 must fail verifier' }],
       },
@@ -1153,7 +1168,7 @@ test('signing mode skeleton is disabled unless manually approved gates are prese
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-disabled-gate' })),
-      body: { metadata: { user_id: JSON.stringify({ device_id: 'client-device', account_uuid: 'acct-client', session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ device_id: 'client-device', account_uuid: 'acct-client', session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1174,7 +1189,7 @@ test('rollback to billing_cch_mode disabled fails closed without native fallback
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-unapproved-evidence-gate' })),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1199,7 +1214,7 @@ test('redacted log paths hide all query values including beta', async () => {
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=false&api_key=query-secret'), {
       headers: schedulerHeaders(),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 404)
   } finally {
@@ -1223,7 +1238,7 @@ test('signing skeleton fails closed even when local signing flag is enabled but 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-unapproved-evidence-gate' })),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1243,7 +1258,7 @@ test('invalid gateway token emits stable control-plane wire contract', async () 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: { ...schedulerHeaders(), 'x-cc-gateway-token': 'wrong-token' },
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 401)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1267,7 +1282,7 @@ test('approved signing rejects downstream CCH material and never downgrades to s
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-untrusted-billing-input' })),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'literal cch=12345 must not be trusted' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'literal cch=12345 must not be trusted' }] },
     })
     assert.equal(response.status, 403)
     assert.equal(response.headers['x-cc-gateway-error-kind'], 'control-plane')
@@ -1294,6 +1309,7 @@ test('approved signing allows literal billing header text without downstream CCH
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-literal-billing-text' })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{
           role: 'user',
@@ -1354,6 +1370,7 @@ test('sign-primary full proxy path for 2.1.177 fails closed before upstream with
         ...signedCch2179Profile({ nonce: 'signed-2177-missing-proof', policy_version: '2.1.177', persona_profile: 'claude-code-2.1.175-macos-local' }),
       }),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionB }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from 2.1.177 full sign lane' }] }],
       },
@@ -1383,6 +1400,7 @@ test('approved sign-primary mode generates billing CCH and forwards only after v
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, signedCch2179Profile({ nonce: 'signed-approved-sign-lane' })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from sign lane' }] }],
       },
@@ -1416,6 +1434,7 @@ test('approved no-CCH profile inserts no-CCH billing block and rejects residual 
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', {}, noCch2179Profile({ nonce: 'no-cch-approved-lane' })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionA }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from no-cch lane' }] }],
       },
@@ -1430,6 +1449,7 @@ test('approved no-CCH profile inserts no-CCH billing block and rejects residual 
     const rejected = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders('/v1/messages', { 'x-claude-code-session-id': uuidSessionB }, noCch2179Profile({ nonce: 'no-cch-residual-cch', session_id: uuidSessionB })),
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionB }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'residual cch=12345 must fail no-cch lane' }] }],
       },
@@ -1473,6 +1493,7 @@ test('sign-primary verified legacy drift fails closed before upstream under 2.1.
         }),
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionB }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from minor drift sign lane' }] }],
       },
@@ -1519,6 +1540,7 @@ test('sign-primary 2.1.175 stale metadata lane fails closed under 2.1.179 profil
         }),
       },
       body: {
+        stream: true,
         model: 'claude-opus-4-8',
         max_tokens: 32000,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionC }) },
@@ -1561,6 +1583,7 @@ test('verified legacy drift without internal trust header fails closed before up
         }),
       },
       body: {
+        stream: true,
         metadata: { user_id: JSON.stringify({ session_id: uuidSessionB }) },
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello from untrusted minor drift lane' }] }],
       },
@@ -1591,7 +1614,7 @@ test('sub2api control-plane errors do not reflect unsupported provider or token 
         ...sharedHeaders,
         'x-cc-provider': sensitiveProvider,
       },
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(providerResponse.status, 403)
     assert.equal(providerResponse.headers['x-cc-gateway-error-code'], 'unsupported_provider')
@@ -1603,7 +1626,7 @@ test('sub2api control-plane errors do not reflect unsupported provider or token 
         ...sharedHeaders,
         'x-cc-token-type': sensitiveTokenType,
       },
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(tokenTypeResponse.status, 400)
     assert.equal(tokenTypeResponse.headers['x-cc-gateway-error-code'], 'unsupported_token_type')
@@ -1637,7 +1660,7 @@ test('raw capture omits raw bodies and plain digests while retaining safe respon
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders(),
-      body: { metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
+      body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: 'session-old' }) }, messages: [{ role: 'user', content: 'hello' }] },
     })
     assert.equal(response.status, 200)
     const requestCapture = JSON.parse(readFileSync(join(dir, '01_final_upstream_request.json'), 'utf-8'))

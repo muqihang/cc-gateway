@@ -13,11 +13,11 @@ const proxyRef = 'opaque:proxy-ref:v1:plan76-bucket-a'
 const tls2179 = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1'
 const tls2197 = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
 const requestShape2179 = 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1'
-const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
+const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1'
 const cache2179 = 'claude_code_2_1_179_cache_parity_degraded_v1'
-const cache2197 = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
+const cache2197 = 'claude_code_2_1_197_cache_parity_native_v1'
 const profilePolicy2179 = 'claude_code_2_1_179_cp1_degraded_v1'
-const profilePolicy2197 = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
+const profilePolicy2197 = 'claude_code_2_1_197_plan76_native_policy_v1'
 const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
@@ -336,9 +336,17 @@ test('2.1.197 server-selected canonical Sonnet 5 path forwards and strips CCH/bi
   })
 })
 
-test('Plan75 new residue marker buckets are observed-only and fail closed on structural leakage', async () => {
-  await expectClosed('2.1.197', '/v1/messages?beta=true', 'formal_pool_env_residue_verifier_failed', body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }), ANTHROPIC_BASE_URL: 'http://127.0.0.1/synthetic' } }), {
-    observed_client_profile: observedProfile({ cli_version_bucket: '2.1.197', base_url_category_bucket: 'neutral_gateway', proxy_env_bucket: 'loopback_proxy_only' }),
+test('Plan75 residue marker buckets are observed-only and structural body residue is sanitized', async () => {
+  await withGateway('2.1.197', async (gateway, upstream) => {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers('2.1.197', {
+        observed_client_profile: observedProfile({ cli_version_bucket: '2.1.197', base_url_category_bucket: 'neutral_gateway', proxy_env_bucket: 'loopback_proxy_only' }),
+      }),
+      body: body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }), ANTHROPIC_BASE_URL: 'http://127.0.0.1/synthetic' } }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.doesNotMatch(upstream.captured[0].body, /ANTHROPIC_BASE_URL|127\.0\.0\.1\/synthetic/i)
   })
 })
 

@@ -843,17 +843,56 @@ test('production accepts explicit mcp connector allowlist with complete sidecar 
   assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['claude-opus-4-8'])
 })
 
-test('production accepts explicit mcp connector wildcard allowlists only as opt-in config', () => {
+test('production accepts explicit mcp connector suffix allowlist with complete sidecar and no mock bridge', () => {
   const config = loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - "*.example.com"
+      - .docs.example.org
+    allowed_models:
+      - claude-opus-4-8
+`)))
+  assert.equal(config.formal_pool?.mcp_connector?.enabled, true)
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_hosts, ['*.example.com', '.docs.example.org'])
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['claude-opus-4-8'])
+})
+
+test('production rejects mcp connector wildcard host allowlist', () => {
+  assert.throws(() => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
     enabled: true
     mode: official_remote_https
     allowed_hosts:
       - "*"
     allowed_models:
+      - claude-opus-4-8
+`))), /formal_pool_mcp_connector_allowlist_required/)
+})
+
+test('production rejects mcp connector overly broad suffix host allowlist', () => {
+  for (const host of ['*.com', '.com']) {
+    assert.throws(() => loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - "${host}"
+    allowed_models:
+      - claude-opus-4-8
+`))), /formal_pool_mcp_connector_allowlist_required/, host)
+  }
+})
+
+test('production accepts explicit mcp connector wildcard model allowlist only as opt-in config', () => {
+  const config = loadConfig(writeConfigYaml(formalPoolMCPConnectorConfigYaml(`  mcp_connector:
+    enabled: true
+    mode: official_remote_https
+    allowed_hosts:
+      - docs.example.com
+    allowed_models:
       - "*"
 `)))
   assert.equal(config.formal_pool?.mcp_connector?.enabled, true)
-  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_hosts, ['*'])
+  assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_hosts, ['docs.example.com'])
   assert.deepEqual(config.formal_pool?.mcp_connector?.allowed_models, ['*'])
 })
 

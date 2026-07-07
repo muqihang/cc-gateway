@@ -109,7 +109,7 @@ Safe rollback modes are:
 Rollback must never fall back to direct Anthropic bypass, Node direct HTTPS after sidecar failure, client-selected
 authority headers, ungated sign-primary, or automatic `signed_cch` / `no_cch`
 promotion. Any real formal-pool smoke requires explicit user approval, a tiny
-cost envelope, safe audit fields only, and no 3012/3017 changes.
+cost envelope, safe audit fields only, no 3012 changes, and no 3017 changes.
 
 ## Known degraded claims
 

@@ -45,7 +45,7 @@ const CLAUDE_CODE_2_1_175_SUBSCRIPTION_1M_BETA = CLAUDE_CODE_2_1_170_SUBSCRIPTIO
 const CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA = 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24'
 const CLAUDE_CODE_2_1_175_SIMPLE_BARE_BETA = CLAUDE_CODE_2_1_175_API_KEY_NON_1M_BETA
 const CLAUDE_CODE_2_1_179_NATIVE_DEGRADED_BETA = 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,effort-2025-11-24'
-const CLAUDE_CODE_2_1_197_SONNET5_BETA = CLAUDE_CODE_2_1_179_NATIVE_DEGRADED_BETA
+const CLAUDE_CODE_2_1_197_NATIVE_BETA = CLAUDE_CODE_2_1_179_NATIVE_DEGRADED_BETA
 const FIRST_200_OAUTH_COMPAT_BETA = CLAUDE_CODE_2_1_150_SUBSCRIPTION_BETA
 
 const FULL_CAPABILITIES: PersonaCapabilities = {
@@ -160,10 +160,10 @@ const REGISTRY: PersonaProfile[] = [
     capabilities: { ...NON_1M_CAPABILITIES },
   },
   {
-    id: 'claude_code_2_1_197_sonnet5',
+    id: 'claude_code_2_1_197_native',
     version: '2.1.197',
-    messageBetaProfile: 'claude_code_2_1_197_sonnet5',
-    betaHeader: CLAUDE_CODE_2_1_197_SONNET5_BETA,
+    messageBetaProfile: 'claude_code_2_1_197_native',
+    betaHeader: CLAUDE_CODE_2_1_197_NATIVE_BETA,
     stainlessPackageVersion: '0.94.0',
     aliases: ['claude-code-2.1.197-macos-local'],
     knownModels: [...KNOWN_MODELS],
@@ -189,6 +189,7 @@ for (const profile of REGISTRY) {
   PROFILE_ID_BY_ALIAS.set(profile.messageBetaProfile, profile.id)
   for (const alias of profile.aliases) PROFILE_ID_BY_ALIAS.set(alias, profile.id)
 }
+PROFILE_ID_BY_ALIAS.set('claude_code_2_1_197_sonnet5', 'claude_code_2_1_197_native')
 
 export function getPersonaProfile(id: string): PersonaProfile {
   const profile = PROFILE_BY_ID.get(id)

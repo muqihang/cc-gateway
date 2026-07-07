@@ -73,6 +73,16 @@ test('registry documents 2.1.175 simple bare profile as distinct low-tool shape'
   assert.equal(profile.betaHeader, 'claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24')
 })
 
+test('2.1.197 profile uses neutral native id while preserving macOS local alias', () => {
+  const profile = getPersonaProfile('claude_code_2_1_197_native')
+  assert.equal(profile.id, 'claude_code_2_1_197_native')
+  assert.equal(profile.version, '2.1.197')
+  assert.equal(profile.messageBetaProfile, 'claude_code_2_1_197_native')
+  assert.equal(resolvePersonaProfileId('claude-code-2.1.197-macos-local'), 'claude_code_2_1_197_native')
+  assert.equal(resolvePersonaProfileId('claude_code_2_1_197_sonnet5'), 'claude_code_2_1_197_native')
+  assert.doesNotMatch(JSON.stringify(profile), /sonnet5/i)
+})
+
 test('persona variant aliases resolve to registry profile ids', () => {
   assert.equal(resolvePersonaProfileId('claude-code-2.1.175-macos-local'), 'claude_code_2_1_175_subscription_1m')
   assert.equal(resolvePersonaProfileId('claude_code_2_1_175_subscription_1m'), 'claude_code_2_1_175_subscription_1m')

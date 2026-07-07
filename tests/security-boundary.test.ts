@@ -57,20 +57,27 @@ function signedSchedulerHeaders(headers: Record<string, string> = {}) {
     session_id: merged['x-claude-code-session-id'],
     timestamp_ms: Date.now(),
     nonce: `nonce-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    trusted_egress_profile_ref: 'strip_attribution',
-    profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
-    billing_shape_policy: 'strip',
-    request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
+	    trusted_egress_profile_ref: 'strip_attribution',
+	    env_residue_profile_ref: 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1',
+	    locale_profile_ref: 'locale-profile:us-pacific-v1',
+	    base_url_residue_profile_ref: 'base-url-residue-profile:official-anthropic-v1',
+	    profile_policy_version: 'claude_code_2_1_179_cp1_degraded_v1',
+	    billing_shape_policy: 'strip',
+	    request_shape_profile_ref: 'claude_code_2_1_179_messages_streaming_tooldefs_degraded_v1',
     cache_parity_profile_ref: 'claude_code_2_1_179_cache_parity_degraded_v1',
     observed_client_profile: {
       schema_version: 'observed_client_profile.v1',
       cli_version_bucket: '2.1.179',
       route_class: 'messages',
-      billing_shape: 'absent',
-      billing_block_count: 0,
-      cc_entrypoint_bucket: 'absent',
-    },
-  }
+	      billing_shape: 'absent',
+	      billing_block_count: 0,
+	      cc_entrypoint_bucket: 'absent',
+	      stream: true,
+	      thinking_present: false,
+	      output_config_present: false,
+	      context_management_present: false,
+	    },
+	  }
   const canonical = canonicalFormalPoolContext(context)
   return {
     ...merged,
@@ -148,7 +155,7 @@ test('fixed upstream ignores inbound Host and Forwarded routing headers', async 
         'x-forwarded-host': 'attacker.example',
         authorization: 'Bearer selected-token',
       }),
-      body: { messages: [{ role: 'user', content: 'hello' }] },
+	      body: { stream: true, messages: [{ role: 'user', content: 'hello' }] },
     })
 
     assert.equal(response.status, 200, response.body)
@@ -170,14 +177,15 @@ test('absolute-form URL still uses fixed upstream and route-sensitive body rewri
 
   try {
     const body = JSON.stringify({
-      metadata: {
-        user_id: JSON.stringify({
-          device_id: 'REAL_DEVICE_ID_FROM_CLIENT_abc123',
-          account_uuid: 'acct-123',
-        }),
-      },
-      messages: [{ role: 'user', content: 'hello' }],
-    })
+	      metadata: {
+	        user_id: JSON.stringify({
+	          device_id: 'REAL_DEVICE_ID_FROM_CLIENT_abc123',
+	          account_uuid: 'acct-123',
+	        }),
+	      },
+	      stream: true,
+	      messages: [{ role: 'user', content: 'hello' }],
+	    })
     const response = await new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = httpRequest({
         host: (gateway.address() as any).address === '::' ? '::1' : '127.0.0.1',

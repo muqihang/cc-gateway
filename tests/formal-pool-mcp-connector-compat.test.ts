@@ -17,9 +17,9 @@ const credentialRef = 'opaque:credential-ref:v1:plan86-cred-a'
 const proxyRef = 'opaque:proxy-ref:v1:plan86-bucket-a'
 const tls2197 = 'tls-profile:claude-code-2.1.197-real-oracle-tcp-v1'
 const tlsBucket2197 = 'tls-bucket:claude-code-real-oracle-2197'
-const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_sonnet5_v1'
-const cache2197 = 'claude_code_2_1_197_cache_parity_sonnet5_v1'
-const profilePolicy2197 = 'claude_code_2_1_197_plan76_sonnet5_policy_v1'
+const requestShape2197 = 'claude_code_2_1_197_messages_streaming_tooldefs_native_v1'
+const cache2197 = 'claude_code_2_1_197_cache_parity_native_v1'
+const profilePolicy2197 = 'claude_code_2_1_197_plan76_native_policy_v1'
 const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
@@ -288,7 +288,7 @@ test('formal-pool official remote MCP connector passes only when explicitly enab
   assert.doesNotMatch(sidecarCaptured[0].bodyText, /x-anthropic-billing-header|cch=/i)
 })
 
-test('formal-pool MCP connector wildcard config permits public HTTPS hosts but keeps URL safety gates', async () => {
+test('formal-pool MCP connector rejects wildcard host config in production', async () => {
   const publicHost = ['tools', 'vendor', 'example'].join('.')
   const allowed = await sendFormalPoolRequest({
     configOverrides: {
@@ -306,9 +306,9 @@ test('formal-pool MCP connector wildcard config permits public HTTPS hosts but k
       mcp_servers: [{ type: 'url', name: mcpServerName, url: new URL('/mcp', `https://${publicHost}`).toString() }],
     }),
   })
-  assert.equal(allowed.response.status, 200, allowed.response.body)
-  assert.equal(allowed.response.headers['x-cc-mcp-connector-decision-bucket'], 'official_url_connector_allowed')
-  assert.equal(allowed.sidecarCount, 1)
+  assert.equal(allowed.response.status, 403, allowed.response.body)
+  assert.equal(allowed.response.headers['x-cc-gateway-error-code'], 'formal_pool_mcp_host_unapproved')
+  assert.equal(allowed.sidecarCount, 0)
 
   const unsafe = await sendFormalPoolRequest({
     configOverrides: {
