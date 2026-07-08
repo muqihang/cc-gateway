@@ -258,7 +258,7 @@ test('formal-pool structured unsafe MCP configured markers fail closed before up
     await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_legacy_shape_unapproved', body({ mcp_servers: { synthetic: { command: 'safe-local-fixture' } } }), {
       observed_client_profile: observedProfile({ cli_version_bucket: version, mcp_configured_absent_diff_bucket: 'configured_marker_present' }),
     })
-    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_legacy_shape_unapproved', body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }), safe_nested: { mcpAuthority: 'synthetic-local' } } }), {
+    await expectClosed(version, '/v1/messages?beta=true', 'formal_pool_mcp_legacy_shape_unapproved', body({ mcpAuthority: 'synthetic-local' }), {
       observed_client_profile: observedProfile({ cli_version_bucket: version, mcp_configured_absent_diff_bucket: 'configured_no_upstream_diff' }),
     })
   }
@@ -352,6 +352,33 @@ test('2.1.197 server-selected canonical path admits observed 2.1.198 after futur
     assert.equal(upstream.captured.length, 1)
     assert.match(String(upstream.captured[0].headers['user-agent']), /^claude-cli\/2\.1\.197 /)
     assert.doesNotMatch(upstream.captured[0].body, /future_client_field/i)
+  })
+})
+
+test('2.1.197 server-selected canonical path observes safe MCP metadata residue without enabling connector', async () => {
+  await withGateway('2.1.197', async (gateway, upstream) => {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers('2.1.197', {
+        observed_client_profile: observedProfile({
+          cli_version_bucket: '2.1.201',
+          mcp_configured_absent_diff_bucket: 'configured_no_upstream_diff',
+          mcp_shape_bucket: 'absent',
+          mcp_server_count_bucket: '0',
+          mcp_toolset_count_bucket: '0',
+          mcp_auth_bucket: 'absent',
+        }),
+      }),
+      body: body({
+        metadata: {
+          user_id: JSON.stringify({ session_id: sessionId }),
+          safe_nested: { mcpAuthority: 'configured locally but not forwarded upstream' },
+        },
+      }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.equal(response.headers['x-cc-mcp-connector-decision-bucket'], 'absent')
+    assert.doesNotMatch(upstream.captured[0].body, /mcp_servers|mcp_toolset|mcpAuthority|command|authorization_token/i)
   })
 })
 

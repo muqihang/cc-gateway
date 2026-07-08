@@ -97,6 +97,9 @@ function rewriteMessagesBody(body: any, config: Config, accountIdentity?: Accoun
       log('warn', `Failed to parse metadata.user_id`)
     }
   }
+  if (config.mode === 'sub2api' && body?.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)) {
+    body.metadata = body.metadata.user_id ? { user_id: body.metadata.user_id } : {}
+  }
 
   // Step 1: Rewrite <system-reminder> blocks in messages (injected by CC, not user content).
   // We do NOT rewrite general user message text — that would corrupt user intent.

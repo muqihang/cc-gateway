@@ -3872,6 +3872,7 @@ function containsStructuralMCPConfigKey(value: unknown, depth = 0): boolean {
   if (typeof value !== 'object') return false
   return Object.entries(value as Record<string, unknown>).some(([key, child]) => {
     if (/^(mcpServers|mcp|mcp_servers|mcp_config|mcpAuthority|mcp_authority|mcpTools|mcp_tools)$/i.test(key)) return true
+    if (depth === 0 && key === 'metadata') return false
     return containsStructuralMCPConfigKey(child, depth + 1)
   })
 }
