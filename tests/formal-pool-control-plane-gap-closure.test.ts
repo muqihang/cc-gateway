@@ -396,4 +396,26 @@ test('Plan75 residue marker buckets are observed-only and structural body residu
   })
 })
 
+
+test('2.1.197 server-selected path treats observed-only MCP configured marker as audit-only when no connector is forwarded', async () => {
+  await withGateway('2.1.197', async (gateway, upstream) => {
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers('2.1.197', {
+        observed_client_profile: observedProfile({
+          cli_version_bucket: '2.1.201',
+          mcp_configured_absent_diff_bucket: 'configured_marker_present',
+          mcp_shape_bucket: 'absent',
+          mcp_server_count_bucket: '0',
+          mcp_toolset_count_bucket: '0',
+          mcp_auth_bucket: 'absent',
+        }),
+      }),
+      body: body({ metadata: { user_id: JSON.stringify({ session_id: sessionId }) } }),
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+    assert.doesNotMatch(upstream.captured[0].body, /mcp_servers|mcp_toolset|mcpAuthority|authorization_token/i)
+  })
+})
+
 await finish()

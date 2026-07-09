@@ -2475,11 +2475,20 @@ function containsStructuralEnvResidue(value: unknown, path: string[] = []): bool
   const record = value as Record<string, unknown>
   for (const [key, child] of Object.entries(record)) {
     if (path[0] === 'messages' && (path[2] === 'content' || (path.length === 2 && key === 'content'))) continue
+    if (isToolJSONSchemaPropertyNamePath(path)) {
+      if (containsStructuralEnvResidue(child, [...path, key])) return true
+      continue
+    }
     if (isEnvResidueStructuralKey(key)) return true
     if (typeof child === 'string' && containsEnvResidueLiteral(child)) return true
     if (containsStructuralEnvResidue(child, [...path, key])) return true
   }
   return false
+}
+
+function isToolJSONSchemaPropertyNamePath(path: string[]): boolean {
+  const propertiesIndex = path.lastIndexOf('properties')
+  return path[0] === 'tools' && propertiesIndex >= 0 && path.length === propertiesIndex + 1
 }
 
 function isEnvResidueStructuralKey(key: string): boolean {
@@ -3842,13 +3851,14 @@ function classifyFormalPoolMCPConnectorShape(
   const hasMCPToolset = Array.isArray(body.tools) && body.tools.some((tool) => !!tool && typeof tool === 'object' && (tool as Record<string, unknown>).type === 'mcp_toolset')
   const hasForbiddenTopLevel = ['mcp', 'mcp_config', 'mcp_authority', 'mcp_tools', 'mcpServers'].some((key) => Object.prototype.hasOwnProperty.call(body, key))
   const hasStructuralMCPConfigKey = containsStructuralMCPConfigKey(body)
-  if (!hasMCPServers && !hasMCPToolset && !hasForbiddenTopLevel && marker !== 'configured_marker_present' && !hasStructuralMCPConfigKey) {
+  if (!hasMCPServers && !hasMCPToolset && !hasForbiddenTopLevel && !hasStructuralMCPConfigKey) {
     return { ok: true, mcp: absentMCPConnectorEvidence() }
   }
   const authBucket = containsRawMCPCredentialKey([body.mcp_servers, body.tools]) ? 'present_rejected' : 'absent'
   const serverCountBucket = mcpCountBucket(Array.isArray(body.mcp_servers) ? body.mcp_servers.length : 0)
   const evidence = { serverCountBucket, authBucket }
-  if (hasForbiddenTopLevel || marker === 'configured_marker_present' || (!hasMCPServers && !hasMCPToolset && hasStructuralMCPConfigKey)) return rejectMCPConnector('formal_pool_mcp_legacy_shape_unapproved', 'legacy_shape_rejected', undefined, evidence)
+  const observedMCPConfiguredMarker = marker === 'configured_marker_present' || marker === 'configured_no_upstream_diff'
+  if (hasForbiddenTopLevel || (hasMCPServers && !Array.isArray(body.mcp_servers) && observedMCPConfiguredMarker) || (!hasMCPServers && !hasMCPToolset && hasStructuralMCPConfigKey)) return rejectMCPConnector('formal_pool_mcp_legacy_shape_unapproved', 'legacy_shape_rejected', undefined, evidence)
   const connector = (config as any).formal_pool?.mcp_connector as { enabled?: boolean; allowed_hosts?: string[]; allowed_models?: string[]; max_servers?: number } | undefined
   if (connector?.enabled !== true) return rejectMCPConnector('formal_pool_mcp_connector_disabled', 'connector_disabled', undefined, evidence)
   if (attested.mcp_connector_policy_ref !== FORMAL_POOL_MCP_CONNECTOR_POLICY_REF) return rejectMCPConnector('formal_pool_mcp_connector_account_disabled', 'account_policy_missing', undefined, evidence)

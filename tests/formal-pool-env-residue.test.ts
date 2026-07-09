@@ -663,4 +663,30 @@ test('retry path reruns env residue verifier before each upstream attempt', asyn
   })
 })
 
+
+test('tool JSON schema property names that resemble env keys are treated as schema, not env residue control-plane', async () => {
+  await withGateway(async (gateway, upstream) => {
+    const requestBody = body([]) as any
+    requestBody.tools = [
+      {
+        name: 'fixture_tool',
+        description: 'safe fixture tool',
+        input_schema: {
+          type: 'object',
+          properties: {
+            timezone: { type: 'string', description: 'safe user timezone option' },
+            baseUrl: { type: 'string', description: 'safe application setting name' },
+          },
+        },
+      },
+    ]
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: headers({ nonce: `tool-schema-env-key-${Date.now()}` }),
+      body: requestBody,
+    })
+    assert.equal(response.status, 200, response.body)
+    assert.equal(upstream.captured.length, 1)
+  })
+})
+
 await finish()
