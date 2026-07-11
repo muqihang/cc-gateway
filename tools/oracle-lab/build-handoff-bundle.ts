@@ -1,8 +1,9 @@
-import { realpathSync } from 'node:fs'
+import { realpathSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { validateManifestArtifact } from './freeze-baseline.js'
-import { assertEvidencePath, assertSafeArtifact, cli, digestFile, exactKeys, isObject, parseArgs, readJson, requireValid, result, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import { assertEvidencePath, assertSafeArtifact, canonicalJson, cli, digestFile, exactKeys, isObject, parseArgs, readJson, requireValid, result, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
 import { validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
 import { validateCommandResultsBindings } from './merge-command-results.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
@@ -26,6 +27,7 @@ export type HandoffBundle = {
 }
 
 const fields = ['schema_version', 'phase', 'generated_at', 'expires_at', 'baseline_digest', 'command_results_digest', 'context_pack_digest', 'repositories', 'commands', 'artifacts', 'known_unknowns', 'retention_policy', 'redaction_policy', 'destruction_procedure'] as const
+const DOCUMENTED_TRANSIENT_CONTEXT = '/tmp/oracle-lab-context-pack.json'
 
 function baselineShape(value: unknown): boolean {
   if (!isObject(value) || !isObject(value.repositories)) return false
@@ -60,25 +62,30 @@ export function buildHandoff(options: { phase: string; baseline: string; command
   const catalogValue = readJson(catalogPath); requireValid(validateCommandCatalogValue(catalogValue)); const catalog = catalogValue as CommandCatalogEntry[]
   requireValid(validateCommandResultsBindings(typedResults, catalog, baseline, { catalogDigest: digestFile(catalogPath), manifestDigest: digestFile(options.baseline), requireGroups: ['phase0-green', 'phase0-red'] }))
   if (typedResults.records.some((record) => record.status === 'unexpected_fail' || record.status === 'unexpected_pass')) throw Object.assign(new Error('handoff cannot contain unexpected command results'), { code: 'unexpected_command_result' })
-  let context: ContextPack | undefined
-  if (options.context) {
-    const value = readJson(options.context); requireValid(validateContextPackValue(value)); context = value as ContextPack
-    if (context.manifest_digest !== digestFile(options.baseline)) throw Object.assign(new Error('context does not match baseline'), { code: 'cross_manifest_context' })
-    if (JSON.stringify(context.repositories) !== JSON.stringify(Object.entries((baseline as { repositories: Record<string, { head: string; dirty_digest: string }> }).repositories).map(([name, repository]) => ({ name, commit: repository.head, dirty_digest: `sha256:${repository.dirty_digest}` })).sort((a, b) => a.name.localeCompare(b.name)))) throw Object.assign(new Error('context repositories do not match baseline'), { code: 'cross_repository_context' })
-    const resultDigests = new Map(typedResults.records.map((record) => [record.command_id, record.result_digest]))
-    if (context.tests.some((test) => resultDigests.get(test.command_id) !== test.result_digest)) throw Object.assign(new Error('context tests do not match command results'), { code: 'cross_result_context' })
+  let contextPath = options.context
+  const contextSourcePath = options.context ?? DOCUMENTED_TRANSIENT_CONTEXT
+  if (!contextPath) {
+    if (!options.out) throw Object.assign(new Error('handoff output is required when --context is omitted'), { code: 'missing_context' })
+    contextPath = path.join(path.dirname(options.out), `${options.phase}-context-pack.json`)
+    assertEvidencePath(contextPath)
   }
+  const contextValue = readJson(contextSourcePath); requireValid(validateContextPackValue(contextValue)); const context = contextValue as ContextPack
+  if (context.manifest_digest !== digestFile(options.baseline)) throw Object.assign(new Error('context does not match baseline'), { code: 'cross_manifest_context' })
+  if (canonicalJson(context.repositories) !== canonicalJson(Object.entries((baseline as { repositories: Record<string, { head: string; dirty_digest: string }> }).repositories).map(([name, repository]) => ({ name, commit: repository.head, dirty_digest: `sha256:${repository.dirty_digest}` })).sort((a, b) => a.name.localeCompare(b.name)))) throw Object.assign(new Error('context repositories do not match baseline'), { code: 'cross_repository_context' })
+  const resultDigests = new Map(typedResults.records.map((record) => [record.command_id, record.result_digest]))
+  if (context.tests.some((test) => resultDigests.get(test.command_id) !== test.result_digest)) throw Object.assign(new Error('context tests do not match command results'), { code: 'cross_result_context' })
+  if (!options.context) writeFileSync(contextPath, `${canonicalJson(context)}\n`, { mode: 0o600 })
   const generated = new Date(options.generatedAt ?? new Date().toISOString())
-  const artifacts = [{ path: options.baseline, digest: digestFile(options.baseline) }, ...(options.context ? [{ path: options.context, digest: digestFile(options.context) }] : [])]
+  const artifacts = [{ path: options.baseline, digest: digestFile(options.baseline) }, ...(contextPath ? [{ path: contextPath, digest: digestFile(contextPath) }] : [])]
   for (const artifact of artifacts) assertEvidencePath(artifact.path)
   if (!isObject(baseline) || !isObject(baseline.repositories)) throw Object.assign(new Error('baseline repositories are missing'), { code: 'missing_repository_digests' })
   const repositories = Object.entries(baseline.repositories).map(([name, value]) => ({ name, commit: String((value as Record<string, unknown>).head), dirty_digest: `sha256:${String((value as Record<string, unknown>).dirty_digest)}` })).sort((a, b) => a.name.localeCompare(b.name))
-  const handoff: HandoffBundle = { schema_version: 1, phase: options.phase, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(), baseline_digest: digestFile(options.baseline), command_results_digest: typedResults.result_set_digest, ...(context ? { context_pack_digest: digestFile(options.context!) } : {}), repositories, commands: typedResults.records.map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)), artifacts, known_unknowns: context?.known_unknowns ?? [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
+  const handoff: HandoffBundle = { schema_version: 1, phase: options.phase, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(), baseline_digest: digestFile(options.baseline), command_results_digest: typedResults.result_set_digest, ...(contextPath ? { context_pack_digest: digestFile(contextPath) } : {}), repositories, commands: typedResults.records.map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)), artifacts, known_unknowns: context?.known_unknowns ?? [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
   requireValid(validateHandoffValue(handoff)); return handoff
 }
 
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {
   const args = parseArgs(process.argv.slice(2)); const phase = args.values.phase?.[0]; const baseline = args.values.baseline?.[0]; const commandResults = args.values['command-results']?.[0]; const out = args.values.out?.[0]
   if (!phase || !baseline || !commandResults || !out) throw Object.assign(new Error('--phase, --baseline, --command-results, and --out are required'), { code: 'invalid_arguments' })
-  writeJson(out, buildHandoff({ phase, baseline, commandResults, context: args.values.context?.[0], catalog: args.values.catalog?.[0] }))
+  writeJson(out, buildHandoff({ phase, baseline, commandResults, context: args.values.context?.[0], catalog: args.values.catalog?.[0], out }))
 })

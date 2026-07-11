@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -8,7 +8,7 @@ import test from 'node:test'
 import { buildContextPack } from '../tools/oracle-lab/build-context-pack.js'
 import { buildExitReceipt, requiredReceiptArtifacts, validateExitReceiptValue } from '../tools/oracle-lab/build-exit-receipt.js'
 import { buildHandoff, validateHandoffValue } from '../tools/oracle-lab/build-handoff-bundle.js'
-import { assertSafeArtifact, digestFile, digestValue } from '../tools/oracle-lab/harness-core.js'
+import { assertSafeArtifact, canonicalJson, digestFile, digestValue, writeJson } from '../tools/oracle-lab/harness-core.js'
 import { commandRecordDigest, commandSetDigest, mergeCommandResults, validateCommandResultsBindings, validateCommandResultsValue, type CommandResultRecord, type CommandResultSet } from '../tools/oracle-lab/merge-command-results.js'
 import { redactOutput, runCommandCatalog } from '../tools/oracle-lab/run-command-catalog.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from '../tools/oracle-lab/validate-command-catalog.js'
@@ -118,6 +118,79 @@ test('context and handoff builders reject cross-input evidence and missing selec
   const cross = { ...bound, manifest_digest: otherDigest, records: bound.records.map((entry) => ({ ...entry, manifest_digest: otherDigest })) }; cross.records = cross.records.map((entry) => { const { result_digest: _old, duration_ms: _duration, ...recordUnsigned } = entry; return { ...entry, result_digest: commandRecordDigest(recordUnsigned) } }); cross.result_set_digest = commandSetDigest((({ result_set_digest: _old, ...rest }) => rest)(cross)); const crossPath = path.join(path.dirname(resultPath), 'cross.json'); await writeFile(crossPath, JSON.stringify(cross))
   assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: crossPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'cross_manifest_results')
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
+})
+
+test('documented Task 8 pipeline canonicalizes the exact transient context into commit-bound evidence', async () => {
+  const originalCwd = process.cwd()
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-documented-pipeline-'))
+  const transientContext = '/tmp/oracle-lab-context-pack.json'
+  const transientResults = '/tmp/oracle-lab-phase-0-command-results.json'
+  const baseline = 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'
+  const handoffPath = 'docs/superpowers/evidence/phase-0/phase-0-handoff.json'
+  const reportPath = 'docs/superpowers/evidence/phase-0/phase-0-exit-report.md'
+  const evidenceContext = 'docs/superpowers/evidence/phase-0/phase-0-context-pack.json'
+  const fixtureFiles = [
+    'docs/superpowers/registry/oracle-lab-requirements.json',
+    'docs/superpowers/registry/oracle-lab-claims.json',
+    'docs/superpowers/registry/oracle-lab-command-catalog.json',
+    'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
+    'docs/superpowers/schemas/oracle-lab-requirement.schema.json',
+    'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md',
+    'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md',
+    'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
+    'tools/oracle-lab/validate-requirements.ts',
+    'tests/oracle-lab-traceability.test.ts',
+  ]
+  for (const file of fixtureFiles) {
+    const destination = path.join(root, file)
+    await mkdir(path.dirname(destination), { recursive: true })
+    await writeFile(destination, await readFile(path.join(originalCwd, file)))
+  }
+  await mkdir(path.dirname(path.join(root, baseline)), { recursive: true })
+  await writeFile(path.join(root, baseline), await readFile(path.join(originalCwd, entryBaseline)))
+
+  process.chdir(root)
+  try {
+    const catalogValue = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-command-catalog.json', 'utf8')) as CommandCatalogEntry[]
+    const manifest = JSON.parse(await readFile(baseline, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
+    const records = catalogValue.map((entry): CommandResultRecord => {
+      const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+      const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(baseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+      return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+    })
+    const unsignedResults = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile('docs/superpowers/registry/oracle-lab-command-catalog.json'), manifest_digest: digestFile(baseline), records }
+    writeJson(transientResults, { ...unsignedResults, result_set_digest: commandSetDigest(unsignedResults) })
+    const context = buildContextPack({ registry: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', manifest: baseline, commandResults: transientResults, requirementIds: ['HA-P0-001', 'HA-P0-002'] })
+    await writeFile(transientContext, `${JSON.stringify({ ...context, manifest_digest: otherDigest }, null, 2)}\n`)
+    assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_manifest_context')
+    await assert.rejects(readFile(evidenceContext), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
+    await writeFile(transientContext, `${JSON.stringify(context, null, 4)}\n`)
+
+    const handoff = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath })
+    assert.deepEqual(handoff.artifacts.map((artifact) => artifact.path).sort(), [baseline, evidenceContext].sort())
+    assert.equal(handoff.context_pack_digest, digestFile(evidenceContext))
+    assert.equal(await readFile(evidenceContext, 'utf8'), `${canonicalJson(context)}\n`)
+    const firstDigest = digestFile(evidenceContext)
+    await writeFile(transientContext, `${JSON.stringify(context, null, 2)}\n`)
+    buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath })
+    assert.equal(digestFile(evidenceContext), firstDigest)
+
+    writeJson(handoffPath, handoff)
+    const { buildExitReport } = await import('../tools/oracle-lab/build-exit-report.js')
+    await writeFile(reportPath, buildExitReport(handoff))
+    execFileSync('git', ['init', '-q']); execFileSync('git', ['config', 'user.email', 'test@example.invalid']); execFileSync('git', ['config', 'user.name', 'Oracle Test'])
+    execFileSync('git', ['add', 'docs']); execFileSync('git', ['commit', '-qm', 'test: bind documented pipeline evidence'])
+    const handoffCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+    assert.deepEqual(validateExitReceiptValue(buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit })), { ok: true, errors: [] })
+
+    const explicitContext = 'docs/superpowers/evidence/phase-0/task-9-context-pack.json'
+    await writeFile(explicitContext, `${canonicalJson(context)}\n`)
+    const explicit = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: explicitContext, out: handoffPath })
+    assert(explicit.artifacts.some((artifact) => artifact.path === explicitContext))
+    assert(!explicit.artifacts.some((artifact) => artifact.path === evidenceContext))
+  } finally {
+    process.chdir(originalCwd)
+  }
 })
 
 test('context builder fails closed when any selected requirement source bytes are missing', async () => {
