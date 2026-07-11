@@ -1,0 +1,42 @@
+[
+  {
+    "claim_id": "CL-DIRECT-EGRESS-001",
+    "requirement_ids": ["HA-P0-003"],
+    "claim_class": "local_structural",
+    "authority_state": "cross_checked",
+    "statement": "The gateway direct-egress path is structurally disabled.",
+    "evidence_ids": ["phase-0-structural-review"],
+    "observation_scope": "cross_checked",
+    "server_dependency": "none",
+    "stability_class": "structural",
+    "confidence": 0.98,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "source-and-static-analysis",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-PINNED-OBS-001",
+    "requirement_ids": ["HA-P0-006"],
+    "claim_class": "local_observational",
+    "authority_state": "local_wire_observed",
+    "statement": "The pinned client emitted the recorded request shape in the hermetic lab.",
+    "evidence_ids": ["phase-0-pinned-client-observation"],
+    "observation_scope": "local_wire",
+    "server_dependency": "none",
+    "stability_class": "observational",
+    "confidence": 0.91,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "pinned-client-run",
+    "authoritative_provider_disclosure": false
+  }
+]
