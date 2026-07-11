@@ -31,7 +31,7 @@ Execute tasks in this order: `Task 0 -> Task 0.5 -> Task 1 -> Task 2 -> Task 4 -
 | --- | --- | --- | --- | --- |
 | 0 | `HA-P0-000` | release-engineering | none | remove only the newly registered Phase 0 worktree after explicit approval |
 | 0.5 | `HA-P0-004`, `OL-LEGACY-001` | cc-gateway-oracle-owner | Task 0 | mark the phase blocked and retain the bootstrap commit plus durable entry artifact for audit; no history rewrite |
-| 1 | `HA-P0-001`, `HA-P0-002` | cc-gateway-oracle-owner | Task 0.5 | revert the task commit; keep source documents intact |
+| 1 | `HA-P0-001`, `HA-P0-002`, `HA-P0-009`, `HA-P1-001`-`HA-P1-006` | cc-gateway-oracle-owner | Task 0.5 | revert the task commit; keep source documents intact |
 | 2 | `HA-P0-003` | cc-gateway-oracle-owner | Task 1 | revert claim registry/validator commit |
 | 4 | `HA-P0-005` | cc-gateway-oracle-owner and release-approver | Task 1, Task 2 | disable formal-pool mode when the boundary is missing or unsupported |
 | 5 | `HA-P0-006` | cc-gateway-oracle-owner | Task 0.5 | restore only the test fixture references; never restore stale paths |
@@ -99,7 +99,9 @@ Expected: dependencies resolve and the targeted baseline either passes or produc
 
 **Interfaces:**
 - IDs use `OL-*`, `AV-*`, and `HA-*`; IDs do not depend on mutable line numbers.
-- Each record contains `requirement_id`, `source_document`, `source_section`, `precedence`, `priority`, `depends_on`, `acceptance_gate`, `implementation_status`, `owner`, `repository`, `implementation_files`, `test_files`, `verification_command`, `evidence_artifact`, `last_verified_commit`, `last_verified_at`, `expiry`, and `known_gaps`.
+- Each record contains `requirement_id`, `source_document`, `source_section`, `precedence`, `priority`, `depends_on`, `acceptance_gate`, `implementation_status`, `owner`, `repository`, `implementation_files`, `test_files`, `verification_command`, `evidence_artifact`, `last_verified_commit`, `last_verified_at`, `expiry`, `known_gaps`, `canary_evidence_ids`, `production_gate_ids`, `rollback_evidence_ids`, `deployed_artifacts`, and `contradiction_ids`.
+- `implementation_status` is exactly `design_only | deferred | failing_test_added | locally_verified | upstream_canary_observed | production_verified | blocked_by_baseline`.
+- The production-only fields are exact: `canary_evidence_ids`, `production_gate_ids`, `rollback_evidence_ids`, and `contradiction_ids` are `string[]`; `deployed_artifacts` is `Array<{ repository: string; commit: string; config_digest: string; manifest_digest: string; deployed_at: string }>`; `expiry` is an ISO-8601 timestamp or `null`. Non-production records carry empty arrays, never omit the fields.
 - `validateRequirements(path: string): ValidationResult` rejects unknown fields, duplicate IDs, missing sections, unresolved dependencies, invalid status transitions, and unowned P0/P1 records.
 - `ValidationResult` is exactly `{ ok: true; errors: [] } | { ok: false; errors: Array<{ code: string; path: string; message: string }> }`.
 
@@ -120,6 +122,7 @@ The complete Phase 0 P0/P1 inventory is fixed before implementation:
 | `HA-P0-006` | Design `9. Shared Contract Discovery` plus Adversarial Validation `WP0. Baseline and Contract Discovery` |
 | `HA-P0-007` | Hardening Amendments `16. Required Deliverables` for the H0 traceability/context/command harness |
 | `HA-P0-008` | Hardening Amendments `18. Acceptance Criteria for This Amendment` plus Design `Validation Gates` |
+| `HA-P0-009` | Hardening Amendments `15. Priority 0`, item 4; Design `Normative Compatibility Contract`; Adversarial Validation `WP0.5. Normative Compatibility Contract` |
 | `OL-LEGACY-001` | Design `Reset of Trust` and `Normative Compatibility Contract` for the comparison-only 2.1.197 tuple |
 | `AV-B1-001` | Adversarial Validation `B1. Browser Egress Attestation Bypass` |
 | `AV-B2-001` | Adversarial Validation `B2. Onboarding Object Authorization` |
@@ -127,8 +130,14 @@ The complete Phase 0 P0/P1 inventory is fixed before implementation:
 | `AV-B4-001` | Adversarial Validation `B4. Formal-Pool Direct-Egress Elimination` |
 | `AV-B5-001` | Adversarial Validation `B5. Sidecar Request Authentication v2` |
 | `AV-B6-001` | Adversarial Validation `B6. Proxy Destination Policy` |
+| `HA-P1-001` | Hardening Amendments `5.1 Key Control-Flow Recovery` and `5.2 Selective Dynamic Instrumentation` |
+| `HA-P1-002` | Hardening Amendments `5.6 Long-Duration and Lifecycle Runs` and `5.9 Stability Convergence Instead of Three Runs` |
+| `HA-P1-003` | Hardening Amendments `6.1 Safe Error Classifier` |
+| `HA-P1-004` | Hardening Amendments `7.1 Proxy Identity Contract` and `7.2 Transport-Cell Resource Model` |
+| `HA-P1-005` | Hardening Amendments `7.3 Rotation and Drain State Machine`, `7.4 Restart Recovery`, `8.1 Fail-Closed Backpressure`, and `8.2 Replay-Ledger Partition Semantics` |
+| `HA-P1-006` | Hardening Amendments `8.3 Complete Authorization Matrix` and `8.4 Operator and Administrator Threats` |
 
-No additional Phase 0 P0/P1 ID is invented during implementation. A newly discovered normative requirement requires a plan amendment, source-section mapping, owner, dependency, rollback, and review before it enters the registry.
+`HA-P0-009` is registered in Phase 0 as `deferred` to the compatibility-contract phase with negative capabilities disabled by default. `HA-P1-001`-`HA-P1-006` are registered as later-phase `deferred` inputs with owners, dependencies, target acceptance gates, and prohibited promotion states; Phase 0 does not implement them. No additional Phase 0 P0/P1 ID is invented during implementation. A newly discovered normative requirement requires a plan amendment, source-section mapping, owner, dependency, rollback, and review before it enters the registry.
 
 - [ ] **Step 2: Seed the registry**
 
@@ -153,13 +162,18 @@ Use this exact record shape:
   "last_verified_commit": null,
   "last_verified_at": null,
   "expiry": null,
-  "known_gaps": ["registry validator not implemented"]
+  "known_gaps": ["registry validator not implemented"],
+  "canary_evidence_ids": [],
+  "production_gate_ids": [],
+  "rollback_evidence_ids": [],
+  "deployed_artifacts": [],
+  "contradiction_ids": []
 }
 ```
 
 - [ ] **Step 3: Write and run the failing registry test**
 
-Test duplicate IDs, invalid precedence, missing sections, invalid status ordering, missing P0/P1 owners, and `production_verified` without all of: upstream canary evidence, production gates, rollback evidence, current deployed commit/digests, non-expired evidence, and an empty contradiction list.
+Test duplicate IDs, invalid precedence, missing sections, invalid status ordering, missing P0/P1 owners, omitted production-only fields, non-empty production fields on a non-production record, and `production_verified` without all of: `canary_evidence_ids`, `production_gate_ids`, `rollback_evidence_ids`, current `deployed_artifacts`, non-expired `expiry`, and an empty `contradiction_ids`. Include one fully populated valid `production_verified` fixture so the state is representable, not merely rejected.
 
 Run: `npm exec tsx tests/oracle-lab-traceability.test.ts`
 
