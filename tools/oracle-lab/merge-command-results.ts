@@ -1,13 +1,15 @@
 import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { cli, COMMIT_RE, DIGEST_RE, digestValue, exactKeys, isObject, parseArgs, readJson, result, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import { assertSafeArtifact, cli, COMMIT_RE, DIGEST_RE, digestValue, exactKeys, isObject, parseArgs, readJson, result, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import type { CommandCatalogEntry } from './validate-command-catalog.js'
 
 export type CommandStatus = 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass'
 export type CommandResultRecord = {
   command_id: string
   repository: 'cc-gateway' | 'sub2api' | 'egress-tls-sidecar'
   repository_commit: string
+  contract_digest?: string
   manifest_digest: string
   environment_digest: string
   exit_code: number
@@ -29,7 +31,11 @@ export type CommandResultSet = {
 }
 
 const setFields = ['schema_version', 'generated_at', 'expires_at', 'catalog_digest', 'manifest_digest', 'records', 'result_set_digest'] as const
-const recordFields = ['command_id', 'repository', 'repository_commit', 'manifest_digest', 'environment_digest', 'exit_code', 'expected_exit', 'status', 'duration_ms', 'output_digest', 'output_excerpt', 'result_digest'] as const
+const recordFields = ['command_id', 'repository', 'repository_commit', 'contract_digest', 'manifest_digest', 'environment_digest', 'exit_code', 'expected_exit', 'status', 'duration_ms', 'output_digest', 'output_excerpt', 'result_digest'] as const
+
+export function expectedStatus(exitCode: number, expectedExit: 0 | 'nonzero'): CommandStatus {
+  return expectedExit === 0 ? (exitCode === 0 ? 'pass' : 'unexpected_fail') : (exitCode === 0 ? 'unexpected_pass' : 'expected_fail')
+}
 
 export function commandRecordDigest(record: Omit<CommandResultRecord, 'duration_ms' | 'result_digest'> & { duration_ms?: number }): string {
   const { duration_ms: _duration, ...stable } = record
@@ -43,24 +49,27 @@ export function commandSetDigest(set: Omit<CommandResultSet, 'result_set_digest'
 
 export function validateCommandResultsValue(value: unknown, now = Date.now(), allowExpired = false): HarnessResult {
   const errors: HarnessErrorRecord[] = []
+  try { assertSafeArtifact(value) } catch (error) { errors.push({ code: (error as Error & { code?: string }).code ?? 'unsafe_artifact', path: '$', message: (error as Error).message }) }
   if (!exactKeys(value, setFields, '$', errors)) return result(errors)
   if (value.schema_version !== 1) errors.push({ code: 'unsupported_schema_version', path: '$.schema_version', message: 'only schema_version 1 is supported' })
   if (!DIGEST_RE.test(String(value.catalog_digest)) || !DIGEST_RE.test(String(value.manifest_digest)) || !DIGEST_RE.test(String(value.result_set_digest))) errors.push({ code: 'invalid_digest', path: '$', message: 'result set digests are required' })
   const generated = Date.parse(String(value.generated_at)); const expires = Date.parse(String(value.expires_at))
   if (!Number.isFinite(generated) || !Number.isFinite(expires) || expires <= generated) errors.push({ code: 'invalid_expiry', path: '$.expires_at', message: 'invalid result expiry' })
   else if (!allowExpired && expires <= now) errors.push({ code: 'expired_results', path: '$.expires_at', message: 'command results have expired' })
-  if (!Array.isArray(value.records)) errors.push({ code: 'invalid_records', path: '$.records', message: 'records must be an array' })
+  if (!Array.isArray(value.records) || value.records.length === 0) errors.push({ code: 'invalid_records', path: '$.records', message: 'records must be a non-empty array' })
   else {
     const ids = new Set<string>()
     for (const [index, record] of value.records.entries()) {
       const base = `$.records[${index}]`
-      if (!exactKeys(record, recordFields.filter((field) => field !== 'output_excerpt' || isObject(record) && field in record), base, errors)) continue
+      if (!exactKeys(record, recordFields.filter((field) => (field !== 'output_excerpt' && field !== 'contract_digest') || isObject(record) && field in record), base, errors)) continue
       if (typeof record.command_id !== 'string' || ids.has(record.command_id)) errors.push({ code: 'duplicate_command_id', path: `${base}.command_id`, message: 'command IDs must be unique' }); else ids.add(record.command_id)
       if (!['cc-gateway', 'sub2api', 'egress-tls-sidecar'].includes(String(record.repository)) || !COMMIT_RE.test(String(record.repository_commit))) errors.push({ code: 'invalid_repository_binding', path: base, message: 'invalid repository binding' })
       for (const field of ['manifest_digest', 'environment_digest', 'output_digest', 'result_digest'] as const) if (!DIGEST_RE.test(String(record[field]))) errors.push({ code: 'invalid_digest', path: `${base}.${field}`, message: `${field} is invalid` })
+      if ('contract_digest' in record && !DIGEST_RE.test(String(record.contract_digest))) errors.push({ code: 'invalid_digest', path: `${base}.contract_digest`, message: 'contract_digest is invalid' })
       if (record.manifest_digest !== value.manifest_digest) errors.push({ code: 'cross_manifest_results', path: `${base}.manifest_digest`, message: 'record manifest differs from set manifest' })
       if (!Number.isInteger(record.exit_code) || Number(record.exit_code) < 0 || !Number.isInteger(record.duration_ms) || Number(record.duration_ms) < 0) errors.push({ code: 'invalid_result', path: base, message: 'exit code and duration must be non-negative integers' })
       if (![0, 'nonzero'].includes(record.expected_exit as never) || !['pass', 'expected_fail', 'unexpected_fail', 'unexpected_pass'].includes(String(record.status))) errors.push({ code: 'invalid_result', path: base, message: 'invalid expected exit or status' })
+      else if (record.status !== expectedStatus(Number(record.exit_code), record.expected_exit as 0 | 'nonzero')) errors.push({ code: 'classification_mismatch', path: `${base}.status`, message: 'status does not match exit_code and expected_exit' })
       if ('output_excerpt' in record && (typeof record.output_excerpt !== 'string' || record.output_excerpt.length > 2048)) errors.push({ code: 'invalid_excerpt', path: `${base}.output_excerpt`, message: 'excerpt is invalid' })
       try {
         const { result_digest: _digest, duration_ms, ...rest } = record as unknown as CommandResultRecord
@@ -71,6 +80,34 @@ export function validateCommandResultsValue(value: unknown, now = Date.now(), al
     const { result_set_digest: _digest, ...unsigned } = typed
     if (value.result_set_digest !== commandSetDigest(unsigned)) errors.push({ code: 'result_set_digest_mismatch', path: '$.result_set_digest', message: 'result set digest mismatch' })
   }
+  return result(errors)
+}
+
+export function validateCommandResultsBindings(
+  results: CommandResultSet,
+  catalog: CommandCatalogEntry[],
+  manifest: unknown,
+  expected: { catalogDigest: string; manifestDigest: string; requireGroups?: Array<'phase0-green' | 'phase0-red'> },
+): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  if (results.catalog_digest !== expected.catalogDigest) errors.push({ code: 'cross_catalog_results', path: '$.catalog_digest', message: 'results do not match supplied catalog' })
+  if (results.manifest_digest !== expected.manifestDigest) errors.push({ code: 'cross_manifest_results', path: '$.manifest_digest', message: 'results do not match supplied manifest' })
+  const entries = new Map(catalog.map((entry) => [entry.id, entry]))
+  const seen = new Set<string>()
+  for (const [index, record] of results.records.entries()) {
+    const entry = entries.get(record.command_id)
+    if (!entry) { errors.push({ code: 'unknown_command_result', path: `$.records[${index}].command_id`, message: 'command is absent from catalog' }); continue }
+    seen.add(record.command_id)
+    if (record.repository !== entry.repository || record.expected_exit !== entry.expected_exit) errors.push({ code: 'catalog_result_mismatch', path: `$.records[${index}]`, message: 'repository or expected exit differs from catalog' })
+    if (entry.output_policy === 'digest_only' && record.output_excerpt !== undefined || entry.output_policy === 'redacted_excerpt' && record.output_excerpt === undefined) errors.push({ code: 'output_policy_mismatch', path: `$.records[${index}].output_excerpt`, message: 'output excerpt presence differs from catalog policy' })
+    const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+    const head = isObject(manifest) && isObject(manifest.repositories) && isObject(manifest.repositories[repositoryName]) ? manifest.repositories[repositoryName].head : undefined
+    if (record.repository_commit !== head) errors.push({ code: 'cross_commit_results', path: `$.records[${index}].repository_commit`, message: 'repository commit differs from manifest' })
+    const contract = isObject(manifest) && isObject(manifest.contract) && typeof manifest.contract.sha256 === 'string' ? `sha256:${manifest.contract.sha256}` : undefined
+    if (entry.repository === 'sub2api' && (!contract || record.contract_digest !== contract)) errors.push({ code: 'contract_digest_mismatch', path: `$.records[${index}].contract_digest`, message: 'Sub2API contract digest differs from manifest' })
+    if (entry.repository !== 'sub2api' && record.contract_digest !== undefined) errors.push({ code: 'contract_digest_mismatch', path: `$.records[${index}].contract_digest`, message: 'non-Sub2API result carries a contract digest' })
+  }
+  for (const group of expected.requireGroups ?? []) for (const entry of catalog.filter((candidate) => candidate.group === group)) if (!seen.has(entry.id)) errors.push({ code: 'incomplete_result_set', path: '$.records', message: `${group} is missing ${entry.id}` })
   return result(errors)
 }
 

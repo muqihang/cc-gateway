@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { buildExitReceipt, validateExitReceiptValue } from '../tools/oracle-lab/build-exit-receipt.js'
-import { validateHandoffValue } from '../tools/oracle-lab/build-handoff-bundle.js'
-import { digestFile, digestValue } from '../tools/oracle-lab/harness-core.js'
-import { commandRecordDigest, commandSetDigest, mergeCommandResults, validateCommandResultsValue, type CommandResultRecord, type CommandResultSet } from '../tools/oracle-lab/merge-command-results.js'
-import { runCommandCatalog } from '../tools/oracle-lab/run-command-catalog.js'
+import { buildContextPack } from '../tools/oracle-lab/build-context-pack.js'
+import { buildExitReceipt, requiredReceiptArtifacts, validateExitReceiptValue } from '../tools/oracle-lab/build-exit-receipt.js'
+import { buildHandoff, validateHandoffValue } from '../tools/oracle-lab/build-handoff-bundle.js'
+import { assertSafeArtifact, digestFile, digestValue } from '../tools/oracle-lab/harness-core.js'
+import { commandRecordDigest, commandSetDigest, mergeCommandResults, validateCommandResultsBindings, validateCommandResultsValue, type CommandResultRecord, type CommandResultSet } from '../tools/oracle-lab/merge-command-results.js'
+import { redactOutput, runCommandCatalog } from '../tools/oracle-lab/run-command-catalog.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from '../tools/oracle-lab/validate-command-catalog.js'
 import { contextPackDigest, validateContextPackValue, type ContextPack } from '../tools/oracle-lab/validate-context-pack.js'
 
@@ -60,8 +61,63 @@ test('catalog rejects duplicate IDs, shell commands, undeclared expansion, inval
     [{ ...value[0], unexpected: true }],
     [{ ...value[0], schema_version: 2 }],
     [{ ...value[0], manifest_binding: { manifest_path: '${EXIT_MANIFEST}', repository_head_field: 'repositories.missing.head' } }],
+    [{ ...value[0], manifest_binding: { manifest_path: 'docs/superpowers/evidence/phase-0/literal.json', repository_head_field: 'repositories.cc_gateway.head' } }],
+    [{ ...value[0], repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', manifest_binding: { manifest_path: '${EXIT_MANIFEST}', repository_head_field: 'repositories.sub2api.head' } }],
+    [{ ...value.find((entry) => entry.repository === 'sub2api')!, manifest_binding: { manifest_path: '${EXIT_MANIFEST}', repository_head_field: 'repositories.sub2api.head' } }],
   ]
   for (const candidate of cases) assert.equal(validateCommandCatalogValue(candidate).ok, false)
+})
+
+test('result validation rejects empty sets and derives status exactly from real and expected exits', () => {
+  assert.equal(validateCommandResultsValue(resultSet([])).ok, false)
+  for (const candidate of [
+    { exit_code: 7, expected_exit: 0 as const, status: 'pass' as const },
+    { exit_code: 0, expected_exit: 'nonzero' as const, status: 'expected_fail' as const },
+    { exit_code: 0, expected_exit: 0 as const, status: 'unexpected_fail' as const },
+    { exit_code: 9, expected_exit: 'nonzero' as const, status: 'unexpected_pass' as const },
+  ]) {
+    const forged = { ...record('forged'), ...candidate }
+    const { result_digest: _old, duration_ms: _duration, ...unsigned } = forged
+    forged.result_digest = commandRecordDigest(unsigned)
+    assert.equal(validateCommandResultsValue(resultSet([forged])).ok, false)
+  }
+  const unsafe = { ...record('unsafe'), output_excerpt: 'Cookie: session=raw-secret' }; { const { result_digest: _old, duration_ms: _duration, ...unsigned } = unsafe; unsafe.result_digest = commandRecordDigest(unsigned) }
+  assert.equal(validateCommandResultsValue(resultSet([unsafe])).ok, false)
+})
+
+test('result evidence binds exactly to catalog, manifest, repository heads, contract and complete groups', async () => {
+  const catalogValue = await catalog()
+  const manifest = { repositories: { cc_gateway: { head: commit }, sub2api: { head: '2'.repeat(40) } }, contract: { sha256: 'c'.repeat(64) } }
+  const cc = record('cc-build')
+  const valid = resultSet([cc])
+  assert.deepEqual(validateCommandResultsBindings(valid, catalogValue, manifest, { catalogDigest: valid.catalog_digest, manifestDigest: valid.manifest_digest }), { ok: true, errors: [] })
+  assert.equal(validateCommandResultsBindings({ ...valid, catalog_digest: digest }, catalogValue, manifest, { catalogDigest: otherDigest, manifestDigest: digest }).ok, false)
+  assert.equal(validateCommandResultsBindings(valid, catalogValue, manifest, { catalogDigest: otherDigest, manifestDigest: otherDigest }).ok, false)
+  assert.equal(validateCommandResultsBindings(valid, catalogValue, { ...manifest, repositories: { ...manifest.repositories, cc_gateway: { head: '3'.repeat(40) } } }, { catalogDigest: otherDigest, manifestDigest: digest }).ok, false)
+  assert.equal(validateCommandResultsBindings(valid, catalogValue, manifest, { catalogDigest: otherDigest, manifestDigest: digest, requireGroups: ['phase0-green'] }).ok, false)
+})
+
+test('context and handoff builders reject cross-input evidence and missing selected requirement results', async () => {
+  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const manifest = JSON.parse(await readFile(entryBaseline, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
+  const catalogValue = await catalog()
+  const make = (entry: CommandCatalogEntry): CommandResultRecord => {
+    const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+    const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(entryBaseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+    return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+  }
+  const all = catalogValue.map(make)
+  const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: digestFile(entryBaseline), records: all }
+  const bound = { ...unsigned, result_set_digest: commandSetDigest(unsigned) }
+  const resultPath = path.join(await mkdtemp(path.join(tmpdir(), 'oracle-h0-bound-')), 'results.json'); await writeFile(resultPath, JSON.stringify(bound))
+  const missing = { ...unsigned, records: all.filter((entry) => entry.command_id !== 'cc-test') }; const missingSet = { ...missing, result_set_digest: commandSetDigest(missing) }; const missingPath = path.join(path.dirname(resultPath), 'missing.json'); await writeFile(missingPath, JSON.stringify(missingSet))
+  assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: missingPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'missing_requirement_evidence')
+  assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-000'] }), (error: Error & { code?: string }) => error.code === 'missing_requirement_evidence')
+  assert.throws(() => buildHandoff({ phase: 'phase-0', baseline: entryBaseline, commandResults: missingPath }), (error: Error & { code?: string }) => error.code === 'incomplete_result_set')
+  const cross = { ...bound, manifest_digest: otherDigest, records: bound.records.map((entry) => ({ ...entry, manifest_digest: otherDigest })) }; cross.records = cross.records.map((entry) => { const { result_digest: _old, duration_ms: _duration, ...recordUnsigned } = entry; return { ...entry, result_digest: commandRecordDigest(recordUnsigned) } }); cross.result_set_digest = commandSetDigest((({ result_set_digest: _old, ...rest }) => rest)(cross)); const crossPath = path.join(path.dirname(resultPath), 'cross.json'); await writeFile(crossPath, JSON.stringify(cross))
+  assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: crossPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'cross_manifest_results')
+  assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
 })
 
 test('result merge is order-independent and rejects duplicates, cross-manifest and cross-commit sets', () => {
@@ -92,7 +148,7 @@ test('context packs round-trip, have stable nonvolatile digests, and fail closed
 
 test('command results and handoffs reject unknown fields, incomplete provenance, escaped artifacts, and secret canaries', () => {
   assert.equal(validateCommandResultsValue({ ...resultSet([record('a')]), extra: true }).ok, false)
-  const handoff = { schema_version: 1, phase: 'phase-0', generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 86_460_000).toISOString(), baseline_digest: digest, command_results_digest: otherDigest, repositories: [{ name: 'cc_gateway', commit, dirty_digest: digest }], commands: [{ command_id: 'a', status: 'pass', result_digest: digest }], artifacts: [{ path: entryBaseline, digest: digestFile(entryBaseline) }], known_unknowns: [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_only', destruction_procedure: 'git_revert' }
+  const handoff = { schema_version: 1, phase: 'phase-0', generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 86_460_000).toISOString(), baseline_digest: digest, command_results_digest: otherDigest, repositories: [{ name: 'cc_gateway', commit, dirty_digest: digest }, { name: 'sub2api', commit: '2'.repeat(40), dirty_digest: otherDigest }], commands: [{ command_id: 'a', status: 'pass', result_digest: digest }], artifacts: [{ path: entryBaseline, digest: digestFile(entryBaseline) }], known_unknowns: [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
   assert.deepEqual(validateHandoffValue(handoff), { ok: true, errors: [] })
   assert.equal(validateHandoffValue({ ...handoff, artifacts: [{ path: '/tmp/raw.log', digest }] }, Date.now(), false).ok, false)
   assert.equal(validateHandoffValue({ ...handoff, known_unknowns: ['Bearer secret-token-value'] }).ok, false)
@@ -117,8 +173,56 @@ test('runner executes argv without a shell, records real exits, environment dige
   const red = await runCommandCatalog(runnerCatalogPath, 'phase0-red', roots); assert.deepEqual(red.records.map((entry) => entry.status), ['expected_fail', 'expected_fail']); assert.deepEqual(red.records.map((entry) => entry.exit_code), [3, 4]); assert(red.records.every((entry) => entry.environment_digest.startsWith('sha256:')))
 })
 
-test('receipt rejects a commit that does not contain every named artifact', () => {
-  assert.throws(() => buildExitReceipt({ baseline: entryBaseline, handoff: entryBaseline, handoffCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), artifacts: ['docs/superpowers/evidence/phase-0/not-committed.json'] }), (error: Error & { code?: string }) => error.code === 'commit_missing_artifact')
+test('runner rejects every undeclared pre/post command worktree delta and removes no symlink bypass', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-delta-'))
+  execFileSync('git', ['init', '-q', root]); execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.invalid']); execFileSync('git', ['-C', root, 'config', 'user.name', 'H0 Test'])
+  await writeFile(path.join(root, 'tracked.txt'), 'fixture\n'); execFileSync('git', ['-C', root, 'add', '.']); execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture'])
+  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  const manifestPath = path.join(root, 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'); await import('node:fs/promises').then(({ mkdir }) => mkdir(path.dirname(manifestPath), { recursive: true })); await writeFile(manifestPath, JSON.stringify({ repositories: { cc_gateway: { head } } }))
+  const common = { id: 'delta-test', schema_version: 1 as const, group: 'phase0-green' as const, owner: 'test', requirement_ids: ['HA-P0-007'], repository: 'cc-gateway' as const, cwd: '${CC_GATEWAY_ROOT}' as const, env: {}, inherit_env: ['PATH' as const], manifest_binding: { manifest_path: '${EXIT_MANIFEST}', repository_head_field: 'repositories.cc_gateway.head' }, allowed_worktree_delta: ['docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'], timeout_ms: 10_000, expected_exit: 0 as const, output_policy: 'digest_only' as const, rollback: 'none' }
+  const catalogDirectory = await mkdtemp(path.join(tmpdir(), 'oracle-h0-delta-catalog-')); const file = path.join(catalogDirectory, 'catalog.json')
+  await writeFile(file, JSON.stringify([{ ...common, argv: [process.execPath, '-e', 'require("fs").writeFileSync("rogue.txt", "x")'] }]))
+  const roots = { CC_GATEWAY_ROOT: root, SUB2API_ROOT: root, EXIT_MANIFEST: manifestPath, ENTRY_MANIFEST: manifestPath }
+  await assert.rejects(runCommandCatalog(file, 'phase0-green', roots), (error: Error & { code?: string }) => error.code === 'worktree_delta_mismatch')
+  const modifiedRoot = await mkdtemp(path.join(tmpdir(), 'oracle-h0-modified-'))
+  execFileSync('git', ['init', '-q', modifiedRoot]); execFileSync('git', ['-C', modifiedRoot, 'config', 'user.email', 'test@example.invalid']); execFileSync('git', ['-C', modifiedRoot, 'config', 'user.name', 'H0 Test']); await writeFile(path.join(modifiedRoot, 'tracked.txt'), 'fixture\n'); execFileSync('git', ['-C', modifiedRoot, 'add', '.']); execFileSync('git', ['-C', modifiedRoot, 'commit', '-qm', 'fixture'])
+  const modifiedHead = execFileSync('git', ['-C', modifiedRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); const modifiedManifest = path.join(modifiedRoot, 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'); await import('node:fs/promises').then(({ mkdir }) => mkdir(path.dirname(modifiedManifest), { recursive: true })); await writeFile(modifiedManifest, JSON.stringify({ repositories: { cc_gateway: { head: modifiedHead } } }))
+  await writeFile(file, JSON.stringify([{ ...common, argv: [process.execPath, '-e', `require("fs").writeFileSync(${JSON.stringify(modifiedManifest)}, "changed")`] }]))
+  await assert.rejects(runCommandCatalog(file, 'phase0-green', { ...roots, CC_GATEWAY_ROOT: modifiedRoot, SUB2API_ROOT: modifiedRoot, EXIT_MANIFEST: modifiedManifest, ENTRY_MANIFEST: modifiedManifest }), (error: Error & { code?: string }) => error.code === 'worktree_delta_mismatch')
+  const cleanRoot = await mkdtemp(path.join(tmpdir(), 'oracle-h0-symlink-'))
+  execFileSync('git', ['init', '-q', cleanRoot]); execFileSync('git', ['-C', cleanRoot, 'config', 'user.email', 'test@example.invalid']); execFileSync('git', ['-C', cleanRoot, 'config', 'user.name', 'H0 Test']); await writeFile(path.join(cleanRoot, 'tracked.txt'), 'fixture\n'); execFileSync('git', ['-C', cleanRoot, 'add', '.']); execFileSync('git', ['-C', cleanRoot, 'commit', '-qm', 'fixture'])
+  const cleanHead = execFileSync('git', ['-C', cleanRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); const cleanManifest = path.join(cleanRoot, 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'); await import('node:fs/promises').then(({ mkdir }) => mkdir(path.dirname(cleanManifest), { recursive: true })); await writeFile(cleanManifest, JSON.stringify({ repositories: { cc_gateway: { head: cleanHead } } })); await symlink(tmpdir(), path.join(cleanRoot, 'node_modules'))
+  await assert.rejects(runCommandCatalog(file, 'phase0-green', { ...roots, CC_GATEWAY_ROOT: cleanRoot, SUB2API_ROOT: cleanRoot, EXIT_MANIFEST: cleanManifest, ENTRY_MANIFEST: cleanManifest }), (error: Error & { code?: string }) => error.code === 'worktree_delta_mismatch')
+})
+
+test('safe excerpts redact credentials, assignments, paths, raw logs and canaries', async () => {
+  for (const unsafe of ['Cookie: session=abc123', 'Authorization: Basic Zm9vOmJhcg==', 'TOKEN=plain-secret', 'API_KEY: abc123', 'https://user:pass@example.test/x', '/Users/alice/private/file', 'ORACLE_SECRET_CANARY_123456']) {
+    assert.throws(() => assertSafeArtifact({ output_excerpt: unsafe }), (error: Error & { code?: string }) => error.code === 'unsafe_artifact')
+  }
+  const raw = 'Cookie: sid=abc\nAuthorization: Bearer raw-token\nTOKEN=plain\nAPI_KEY: key\nhttps://user:p@ss@example.test/x\n/private/var/folders/ab/raw.log\nORACLE_SECRET_CANARY_123456'
+  const redacted = redactOutput(raw)
+  for (const leaked of ['sid=abc', 'raw-token', 'plain', ' key', 'user', 'p@ss', '/private/', 'ORACLE_SECRET_CANARY']) assert.equal(redacted.includes(leaked), false, leaked)
+})
+
+test('receipt validates semantics before commit inventory verification', () => {
+  assert.throws(() => buildExitReceipt({ baseline: entryBaseline, handoff: entryBaseline, handoffCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), artifacts: ['docs/superpowers/evidence/phase-0/not-committed.json'] }), (error: Error & { code?: string }) => error.code === 'missing_field')
+})
+
+test('receipt validation rejects empty artifact and repository inventories and weak metadata', () => {
+  const receipt = { schema_version: 1, generated_at: new Date().toISOString(), baseline_digest: digest, handoff_digest: otherDigest, handoff_commit: commit, artifact_digests: {}, repository_heads: {}, retention_class: 'phase_evidence_permanent', redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
+  assert.equal(validateExitReceiptValue(receipt).ok, false)
+  assert.equal(validateExitReceiptValue({ ...receipt, artifact_digests: { [entryBaseline]: digest }, repository_heads: { cc_gateway: commit }, retention_class: 'anything' }).ok, false)
+})
+
+test('receipt inventory is exact for baseline, context, handoff, report, registry and roadmap', () => {
+  assert.deepEqual(requiredReceiptArtifacts('phase-0', 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json', 'docs/superpowers/evidence/phase-0/phase-0-context-pack.json', 'docs/superpowers/evidence/phase-0/phase-0-handoff.json'), [
+    'docs/superpowers/evidence/phase-0/phase-0-context-pack.json',
+    'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json',
+    'docs/superpowers/evidence/phase-0/phase-0-exit-report.md',
+    'docs/superpowers/evidence/phase-0/phase-0-handoff.json',
+    'docs/superpowers/registry/oracle-lab-requirements.json',
+    'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
+  ])
 })
 
 test('published H0 schemas are strict, versioned, retention-aware, and require migrations for breaking changes', async () => {
@@ -129,6 +233,9 @@ test('published H0 schemas are strict, versioned, retention-aware, and require m
     assert.equal(schema.redaction_policy, 'digests_and_safe_redacted_excerpts_only')
     assert.equal(schema.destruction_procedure, 'git_revert_artifact_commit_after_security_approval')
     if (schema.type === 'array') assert.equal(schema.items.additionalProperties, false); else assert.equal(schema.additionalProperties, false)
+    const arrays = Object.values(schema.properties ?? {}).filter((property): property is Record<string, unknown> => typeof property === 'object' && property !== null && (property as { type?: string }).type === 'array')
+    for (const property of arrays) assert.ok(property.items, `${name} array must constrain items`)
+    if (name === 'command-results') assert.ok(schema.$defs.record.allOf, 'result schema must correlate exit, expectation, and status')
   }
   assert.equal(validateContextPackValue({ ...contextPack(), schema_version: 2, migration: 'missing-test' }).ok, false)
 })

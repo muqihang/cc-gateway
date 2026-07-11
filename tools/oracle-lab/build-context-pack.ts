@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { cli, digestFile, isObject, parseArgs, readJson, requireValid, writeJson } from './harness-core.js'
-import { validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
+import { validateCommandResultsBindings, validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
 import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
 import { validateRunInputs } from './validate-run-manifest.js'
@@ -25,14 +25,23 @@ export function buildContextPack(options: { registry: string; claims: string; ma
   const results = resultValue as CommandResultSet
   const catalogValue = readJson(catalogPath); requireValid(validateCommandCatalogValue(catalogValue, new Set(requirements.keys() as Iterable<string>)))
   const catalog = catalogValue as CommandCatalogEntry[]; const selected = new Set(options.requirementIds)
-  const commandIds = new Set(catalog.filter((entry) => entry.requirement_ids.some((id) => selected.has(id))).map((entry) => entry.id))
+  const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => selected.has(id)))
+  for (const id of options.requirementIds) if (!selectedCommands.some((entry) => entry.requirement_ids.includes(id))) throw Object.assign(new Error(`${id} has no catalog command evidence`), { code: 'missing_requirement_evidence' })
+  const commandIds = new Set(selectedCommands.map((entry) => entry.id))
   const manifest = readJson(options.manifest)
   if (!isObject(manifest) || !isObject(manifest.repositories)) throw Object.assign(new Error('manifest repositories are missing'), { code: 'missing_repository_digests' })
   const repositories = Object.entries(manifest.repositories).map(([name, value]) => {
     if (!isObject(value) || typeof value.head !== 'string' || typeof value.dirty_digest !== 'string') throw Object.assign(new Error(`${name} repository provenance is missing`), { code: 'missing_repository_digests' })
     return { name, commit: value.head, dirty_digest: `sha256:${value.dirty_digest}` }
   }).sort((a, b) => a.name.localeCompare(b.name))
+  requireValid(validateCommandResultsBindings(results, catalog, manifest, { catalogDigest: digestFile(catalogPath), manifestDigest: digestFile(options.manifest) }))
+  const evidence = new Map(results.records.map((record) => [record.command_id, record]))
+  for (const entry of selectedCommands) {
+    const record = evidence.get(entry.id)
+    if (!record || (record.status !== 'pass' && record.status !== 'expected_fail')) throw Object.assign(new Error(`${entry.id} has no matching accepted result`), { code: 'missing_requirement_evidence' })
+  }
   const sources = new Map<string, { path: string; symbol?: string; line?: number; digest: string }>()
+  const missingSources: string[] = []
   for (const id of options.requirementIds) {
     const requirement = requirements.get(id)!
     const registryLine = sourceLine(options.registry, `"requirement_id": "${id}"`)
@@ -44,7 +53,7 @@ export function buildContextPack(options: { registry: string; claims: string; ma
       try {
         const line = file === sourceDocument && typeof requirement.source_section === 'string' ? sourceLine(file, requirement.source_section) : undefined
         sources.set(file, { path: file, ...(line ? { line } : {}), digest: digestFile(file) })
-      } catch { /* Registry may reference later-phase or cross-repository files; those remain known unknowns. */ }
+      } catch { missingSources.push(`missing_source:${file}`) }
     }
   }
   const generated = new Date(options.generatedAt ?? new Date().toISOString())
@@ -53,7 +62,7 @@ export function buildContextPack(options: { registry: string; claims: string; ma
     registry_digest: digestFile(options.registry), claims_digest: digestFile(options.claims), manifest_digest: digestFile(options.manifest),
     requirement_ids: [...options.requirementIds].sort(), repositories, sources: [...sources.values()].sort((a, b) => `${a.path}\0${a.symbol ?? ''}`.localeCompare(`${b.path}\0${b.symbol ?? ''}`)),
     tests: results.records.filter((record) => commandIds.has(record.command_id)).map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)),
-    known_unknowns: [...new Set(options.requirementIds.flatMap((id) => { const gaps = requirements.get(id)?.known_gaps; return Array.isArray(gaps) ? gaps.filter((gap): gap is string => typeof gap === 'string') : [] }))].sort(),
+    known_unknowns: [...new Set([...missingSources, ...options.requirementIds.flatMap((id) => { const gaps = requirements.get(id)?.known_gaps; return Array.isArray(gaps) ? gaps.filter((gap): gap is string => typeof gap === 'string') : [] })])].sort(),
   }
   requireValid(validateContextPackValue(pack)); return pack
 }

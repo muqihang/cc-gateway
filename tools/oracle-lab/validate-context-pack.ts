@@ -36,10 +36,11 @@ export function validateContextPackValue(value: unknown, now = Date.now(), verif
   else if (expires <= now) errors.push({ code: 'expired_context_pack', path: '$.expires_at', message: 'context pack is expired' })
   if (!Array.isArray(value.requirement_ids) || value.requirement_ids.length === 0 || value.requirement_ids.some((id) => typeof id !== 'string') || new Set(value.requirement_ids).size !== value.requirement_ids.length) errors.push({ code: 'invalid_requirements', path: '$.requirement_ids', message: 'requirement IDs must be unique strings' })
   if (!Array.isArray(value.repositories) || value.repositories.length === 0) errors.push({ code: 'missing_repository_digests', path: '$.repositories', message: 'repositories are required' })
-  else for (const [index, repository] of value.repositories.entries()) {
+  else { const names = new Set<string>(); for (const [index, repository] of value.repositories.entries()) {
     if (!exactKeys(repository, ['name', 'commit', 'dirty_digest'], `$.repositories[${index}]`, errors)) continue
     if (typeof repository.name !== 'string' || !COMMIT_RE.test(String(repository.commit)) || !DIGEST_RE.test(String(repository.dirty_digest))) errors.push({ code: 'missing_repository_digests', path: `$.repositories[${index}]`, message: 'repository provenance is incomplete' })
-  }
+    else if (names.has(repository.name)) errors.push({ code: 'duplicate_repository', path: `$.repositories[${index}].name`, message: 'repository names must be unique' }); else names.add(repository.name)
+  } }
   if (!Array.isArray(value.sources) || value.sources.length === 0) errors.push({ code: 'invalid_sources', path: '$.sources', message: 'sources are required' })
   else for (const [index, source] of value.sources.entries()) {
     const sourceFields = ['path', 'digest', ...isObject(source) && 'symbol' in source ? ['symbol'] : [], ...isObject(source) && 'line' in source ? ['line'] : []]
@@ -49,11 +50,12 @@ export function validateContextPackValue(value: unknown, now = Date.now(), verif
     if ('symbol' in source && (typeof source.symbol !== 'string' || source.symbol === '')) errors.push({ code: 'invalid_source', path: `$.sources[${index}].symbol`, message: 'symbol is invalid' })
     if ('line' in source && (!Number.isInteger(source.line) || Number(source.line) < 1)) errors.push({ code: 'invalid_source', path: `$.sources[${index}].line`, message: 'line is invalid' })
   }
-  if (!Array.isArray(value.tests)) errors.push({ code: 'invalid_tests', path: '$.tests', message: 'tests must be an array' })
-  else for (const [index, test] of value.tests.entries()) {
+  if (!Array.isArray(value.tests) || value.tests.length === 0) errors.push({ code: 'invalid_tests', path: '$.tests', message: 'tests must be a non-empty array' })
+  else { const commandIds = new Set<string>(); for (const [index, test] of value.tests.entries()) {
     if (!exactKeys(test, ['command_id', 'status', 'result_digest'], `$.tests[${index}]`, errors)) continue
     if (typeof test.command_id !== 'string' || !['pass', 'expected_fail', 'unexpected_fail', 'unexpected_pass'].includes(String(test.status)) || !DIGEST_RE.test(String(test.result_digest))) errors.push({ code: 'invalid_test', path: `$.tests[${index}]`, message: 'test reference is invalid' })
-  }
+    else if (commandIds.has(test.command_id)) errors.push({ code: 'duplicate_command_id', path: `$.tests[${index}].command_id`, message: 'test command IDs must be unique' }); else commandIds.add(test.command_id)
+  } }
   if (!Array.isArray(value.known_unknowns) || value.known_unknowns.some((entry) => typeof entry !== 'string')) errors.push({ code: 'invalid_known_unknowns', path: '$.known_unknowns', message: 'known_unknowns must be strings' })
   return result(errors)
 }

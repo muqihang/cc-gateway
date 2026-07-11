@@ -60,10 +60,10 @@ export function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
 
-const SECRET_CANARY = /(?:ORACLE[_-]?SECRET[_-]?CANARY|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~-]{8,})/i
+const UNSAFE_ARTIFACT = /(?:ORACLE[_-]?SECRET[_-]?CANARY|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|\b(?:Cookie|Set-Cookie|Authorization)\s*:|\b(?:TOKEN|SECRET|API_KEY)\s*[:=]\s*[^\s"']+|https?:\/\/[^\s/]+@|(?:^|[\s"'])(?:\/Users\/|\/home\/|\/private\/|\/tmp\/|\/var\/folders\/|[A-Za-z]:\\Users\\))/i
 
 export function assertSafeArtifact(value: unknown): void {
-  if (SECRET_CANARY.test(JSON.stringify(value))) throw Object.assign(new Error('raw secret canary in safe artifact'), { code: 'secret_canary' })
+  if (UNSAFE_ARTIFACT.test(JSON.stringify(value))) throw Object.assign(new Error('unsafe content in safe artifact'), { code: 'unsafe_artifact' })
 }
 
 export function parseArgs(argv: string[]): { values: Record<string, string[]>; positionals: string[] } {
