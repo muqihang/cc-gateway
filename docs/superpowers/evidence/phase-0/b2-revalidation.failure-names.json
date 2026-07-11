@@ -1,0 +1,33 @@
+{
+  "requirement_id": "AV-B2-001",
+  "content": "stable_leaf_failure_test_names_only",
+  "digest_algorithm": "SHA-256 over UTF-8 names sorted bytewise, unique, joined by LF, with one trailing LF",
+  "reproduction_command": "export LC_ALL=C; jq -r '.failure_names[]' docs/superpowers/evidence/phase-0/b2-revalidation.failure-names.json | sort -u | shasum -a 256",
+  "failure_names": [
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/different_administrator_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/different_creator_owner_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/different_group_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/different_tenant_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/missing_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/non-administrator_role_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/session_creation_different_group_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/session_creation_missing_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/session_creation_non-administrator_role_only",
+    "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent/valid_owner_stale_expected_version_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/Abort/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/Acceptance/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/AccountHealthcheck/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/Activation/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/BrowserEgressAttestation/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/ExchangeOAuth/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/ExchangeSetupToken/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/GenerateOAuth/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/GetSession/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/Promotion/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/RefreshOnly/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/RuntimeRegistration/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/SessionHealthcheck/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/StartWarming/different_authenticated_principal_only",
+    "TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations/TestProxy/different_authenticated_principal_only"
+  ]
+}
