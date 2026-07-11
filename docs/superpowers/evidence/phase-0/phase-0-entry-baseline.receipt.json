@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "compatibility_policy": "fail_closed_exact_schema",
+  "retention_class": "phase_evidence_permanent",
+  "redaction_policy": "digests_only",
+  "destruction_procedure": "git_revert_artifact_commit_after_security_approval",
+  "manifest_sha256": "711c8b1f6e78578cfb9a91fdb37f9452cc5506b4bb56c1539583be14f0dd3809",
+  "schema_sha256": "f0b763789113c5fb3e3672fb78a87be1faca66595c0ff825f22621c2d68d8078",
+  "bootstrap_commit": "b9745da781397111a77465a1afb6bbbcb7cfd692"
+}
