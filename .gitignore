@@ -6,3 +6,4 @@ config.yaml
 certs/
 clients/
 runtime/
+docs/superpowers/evidence/**/*.tmp

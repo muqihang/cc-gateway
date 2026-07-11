@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oracle-lab-run-manifest.schema.json",
+  "title": "Oracle Lab Run Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "compatibility_policy",
+    "retention_class",
+    "redaction_policy",
+    "destruction_procedure",
+    "phase",
+    "approved_tool_head",
+    "repositories",
+    "contract",
+    "governance",
+    "policies",
+    "dependencies",
+    "codegraph",
+    "legacy_comparison"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "compatibility_policy": { "const": "fail_closed_exact_schema" },
+    "retention_class": { "const": "phase_evidence_permanent" },
+    "redaction_policy": { "const": "digests_and_safe_categories_only" },
+    "destruction_procedure": { "const": "git_revert_artifact_commit_after_security_approval" },
+    "phase": { "enum": ["phase_0_entry", "phase_0_exit"] },
+    "approved_tool_head": { "$ref": "#/$defs/gitCommit" },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cc_gateway", "sub2api"],
+      "properties": {
+        "cc_gateway": { "$ref": "#/$defs/repository" },
+        "sub2api": { "$ref": "#/$defs/repository" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path_category", "repository_relative_path_base64url", "sha256"],
+      "properties": {
+        "path_category": { "const": "sub2api_formal_pool_contract" },
+        "repository_relative_path_base64url": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "governance": { "type": "object" },
+    "policies": { "type": "object" },
+    "dependencies": { "type": "object" },
+    "codegraph": { "type": "object" },
+    "legacy_comparison": { "type": "object" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "repository": {
+      "type": "object",
+      "required": ["head", "branch", "clean", "dirty_digest", "dirty_records", "ignored_exclusion_rules"],
+      "properties": {
+        "head": { "$ref": "#/$defs/gitCommit" },
+        "branch": { "type": "string" },
+        "clean": { "type": "boolean" },
+        "dirty_digest": { "$ref": "#/$defs/sha256" },
+        "dirty_records": { "type": "array" },
+        "ignored_exclusion_rules": { "type": "array" }
+      }
+    }
+  }
+}
