@@ -58,6 +58,7 @@ auth:
   gateway_token: gateway-token
   internal_control_token: ${configInternalControlMaterial}
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   upstream_mode: production
   production_upstream_enabled: true
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
@@ -67,6 +68,22 @@ formal_pool:
 ${mcpConnectorYaml}
 ${sidecarYaml}
 ${formalPoolMapsYaml.replace('proxy_url: http://127.0.0.1:8080', 'proxy_url: http://127.0.0.1:9')}
+`).replace(
+    /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
+    '',
+  )
+}
+
+function gatewayBoundaryConfigYaml(boundaryYaml: string, upstreamYaml = '  upstream_mode: preflight\n') {
+  return configYaml(`
+mode: sub2api
+auth:
+  gateway_token: gateway-token
+  internal_control_token: ${configInternalControlMaterial}
+shared_pool:
+${boundaryYaml}${upstreamYaml}  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
+  context_attestation_secret: ${configAttestationMaterial}
+${formalPoolMapsYaml}
 `).replace(
     /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
     '',
@@ -87,7 +104,7 @@ test('standalone still requires oauth.refresh_token', () => {
 test('sub2api mode can omit oauth', () => {
   const path = writeConfigYaml(configYaml().replace(
     /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
-    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\nmode: sub2api\nshared_pool:\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
+    `auth:\n  gateway_token: gateway-token\n  internal_control_token: ${configInternalControlMaterial}\nmode: sub2api\nshared_pool:\n  gateway_compromise_boundary: trusted_gateway\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
   ))
   const config = loadConfig(path)
   assert.equal(config.mode, 'sub2api')
@@ -105,7 +122,7 @@ test('sub2api mode requires a gateway token or equivalent auth token', () => {
 test('sub2api mode accepts existing auth.tokens as equivalent gateway tokens', () => {
   const path = writeConfigYaml(configYaml().replace(
     /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
-    `auth:\n  internal_control_token: ${configInternalControlMaterial}\n  tokens:\n    - name: client\n      token: client-token\nmode: sub2api\nshared_pool:\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
+    `auth:\n  internal_control_token: ${configInternalControlMaterial}\n  tokens:\n    - name: client\n      token: client-token\nmode: sub2api\nshared_pool:\n  gateway_compromise_boundary: trusted_gateway\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
   ))
   const config = loadConfig(path)
   assert.equal(config.mode, 'sub2api')
@@ -115,9 +132,54 @@ test('sub2api mode accepts existing auth.tokens as equivalent gateway tokens', (
 test('sub2api mode rejects auth.tokens reused as internal attestation token', () => {
   const path = writeConfigYaml(configYaml().replace(
     /auth:\n  tokens:\n    - name: client\n      token: client-token\noauth:\n  refresh_token: refresh-token\n/,
-    `auth:\n  internal_control_token: client-token\n  tokens:\n    - name: client\n      token: client-token\nmode: sub2api\nshared_pool:\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
+    `auth:\n  internal_control_token: client-token\n  tokens:\n    - name: client\n      token: client-token\nmode: sub2api\nshared_pool:\n  gateway_compromise_boundary: trusted_gateway\n  context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool\n  context_attestation_secret: ${configAttestationMaterial}\n${formalPoolMapsYaml}`,
   ))
   assert.throws(() => loadConfig(path), /internal_control_token.*independent/)
+})
+
+test('sub2api formal-pool requires an explicit gateway compromise boundary', () => {
+  assert.throws(
+    () => loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml(''))),
+    /gateway_compromise_boundary.*required/i,
+  )
+})
+
+test('sub2api formal-pool rejects an unknown gateway compromise boundary', () => {
+  assert.throws(
+    () => loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml('  gateway_compromise_boundary: implicit_gateway\n'))),
+    /gateway_compromise_boundary.*protected_gateway.*trusted_gateway/i,
+  )
+})
+
+test('trusted_gateway is the explicit Phase 0 production-compatible boundary', () => {
+  const config = loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml(
+    '  gateway_compromise_boundary: trusted_gateway\n',
+    '  upstream_mode: production\n  production_upstream_enabled: true\n',
+  )))
+  assert.equal(config.shared_pool?.gateway_compromise_boundary, 'trusted_gateway')
+})
+
+test('protected_gateway is normalized into the safe config summary for local capture', () => {
+  const config = loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml(
+    '  gateway_compromise_boundary: protected_gateway\n',
+    '  upstream_mode: local-capture\n',
+  )))
+  assert.equal(config.shared_pool?.gateway_compromise_boundary, 'protected_gateway')
+})
+
+test('protected_gateway fails closed for production and real canary until broker authority exists', () => {
+  for (const upstreamYaml of [
+    '  upstream_mode: production\n  production_upstream_enabled: true\n',
+    '  upstream_mode: real-canary\n  real_canary_user_approved: true\n',
+  ]) {
+    assert.throws(
+      () => loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml(
+        '  gateway_compromise_boundary: protected_gateway\n',
+        upstreamYaml,
+      ))),
+      /protected_gateway_authority_unavailable/,
+    )
+  }
 })
 
 test('rejects invalid mode', () => {
@@ -264,6 +326,8 @@ auth:
   gateway_token: gateway-token
   internal_control_token: ${configInternalControlMaterial}
 shared_pool:
+  gateway_compromise_boundary: protected_gateway
+  upstream_mode: preflight
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${configAttestationMaterial}
 ${formalPoolMapsYaml.replace('session_policy: preserve_downstream_session_id', 'session_policy: gateway_generated')}
@@ -351,6 +415,7 @@ auth:
   gateway_token: gateway-token
   internal_control_token: ${configInternalControlMaterial}
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${configAttestationMaterial}
   env_residue:
@@ -379,6 +444,7 @@ mode: sub2api
 auth:
 ${authYaml}
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${configAttestationMaterial}
 ${formalPoolMapsYaml}
@@ -407,6 +473,8 @@ mode: sub2api
 auth:
   gateway_token: gateway-token
   internal_control_token: ${configInternalControlMaterial}
+shared_pool:
+  gateway_compromise_boundary: trusted_gateway
 ${formalPoolMapsYaml}
 `).replace(/auth:\n  tokens:\n    - name: client\n      token: client-token\n/, '').replace(/oauth:\n  refresh_token: refresh-token\n/, ''))
   assert.throws(() => loadConfig(path), /context_attestation_secret_ref/)
@@ -500,6 +568,7 @@ auth:
   gateway_token: gateway-token
   internal_control_token: ${internal}
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   upstream_mode: production
   production_upstream_enabled: true
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
@@ -518,6 +587,7 @@ test('sub2api production formal-pool rejects sidecar mock messages response brid
   const yaml = configYaml(`
 mode: sub2api
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   upstream_mode: production
   production_upstream_enabled: true
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
@@ -552,6 +622,7 @@ test('sub2api production formal-pool rejects weak or reused sidecar proxy bindin
   const productionSidecarYaml = (proxyBinding: string) => configYaml(`
 mode: sub2api
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   upstream_mode: production
   production_upstream_enabled: true
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
@@ -587,6 +658,7 @@ test('sub2api production formal-pool can enable production TLS sidecar with mock
   const yaml = configYaml(`
 mode: sub2api
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   upstream_mode: production
   production_upstream_enabled: true
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
@@ -900,6 +972,7 @@ test('sub2api local smoke formal-pool can explicitly enable sidecar mock message
   const yaml = configYaml(`
 mode: sub2api
 shared_pool:
+  gateway_compromise_boundary: protected_gateway
   upstream_mode: local-capture
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${configAttestationMaterial}
@@ -938,6 +1011,7 @@ test('sidecar mock messages response bridge requires parent sidecar enabled', ()
   const yaml = configYaml(`
 mode: sub2api
 shared_pool:
+  gateway_compromise_boundary: protected_gateway
   upstream_mode: local-capture
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${configAttestationMaterial}
@@ -989,6 +1063,9 @@ test('config examples separate personal standalone from formal-pool sub2api', ()
   assert.match(formalPoolExample, /gateway_token: "change-me-gateway-token"/)
   assert.match(formalPoolExample, /internal_control_token: "change-me-independent-internal-control-token"/)
   assert.match(formalPoolExample, /context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool/)
+  assert.match(formalPoolExample, /^  gateway_compromise_boundary: protected_gateway$/m)
+  assert.match(formalPoolExample, /protected_gateway_authority_unavailable/)
+  assert.match(formalPoolExample, /trusted_gateway.*production-compatible/i)
   assert.match(formalPoolExample, /billing_cch_mode: strip/)
   assert.match(formalPoolExample, /account_identities:/)
   assert.match(formalPoolExample, /credential_ref:/)

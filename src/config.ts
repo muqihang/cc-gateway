@@ -106,6 +106,7 @@ export type Config = {
   }
   shared_pool?: {
     max_body_bytes?: number
+    gateway_compromise_boundary?: 'protected_gateway' | 'trusted_gateway'
     billing_cch_mode?: 'strip' | 'sign' | 'disabled'
     signing_enabled?: boolean
     signing_evidence_gates_approved?: boolean
@@ -196,6 +197,7 @@ function hasOwnKeys(value: unknown): boolean {
 function hasFormalPoolSharedPoolConfig(sharedPool: unknown): boolean {
   if (!sharedPool || typeof sharedPool !== 'object') return false
   const pool = sharedPool as Record<string, unknown>
+  if (pool.gateway_compromise_boundary !== undefined) return true
   if (typeof pool.context_attestation_secret_ref === 'string' && pool.context_attestation_secret_ref.trim()) return true
   if (pool.production_upstream_enabled === true || pool.real_canary_user_approved === true) return true
   if (pool.upstream_mode === 'production' || pool.upstream_mode === 'real-canary') return true
@@ -359,9 +361,31 @@ export function validateFormalPoolMode(config: Config): void {
       throw new Error(`config: egress_buckets.${bucketId}.tls_profile_ref must reference an enabled tls_profiles profile_ref`)
     }
   }
+  validateGatewayCompromiseBoundary(config)
   validateEgressSidecarConfig(config as any)
   validateFormalPoolMCPConnectorConfig(config)
   validateFormalPoolAttestationConfig(config)
+}
+
+function validateGatewayCompromiseBoundary(config: Config): void {
+  const sharedPool = (config as any).shared_pool as Record<string, unknown> | undefined
+  if (!sharedPool) {
+    throw new Error('config: shared_pool.gateway_compromise_boundary is required for formal-pool mode')
+  }
+  const boundary = sharedPool.gateway_compromise_boundary
+  if (boundary === undefined || boundary === null || boundary === '') {
+    throw new Error('config: shared_pool.gateway_compromise_boundary is required for formal-pool mode')
+  }
+  if (boundary !== 'protected_gateway' && boundary !== 'trusted_gateway') {
+    throw new Error('config: shared_pool.gateway_compromise_boundary must be protected_gateway or trusted_gateway')
+  }
+  sharedPool.gateway_compromise_boundary = boundary
+
+  const upstreamMode = sharedPool.upstream_mode
+  const protectedLocalMode = upstreamMode === 'preflight' || upstreamMode === 'local-capture'
+  if (boundary === 'protected_gateway' && !protectedLocalMode) {
+    throw new Error('config: protected_gateway_authority_unavailable')
+  }
 }
 
 function validateFormalPoolMCPConnectorConfig(config: Config): void {

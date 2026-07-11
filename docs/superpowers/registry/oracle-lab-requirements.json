@@ -85,10 +85,10 @@
     "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
     "source_section": "4. Required Architecture Decision: Gateway Compromise Boundary",
     "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-003"],
-    "acceptance_gate": "phase_0_gateway_boundary_adr", "implementation_status": "design_only",
-    "owner": "cc-gateway-oracle-owner and release-approver", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
-    "verification_command": "npm exec tsx tests/oracle-lab-boundary-adr.test.ts", "evidence_artifact": "phase-0/gateway-compromise-boundary.json",
-    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["boundary decision is scheduled for Task 4"],
+    "acceptance_gate": "phase_0_gateway_boundary_adr", "implementation_status": "failing_test_added",
+    "owner": "cc-gateway-oracle-owner and release-approver", "repository": "cc-gateway", "implementation_files": ["docs/superpowers/adr/0001-gateway-compromise-boundary.md", "src/config.ts", "config.sub2api.formal-pool.example.yaml", "docs/formal-pool-sub2api-safety.md"], "test_files": ["tests/config.test.ts", "tests/formal-pool-safety-doc.test.ts"],
+    "verification_command": "npm exec tsx tests/config.test.ts && npm exec tsx tests/formal-pool-safety-doc.test.ts", "evidence_artifact": "phase-0/gateway-compromise-boundary.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["protected_gateway production and real-canary authority remain disabled pending mandatory Phase 4 policy broker verification", "task commit is not yet bound by the Phase 0 exit receipt"],
     "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
   },
   {

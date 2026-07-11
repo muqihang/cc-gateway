@@ -62,6 +62,13 @@ test('formal-pool Sub2API safety doc records safe field matrix and degraded clai
     'explicit user approval',
     'no 3012 changes',
     'Known degraded claims',
+    'gateway_compromise_boundary',
+    'protected_gateway',
+    'trusted_gateway',
+    'protected_gateway_authority_unavailable',
+    'Phase 4 policy broker',
+    'compromised Gateway is outside the sidecar prevention boundary',
+    'does not block Phase 0 governance exit',
     'WebSearch/WebFetch bridge is not part of this P0',
     '2.1.179 strict native mimicry and sign-primary remain gated on oracle/profile evidence',
   ]
