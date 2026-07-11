@@ -91,8 +91,9 @@ test('declared main root reports declared_root', () => {
   const { root, gatewayRoot } = workspace()
   const sub2apiRoot = join(root, 'declared-sub2api')
   mkdirSync(sub2apiRoot)
-  createRepository(sub2apiRoot, 'main')
-  const result = resolveFormalPoolContract({ gatewayRoot, sub2apiRoot })
+  const repo = createRepository(sub2apiRoot, 'main')
+  const manifestPath = writeManifest(gatewayRoot, sub2apiRoot, 'main', repo.head, repo.digest)
+  const result = resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath })
   assert.equal(result.sourceCategory, 'declared_root')
 })
 
@@ -118,6 +119,19 @@ test('feature worktree is rejected without a matching committed manifest', () =>
   assert.throws(() => resolveFormalPoolContract({ gatewayRoot, sub2apiRoot }), /manifest/i)
 })
 
+test('explicit feature-worktree path is rejected without an explicitly declared root', () => {
+  const { root, gatewayRoot } = workspace()
+  const sub2apiRoot = join(root, 'feature-worktree')
+  mkdirSync(sub2apiRoot)
+  const repo = createRepository(sub2apiRoot, 'feature/formal-pool')
+  const manifestPath = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest)
+  assert.throws(() => resolveFormalPoolContract({
+    explicitPath: join(sub2apiRoot, contractRelativePath),
+    gatewayRoot,
+    manifestPath,
+  }), /explicit.*root|declared.*root|sub2apiRoot/i)
+})
+
 test('declared feature worktree requires matching role path category HEAD branch digest and realpath', () => {
   const { root, gatewayRoot } = workspace()
   const sub2apiRoot = join(root, 'feature-worktree')
@@ -127,7 +141,12 @@ test('declared feature worktree requires matching role path category HEAD branch
   const result = resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath })
   assert.equal(result.sourceCategory, 'declared_worktree')
 
-  let invalid = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest, { repositories: { wrong_role: { branch: 'feature/formal-pool', head: repo.head } } })
+  let invalid = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest, { contract: { path_category: 'sub2api_formal_pool_contract', repository_relative_path_base64url: Buffer.from(contractRelativePath).toString('base64url'), sha256: repo.digest } })
+  assert.throws(() => resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath: invalid }), /contract role|repository_role|Sub2API/i)
+  invalid = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest, { contract: { repository_role: 'cc_gateway', path_category: 'sub2api_formal_pool_contract', repository_relative_path_base64url: Buffer.from(contractRelativePath).toString('base64url'), sha256: repo.digest } })
+  assert.throws(() => resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath: invalid }), /contract role|repository_role|Sub2API/i)
+
+  invalid = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest, { repositories: { wrong_role: { branch: 'feature/formal-pool', head: repo.head } } })
   assert.throws(() => resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath: invalid }), /role/i)
   invalid = writeManifest(gatewayRoot, sub2apiRoot, 'feature/formal-pool', repo.head, repo.digest, { contract: { repository_role: 'sub2api', path_category: 'wrong', repository_relative_path_base64url: Buffer.from(contractRelativePath).toString('base64url'), sha256: repo.digest } })
   assert.throws(() => resolveFormalPoolContract({ gatewayRoot, sub2apiRoot, manifestPath: invalid }), /path category/i)

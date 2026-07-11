@@ -44,8 +44,9 @@
     "contract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path_category", "repository_relative_path_base64url", "sha256"],
+      "required": ["repository_role", "path_category", "repository_relative_path_base64url", "sha256"],
       "properties": {
+        "repository_role": { "const": "sub2api" },
         "path_category": { "const": "sub2api_formal_pool_contract" },
         "repository_relative_path_base64url": { "$ref": "#/$defs/base64url" },
         "sha256": { "$ref": "#/$defs/sha256" }

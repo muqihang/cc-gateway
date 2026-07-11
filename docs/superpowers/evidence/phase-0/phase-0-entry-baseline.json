@@ -841,6 +841,7 @@
     }
   },
   "contract": {
+    "repository_role": "sub2api",
     "path_category": "sub2api_formal_pool_contract",
     "repository_relative_path_base64url": "YmFja2VuZC9pbnRlcm5hbC9zZXJ2aWNlL3Rlc3RkYXRhL2NjX2dhdGV3YXlfZm9ybWFsX3Bvb2xfY29udHJhY3QvdmVjdG9ycy5qc29u",
     "sha256": "70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"

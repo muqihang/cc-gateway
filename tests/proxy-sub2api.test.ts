@@ -1,4 +1,5 @@
 import { strict as assert } from 'assert'
+import { execFileSync } from 'child_process'
 import { createHmac } from 'crypto'
 import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -32,7 +33,7 @@ const sharedContract = resolveFormalPoolContract({
 const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
   ? 'explicit_env'
   : process.env.SUB2API_ROOT
-    ? process.env.ORACLE_LAB_MANIFEST_PATH ? 'declared_worktree' : 'declared_root'
+    ? execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: process.env.SUB2API_ROOT, encoding: 'utf8' }).trim() === 'main' ? 'declared_root' : 'declared_worktree'
     : 'sibling_main'
 assert.equal(sharedContract.sourceCategory, expectedSourceCategory)
 assert.equal(sharedContract.digest, '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1')

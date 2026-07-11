@@ -103,7 +103,7 @@ function validateManifest(input: {
     }
     if (manifestRootReal !== input.rootReal) throw new Error('manifest Sub2API realpath does not match declared root')
   }
-  if (manifest.contract?.repository_role !== undefined && manifest.contract.repository_role !== 'sub2api') {
+  if (manifest.contract?.repository_role !== 'sub2api') {
     throw new Error('manifest contract role is not Sub2API')
   }
   if (manifest.contract?.path_category !== contractPathCategory) throw new Error('manifest contract path category does not match')
@@ -185,6 +185,7 @@ export function resolveFormalPoolContract(input: {
   observedDigests.set(contractReal, contractDigest)
 
   if (branch !== 'main') {
+    if (!input.sub2apiRoot) throw new Error('explicit feature-worktree contract requires an explicitly declared sub2apiRoot')
     validateManifest({ gatewayRoot, manifestPath: input.manifestPath, rootReal, branch, head, contractDigest })
     if (sourceCategory !== 'explicit_env') sourceCategory = 'declared_worktree'
   }
