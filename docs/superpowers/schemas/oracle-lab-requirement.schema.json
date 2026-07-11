@@ -32,14 +32,29 @@
       ]
     },
     "owner": { "type": "string" },
-    "repository": { "type": "string", "minLength": 1 },
+    "repository": { "$ref": "#/$defs/repository" },
     "implementation_files": { "$ref": "#/$defs/stringArray" },
     "test_files": { "$ref": "#/$defs/stringArray" },
     "verification_command": { "type": "string" },
     "evidence_artifact": { "type": "string" },
-    "last_verified_commit": { "type": ["string", "null"] },
-    "last_verified_at": { "type": ["string", "null"], "format": "date-time" },
-    "expiry": { "type": ["string", "null"], "format": "date-time" },
+    "last_verified_commit": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "null" }
+      ]
+    },
+    "last_verified_at": {
+      "oneOf": [
+        { "$ref": "#/$defs/rfc3339Timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "expiry": {
+      "oneOf": [
+        { "$ref": "#/$defs/rfc3339Timestamp" },
+        { "type": "null" }
+      ]
+    },
     "known_gaps": { "$ref": "#/$defs/stringArray" },
     "canary_evidence_ids": { "$ref": "#/$defs/stringArray" },
     "production_gate_ids": { "$ref": "#/$defs/stringArray" },
@@ -50,22 +65,94 @@
     },
     "contradiction_ids": { "$ref": "#/$defs/stringArray" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "implementation_status": { "const": "production_verified" } },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": {
+          "last_verified_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "last_verified_at": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "expiry": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "canary_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "production_gate_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "rollback_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "deployed_artifacts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/deployedArtifact" } },
+          "contradiction_ids": { "type": "array", "maxItems": 0 }
+        }
+      },
+      "else": {
+        "properties": {
+          "expiry": { "type": "null" },
+          "canary_evidence_ids": { "type": "array", "maxItems": 0 },
+          "production_gate_ids": { "type": "array", "maxItems": 0 },
+          "rollback_evidence_ids": { "type": "array", "maxItems": 0 },
+          "deployed_artifacts": { "type": "array", "maxItems": 0 },
+          "contradiction_ids": { "type": "array", "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "implementation_status": {
+            "enum": ["locally_verified", "upstream_canary_observed", "production_verified"]
+          }
+        },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": {
+          "last_verified_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "last_verified_at": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "implementation_files": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "test_files": { "$ref": "#/$defs/nonEmptyStringArray" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "implementation_status": { "const": "failing_test_added" } },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": { "test_files": { "$ref": "#/$defs/nonEmptyStringArray" } }
+      }
+    }
+  ],
   "$defs": {
     "stringArray": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "uniqueItems": true
     },
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^(?!.*(?:\\.\\.|//))(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
+    },
+    "rfc3339Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
     "deployedArtifact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["repository", "commit", "config_digest", "manifest_digest", "deployed_at"],
       "properties": {
-        "repository": { "type": "string", "minLength": 1 },
-        "commit": { "type": "string", "minLength": 1 },
-        "config_digest": { "type": "string", "minLength": 1 },
-        "manifest_digest": { "type": "string", "minLength": 1 },
-        "deployed_at": { "type": "string", "format": "date-time" }
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "config_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "deployed_at": { "$ref": "#/$defs/rfc3339Timestamp" }
       }
     }
   }
