@@ -209,6 +209,7 @@ assert.equal(manifest.legacy_comparison.requirement_id, 'OL-LEGACY-001');
 assert.equal(manifest.legacy_comparison.version, '2.1.197');
 assert.equal(manifest.legacy_comparison.authority, 'unverified_legacy');
 assert.equal(manifest.legacy_comparison.promotion_eligible, false);
+assert.equal(manifest.gateway_compromise_boundary, 'protected_gateway');
 assert.equal(JSON.stringify(manifest).includes(gateway), false);
 assert.equal(JSON.stringify(manifest).includes(sub2api), false);
 assert.equal(readFileSync(contract, 'utf8'), '{"fixture":true}\n');
@@ -236,6 +237,8 @@ expectCode(() => validateReceiptArtifact({ schema_version: '1.0.0', extra: true 
 
 // Runtime validation rejects nested type, enum, digest, policy, legacy, and CodeGraph tampering.
 const nestedTampering: Array<(candidate: any) => void> = [
+  (candidate) => { delete candidate.gateway_compromise_boundary; },
+  (candidate) => { candidate.gateway_compromise_boundary = 'trusted_gateway'; },
   (candidate) => { candidate.repositories.cc_gateway.dirty_record_format = 7; },
   (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: 'XX', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'regular_file', file_mode: '100644', content_sha256: '0'.repeat(64) }]; },
   (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: '??', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'socket', file_mode: '100644' }]; },
@@ -272,10 +275,15 @@ const receiptValue = {
   retention_class: 'phase_evidence_permanent',
   redaction_policy: 'digests_only',
   destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
+  gateway_compromise_boundary: 'protected_gateway',
   manifest_sha256: sha256(manifestBytes),
   schema_sha256: sha256(schemaBytes),
   bootstrap_commit: PHASE_0_BINDINGS.ccGatewayHead,
 };
+const receiptWithoutBoundary = clone(receiptValue) as any;
+delete receiptWithoutBoundary.gateway_compromise_boundary;
+expectCode(() => validateReceiptArtifact(receiptWithoutBoundary), 'receipt_schema_invalid');
+expectCode(() => validateReceiptArtifact({ ...receiptValue, gateway_compromise_boundary: 'trusted_gateway' }), 'receipt_schema_invalid');
 
 // Evidence writes validate the supplied manifest/schema linkage before staging either file.
 const pairRoot = mkdtempSync(path.join(tmpdir(), 'oracle-evidence-pair-'));
@@ -301,6 +309,8 @@ assert.equal(existsSync(`${pairReceipt}.tmp`), false);
 
 // The published schema carries the same strict nested constraints as runtime validation.
 const publishedSchema = JSON.parse(schemaBytes.toString('utf8'));
+assert.ok(publishedSchema.required.includes('gateway_compromise_boundary'));
+assert.deepEqual(publishedSchema.properties.gateway_compromise_boundary, { const: 'protected_gateway' });
 assert.ok(publishedSchema.$defs.repository.required.includes('dirty_record_format'));
 assert.deepEqual(publishedSchema.properties.dependencies.properties.runtime_toolchain.properties.node, { $ref: '#/$defs/sha256' });
 assert.deepEqual(publishedSchema.$defs.dirtyRecord.properties.object_type.enum, ['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);

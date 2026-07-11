@@ -7,6 +7,7 @@
   "phase": "phase_0_entry",
   "entry_kind": "phase_0_entry",
   "approved_tool_head": "b9745da781397111a77465a1afb6bbbcb7cfd692",
+  "gateway_compromise_boundary": "protected_gateway",
   "repositories": {
     "cc_gateway": {
       "head": "b9745da781397111a77465a1afb6bbbcb7cfd692",

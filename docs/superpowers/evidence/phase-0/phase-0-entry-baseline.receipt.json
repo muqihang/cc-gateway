@@ -4,7 +4,8 @@
   "retention_class": "phase_evidence_permanent",
   "redaction_policy": "digests_only",
   "destruction_procedure": "git_revert_artifact_commit_after_security_approval",
-  "manifest_sha256": "4deec7f96e6c272101c8f6097b783b303bf1bec68ff385861938e9e5ca399ee7",
-  "schema_sha256": "e4dacc91d78c243a2ab3b134c9c49de33da39aba8bba479ebb86c4c4b873d75b",
+  "gateway_compromise_boundary": "protected_gateway",
+  "manifest_sha256": "00c2d01fa02604847daf4258f4f0e8f9100c1cbf1cd3791553ad6fb6941f6c17",
+  "schema_sha256": "ab3f988786be5523b5c0510eb8eb434ed79ba77a1923cdd59aff07a4ee76d6c8",
   "bootstrap_commit": "b9745da781397111a77465a1afb6bbbcb7cfd692"
 }

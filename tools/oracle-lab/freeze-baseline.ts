@@ -86,6 +86,7 @@ class BaselineError extends Error {
 
 const EMPTY_SHA256 = sha256(Buffer.alloc(0));
 const GOVERNANCE_ABSENCE = 'absent_pre_governance_bootstrap' as const;
+const GATEWAY_COMPROMISE_BOUNDARY = 'protected_gateway' as const;
 const RECORD_FORMAT = 'u32be_length_prefixed_fields(status,destination,source,object_type,file_mode,content_sha256,symlink_target_sha256,deletion_marker,submodule_head,submodule_dirty); records sorted by destination bytes then source bytes; sha256(records || git_diff_binary_head)';
 
 function sha256(value: Buffer | string): string {
@@ -374,9 +375,9 @@ function validateDigestMarker(value: unknown): void {
 }
 
 function validateManifestArtifactAgainstBindings(value: unknown, bindings: FrozenBindings): void {
-  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'gateway_compromise_boundary', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
   const v = value as any;
-  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head) || v.gateway_compromise_boundary !== GATEWAY_COMPROMISE_BOUNDARY) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
   exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
   exactObject(v.contract, ['path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (v.contract.path_category !== 'sub2api_formal_pool_contract' || !validPathBytes(v.contract.repository_relative_path_base64url) || !validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract');
   exactObject(v.governance, ['requirement_registry', 'claim_registry'], 'manifest_schema_invalid'); validateGovernanceMarkers(v.governance);
@@ -402,9 +403,9 @@ export function validateManifestArtifact(value: unknown): void {
 }
 
 export function validateReceiptArtifact(value: unknown): void {
-  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'manifest_sha256', 'schema_sha256', 'bootstrap_commit'], 'receipt_schema_invalid');
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'gateway_compromise_boundary', 'manifest_sha256', 'schema_sha256', 'bootstrap_commit'], 'receipt_schema_invalid');
   const v = value as any;
-  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !validCommit(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || v.gateway_compromise_boundary !== GATEWAY_COMPROMISE_BOUNDARY || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !validCommit(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
 }
 
 function writeEvidencePairWithBindings(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer, bindings: FrozenBindings): void {
@@ -474,6 +475,7 @@ function captureBaselineWithBindings(options: BaselineOptions, bindings: FrozenB
     phase: 'phase_0_entry',
     entry_kind: 'phase_0_entry',
     approved_tool_head: options.approvedToolHead,
+    gateway_compromise_boundary: GATEWAY_COMPROMISE_BOUNDARY,
     repositories: { cc_gateway: ccState, sub2api: subState },
     contract: {
       path_category: 'sub2api_formal_pool_contract',
@@ -621,6 +623,7 @@ function executeFreezeBaseline(argv: string[], runtime: CliRuntime): void {
     retention_class: 'phase_evidence_permanent',
     redaction_policy: 'digests_only',
     destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
+    gateway_compromise_boundary: manifest.gateway_compromise_boundary,
     manifest_sha256: sha256(manifestBytes),
     schema_sha256: sha256(readFileSync(schemaPath)),
     bootstrap_commit: args['approved-tool-head'],

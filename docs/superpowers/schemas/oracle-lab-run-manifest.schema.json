@@ -13,6 +13,7 @@
     "phase",
     "entry_kind",
     "approved_tool_head",
+    "gateway_compromise_boundary",
     "repositories",
     "contract",
     "governance",
@@ -30,6 +31,7 @@
     "phase": { "enum": ["phase_0_entry", "phase_0_exit"] },
     "entry_kind": { "enum": ["phase_0_entry", "phase_0_exit"] },
     "approved_tool_head": { "$ref": "#/$defs/gitCommit" },
+    "gateway_compromise_boundary": { "const": "protected_gateway" },
     "repositories": {
       "type": "object",
       "additionalProperties": false,

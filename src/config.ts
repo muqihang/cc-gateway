@@ -50,6 +50,16 @@ export type EgressBucketConfig = {
   tls_profile_ref?: string
 }
 
+export class ConfigValidationError extends Error {
+  readonly code: string
+
+  constructor(code: string) {
+    super(`config: ${code}`)
+    this.name = 'ConfigValidationError'
+    this.code = code
+  }
+}
+
 export type FormalPoolMCPConnectorConfig = {
   enabled?: boolean
   mode?: 'official_remote_https' | string
@@ -256,6 +266,13 @@ export function isProductionFormalPool(config: Config): boolean {
     && (sharedPool?.upstream_mode === 'production' || sharedPool?.production_upstream_enabled === true)
 }
 
+function isProductionLikeFormalPool(sharedPool: Record<string, unknown>): boolean {
+  return sharedPool.upstream_mode === 'production'
+    || sharedPool.upstream_mode === 'real-canary'
+    || sharedPool.production_upstream_enabled === true
+    || sharedPool.real_canary_user_approved === true
+}
+
 function resolveContextAttestationSecret(sharedPool: Record<string, unknown> | undefined): string {
   const direct = typeof sharedPool?.context_attestation_secret === 'string' ? sharedPool.context_attestation_secret.trim() : ''
   if (direct) return direct
@@ -383,8 +400,8 @@ function validateGatewayCompromiseBoundary(config: Config): void {
 
   const upstreamMode = sharedPool.upstream_mode
   const protectedLocalMode = upstreamMode === 'preflight' || upstreamMode === 'local-capture'
-  if (boundary === 'protected_gateway' && !protectedLocalMode) {
-    throw new Error('config: protected_gateway_authority_unavailable')
+  if (boundary === 'protected_gateway' && (!protectedLocalMode || isProductionLikeFormalPool(sharedPool))) {
+    throw new ConfigValidationError('protected_gateway_authority_unavailable')
   }
 }
 

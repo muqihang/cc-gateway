@@ -177,7 +177,30 @@ test('protected_gateway fails closed for production and real canary until broker
         '  gateway_compromise_boundary: protected_gateway\n',
         upstreamYaml,
       ))),
-      /protected_gateway_authority_unavailable/,
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'protected_gateway_authority_unavailable')
+        assert.equal((error as Error).message, 'config: protected_gateway_authority_unavailable')
+        return true
+      },
+    )
+  }
+})
+
+test('protected_gateway rejects production-like approval booleans even when upstream mode is local', () => {
+  for (const upstreamYaml of [
+    '  upstream_mode: local-capture\n  production_upstream_enabled: true\n',
+    '  upstream_mode: preflight\n  real_canary_user_approved: true\n',
+  ]) {
+    assert.throws(
+      () => loadConfig(writeConfigYaml(gatewayBoundaryConfigYaml(
+        '  gateway_compromise_boundary: protected_gateway\n',
+        upstreamYaml,
+      ))),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, 'protected_gateway_authority_unavailable')
+        assert.equal((error as Error).message, 'config: protected_gateway_authority_unavailable')
+        return true
+      },
     )
   }
 })
