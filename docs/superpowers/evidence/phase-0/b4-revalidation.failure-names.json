@@ -1,0 +1,15 @@
+{
+  "requirement_id": "AV-B4-001",
+  "content": "stable_leaf_failure_test_names_only",
+  "digest_algorithm": "SHA-256 over UTF-8 names sorted bytewise, unique, joined by LF, with one trailing LF",
+  "reproduction_command": "export LC_ALL=C; jq -r '.failure_names[]' docs/superpowers/evidence/phase-0/b4-revalidation.failure-names.json | sort -u | shasum -a 256",
+  "failure_names": [
+    "B4 denies direct fallback enabled before DNS or socket creation",
+    "B4 denies disabled profile before DNS or socket creation",
+    "B4 denies mismatched proxy generation before DNS or socket creation",
+    "B4 denies missing manifest authority before DNS or socket creation",
+    "B4 denies missing proxy generation before DNS or socket creation",
+    "B4 denies missing verified context before DNS or socket creation",
+    "B4 denies unknown manifest authority before DNS or socket creation"
+  ]
+}
