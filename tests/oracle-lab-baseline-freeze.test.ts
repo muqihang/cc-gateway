@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -9,6 +10,7 @@ import {
   validateGovernanceMarkers,
   validateManifestArtifact,
   validateReceiptArtifact,
+  writeEvidencePair,
   PHASE_0_BINDINGS,
   parsePorcelainPathRecords,
   validateFrozenBindings,
@@ -34,6 +36,14 @@ function expectCode(fn: () => unknown, code: string): void {
     assert.equal((error as { code?: string }).code, code);
     return true;
   });
+}
+
+function sha256(value: Buffer | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 const tracked = fixture('tracked');
@@ -136,6 +146,78 @@ expectCode(() => validateFrozenBindings(frozenState, frozenSubState, PHASE_0_BIN
 // Strict schema rejects unknown nested fields and the CLI artifact validators enforce both artifacts.
 expectCode(() => validateManifestArtifact({ ...manifest, repositories: { ...manifest.repositories, cc_gateway: { ...manifest.repositories.cc_gateway, extra: true } } }), 'manifest_schema_invalid');
 expectCode(() => validateReceiptArtifact({ schema_version: '1.0.0', extra: true }), 'receipt_schema_invalid');
+
+// Runtime validation rejects nested type, enum, digest, policy, legacy, and CodeGraph tampering.
+const nestedTampering: Array<(candidate: any) => void> = [
+  (candidate) => { candidate.repositories.cc_gateway.dirty_record_format = 7; },
+  (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: 'XX', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'regular_file', file_mode: '100644', content_sha256: '0'.repeat(64) }]; },
+  (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: '??', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'socket', file_mode: '100644' }]; },
+  (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: '??', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'regular_file', file_mode: '777777', content_sha256: '0'.repeat(64) }]; },
+  (candidate) => { candidate.repositories.cc_gateway.dirty_records = [{ status: ' M', destination_path_base64url: 'dHJhY2tlZC50eHQ', object_type: 'regular_file', file_mode: '100644', content_sha256: 'not-a-sha' }]; },
+  (candidate) => { candidate.repositories.cc_gateway.ignored_exclusion_rules = [{ source_category: 9, rule_sha256: '0'.repeat(64) }]; },
+  (candidate) => { candidate.dependencies.runtime_toolchain.node = 'not-a-sha'; },
+  (candidate) => { candidate.dependencies.runtime_toolchain.go = { status: 'present', sha256: '0'.repeat(64), provenance: '' }; },
+  (candidate) => { candidate.contract.path_category = 'arbitrary_contract'; },
+  (candidate) => { candidate.contract.repository_relative_path_base64url = 42; },
+  (candidate) => { candidate.policies.network.real_upstream_requests = 'allowed'; },
+  (candidate) => { candidate.policies.network.local_fixture_only = false; },
+  (candidate) => { candidate.policies.sensitivity.persisted_material = 'raw_allowed'; },
+  (candidate) => { candidate.policies.sensitivity.forbidden = ['raw_prompt']; },
+  (candidate) => { candidate.legacy_comparison.requirement_id = 'OL-LEGACY-999'; },
+  (candidate) => { candidate.legacy_comparison.use = 'promotion_candidate'; },
+  (candidate) => { candidate.legacy_comparison.promotion_eligible = true; },
+  (candidate) => { candidate.legacy_comparison.tuple_digests.persona = { status: 'present', sha256: 'bad' }; },
+  (candidate) => { candidate.codegraph = { status: 'present', fallback_reason: 'wrong field' }; },
+  (candidate) => { candidate.codegraph = { status: 'absent', index_sha256: '0'.repeat(64) }; },
+];
+for (const tamper of nestedTampering) {
+  const candidate = clone(manifest);
+  tamper(candidate);
+  expectCode(() => validateManifestArtifact(candidate), 'manifest_schema_invalid');
+}
+
+const schemaPath = path.join(process.cwd(), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
+const schemaBytes = readFileSync(schemaPath);
+const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+const receiptValue = {
+  schema_version: '1.0.0',
+  compatibility_policy: 'fail_closed_exact_schema',
+  retention_class: 'phase_evidence_permanent',
+  redaction_policy: 'digests_only',
+  destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
+  manifest_sha256: sha256(manifestBytes),
+  schema_sha256: sha256(schemaBytes),
+  bootstrap_commit: common.approvedToolHead,
+};
+
+// Evidence writes validate the supplied manifest/schema linkage before staging either file.
+const pairRoot = mkdtempSync(path.join(tmpdir(), 'oracle-evidence-pair-'));
+const pairManifest = path.join(pairRoot, 'manifest.json');
+const pairReceipt = path.join(pairRoot, 'manifest.receipt.json');
+expectCode(
+  () => writeEvidencePair(pairManifest, manifest, pairReceipt, { ...receiptValue, manifest_sha256: '0'.repeat(64) }, schemaBytes),
+  'receipt_digest_mismatch',
+);
+assert.equal(existsSync(pairManifest), false);
+assert.equal(existsSync(pairReceipt), false);
+assert.equal(existsSync(`${pairManifest}.tmp`), false);
+assert.equal(existsSync(`${pairReceipt}.tmp`), false);
+expectCode(
+  () => writeEvidencePair(pairManifest, manifest, pairReceipt, { ...receiptValue, schema_sha256: '0'.repeat(64) }, schemaBytes),
+  'receipt_digest_mismatch',
+);
+writeEvidencePair(pairManifest, manifest, pairReceipt, receiptValue, schemaBytes);
+assert.equal(sha256(readFileSync(pairManifest)), receiptValue.manifest_sha256);
+assert.equal(JSON.parse(readFileSync(pairReceipt, 'utf8')).schema_sha256, receiptValue.schema_sha256);
+assert.equal(existsSync(`${pairManifest}.tmp`), false);
+assert.equal(existsSync(`${pairReceipt}.tmp`), false);
+
+// The published schema carries the same strict nested constraints as runtime validation.
+const publishedSchema = JSON.parse(schemaBytes.toString('utf8'));
+assert.ok(publishedSchema.$defs.repository.required.includes('dirty_record_format'));
+assert.deepEqual(publishedSchema.properties.dependencies.properties.runtime_toolchain.properties.node, { $ref: '#/$defs/sha256' });
+assert.deepEqual(publishedSchema.$defs.dirtyRecord.properties.object_type.enum, ['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);
+assert.ok(Array.isArray(publishedSchema.properties.codegraph.oneOf));
 
 // Output parent realpath containment rejects a symlinked parent.
 const outputRoot = mkdtempSync(path.join(tmpdir(), 'oracle-output-'));

@@ -313,45 +313,81 @@ function exactObject(value: unknown, keys: string[], code: string): asserts valu
 
 function validSha(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value); }
 function validCommit(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value); }
+function validPathBytes(value: unknown): boolean { return typeof value === 'string' && value.length > 0 && /^[A-Za-z0-9_-]+$/.test(value); }
+const DIRTY_STATUSES = new Set(['??', '!!', 'SM', ' M', 'M ', 'MM', ' T', 'T ', 'TT', 'A ', 'AM', 'AT', ' D', 'D ', 'DT', 'R ', 'RM', 'RT', 'C ', 'CM', 'CT', 'DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+const OBJECT_TYPES = new Set(['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);
+const FILE_MODES = new Set(['000000', '040000', '100644', '100755', '120000', '160000']);
+const ABSENT_REASON = 'path_not_present_at_entry';
 function validateRepositoryArtifact(value: unknown): void {
   exactObject(value, ['head', 'branch', 'clean', 'dirty_digest', 'dirty_records', 'dirty_record_format', 'ignored_exclusion_rules'], 'manifest_schema_invalid');
-  if (typeof (value as any).branch !== 'string' || typeof (value as any).clean !== 'boolean' || !validCommit((value as any).head) || !validSha((value as any).dirty_digest) || !Array.isArray((value as any).dirty_records) || !Array.isArray((value as any).ignored_exclusion_rules)) throw new BaselineError('manifest_schema_invalid', 'invalid repository properties');
+  const repository = value as any;
+  if (typeof repository.branch !== 'string' || repository.branch.length === 0 || typeof repository.clean !== 'boolean' || !validCommit(repository.head) || !validSha(repository.dirty_digest) || repository.dirty_record_format !== RECORD_FORMAT || !Array.isArray(repository.dirty_records) || !Array.isArray(repository.ignored_exclusion_rules)) throw new BaselineError('manifest_schema_invalid', 'invalid repository properties');
   for (const record of (value as any).dirty_records) {
-    exactObject(record, ['status', 'destination_path_base64url', 'object_type', 'file_mode', ...(record.source_path_base64url ? ['source_path_base64url'] : []), ...(record.content_sha256 ? ['content_sha256'] : []), ...(record.symlink_target_sha256 ? ['symlink_target_sha256'] : []), ...(record.deletion_marker ? ['deletion_marker'] : []), ...(record.submodule_head ? ['submodule_head'] : []), ...(record.submodule_dirty !== undefined ? ['submodule_dirty'] : [])], 'manifest_schema_invalid');
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new BaselineError('manifest_schema_invalid', 'invalid dirty record');
+    const keys = ['status', 'destination_path_base64url', 'object_type', 'file_mode', 'source_path_base64url', 'content_sha256', 'symlink_target_sha256', 'deletion_marker', 'submodule_head', 'submodule_dirty'];
+    if (Object.keys(record).some((key) => !keys.includes(key))) throw new BaselineError('manifest_schema_invalid', 'unknown dirty record field');
+    if (typeof record.status !== 'string' || !DIRTY_STATUSES.has(record.status) || !validPathBytes(record.destination_path_base64url) || (record.source_path_base64url !== undefined && !validPathBytes(record.source_path_base64url)) || !OBJECT_TYPES.has(record.object_type) || !FILE_MODES.has(record.file_mode)) throw new BaselineError('manifest_schema_invalid', 'invalid dirty record fields');
+    if (record.content_sha256 !== undefined && !validSha(record.content_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid content digest');
+    if (record.symlink_target_sha256 !== undefined && !validSha(record.symlink_target_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid symlink digest');
+    if (record.deletion_marker !== undefined && record.deletion_marker !== true) throw new BaselineError('manifest_schema_invalid', 'invalid deletion marker');
+    if (record.submodule_head !== undefined && !validCommit(record.submodule_head)) throw new BaselineError('manifest_schema_invalid', 'invalid submodule head');
+    if (record.submodule_dirty !== undefined && typeof record.submodule_dirty !== 'boolean') throw new BaselineError('manifest_schema_invalid', 'invalid submodule dirty state');
+    if (record.object_type === 'regular_file' && !validSha(record.content_sha256)) throw new BaselineError('manifest_schema_invalid', 'regular file requires content digest');
+    if (record.object_type === 'symlink' && !validSha(record.symlink_target_sha256)) throw new BaselineError('manifest_schema_invalid', 'symlink requires target digest');
+    if (record.object_type === 'deleted' && record.deletion_marker !== true) throw new BaselineError('manifest_schema_invalid', 'deleted record requires deletion marker');
+    if (record.object_type === 'submodule' && (!validCommit(record.submodule_head) || typeof record.submodule_dirty !== 'boolean')) throw new BaselineError('manifest_schema_invalid', 'submodule requires provenance');
+  }
+  for (const rule of repository.ignored_exclusion_rules) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) throw new BaselineError('manifest_schema_invalid', 'invalid exclusion rule');
+    exactObject(rule, ['source_category', ...(rule.source_path_base64url === undefined ? [] : ['source_path_base64url']), 'rule_sha256'], 'manifest_schema_invalid');
+    if (!['repository_gitignore', 'repository_info_exclude', 'global_excludes'].includes(rule.source_category) || (rule.source_path_base64url !== undefined && !validPathBytes(rule.source_path_base64url)) || !validSha(rule.rule_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid exclusion rule');
   }
 }
 
 function validateDigestMarker(value: unknown): void {
   const marker = value as any;
-  exactObject(marker, marker?.status === 'present' ? ['status', 'sha256'] : ['status', 'reason'], 'manifest_schema_invalid');
-  if (marker.status === 'present' ? !validSha(marker.sha256) : marker.status !== 'absent' || typeof marker.reason !== 'string') throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
+  if (marker.status === 'present') { exactObject(marker, ['status', 'sha256'], 'manifest_schema_invalid'); if (!validSha(marker.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker'); return; }
+  exactObject(marker, ['status', 'reason'], 'manifest_schema_invalid');
+  if (marker.status !== 'absent' || marker.reason !== ABSENT_REASON) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
 }
 
 export function validateManifestArtifact(value: unknown): void {
   exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
   const v = value as any;
-  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.phase !== 'phase_0_entry' || !/^[0-9a-f]{40,64}$/.test(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || v.phase !== 'phase_0_entry' || !validCommit(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
   exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
-  exactObject(v.contract, ['path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract digest');
+  exactObject(v.contract, ['path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (v.contract.path_category !== 'sub2api_formal_pool_contract' || !validPathBytes(v.contract.repository_relative_path_base64url) || !validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract');
   exactObject(v.governance, ['requirement_registry', 'claim_registry'], 'manifest_schema_invalid'); validateGovernanceMarkers(v.governance);
-  exactObject(v.policies, ['network', 'sensitivity'], 'manifest_schema_invalid'); exactObject(v.policies.network, ['real_upstream_requests', 'local_fixture_only'], 'manifest_schema_invalid'); exactObject(v.policies.sensitivity, ['persisted_material', 'forbidden'], 'manifest_schema_invalid');
+  exactObject(v.policies, ['network', 'sensitivity'], 'manifest_schema_invalid'); exactObject(v.policies.network, ['real_upstream_requests', 'local_fixture_only'], 'manifest_schema_invalid'); if (v.policies.network.real_upstream_requests !== 'forbidden' || v.policies.network.local_fixture_only !== true) throw new BaselineError('manifest_schema_invalid', 'invalid network policy'); exactObject(v.policies.sensitivity, ['persisted_material', 'forbidden'], 'manifest_schema_invalid'); if (v.policies.sensitivity.persisted_material !== 'safe_categories_and_sha256_digests_only' || !Array.isArray(v.policies.sensitivity.forbidden) || JSON.stringify(v.policies.sensitivity.forbidden) !== JSON.stringify(['raw_prompt', 'raw_body', 'credential', 'raw_cch', 'raw_client_hello', 'account_identifier', 'proxy_credential'])) throw new BaselineError('manifest_schema_invalid', 'invalid sensitivity policy');
   const dependencyKeys = ['persona_registry', 'persona_resolver', 'request_policy', 'tls_registry', 'cch_request_construction', 'sidecar_profile', 'sidecar_summary', 'package_manifest', 'package_lock', 'sidecar_go_manifest', 'sidecar_go_lock', 'repository_root_metadata', 'tools', 'observer_parser_canonicalizer', 'runtime_toolchain'];
   exactObject(v.dependencies, dependencyKeys, 'manifest_schema_invalid');
   for (const key of dependencyKeys.slice(0, 11)) validateDigestMarker(v.dependencies[key]);
   exactObject(v.dependencies.repository_root_metadata, ['cc_gateway_augmentroot', 'sub2api_augmentroot'], 'manifest_schema_invalid'); validateDigestMarker(v.dependencies.repository_root_metadata.cc_gateway_augmentroot); validateDigestMarker(v.dependencies.repository_root_metadata.sub2api_augmentroot);
-  for (const list of [v.dependencies.tools, v.dependencies.observer_parser_canonicalizer]) { if (!Array.isArray(list)) throw new BaselineError('manifest_schema_invalid', 'dependency file list must be an array'); for (const item of list) { exactObject(item, ['path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validSha(item.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency file digest'); } }
+  for (const list of [v.dependencies.tools, v.dependencies.observer_parser_canonicalizer]) { if (!Array.isArray(list)) throw new BaselineError('manifest_schema_invalid', 'dependency file list must be an array'); for (const item of list) { exactObject(item, ['path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validPathBytes(item.path_base64url) || !validSha(item.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency file digest'); } }
   exactObject(v.dependencies.runtime_toolchain, ['node', 'git', 'npm', 'go'], 'manifest_schema_invalid');
   if (!validSha(v.dependencies.runtime_toolchain.node) || !validSha(v.dependencies.runtime_toolchain.git) || !validSha(v.dependencies.runtime_toolchain.npm)) throw new BaselineError('manifest_schema_invalid', 'invalid runtime digest');
   const go = v.dependencies.runtime_toolchain.go; exactObject(go, go?.status === 'present' ? ['status', 'sha256', 'provenance'] : ['status', 'reason', 'required'], 'manifest_schema_invalid');
-  if (go.status === 'present' ? !validSha(go.sha256) || typeof go.provenance !== 'string' : go.status !== 'absent' || go.reason !== 'tool_not_found' || typeof go.required !== 'boolean') throw new BaselineError('manifest_schema_invalid', 'invalid Go provenance');
-  exactObject(v.codegraph, v.codegraph.status === 'present' ? ['status', 'index_sha256'] : ['status', 'fallback_reason'], 'manifest_schema_invalid');
+  if (go.status === 'present' ? !validSha(go.sha256) || typeof go.provenance !== 'string' || go.provenance.length === 0 : go.status !== 'absent' || go.reason !== 'tool_not_found' || go.required !== true) throw new BaselineError('manifest_schema_invalid', 'invalid Go provenance');
+  exactObject(v.codegraph, v.codegraph?.status === 'present' ? ['status', 'index_sha256'] : ['status', 'fallback_reason'], 'manifest_schema_invalid'); if (v.codegraph.status === 'present' ? !validSha(v.codegraph.index_sha256) : v.codegraph.status !== 'absent' || typeof v.codegraph.fallback_reason !== 'string' || v.codegraph.fallback_reason.length === 0) throw new BaselineError('manifest_schema_invalid', 'invalid CodeGraph provenance');
   exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
+  if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
+  exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
 }
 
 export function validateReceiptArtifact(value: unknown): void {
   exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'manifest_sha256', 'schema_sha256', 'bootstrap_commit'], 'receipt_schema_invalid');
   const v = value as any;
-  if (v.schema_version !== '1.0.0' || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !/^[0-9a-f]{40,64}$/.test(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !validCommit(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
+}
+
+export function writeEvidencePair(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer): void {
+  validateManifestArtifact(manifest);
+  validateReceiptArtifact(receiptValue);
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  const validatedReceipt = receiptValue as any;
+  if (validatedReceipt.manifest_sha256 !== sha256(manifestBytes) || validatedReceipt.schema_sha256 !== sha256(schemaBytes)) throw new BaselineError('receipt_digest_mismatch', 'receipt does not bind supplied manifest and schema');
+  writeEvidencePairInternal(out, manifest, receiptPath, receiptValue);
 }
 
 export function validateFrozenBindings(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string): void {
@@ -470,7 +506,7 @@ function writeJsonAtomic(target: string, value: unknown): void {
   renameSync(temporary, target);
 }
 
-function writeEvidencePair(out: string, manifest: unknown, receipt: string, receiptValue: unknown): void {
+function writeEvidencePairInternal(out: string, manifest: unknown, receipt: string, receiptValue: unknown): void {
   const outTemporary = `${out}.tmp`;
   const receiptTemporary = `${receipt}.tmp`;
   writeFileSync(outTemporary, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -510,7 +546,7 @@ function main(): void {
   };
   validateManifestArtifact(manifest);
   validateReceiptArtifact(receiptValue);
-  writeEvidencePair(out, manifest, receipt, receiptValue);
+  writeEvidencePair(out, manifest, receipt, receiptValue, readFileSync(schemaPath));
   console.log(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: true }));
 }
 
