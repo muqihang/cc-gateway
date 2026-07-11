@@ -96,14 +96,21 @@ function add(errors: ValidationError[], code: string, path: string, message: str
 }
 
 export function validateRequirements(path: string): ValidationResult {
-  const errors: ValidationError[] = []
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'))
   } catch (error) {
-    add(errors, 'invalid_registry', '$', error instanceof Error ? error.message : 'registry is unreadable')
-    return { ok: false, errors }
+    return {
+      ok: false,
+      errors: [{ code: 'invalid_registry', path: '$', message: error instanceof Error ? error.message : 'registry is unreadable' }],
+    }
   }
+
+  return validateRequirementRecords(parsed)
+}
+
+export function validateRequirementRecords(parsed: unknown): ValidationResult {
+  const errors: ValidationError[] = []
 
   if (!Array.isArray(parsed)) {
     return { ok: false, errors: [{ code: 'invalid_registry', path: '$', message: 'registry must be an array' }] }

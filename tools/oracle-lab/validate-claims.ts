@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import {
   isRfc3339Timestamp,
+  validateRequirementRecords,
   type ValidationError,
   type ValidationResult,
 } from './validate-requirements.js'
@@ -74,6 +75,18 @@ export function validateClaims(path: string, requirements: RequirementRecord[]):
     return { ok: false, errors: [{ code: 'invalid_registry', path: '$', message: error instanceof Error ? error.message : 'claims are unreadable' }] }
   }
   if (!Array.isArray(parsed)) return { ok: false, errors: [{ code: 'invalid_registry', path: '$', message: 'claims must be an array' }] }
+
+  const requirementValidation = validateRequirementRecords(requirements)
+  if (!requirementValidation.ok) {
+    return {
+      ok: false,
+      errors: requirementValidation.errors.map((error) => ({
+        code: 'invalid_requirement_registry',
+        path: `requirements${error.path === '$' ? '' : error.path.slice(1)}`,
+        message: `${error.code}: ${error.message}`,
+      })),
+    }
+  }
 
   const requirementsById = new Map<string, RequirementRecord>()
   const ambiguousRequirementIds = new Set<string>()

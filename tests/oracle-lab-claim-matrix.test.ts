@@ -67,6 +67,8 @@ function authoritativeRequirement(record: RecordValue): RecordValue {
   return {
     ...record,
     implementation_status: 'production_verified',
+    implementation_files: ['tools/oracle-lab/validate-claims.ts'],
+    test_files: ['tests/oracle-lab-claim-matrix.test.ts'],
     repository: productionArtifact.repository,
     last_verified_commit: productionArtifact.commit,
     last_verified_at: '2026-07-11T18:00:00Z',
@@ -75,6 +77,24 @@ function authoritativeRequirement(record: RecordValue): RecordValue {
     production_gate_ids: ['gate-authoritative'],
     rollback_evidence_ids: ['rollback-authoritative'],
     deployed_artifacts: [productionArtifact],
+    contradiction_ids: [],
+  }
+}
+
+function nonAuthoritativeRequirement(record: RecordValue, status: string): RecordValue {
+  const verified = status === 'locally_verified' || status === 'upstream_canary_observed'
+  return {
+    ...record,
+    implementation_status: status,
+    implementation_files: verified ? ['tools/oracle-lab/validate-claims.ts'] : [],
+    test_files: status === 'failing_test_added' || verified ? ['tests/oracle-lab-claim-matrix.test.ts'] : [],
+    last_verified_commit: verified ? productionArtifact.commit : null,
+    last_verified_at: verified ? '2026-07-11T18:00:00Z' : null,
+    expiry: null,
+    canary_evidence_ids: [],
+    production_gate_ids: [],
+    rollback_evidence_ids: [],
+    deployed_artifacts: [],
     contradiction_ids: [],
   }
 }
@@ -186,9 +206,9 @@ test('non-unverified authority requires evidence and non-production claims rejec
 test('production authority rejects non-authoritative requirement records and invented registry evidence', async () => {
   for (const status of ['design_only', 'deferred', 'failing_test_added', 'locally_verified', 'upstream_canary_observed']) {
     const records = await authoritativeRecords()
-    const record = records.find((entry) => entry.requirement_id === 'HA-P0-003')
-    assert(record)
-    record.implementation_status = status
+    const index = records.findIndex((entry) => entry.requirement_id === 'HA-P0-003')
+    assert.notEqual(index, -1)
+    records[index] = nonAuthoritativeRequirement(records[index], status)
     expectError(await validateFixture([productionClaim()], records), 'requirement_authority_insufficient')
   }
   for (const [field, value] of [
@@ -222,7 +242,7 @@ test('production authority requires exact requirement repository, commit, and ar
   const record = records.find((entry) => entry.requirement_id === 'HA-P0-003')
   assert(record)
   record.last_verified_commit = 'fedcba9876543210fedcba9876543210fedcba98'
-  expectError(await validateFixture([productionClaim()], records), 'requirement_artifact_mismatch')
+  expectError(await validateFixture([productionClaim()], records), 'invalid_requirement_registry')
 })
 
 test('production evidence must be current, contradiction-free, and exactly linked across all requirements', async () => {
@@ -237,7 +257,7 @@ test('production evidence must be current, contradiction-free, and exactly linke
     const record = expiredOrContradicted.find((entry) => entry.requirement_id === 'HA-P0-003')
     assert(record)
     Object.assign(record, requirementMutation)
-    expectError(await validateFixture([productionClaim()], expiredOrContradicted), 'requirement_authority_insufficient')
+    expectError(await validateFixture([productionClaim()], expiredOrContradicted), 'invalid_requirement_registry')
   }
 
   const records = await authoritativeRecords()
@@ -259,6 +279,26 @@ test('production evidence must be current, contradiction-free, and exactly linke
 
 test('accepts production authority only with fully authoritative requirements and exact artifacts', async () => {
   assert.deepEqual(await validateFixture([productionClaim()], await authoritativeRecords()), { ok: true, errors: [] })
+})
+
+test('fails closed before authority derivation when supplied requirements are not a complete Task 1 registry', async () => {
+  const records = await authoritativeRecords()
+  const partial = records.find((entry) => entry.requirement_id === 'HA-P0-003')
+  assert(partial)
+  expectError(await validateFixture([productionClaim()], [partial]), 'invalid_requirement_registry')
+
+  const invented = records.map((entry) => entry.requirement_id === 'HA-P0-003'
+    ? { ...entry, requirement_id: 'HA-P0-999' }
+    : entry)
+  expectError(await validateFixture([productionClaim()], invented), 'invalid_requirement_registry')
+})
+
+test('fails closed on duplicate requirement evidence arrays before production claim linkage', async () => {
+  const records = await authoritativeRecords()
+  const record = records.find((entry) => entry.requirement_id === 'HA-P0-003')
+  assert(record)
+  record.canary_evidence_ids = ['canary-authoritative', 'canary-authoritative']
+  expectError(await validateFixture([productionClaim()], records), 'invalid_requirement_registry')
 })
 
 test('timestamps reject impossible calendar dates using Task 1 RFC3339 strictness', async () => {
