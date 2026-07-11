@@ -120,6 +120,47 @@ test('context and handoff builders reject cross-input evidence and missing selec
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
 })
 
+test('context builder fails closed when any selected requirement source bytes are missing', async () => {
+  const registryPath = 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = JSON.parse(await readFile(registryPath, 'utf8')) as Array<Record<string, unknown>>
+  const baseline = JSON.parse(await readFile(entryBaseline, 'utf8')) as Record<string, unknown> & { governance: Record<string, { sha256: string }>; repositories: Record<string, { head: string }>; contract: { sha256: string } }
+  const catalogValue = await catalog()
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-missing-source-'))
+
+  for (const [field, value] of [
+    ['implementation_files', ['missing/required-implementation.ts']],
+    ['test_files', ['missing/required-regression.test.ts']],
+    ['source_document', 'missing-required-spec.md'],
+  ] as const) {
+    const candidate = structuredClone(registry)
+    const requirement = candidate.find((entry) => entry.requirement_id === 'HA-P0-007')!
+    requirement[field] = value
+    const candidateRegistry = path.join(root, `${field}.registry.json`)
+    await writeFile(candidateRegistry, JSON.stringify(candidate))
+    const candidateManifest = structuredClone(baseline)
+    candidateManifest.governance.requirement_registry.sha256 = digestFile(candidateRegistry).slice(7)
+    const manifestPath = path.join(root, `${field}.manifest.json`)
+    await writeFile(manifestPath, JSON.stringify(candidateManifest))
+
+    const selectedEntries = catalogValue.filter((entry) => entry.requirement_ids.includes('HA-P0-007'))
+    const records = selectedEntries.map((entry): CommandResultRecord => {
+      const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+      const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: candidateManifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${candidateManifest.contract.sha256}` } : {}), manifest_digest: digestFile(manifestPath), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+      return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+    })
+    const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: digestFile(manifestPath), records }
+    const resultsPath = path.join(root, `${field}.results.json`)
+    await writeFile(resultsPath, JSON.stringify({ ...unsigned, result_set_digest: commandSetDigest(unsigned) }))
+
+    assert.throws(
+      () => buildContextPack({ registry: candidateRegistry, claims, manifest: manifestPath, commandResults: resultsPath, requirementIds: ['HA-P0-007'] }),
+      (error: Error & { code?: string }) => error.code === 'missing_source',
+      String(field),
+    )
+  }
+})
+
 test('result merge is order-independent and rejects duplicates, cross-manifest and cross-commit sets', () => {
   const a = resultSet([record('a')]); const b = resultSet([record('b', 'sub2api')])
   const first = mergeCommandResults([a, b], '2026-07-11T21:00:00.000Z')
