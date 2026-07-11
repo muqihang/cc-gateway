@@ -939,7 +939,11 @@
       "node": "e9adcddb6d8bf4f8ae039a685ffbfbfc43ec9a737ef7f8b021fbd80cb51a547f",
       "git": "74d9e1a39c1204fdcd5444ef60250735f463db4898a2e813c4fa937720fb6943",
       "npm": "de2f0aa452a648a7039bfc2984089aafc6847ed84f69ca45d157dcea258c681d",
-      "go": "c266e37e7c412841c14de5c89a6507af96bb5427e0288f2578f940a0aea6577a"
+      "go": {
+        "status": "present",
+        "sha256": "c266e37e7c412841c14de5c89a6507af96bb5427e0288f2578f940a0aea6577a",
+        "provenance": "go version go1.26.0 darwin/arm64"
+      }
     }
   },
   "codegraph": {

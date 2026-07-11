@@ -16,6 +16,15 @@ import { fileURLToPath } from 'node:url';
 
 type DigestMarker = { status: 'present'; sha256: string } | { status: 'absent'; reason: string };
 type GovernanceMarker = { status: 'absent_pre_governance_bootstrap' } | { status: 'present'; sha256: string };
+type ToolDigest = { status: 'present'; sha256: string; provenance: string } | { status: 'absent'; reason: 'tool_not_found'; required: boolean };
+
+export const PHASE_0_BINDINGS = {
+  ccGatewayHead: 'b9745da781397111a77465a1afb6bbbcb7cfd692',
+  ccGatewayBranch: 'codex/oracle-phase-0-governance',
+  sub2apiHead: 'a0c51e3c674c858fb11b09f21d94d72ec909f554',
+  sub2apiBranch: 'codex/oracle-phase-0-governance',
+  contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
+} as const;
 
 export type DirtyRecord = {
   status: string;
@@ -47,6 +56,8 @@ export type BaselineOptions = {
   approvedToolHead: string;
   allowCcGatewayDirtyDigest?: string;
   allowSub2apiDirtyDigest?: string;
+  strictBindings?: boolean;
+  outputPath?: string;
 };
 
 export type BaselineManifest = ReturnType<typeof captureBaseline>;
@@ -95,9 +106,28 @@ function pathInside(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-function statRecord(root: string, status: string, destination: Buffer, source?: Buffer): DirtyRecord {
-  const relative = destination.toString('utf8');
-  const target = path.join(root, relative);
+function bufferPath(root: string, relative: Buffer): Buffer {
+  return Buffer.concat([Buffer.from(root), Buffer.from(path.sep), relative]);
+}
+
+function indexEntries(root: string): Map<string, { mode: string; object: string; path: Buffer }> {
+  const output = gitBuffer(root, 'ls-files', '-s', '-z');
+  const entries = new Map<string, { mode: string; object: string; path: Buffer }>();
+  let start = 0;
+  for (let i = 0; i < output.length; i++) {
+    if (output[i] !== 0) continue;
+    const entry = output.subarray(start, i);
+    start = i + 1;
+    const tab = entry.indexOf(0x09);
+    const metadata = entry.subarray(0, tab).toString('ascii').split(' ');
+    const rawPath = Buffer.from(entry.subarray(tab + 1));
+    entries.set(encodePath(rawPath), { mode: metadata[0], object: metadata[1], path: rawPath });
+  }
+  return entries;
+}
+
+function statRecord(root: string, status: string, destination: Buffer, source: Buffer | undefined, index: Map<string, { mode: string; object: string; path: Buffer }>): DirtyRecord {
+  const target = bufferPath(root, destination);
   const base = {
     status,
     destination_path_base64url: encodePath(destination),
@@ -107,24 +137,20 @@ function statRecord(root: string, status: string, destination: Buffer, source?: 
     return { ...base, object_type: 'deleted', file_mode: '000000', deletion_marker: true };
   }
   const stat = lstatSync(target);
-  const indexMode = (() => {
-    try {
-      const line = gitText(root, 'ls-files', '-s', '--', relative).split('\n')[0];
-      return /^\d{6}\s/.test(line) ? line.slice(0, 6) : '';
-    } catch { return ''; }
-  })();
+  const indexMode = index.get(encodePath(destination))?.mode || '';
   const mode = indexMode || (stat.isSymbolicLink() ? '120000' : stat.isDirectory() ? '040000' : (stat.mode & 0o111) ? '100755' : '100644');
   if (mode === '160000') {
     let head = 'unavailable';
     let dirty = true;
     try {
-      head = gitText(target, 'rev-parse', 'HEAD');
-      dirty = gitBuffer(target, 'status', '--porcelain=v1', '-z', '--untracked-files=all').length > 0;
+      const targetText = target.toString();
+      head = gitText(targetText, 'rev-parse', 'HEAD');
+      dirty = gitBuffer(targetText, 'status', '--porcelain=v1', '-z', '--untracked-files=all').length > 0;
     } catch { /* fail-closed state is represented */ }
     return { ...base, object_type: 'submodule', file_mode: mode, submodule_head: head, submodule_dirty: dirty };
   }
   if (stat.isSymbolicLink()) {
-    return { ...base, object_type: 'symlink', file_mode: mode, symlink_target_sha256: sha256(Buffer.from(readlinkSync(target))) };
+    return { ...base, object_type: 'symlink', file_mode: mode, symlink_target_sha256: sha256(readlinkSync(target, { encoding: 'buffer' })) };
   }
   if (stat.isFile()) {
     return { ...base, object_type: 'regular_file', file_mode: mode, content_sha256: sha256(readFileSync(target)) };
@@ -132,7 +158,7 @@ function statRecord(root: string, status: string, destination: Buffer, source?: 
   return { ...base, object_type: stat.isDirectory() ? 'directory' : 'other', file_mode: mode };
 }
 
-function parsePorcelain(root: string, output: Buffer): Array<{ destination: Buffer; source?: Buffer; record: DirtyRecord }> {
+export function parsePorcelainPathRecords(output: Buffer): Array<{ status: string; destination: Buffer; source?: Buffer }> {
   const parts: Buffer[] = [];
   let start = 0;
   for (let i = 0; i < output.length; i++) {
@@ -141,7 +167,7 @@ function parsePorcelain(root: string, output: Buffer): Array<{ destination: Buff
       start = i + 1;
     }
   }
-  const parsed: Array<{ destination: Buffer; source?: Buffer; record: DirtyRecord }> = [];
+  const parsed: Array<{ status: string; destination: Buffer; source?: Buffer }> = [];
   for (let i = 0; i < parts.length; i++) {
     const entry = parts[i];
     if (entry.length < 4 || entry[2] !== 0x20) throw new BaselineError('invalid_git_status', 'unexpected porcelain v1 -z record');
@@ -149,9 +175,13 @@ function parsePorcelain(root: string, output: Buffer): Array<{ destination: Buff
     const destination = Buffer.from(entry.subarray(3));
     let source: Buffer | undefined;
     if (status.includes('R') || status.includes('C')) source = Buffer.from(parts[++i] || Buffer.alloc(0));
-    parsed.push({ destination, source, record: statRecord(root, status, destination, source) });
+    parsed.push({ status, destination, source });
   }
   return parsed.sort((a, b) => Buffer.compare(a.destination, b.destination) || Buffer.compare(a.source || Buffer.alloc(0), b.source || Buffer.alloc(0)));
+}
+
+function parsePorcelain(root: string, output: Buffer, index: Map<string, { mode: string; object: string; path: Buffer }>): Array<{ destination: Buffer; source?: Buffer; record: DirtyRecord }> {
+  return parsePorcelainPathRecords(output).map(({ status, destination, source }) => ({ destination, source, record: statRecord(root, status, destination, source, index) }));
 }
 
 function serializeRecord(record: DirtyRecord, destination: Buffer, source?: Buffer): Buffer {
@@ -185,8 +215,24 @@ function exclusionRules(root: string): RepositoryState['ignored_exclusion_rules'
 
 export function computeRepositoryState(rootInput: string, allowedDirtyDigest?: string, inspectOnly = false): RepositoryState {
   const root = realpathSync(rootInput);
+  const index = indexEntries(root);
   const status = gitBuffer(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
-  const parsed = parsePorcelain(root, status);
+  const parsed = parsePorcelain(root, status, index);
+  const seen = new Set(parsed.map(({ destination }) => encodePath(destination)));
+  for (const entry of index.values()) {
+    if (entry.mode !== '160000' || seen.has(encodePath(entry.path))) continue;
+    const target = bufferPath(root, entry.path);
+    let head = 'unavailable';
+    let dirty = true;
+    try {
+      head = gitText(target.toString(), 'rev-parse', 'HEAD');
+      dirty = gitBuffer(target.toString(), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none').length > 0;
+    } catch { /* missing/unreadable submodule is drift */ }
+    if (head !== entry.object || dirty) {
+      parsed.push({ destination: entry.path, record: { status: 'SM', destination_path_base64url: encodePath(entry.path), object_type: 'submodule', file_mode: '160000', submodule_head: head, submodule_dirty: dirty } });
+    }
+  }
+  parsed.sort((a, b) => Buffer.compare(a.destination, b.destination) || Buffer.compare(a.source || Buffer.alloc(0), b.source || Buffer.alloc(0)));
   const diff = gitBuffer(root, 'diff', '--binary', 'HEAD');
   const serialized = Buffer.concat(parsed.map(({ record, destination, source }) => serializeRecord(record, destination, source)));
   const dirtyDigest = sha256(Buffer.concat([serialized, diff]));
@@ -250,17 +296,88 @@ function governanceMarker(root: string, relative: string): GovernanceMarker {
     : { status: GOVERNANCE_ABSENCE };
 }
 
+function ensureOutputContainment(rootInput: string, candidateInput: string): void {
+  const root = realpathSync(rootInput);
+  const candidate = path.resolve(candidateInput);
+  const parent = path.dirname(candidate);
+  const parentReal = realpathSync(parent);
+  if (!pathInside(root, parentReal) || !pathInside(root, candidate)) throw new BaselineError('output_path_escape', 'output parent must resolve inside CC Gateway root');
+}
+
+function exactObject(value: unknown, keys: string[], code: string): asserts value is Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BaselineError(code, 'expected object');
+  const actual = Object.keys(value as object).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, i) => key !== expected[i])) throw new BaselineError(code, `unexpected or missing properties: ${actual.join(',')}`);
+}
+
+function validSha(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value); }
+function validCommit(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value); }
+function validateRepositoryArtifact(value: unknown): void {
+  exactObject(value, ['head', 'branch', 'clean', 'dirty_digest', 'dirty_records', 'dirty_record_format', 'ignored_exclusion_rules'], 'manifest_schema_invalid');
+  if (typeof (value as any).branch !== 'string' || typeof (value as any).clean !== 'boolean' || !validCommit((value as any).head) || !validSha((value as any).dirty_digest) || !Array.isArray((value as any).dirty_records) || !Array.isArray((value as any).ignored_exclusion_rules)) throw new BaselineError('manifest_schema_invalid', 'invalid repository properties');
+  for (const record of (value as any).dirty_records) {
+    exactObject(record, ['status', 'destination_path_base64url', 'object_type', 'file_mode', ...(record.source_path_base64url ? ['source_path_base64url'] : []), ...(record.content_sha256 ? ['content_sha256'] : []), ...(record.symlink_target_sha256 ? ['symlink_target_sha256'] : []), ...(record.deletion_marker ? ['deletion_marker'] : []), ...(record.submodule_head ? ['submodule_head'] : []), ...(record.submodule_dirty !== undefined ? ['submodule_dirty'] : [])], 'manifest_schema_invalid');
+  }
+}
+
+function validateDigestMarker(value: unknown): void {
+  const marker = value as any;
+  exactObject(marker, marker?.status === 'present' ? ['status', 'sha256'] : ['status', 'reason'], 'manifest_schema_invalid');
+  if (marker.status === 'present' ? !validSha(marker.sha256) : marker.status !== 'absent' || typeof marker.reason !== 'string') throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
+}
+
+export function validateManifestArtifact(value: unknown): void {
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
+  const v = value as any;
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.phase !== 'phase_0_entry' || !/^[0-9a-f]{40,64}$/.test(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
+  exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
+  exactObject(v.contract, ['path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract digest');
+  exactObject(v.governance, ['requirement_registry', 'claim_registry'], 'manifest_schema_invalid'); validateGovernanceMarkers(v.governance);
+  exactObject(v.policies, ['network', 'sensitivity'], 'manifest_schema_invalid'); exactObject(v.policies.network, ['real_upstream_requests', 'local_fixture_only'], 'manifest_schema_invalid'); exactObject(v.policies.sensitivity, ['persisted_material', 'forbidden'], 'manifest_schema_invalid');
+  const dependencyKeys = ['persona_registry', 'persona_resolver', 'request_policy', 'tls_registry', 'cch_request_construction', 'sidecar_profile', 'sidecar_summary', 'package_manifest', 'package_lock', 'sidecar_go_manifest', 'sidecar_go_lock', 'repository_root_metadata', 'tools', 'observer_parser_canonicalizer', 'runtime_toolchain'];
+  exactObject(v.dependencies, dependencyKeys, 'manifest_schema_invalid');
+  for (const key of dependencyKeys.slice(0, 11)) validateDigestMarker(v.dependencies[key]);
+  exactObject(v.dependencies.repository_root_metadata, ['cc_gateway_augmentroot', 'sub2api_augmentroot'], 'manifest_schema_invalid'); validateDigestMarker(v.dependencies.repository_root_metadata.cc_gateway_augmentroot); validateDigestMarker(v.dependencies.repository_root_metadata.sub2api_augmentroot);
+  for (const list of [v.dependencies.tools, v.dependencies.observer_parser_canonicalizer]) { if (!Array.isArray(list)) throw new BaselineError('manifest_schema_invalid', 'dependency file list must be an array'); for (const item of list) { exactObject(item, ['path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validSha(item.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency file digest'); } }
+  exactObject(v.dependencies.runtime_toolchain, ['node', 'git', 'npm', 'go'], 'manifest_schema_invalid');
+  if (!validSha(v.dependencies.runtime_toolchain.node) || !validSha(v.dependencies.runtime_toolchain.git) || !validSha(v.dependencies.runtime_toolchain.npm)) throw new BaselineError('manifest_schema_invalid', 'invalid runtime digest');
+  const go = v.dependencies.runtime_toolchain.go; exactObject(go, go?.status === 'present' ? ['status', 'sha256', 'provenance'] : ['status', 'reason', 'required'], 'manifest_schema_invalid');
+  if (go.status === 'present' ? !validSha(go.sha256) || typeof go.provenance !== 'string' : go.status !== 'absent' || go.reason !== 'tool_not_found' || typeof go.required !== 'boolean') throw new BaselineError('manifest_schema_invalid', 'invalid Go provenance');
+  exactObject(v.codegraph, v.codegraph.status === 'present' ? ['status', 'index_sha256'] : ['status', 'fallback_reason'], 'manifest_schema_invalid');
+  exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
+}
+
+export function validateReceiptArtifact(value: unknown): void {
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'manifest_sha256', 'schema_sha256', 'bootstrap_commit'], 'receipt_schema_invalid');
+  const v = value as any;
+  if (v.schema_version !== '1.0.0' || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !/^[0-9a-f]{40,64}$/.test(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
+}
+
+export function validateFrozenBindings(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string): void {
+  if (ccState.head !== PHASE_0_BINDINGS.ccGatewayHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD is not the frozen Phase 0 bootstrap head');
+  if (ccState.branch !== PHASE_0_BINDINGS.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the frozen Phase 0 governance branch');
+  if (subState.head !== PHASE_0_BINDINGS.sub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD is not the frozen Phase 0 head');
+  if (subState.branch !== PHASE_0_BINDINGS.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the frozen Phase 0 governance branch');
+  if (approvedToolHead !== PHASE_0_BINDINGS.ccGatewayHead) throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit does not match frozen bootstrap head');
+  if (contractSha !== PHASE_0_BINDINGS.contractSha256) throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest is not the frozen Phase 0 digest');
+}
+
 export function captureBaseline(options: BaselineOptions) {
   const ccRoot = realpathSync(options.ccGatewayRoot);
   const subRoot = realpathSync(options.sub2apiRoot);
   if (!existsSync(options.contractPath)) throw new BaselineError('missing_contract', 'formal-pool contract does not exist');
   const contractReal = realpathSync(options.contractPath);
   if (!pathInside(subRoot, contractReal)) throw new BaselineError('contract_symlink_escape', 'formal-pool contract resolves outside the declared Sub2API root');
+  if (options.outputPath) ensureOutputContainment(ccRoot, options.outputPath);
   const ccState = computeRepositoryState(ccRoot, options.allowCcGatewayDirtyDigest);
   const subState = computeRepositoryState(subRoot, options.allowSub2apiDirtyDigest);
-  if (!/^[0-9a-f]{40,64}$/.test(options.approvedToolHead) || options.approvedToolHead !== ccState.head) {
+  const strict = options.strictBindings !== false;
+  if (!/^[0-9a-f]{40,64}$/.test(options.approvedToolHead) || (!strict && options.approvedToolHead !== ccState.head)) {
     throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit must exactly equal the CC Gateway repository HEAD');
   }
+  const contractSha = sha256(readFileSync(contractReal));
+  if (strict) validateFrozenBindings(ccState, subState, options.approvedToolHead, contractSha);
   const governance = {
     requirement_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-requirements.json'),
     claim_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-claims.json'),
@@ -274,7 +391,7 @@ export function captureBaseline(options: BaselineOptions) {
     node: sha256(process.version),
     git: sha256(gitText(ccRoot, '--version')),
     npm: sha256(String(run(ccRoot, ['npm', '--version'], 'utf8')).trim()),
-    go: (() => { try { return sha256(String(run(ccRoot, ['go', 'version'], 'utf8')).trim()); } catch { return EMPTY_SHA256; } })(),
+    go: (() => { try { const provenance = String(run(ccRoot, ['go', 'version'], 'utf8')).trim(); return { status: 'present' as const, sha256: sha256(provenance), provenance }; } catch { return { status: 'absent' as const, reason: 'tool_not_found' as const, required: true }; } })(),
   };
   return {
     schema_version: '1.0.0',
@@ -288,7 +405,7 @@ export function captureBaseline(options: BaselineOptions) {
     contract: {
       path_category: 'sub2api_formal_pool_contract',
       repository_relative_path_base64url: Buffer.from(path.relative(subRoot, contractReal)).toString('base64url'),
-      sha256: sha256(readFileSync(contractReal)),
+      sha256: contractSha,
     },
     governance,
     policies: {
@@ -353,6 +470,15 @@ function writeJsonAtomic(target: string, value: unknown): void {
   renameSync(temporary, target);
 }
 
+function writeEvidencePair(out: string, manifest: unknown, receipt: string, receiptValue: unknown): void {
+  const outTemporary = `${out}.tmp`;
+  const receiptTemporary = `${receipt}.tmp`;
+  writeFileSync(outTemporary, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(receiptTemporary, `${JSON.stringify(receiptValue, null, 2)}\n`, { mode: 0o600 });
+  renameSync(outTemporary, out);
+  renameSync(receiptTemporary, receipt);
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   for (const required of ['cc-gateway-root', 'sub2api-root', 'contract-path', 'approved-tool-head', 'out', 'receipt']) {
@@ -364,24 +490,27 @@ function main(): void {
     contractPath: args['contract-path'],
     approvedToolHead: args['approved-tool-head'],
     allowCcGatewayDirtyDigest: args['allow-dirty-digest'],
+    outputPath: path.resolve(args['cc-gateway-root'], args.out),
   });
   const out = path.resolve(args['cc-gateway-root'], args.out);
   const receipt = path.resolve(args['cc-gateway-root'], args.receipt);
-  if (!pathInside(realpathSync(args['cc-gateway-root']), out) || !pathInside(realpathSync(args['cc-gateway-root']), receipt)) {
-    throw new BaselineError('output_path_escape', 'output and receipt must remain inside CC Gateway root');
-  }
-  writeJsonAtomic(out, manifest);
+  ensureOutputContainment(args['cc-gateway-root'], out);
+  ensureOutputContainment(args['cc-gateway-root'], receipt);
   const schemaPath = path.join(realpathSync(args['cc-gateway-root']), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
-  writeJsonAtomic(receipt, {
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  const receiptValue = {
     schema_version: '1.0.0',
     compatibility_policy: 'fail_closed_exact_schema',
     retention_class: 'phase_evidence_permanent',
     redaction_policy: 'digests_only',
     destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
-    manifest_sha256: sha256(readFileSync(out)),
+    manifest_sha256: sha256(manifestBytes),
     schema_sha256: sha256(readFileSync(schemaPath)),
     bootstrap_commit: args['approved-tool-head'],
-  });
+  };
+  validateManifestArtifact(manifest);
+  validateReceiptArtifact(receiptValue);
+  writeEvidencePair(out, manifest, receipt, receiptValue);
   console.log(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: true }));
 }
 

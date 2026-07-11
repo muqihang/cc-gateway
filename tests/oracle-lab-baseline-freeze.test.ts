@@ -7,6 +7,11 @@ import {
   captureBaseline,
   computeRepositoryState,
   validateGovernanceMarkers,
+  validateManifestArtifact,
+  validateReceiptArtifact,
+  PHASE_0_BINDINGS,
+  parsePorcelainPathRecords,
+  validateFrozenBindings,
 } from '../tools/oracle-lab/freeze-baseline.js';
 
 function git(root: string, ...args: string[]): string {
@@ -48,6 +53,10 @@ git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', child,
 git(parent, 'commit', '-qam', 'add submodule');
 writeFileSync(path.join(parent, 'vendor/child/tracked.txt'), 'drift\n');
 expectCode(() => computeRepositoryState(parent), 'undeclared_dirty_tree');
+git(parent, 'config', 'submodule.vendor/child.ignore', 'all');
+expectCode(() => computeRepositoryState(parent), 'undeclared_dirty_tree');
+const ignoredSubmodule = computeRepositoryState(parent, undefined, true).dirty_records.find((record) => record.object_type === 'submodule');
+assert.equal(ignoredSubmodule?.submodule_dirty, true);
 
 const gateway = fixture('gateway');
 const sub2api = fixture('sub2api');
@@ -77,6 +86,7 @@ const common = {
   sub2apiRoot: sub2api,
   contractPath: contract,
   approvedToolHead: git(gateway, 'rev-parse', 'HEAD'),
+  strictBindings: false,
 };
 expectCode(() => captureBaseline({ ...common, contractPath: path.join(sub2api, 'missing.json') }), 'missing_contract');
 const outside = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-outside-')), 'vectors.json');
@@ -92,6 +102,7 @@ expectCode(
 );
 
 const manifest = captureBaseline(common);
+validateManifestArtifact(manifest);
 assert.equal(manifest.repositories.cc_gateway.clean, true);
 assert.equal(manifest.repositories.sub2api.clean, true);
 assert.equal(manifest.governance.requirement_registry.status, 'absent_pre_governance_bootstrap');
@@ -105,5 +116,42 @@ assert.equal(manifest.legacy_comparison.promotion_eligible, false);
 assert.equal(JSON.stringify(manifest).includes(gateway), false);
 assert.equal(JSON.stringify(manifest).includes(sub2api), false);
 assert.equal(readFileSync(contract, 'utf8'), '{"fixture":true}\n');
+
+// Frozen Phase 0 bindings must fail closed in strict capture mode.
+expectCode(() => captureBaseline({ ...common, strictBindings: true }), 'cc_gateway_head_mismatch');
+assert.deepEqual(PHASE_0_BINDINGS, {
+  ccGatewayHead: 'b9745da781397111a77465a1afb6bbbcb7cfd692',
+  ccGatewayBranch: 'codex/oracle-phase-0-governance',
+  sub2apiHead: 'a0c51e3c674c858fb11b09f21d94d72ec909f554',
+  sub2apiBranch: 'codex/oracle-phase-0-governance',
+  contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
+});
+const frozenState = { head: PHASE_0_BINDINGS.ccGatewayHead, branch: PHASE_0_BINDINGS.ccGatewayBranch };
+const frozenSubState = { head: PHASE_0_BINDINGS.sub2apiHead, branch: PHASE_0_BINDINGS.sub2apiBranch };
+validateFrozenBindings(frozenState, frozenSubState, PHASE_0_BINDINGS.ccGatewayHead, PHASE_0_BINDINGS.contractSha256);
+expectCode(() => validateFrozenBindings({ ...frozenState, branch: 'HEAD' }, frozenSubState, PHASE_0_BINDINGS.ccGatewayHead, PHASE_0_BINDINGS.contractSha256), 'cc_gateway_branch_mismatch');
+expectCode(() => validateFrozenBindings(frozenState, { ...frozenSubState, head: '0'.repeat(40) }, PHASE_0_BINDINGS.ccGatewayHead, PHASE_0_BINDINGS.contractSha256), 'sub2api_head_mismatch');
+expectCode(() => validateFrozenBindings(frozenState, frozenSubState, PHASE_0_BINDINGS.ccGatewayHead, '0'.repeat(64)), 'contract_digest_mismatch');
+
+// Strict schema rejects unknown nested fields and the CLI artifact validators enforce both artifacts.
+expectCode(() => validateManifestArtifact({ ...manifest, repositories: { ...manifest.repositories, cc_gateway: { ...manifest.repositories.cc_gateway, extra: true } } }), 'manifest_schema_invalid');
+expectCode(() => validateReceiptArtifact({ schema_version: '1.0.0', extra: true }), 'receipt_schema_invalid');
+
+// Output parent realpath containment rejects a symlinked parent.
+const outputRoot = mkdtempSync(path.join(tmpdir(), 'oracle-output-'));
+const outputLink = path.join(gateway, 'out-link');
+symlinkSync(outputRoot, outputLink);
+expectCode(() => captureBaseline({ ...common, outputPath: path.join(outputLink, 'manifest.json') }), 'output_path_escape');
+unlinkSync(outputLink);
+
+// Invalid raw path bytes are retained as bytes in dirty records.
+const invalidPath = Buffer.from([0x62, 0x61, 0x64, 0xff]);
+const rawRecords = parsePorcelainPathRecords(Buffer.concat([Buffer.from('?? '), invalidPath, Buffer.from([0])]));
+assert.equal(rawRecords[0].destination.toString('base64url'), invalidPath.toString('base64url'));
+
+const checkedManifest = JSON.parse(readFileSync(path.join(process.cwd(), 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'), 'utf8'));
+const checkedReceipt = JSON.parse(readFileSync(path.join(process.cwd(), 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json'), 'utf8'));
+validateManifestArtifact(checkedManifest);
+validateReceiptArtifact(checkedReceipt);
 
 console.log('oracle lab baseline freeze tests passed');
