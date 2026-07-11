@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,21 +62,30 @@ func TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange(t *testing
 	type replayCase struct {
 		name            string
 		stateAssumption string
-		next            func(first http.Handler) http.Handler
+		next            func(first http.Handler, ledger *phase0ReplayLedger) http.Handler
 	}
 	cases := []replayCase{
-		{name: "same_instance_after_successful_completion", stateAssumption: "same in-memory replay state", next: func(first http.Handler) http.Handler { return first }},
-		{name: "restart_with_persistent_replay_state", stateAssumption: "new handler loads the same persistent replay store", next: func(http.Handler) http.Handler { return phase0ForwardingHandler(dialAddr) }},
-		{name: "distinct_replica_with_shared_replay_state", stateAssumption: "independent replica consults the shared replay store", next: func(http.Handler) http.Handler { return phase0ForwardingHandler(dialAddr) }},
+		{name: "same_instance_after_successful_completion", stateAssumption: "same handler and ledger", next: func(first http.Handler, _ *phase0ReplayLedger) http.Handler { return first }},
+		{name: "restart_with_persistent_replay_state", stateAssumption: "restarted handler loads the persisted ledger", next: func(_ http.Handler, ledger *phase0ReplayLedger) http.Handler {
+			restored := newPhase0ReplayLedgerFromSnapshot(ledger.snapshot())
+			return phase0ReplayObservingHandler(phase0ForwardingHandler(dialAddr), restored, "restart")
+		}},
+		{name: "distinct_replica_with_shared_replay_state", stateAssumption: "independent replica uses the shared ledger", next: func(_ http.Handler, ledger *phase0ReplayLedger) http.Handler {
+			return phase0ReplayObservingHandler(phase0ForwardingHandler(dialAddr), ledger, "replica-b")
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			first := phase0ForwardingHandler(dialAddr)
+			ledger := newPhase0ReplayLedger()
+			first := phase0ReplayObservingHandler(phase0ForwardingHandler(dialAddr), ledger, "replica-a")
 			completed := phase0ForwardingRequest(first)
 			if completed.Code != http.StatusOK || !strings.Contains(completed.Body.String(), `"forwarded":true`) {
 				t.Fatalf("first authenticated completion did not succeed: status=%d body=%q", completed.Code, completed.Body.String())
 			}
-			replay := phase0ForwardingRequest(tc.next(first))
+			if got := ledger.completions(phase0ReplayNonce); got != 1 {
+				t.Fatalf("successful completion ledger count = %d, want 1", got)
+			}
+			replay := phase0ForwardingRequest(tc.next(first, ledger))
 			if replay.Code != http.StatusForbidden {
 				t.Fatalf("captured request replay status = %d, want 403 (%s)", replay.Code, tc.stateAssumption)
 			}
@@ -82,51 +93,61 @@ func TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange(t *testing
 	}
 }
 
-func TestPhase0B5CanonicalizationCrossesHandlerAuthenticationBoundary(t *testing.T) {
-	canonical := phase0CompleteControlJSONForServer(false)
-	reorderedUnicode := phase0CompleteControlJSONForServer(true)
+func TestPhase0B5CanonicalizationCrossesControlValidationAndAuthentication(t *testing.T) {
+	canonical := safeControlJSON()
+	reorderedUnicode := phase0EquivalentControlJSON()
 	for name, raw := range map[string]string{"canonical": canonical, "reordered_unicode": reorderedUnicode} {
 		t.Run(name, func(t *testing.T) {
-			recorder := phase0RawAuthenticatedRequest(phase0Handler(), raw, phase0PublicProxy)
-			if recorder.Code == http.StatusForbidden {
-				t.Fatalf("semantic envelope representation was rejected before authenticated envelope verification")
+			envelope := phase0ValidatedAuthenticatedEnvelope(t, raw)
+			provided := phase0EnvelopeBinding(envelope)
+			if !verifyProxyBinding(phase0BindingSecret, envelope.Control, envelope.ProxyURL, provided) {
+				t.Fatal("semantically equivalent control did not reach and pass signature verification")
 			}
 		})
 	}
 }
 
 func TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations(t *testing.T) {
-	mutations := map[string]any{
-		"target_scheme": "http", "target_host": "api-alt.anthropic.com", "target_port": 8443,
-		"target_path": "/v1/alternate", "route": "/v1/alternate", "method": "PUT",
-		"proxy_identity_ref": "opaque:proxy-ref:v1:bucket-b", "account_identity_ref": "opaque:account-ref:v1:other",
-		"verified_context_ref": "opaque:context-ref:v1:other", "proxy_generation": 8,
-		"profile_ref": "tls-profile:phase0-alternate-v1", "manifest_authority_ref": "opaque:manifest-ref:v1:other",
-		"egress_bucket": "bucket-b", "expected_tls_summary_bucket": "tls-bucket:alternate",
-		"nonce": "nonce-ref-phase0-0002", "timestamp_ms": float64(1783796400001),
-		"final_headers_hash": "sha256:" + strings.Repeat("c", 64), "request_body_hash": "sha256:" + strings.Repeat("d", 64),
-		"content_length": float64(18), "content_encoding": "gzip", "absolute_deadline_ms": float64(1783796460001),
-		"expected_response_policy_ref": "response-policy:anthropic-v2", "envelope_version": float64(3),
-		"key_epoch": float64(12), "attempt_id": "attempt-ref-phase0-0002",
+	base := phase0ValidatedAuthenticatedEnvelope(t, safeControlJSON())
+	provided := phase0EnvelopeBinding(base)
+	if !verifyProxyBinding(phase0BindingSecret, base.Control, base.ProxyURL, provided) {
+		t.Fatal("complete envelope baseline did not pass signature verification")
 	}
-	for field, value := range mutations {
+	mutations := map[string]func(*phase0AuthenticatedEnvelope){
+		"target_scheme":                func(e *phase0AuthenticatedEnvelope) { e.Control.TargetScheme = "http" },
+		"target_host":                  func(e *phase0AuthenticatedEnvelope) { e.Control.TargetHost = "api-alt.anthropic.com" },
+		"target_port":                  func(e *phase0AuthenticatedEnvelope) { e.Control.TargetPort = 8443 },
+		"target_path":                  func(e *phase0AuthenticatedEnvelope) { e.Control.TargetPath = "/v1/alternate" },
+		"route":                        func(e *phase0AuthenticatedEnvelope) { e.Control.Route = "/v1/alternate" },
+		"method":                       func(e *phase0AuthenticatedEnvelope) { e.Control.Method = "PUT" },
+		"proxy_identity_ref":           func(e *phase0AuthenticatedEnvelope) { e.Control.ProxyIdentityRef = "opaque:proxy-ref:v1:bucket-b" },
+		"account_identity_ref":         func(e *phase0AuthenticatedEnvelope) { e.AccountIdentityRef = "opaque:account-ref:v1:other" },
+		"verified_context_ref":         func(e *phase0AuthenticatedEnvelope) { e.VerifiedContextRef = "opaque:context-ref:v1:other" },
+		"proxy_generation":             func(e *phase0AuthenticatedEnvelope) { e.ProxyGeneration = 8 },
+		"profile_ref":                  func(e *phase0AuthenticatedEnvelope) { e.Control.ProfileRef = "tls-profile:phase0-alternate-v1" },
+		"manifest_authority_ref":       func(e *phase0AuthenticatedEnvelope) { e.ManifestAuthorityRef = "opaque:manifest-ref:v1:other" },
+		"egress_bucket":                func(e *phase0AuthenticatedEnvelope) { e.Control.EgressBucket = "bucket-b" },
+		"expected_tls_summary_bucket":  func(e *phase0AuthenticatedEnvelope) { e.Control.ExpectedTLSSummaryBucket = "tls-bucket:alternate" },
+		"nonce":                        func(e *phase0AuthenticatedEnvelope) { e.Nonce = "nonce-ref-phase0-0002" },
+		"timestamp_ms":                 func(e *phase0AuthenticatedEnvelope) { e.TimestampMS++ },
+		"final_headers_hash":           func(e *phase0AuthenticatedEnvelope) { e.FinalHeadersHash = "sha256:" + strings.Repeat("c", 64) },
+		"request_body_hash":            func(e *phase0AuthenticatedEnvelope) { e.RequestBodyHash = "sha256:" + strings.Repeat("d", 64) },
+		"content_length":               func(e *phase0AuthenticatedEnvelope) { e.ContentLength++ },
+		"content_encoding":             func(e *phase0AuthenticatedEnvelope) { e.ContentEncoding = "gzip" },
+		"absolute_deadline_ms":         func(e *phase0AuthenticatedEnvelope) { e.AbsoluteDeadlineMS++ },
+		"expected_response_policy_ref": func(e *phase0AuthenticatedEnvelope) { e.ExpectedResponsePolicyRef = "response-policy:anthropic-v2" },
+		"envelope_version":             func(e *phase0AuthenticatedEnvelope) { e.EnvelopeVersion++ },
+		"key_epoch":                    func(e *phase0AuthenticatedEnvelope) { e.KeyEpoch++ },
+		"attempt_id":                   func(e *phase0AuthenticatedEnvelope) { e.AttemptID = "attempt-ref-phase0-0002" },
+	}
+	for field, mutate := range mutations {
 		t.Run(field, func(t *testing.T) {
-			baseRaw := phase0CompleteControlJSONForServer(false)
-			baseline := phase0RawAuthenticatedRequest(phase0Handler(), baseRaw, phase0PublicProxy)
-			if baseline.Code == http.StatusForbidden {
-				t.Fatalf("complete authenticated baseline was rejected before %s mutation reached envelope verification", field)
+			changed := base
+			mutate(&changed)
+			if reflect.DeepEqual(changed, base) {
+				t.Fatalf("fixture mutation for %s changed no field", field)
 			}
-			var envelope map[string]any
-			if err := json.Unmarshal([]byte(baseRaw), &envelope); err != nil {
-				t.Fatal(err)
-			}
-			envelope[field] = value
-			mutatedRaw, err := json.Marshal(envelope)
-			if err != nil {
-				t.Fatal(err)
-			}
-			mutated := phase0RawAuthenticatedRequest(phase0Handler(), string(mutatedRaw), phase0PublicProxy)
-			if mutated.Code != http.StatusForbidden {
+			if verifyProxyBinding(phase0BindingSecret, changed.Control, changed.ProxyURL, provided) {
 				t.Fatalf("captured authentication accepted independently mutated %s", field)
 			}
 		})
@@ -186,6 +207,107 @@ func TestPhase0B6RebindingResolutionIsPinnedBeforeDial(t *testing.T) {
 
 const phase0BindingSecret = "phase0-red-independent-binding-material-20260711"
 const phase0PublicProxy = "http://198.51.100.40:8080"
+const phase0ReplayNonce = "nonce-ref-phase0-0001"
+
+type phase0AuthenticatedEnvelope struct {
+	Control                   control.Control
+	ProxyURL                  string
+	AccountIdentityRef        string
+	VerifiedContextRef        string
+	ManifestAuthorityRef      string
+	ProxyGeneration           int
+	Nonce                     string
+	TimestampMS               int64
+	FinalHeadersHash          string
+	RequestBodyHash           string
+	EnvelopeVersion           int
+	KeyEpoch                  int
+	AttemptID                 string
+	AbsoluteDeadlineMS        int64
+	ContentLength             int64
+	ContentEncoding           string
+	ExpectedResponsePolicyRef string
+}
+
+func phase0ValidatedAuthenticatedEnvelope(t *testing.T, rawControl string) phase0AuthenticatedEnvelope {
+	t.Helper()
+	ctrl, err := control.Validate(safePolicy().ControlToken, []byte(rawControl), safePolicy())
+	if err != nil {
+		t.Fatalf("valid baseline control rejected before authentication: %v", err)
+	}
+	return phase0AuthenticatedEnvelope{
+		Control: ctrl, ProxyURL: phase0PublicProxy,
+		AccountIdentityRef: "opaque:account-ref:v1:phase0", VerifiedContextRef: "opaque:context-ref:v1:phase0",
+		ManifestAuthorityRef: "opaque:manifest-ref:v1:phase0", ProxyGeneration: 7,
+		Nonce: phase0ReplayNonce, TimestampMS: 1783796400000,
+		FinalHeadersHash: "sha256:" + strings.Repeat("a", 64), RequestBodyHash: "sha256:" + strings.Repeat("b", 64),
+		EnvelopeVersion: 2, KeyEpoch: 11, AttemptID: "attempt-ref-phase0-0001",
+		AbsoluteDeadlineMS: 1783796460000, ContentLength: 17, ContentEncoding: "identity",
+		ExpectedResponsePolicyRef: "response-policy:anthropic-v1",
+	}
+}
+
+func phase0EnvelopeBinding(envelope phase0AuthenticatedEnvelope) string {
+	return proxyBindingForTest(phase0BindingSecret, envelope.Control.EgressBucket, envelope.Control.ProxyIdentityRef, envelope.ProxyURL, envelope.Control.TargetHost, envelope.Control.TargetPort)
+}
+
+func phase0EquivalentControlJSON() string {
+	return `{"method":"POST","route":"/v1/messages","target_path":"/v1/messages","target_scheme":"https","target_port":443,"target_host":"api.anthropic.com","proxy_identity_ref":"opaque:proxy-ref:v1:bucket-a","egress_bucket":"bucket-a","profile_ref":"tls-profile:claude-code-\u0032.1.179-real-oracle-tcp-v1","expected_tls_summary_bucket":"tls-bucket:claude-code-real-oracle-2179"}`
+}
+
+type phase0ReplayLedger struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newPhase0ReplayLedger() *phase0ReplayLedger {
+	return &phase0ReplayLedger{counts: make(map[string]int)}
+}
+
+func newPhase0ReplayLedgerFromSnapshot(snapshot map[string]int) *phase0ReplayLedger {
+	ledger := newPhase0ReplayLedger()
+	for nonce, count := range snapshot {
+		ledger.counts[nonce] = count
+	}
+	return ledger
+}
+
+func (l *phase0ReplayLedger) record(nonce string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.counts[nonce]++
+}
+
+func (l *phase0ReplayLedger) completions(nonce string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.counts[nonce]
+}
+
+func (l *phase0ReplayLedger) snapshot() map[string]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	snapshot := make(map[string]int, len(l.counts))
+	for nonce, count := range l.counts {
+		snapshot[nonce] = count
+	}
+	return snapshot
+}
+
+func phase0ReplayObservingHandler(next http.Handler, ledger *phase0ReplayLedger, _ string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := httptest.NewRecorder()
+		next.ServeHTTP(recorder, r)
+		for name, values := range recorder.Header() {
+			w.Header()[name] = append([]string(nil), values...)
+		}
+		w.WriteHeader(recorder.Code)
+		_, _ = w.Write(recorder.Body.Bytes())
+		if recorder.Code >= 200 && recorder.Code < 300 {
+			ledger.record(phase0ReplayNonce)
+		}
+	})
+}
 
 func phase0Control(t *testing.T) control.Control {
 	t.Helper()
@@ -262,13 +384,6 @@ func phase0RawAuthenticatedRequest(handler http.Handler, rawControl, proxyURL st
 	req.Header.Set("x-cc-egress-proxy-binding", proxyBindingForTest(phase0BindingSecret, ctrl.EgressBucket, ctrl.ProxyIdentityRef, proxyURL, ctrl.TargetHost, ctrl.TargetPort))
 	handler.ServeHTTP(recorder, req)
 	return recorder
-}
-
-func phase0CompleteControlJSONForServer(reorderedUnicode bool) string {
-	if reorderedUnicode {
-		return `{"method":"POST","route":"/v1/messages","target_path":"/v1/messages","target_scheme":"https","target_port":443,"target_host":"api.anthropic.com","proxy_identity_ref":"opaque:proxy-ref:v1:bucket-a","egress_bucket":"bucket-a","profile_ref":"tls-profile:claude-code-\\u0032.1.179-real-oracle-tcp-v1","expected_tls_summary_bucket":"tls-bucket:claude-code-real-oracle-2179","nonce":"nonce-ref-phase0-0001","timestamp_ms":1783796400000,"final_headers_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","request_body_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","envelope_version":2,"key_epoch":11,"attempt_id":"attempt-ref-phase0-0001","absolute_deadline_ms":1783796460000,"content_length":17,"content_encoding":"identity","expected_response_policy_ref":"response-policy:anthropic-v1","verified_context_ref":"opaque:context-ref:v1:phase0","account_identity_ref":"opaque:account-ref:v1:phase0","manifest_authority_ref":"opaque:manifest-ref:v1:phase0","proxy_generation":7}`
-	}
-	return `{"profile_ref":"tls-profile:claude-code-2.1.179-real-oracle-tcp-v1","egress_bucket":"bucket-a","proxy_identity_ref":"opaque:proxy-ref:v1:bucket-a","target_host":"api.anthropic.com","target_port":443,"target_scheme":"https","target_path":"/v1/messages","route":"/v1/messages","method":"POST","expected_tls_summary_bucket":"tls-bucket:claude-code-real-oracle-2179","nonce":"nonce-ref-phase0-0001","timestamp_ms":1783796400000,"final_headers_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","request_body_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","envelope_version":2,"key_epoch":11,"attempt_id":"attempt-ref-phase0-0001","absolute_deadline_ms":1783796460000,"content_length":17,"content_encoding":"identity","expected_response_policy_ref":"response-policy:anthropic-v1","verified_context_ref":"opaque:context-ref:v1:phase0","account_identity_ref":"opaque:account-ref:v1:phase0","manifest_authority_ref":"opaque:manifest-ref:v1:phase0","proxy_generation":7}`
 }
 
 func phase0ControlForRequest() control.Control {
