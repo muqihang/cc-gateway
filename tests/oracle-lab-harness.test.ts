@@ -120,6 +120,40 @@ test('context and handoff builders reject cross-input evidence and missing selec
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
 })
 
+test('handoff rejects a transient context pack whose registry claims or required command evidence is unrelated', async () => {
+  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-context-binding-'))
+  const results = path.join(root, 'results.json')
+  const baseline = entryBaseline
+  const catalogValue = await catalog()
+  const manifest = JSON.parse(await readFile(baseline, 'utf8')) as any
+  const records = catalogValue.map((entry): CommandResultRecord => {
+    const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+    const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(baseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+    return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+  })
+  const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: digestFile(baseline), records }
+  writeJson(results, { ...unsigned, result_set_digest: commandSetDigest(unsigned) })
+  const context = buildContextPack({ registry, claims, manifest: baseline, commandResults: results, requirementIds: ['HA-P0-001'] })
+  const contextPath = path.join(root, 'context.json')
+  writeJson(contextPath, { ...context, registry_digest: otherDigest, tests: context.tests.map((test) => ({ ...test, command_id: 'cc-build' })) })
+  assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: results, context: contextPath, registry, claims }), /context|requirement|catalog/i)
+})
+
+test('evidence containment rejects symlink parents and destinations without touching external targets', async () => {
+  const { assertEvidencePath } = await import('../tools/oracle-lab/harness-core.js')
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-symlink-evidence-'))
+  const evidence = path.join(root, 'docs/superpowers/evidence'); const external = path.join(root, 'external');
+  await mkdir(evidence, { recursive: true }); await mkdir(external, { recursive: true })
+  const target = path.join(external, 'target.json'); await writeFile(target, 'untouched')
+  await symlink(external, path.join(evidence, 'linked-parent'))
+  assert.throws(() => assertEvidencePath(path.join(evidence, 'linked-parent', 'out.json'), evidence), /symlink|containment|escape/i)
+  const destination = path.join(evidence, 'destination.json'); await symlink(target, destination)
+  assert.throws(() => assertEvidencePath(destination, evidence), /symlink|containment|escape/i)
+  assert.equal(await readFile(target, 'utf8'), 'untouched')
+})
+
 test('documented Task 8 pipeline canonicalizes the exact transient context into commit-bound evidence', async () => {
   const originalCwd = process.cwd()
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-documented-pipeline-'))

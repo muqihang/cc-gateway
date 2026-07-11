@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, constants as fsConstants, lstatSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 export type HarnessErrorRecord = { code: string; path: string; message: string }
@@ -60,6 +60,27 @@ export function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
 
+export function writeExclusiveJson(file: string, value: unknown): void {
+  assertSafeArtifact(value)
+  assertEvidencePath(file)
+  const payload = `${canonicalJson(value)}\n`
+  const temp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  let fd: number | undefined
+  try {
+    fd = openSync(temp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600)
+    writeFileSync(fd, payload)
+    closeSync(fd); fd = undefined
+    try { if (lstatSync(file).isSymbolicLink()) throw Object.assign(new Error(`${file} is a symlink`), { code: 'artifact_symlink' }) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    renameSync(temp, file)
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd)
+    try { unlinkSync(temp) } catch { /* best effort cleanup */ }
+    throw error
+  }
+}
+
 const UNSAFE_ARTIFACT = /(?:ORACLE[_-]?SECRET[_-]?CANARY|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|\b(?:Cookie|Set-Cookie|Authorization)\s*:|\b(?:TOKEN|SECRET|API_KEY)\s*[:=]\s*[^\s"']+|https?:\/\/[^\s/]+@|(?:^|[\s"'])(?:\/Users\/|\/home\/|\/private\/|\/tmp\/|\/var\/folders\/|[A-Za-z]:\\Users\\))/i
 
 export function assertSafeArtifact(value: unknown): void {
@@ -107,10 +128,29 @@ export function requireValid(validation: HarnessResult): void {
 }
 
 export function assertEvidencePath(file: string, root = path.resolve('docs/superpowers/evidence')): void {
+  const resolvedRoot = path.resolve(root)
   const resolved = path.resolve(file)
-  const relative = path.relative(root, resolved)
+  const relative = path.relative(resolvedRoot, resolved)
   if (relative.startsWith('..') || path.isAbsolute(relative) || relative === '') {
     throw Object.assign(new Error(`${file} is outside the evidence root`), { code: 'artifact_path_escape' })
+  }
+  const existing: string[] = []
+  let cursor = resolved
+  while (cursor !== path.dirname(cursor)) {
+    try { lstatSync(cursor); existing.push(cursor) } catch { /* destination may be new */ }
+    cursor = path.dirname(cursor)
+  }
+  try { lstatSync(cursor); existing.push(cursor) } catch { /* root may be created by caller */ }
+  for (const candidate of existing) {
+    if (lstatSync(candidate).isSymbolicLink()) throw Object.assign(new Error(`${candidate} is a symlink`), { code: 'artifact_symlink' })
+  }
+  try {
+    const rootReal = realpathSync(resolvedRoot)
+    const parentReal = realpathSync(path.dirname(resolved))
+    const realRelative = path.relative(rootReal, parentReal)
+    if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) throw Object.assign(new Error(`${file} escapes evidence root`), { code: 'artifact_path_escape' })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'artifact_path_escape') throw error
   }
 }
 

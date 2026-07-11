@@ -1,13 +1,14 @@
-import { realpathSync, writeFileSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { validateManifestArtifact } from './freeze-baseline.js'
-import { assertEvidencePath, assertSafeArtifact, canonicalJson, cli, digestFile, exactKeys, isObject, parseArgs, readJson, requireValid, result, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import { assertEvidencePath, assertSafeArtifact, canonicalJson, cli, digestFile, exactKeys, isObject, parseArgs, readJson, requireValid, result, writeExclusiveJson, writeJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
 import { validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
 import { validateCommandResultsBindings } from './merge-command-results.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
 import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
+import { validateRunInputs } from './validate-run-manifest.js'
 
 export type HandoffBundle = {
   schema_version: 1
@@ -54,7 +55,7 @@ export function validateHandoffValue(value: unknown, now = Date.now(), verifyArt
   return result(errors)
 }
 
-export function buildHandoff(options: { phase: string; baseline: string; commandResults: string; context?: string; catalog?: string; out?: string; generatedAt?: string }): HandoffBundle {
+export function buildHandoff(options: { phase: string; baseline: string; commandResults: string; context?: string; catalog?: string; registry?: string; claims?: string; out?: string; generatedAt?: string }): HandoffBundle {
   const baseline = readJson(options.baseline)
   try { validateManifestArtifact(baseline) } catch { if (!baselineShape(baseline)) throw Object.assign(new Error('baseline is invalid'), { code: 'invalid_baseline' }) }
   const results = readJson(options.commandResults); requireValid(validateCommandResultsValue(results)); const typedResults = results as CommandResultSet
@@ -70,11 +71,21 @@ export function buildHandoff(options: { phase: string; baseline: string; command
     assertEvidencePath(contextPath)
   }
   const contextValue = readJson(contextSourcePath); requireValid(validateContextPackValue(contextValue)); const context = contextValue as ContextPack
+  const registryPath = options.registry ?? 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claimsPath = options.claims ?? 'docs/superpowers/registry/oracle-lab-claims.json'
+  requireValid(validateRunInputs(registryPath, claimsPath, options.baseline, catalogPath))
+  if (context.registry_digest !== digestFile(registryPath) || context.claims_digest !== digestFile(claimsPath)) throw Object.assign(new Error('context registry or claims digest does not match supplied inputs'), { code: 'context_registry_claims_mismatch' })
+  const registryValue = readJson(registryPath)
+  const knownRequirements = new Set(Array.isArray(registryValue) ? registryValue.map((entry) => isObject(entry) ? entry.requirement_id : undefined).filter((id): id is string => typeof id === 'string') : [])
+  if (context.requirement_ids.some((id) => !knownRequirements.has(id))) throw Object.assign(new Error('context contains an unknown requirement'), { code: 'unknown_requirement' })
+  const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => context.requirement_ids.includes(id))).map((entry) => entry.id).sort()
+  const contextCommands = context.tests.map((entry) => entry.command_id).sort()
+  if (JSON.stringify(selectedCommands) !== JSON.stringify(contextCommands)) throw Object.assign(new Error('context does not contain the exact catalog command evidence for its requirements'), { code: 'context_command_evidence_mismatch' })
   if (context.manifest_digest !== digestFile(options.baseline)) throw Object.assign(new Error('context does not match baseline'), { code: 'cross_manifest_context' })
   if (canonicalJson(context.repositories) !== canonicalJson(Object.entries((baseline as { repositories: Record<string, { head: string; dirty_digest: string }> }).repositories).map(([name, repository]) => ({ name, commit: repository.head, dirty_digest: `sha256:${repository.dirty_digest}` })).sort((a, b) => a.name.localeCompare(b.name)))) throw Object.assign(new Error('context repositories do not match baseline'), { code: 'cross_repository_context' })
   const resultDigests = new Map(typedResults.records.map((record) => [record.command_id, record.result_digest]))
   if (context.tests.some((test) => resultDigests.get(test.command_id) !== test.result_digest)) throw Object.assign(new Error('context tests do not match command results'), { code: 'cross_result_context' })
-  if (!options.context) writeFileSync(contextPath, `${canonicalJson(context)}\n`, { mode: 0o600 })
+  if (!options.context) writeExclusiveJson(contextPath, context)
   const generated = new Date(options.generatedAt ?? new Date().toISOString())
   const artifacts = [{ path: options.baseline, digest: digestFile(options.baseline) }, ...(contextPath ? [{ path: contextPath, digest: digestFile(contextPath) }] : [])]
   for (const artifact of artifacts) assertEvidencePath(artifact.path)
@@ -87,5 +98,5 @@ export function buildHandoff(options: { phase: string; baseline: string; command
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {
   const args = parseArgs(process.argv.slice(2)); const phase = args.values.phase?.[0]; const baseline = args.values.baseline?.[0]; const commandResults = args.values['command-results']?.[0]; const out = args.values.out?.[0]
   if (!phase || !baseline || !commandResults || !out) throw Object.assign(new Error('--phase, --baseline, --command-results, and --out are required'), { code: 'invalid_arguments' })
-  writeJson(out, buildHandoff({ phase, baseline, commandResults, context: args.values.context?.[0], catalog: args.values.catalog?.[0], out }))
+  writeJson(out, buildHandoff({ phase, baseline, commandResults, context: args.values.context?.[0], catalog: args.values.catalog?.[0], registry: args.values.registry?.[0], claims: args.values.claims?.[0], out }))
 })

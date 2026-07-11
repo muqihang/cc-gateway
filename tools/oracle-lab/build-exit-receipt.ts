@@ -9,6 +9,8 @@ import { buildExitReport } from './build-exit-report.js'
 import { validateManifestArtifact } from './freeze-baseline.js'
 import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
 import { validateRequirements } from './validate-requirements.js'
+import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
+import { validateRunInputs } from './validate-run-manifest.js'
 
 export type ExitReceipt = { schema_version: 1; generated_at: string; baseline_digest: string; handoff_digest: string; handoff_commit: string; artifact_digests: Record<string, string>; repository_heads: Record<string, string>; retention_class: string; redaction_policy: string; destruction_procedure: string }
 const fields = ['schema_version', 'generated_at', 'baseline_digest', 'handoff_digest', 'handoff_commit', 'artifact_digests', 'repository_heads', 'retention_class', 'redaction_policy', 'destruction_procedure'] as const
@@ -43,7 +45,7 @@ function commitFileDigest(commit: string, file: string): string {
   return sha256(execFileSync('git', ['show', `${commit}:${file}`], { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 }))
 }
 
-export function buildExitReceipt(options: { baseline: string; handoff: string; handoffCommit: string; artifacts?: string[]; generatedAt?: string }): ExitReceipt {
+export function buildExitReceipt(options: { baseline: string; handoff: string; handoffCommit: string; artifacts?: string[]; generatedAt?: string; registry?: string; claims?: string; catalog?: string }): ExitReceipt {
   const baseline = readJson(options.baseline); const handoff = readJson(options.handoff)
   try { validateManifestArtifact(baseline) } catch { throw Object.assign(new Error('baseline is invalid'), { code: 'invalid_baseline' }) }
   requireValid(validateHandoffValue(handoff)); const typedHandoff = handoff as HandoffBundle
@@ -53,6 +55,17 @@ export function buildExitReceipt(options: { baseline: string; handoff: string; h
   const contextPath = contextArtifacts[0].path
   const contextValue = readJson(contextPath); requireValid(validateContextPackValue(contextValue)); const context = contextValue as ContextPack
   if (digestFile(contextPath) !== typedHandoff.context_pack_digest || context.manifest_digest !== typedHandoff.baseline_digest) throw Object.assign(new Error('context does not bind handoff and baseline'), { code: 'context_binding_mismatch' })
+  const registryPath = options.registry ?? REQUIREMENT_REGISTRY
+  const claimsPath = options.claims ?? 'docs/superpowers/registry/oracle-lab-claims.json'
+  const catalogPath = options.catalog ?? 'docs/superpowers/registry/oracle-lab-command-catalog.json'
+  requireValid(validateRunInputs(registryPath, claimsPath, options.baseline, catalogPath))
+  if (context.registry_digest !== digestFile(registryPath) || context.claims_digest !== digestFile(claimsPath)) throw Object.assign(new Error('context registry or claims digest does not match supplied inputs'), { code: 'context_registry_claims_mismatch' })
+  const registryValue = readJson(registryPath)
+  const knownRequirements = new Set(Array.isArray(registryValue) ? registryValue.map((entry) => isObject(entry) ? entry.requirement_id : undefined).filter((id): id is string => typeof id === 'string') : [])
+  if (context.requirement_ids.some((id) => !knownRequirements.has(id))) throw Object.assign(new Error('context contains an unknown requirement'), { code: 'unknown_requirement' })
+  const catalog = readJson(catalogPath) as CommandCatalogEntry[]; requireValid(validateCommandCatalogValue(catalog))
+  const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => context.requirement_ids.includes(id))).map((entry) => entry.id).sort()
+  if (JSON.stringify(selectedCommands) !== JSON.stringify(context.tests.map((entry) => entry.command_id).sort())) throw Object.assign(new Error('context command evidence is not exact'), { code: 'context_command_evidence_mismatch' })
   const artifacts = requiredReceiptArtifacts(typedHandoff.phase, options.baseline, contextPath, options.handoff)
   if (options.artifacts && (options.artifacts.length !== artifacts.length || [...options.artifacts].sort().some((file, index) => file !== artifacts[index]))) throw Object.assign(new Error('explicit artifact inventory is not exact'), { code: 'artifact_inventory_mismatch' })
   const handoffArtifactPaths = typedHandoff.artifacts.map((artifact) => artifact.path).sort()
@@ -77,5 +90,5 @@ export function buildExitReceipt(options: { baseline: string; handoff: string; h
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {
   const args = parseArgs(process.argv.slice(2)); const baseline = args.values.baseline?.[0]; const handoff = args.values.handoff?.[0]; const handoffCommit = args.values['handoff-commit']?.[0]; const out = args.values.out?.[0]
   if (!baseline || !handoff || !handoffCommit || !out) throw Object.assign(new Error('--baseline, --handoff, --handoff-commit, and --out are required'), { code: 'invalid_arguments' })
-  writeJson(out, buildExitReceipt({ baseline, handoff, handoffCommit, artifacts: args.values.artifact }))
+  writeJson(out, buildExitReceipt({ baseline, handoff, handoffCommit, artifacts: args.values.artifact, registry: args.values.registry?.[0], claims: args.values.claims?.[0], catalog: args.values.catalog?.[0] }))
 })
