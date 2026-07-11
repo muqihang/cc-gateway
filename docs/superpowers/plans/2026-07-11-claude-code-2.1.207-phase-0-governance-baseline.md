@@ -14,13 +14,31 @@
 - Current planning worktree: `/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-phase-0`.
 - Read-only Sub2API reconnaissance root: `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main` at `main@a0c51e3c674c858fb11b09f21d94d72ec909f554`.
 - Planned Sub2API Phase 0 implementation worktree after plan approval: `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0` on branch `codex/oracle-phase-0-governance`.
-- Current CC Gateway planning base: `7827aac`; the parent `main` fast-forward is blocked by the stale contract-fixture baseline failure.
+- Current CC Gateway planning base: `7827aac`; the parent `main` fast-forward is held by a release/process gate because the baseline test suite currently has a stale contract-fixture failure.
 - Precedence: `Hardening Amendments > Adversarial Validation v2 > Oracle Lab Design` until the registry records a consolidated source map.
 - Real upstream requests, real credentials, profile promotion, and production deployment are forbidden in Phase 0.
 - No raw prompts, bodies, credentials, CCH, ClientHello, account identifiers, proxy credentials, or unrestricted diagnostics may be persisted.
 - Every requirement, claim, baseline input, test result, and generated artifact has a stable reference and digest.
 - Missing, stale, contradictory, or expired inputs fail closed and are never replaced by guessed defaults.
 - Existing user-created untracked files, including `.DS_Store`, are not staged, modified, or deleted.
+- Every JSON schema carries `schema_version`, `compatibility_policy`, `retention_class`, `redaction_policy`, and `destruction_procedure`.
+
+## Task Metadata and Execution Order
+
+Execute tasks in this order: `Task 0 -> Task 0.5 -> Task 1 -> Task 2 -> Task 4 -> Task 5 -> Task 6 -> Task 7 -> Task 8 -> Task 9`.
+
+| Task | Requirement IDs | Owner | Depends on | Rollback |
+| --- | --- | --- | --- | --- |
+| 0 | `HA-P0-000` | release-engineering | none | remove only the newly registered Phase 0 worktree after explicit approval |
+| 0.5 | `HA-P0-004`, `OL-LEGACY-001` | cc-gateway-oracle-owner | Task 0 | discard only the uncommitted `/tmp` entry artifacts |
+| 1 | `HA-P0-001`, `HA-P0-002` | cc-gateway-oracle-owner | Task 0.5 | revert the task commit; keep source documents intact |
+| 2 | `HA-P0-003` | cc-gateway-oracle-owner | Task 1 | revert claim registry/validator commit |
+| 4 | `HA-P0-005` | cc-gateway-oracle-owner and release-approver | Task 1, Task 2 | disable formal-pool mode when the boundary is missing or unsupported |
+| 5 | `HA-P0-006` | cc-gateway-oracle-owner | Task 0.5 | restore only the test fixture references; never restore stale paths |
+| 6 | `AV-B1-001`, `AV-B2-001`, `AV-B3-001` | sub2api-formal-pool-owner | Task 0, Task 1 | remove only the phase0red test commit |
+| 7 | `AV-B4-001`, `AV-B5-001`, `AV-B6-001` | cc-gateway-oracle-owner and sidecar-owner | Task 1, Task 2 | remove only the phase0red test commit; keep baseline resolver |
+| 8 | `HA-P0-007` | cc-gateway-oracle-owner | Task 1, Task 2, Task 0.5 | disable H0 commands; retain safe registry artifacts |
+| 9 | `HA-P0-008` | cc-gateway-oracle-owner and security-reviewer | all prior tasks | mark roadmap `blocked_by_baseline`; do not promote or deploy |
 
 ---
 
@@ -39,6 +57,35 @@ Phase 0 is complete only when:
 
 No Phase 1 implementation begins while any exit condition is red.
 
+## Task 0: Create the Sub2API Phase 0 Worktree and Verify Its Baseline
+
+**Files:**
+- Git worktree only: `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0`
+
+**Interfaces:**
+- Branch: `codex/oracle-phase-0-governance` from Sub2API `main@a0c51e3c674c858fb11b09f21d94d72ec909f554`.
+- The worktree must be created only after this plan is approved and only after `.worktrees/` passes `git check-ignore`.
+
+- [ ] **Step 1: Verify ignored worktree directory**
+
+Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main`: `git check-ignore -q .worktrees`.
+
+Expected: exit code `0`; do not edit `.gitignore` because the directory is already ignored.
+
+- [ ] **Step 2: Create the worktree**
+
+Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main`: `git worktree add .worktrees/oracle-phase-0 -b codex/oracle-phase-0-governance a0c51e3c674c858fb11b09f21d94d72ec909f554`.
+
+Expected: the new worktree is registered at the declared path and has the declared branch/HEAD.
+
+- [ ] **Step 3: Install and run the baseline**
+
+Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend`: `go mod download`.
+
+Run separately: `go test ./internal/service ./internal/server/routes ./internal/handler/admin -count=1`.
+
+Expected: dependencies resolve and the targeted baseline either passes or produces a recorded pre-existing failure; no implementation proceeds on an unexplained failure.
+
 ## Task 1: Reconcile Document Authority and Requirement IDs
 
 **Files:**
@@ -53,10 +100,11 @@ No Phase 1 implementation begins while any exit condition is red.
 - IDs use `OL-*`, `AV-*`, and `HA-*`; IDs do not depend on mutable line numbers.
 - Each record contains `requirement_id`, `source_document`, `source_section`, `precedence`, `priority`, `depends_on`, `acceptance_gate`, `implementation_status`, `owner`, `repository`, `implementation_files`, `test_files`, `verification_command`, `evidence_artifact`, `last_verified_commit`, `last_verified_at`, `expiry`, and `known_gaps`.
 - `validateRequirements(path: string): ValidationResult` rejects unknown fields, duplicate IDs, missing sections, unresolved dependencies, invalid status transitions, and unowned P0/P1 records.
+- `ValidationResult` is exactly `{ ok: true; errors: [] } | { ok: false; errors: Array<{ code: string; path: string; message: string }> }`.
 
 - [ ] **Step 1: Add registry metadata to the three designs**
 
-Each Status section names `docs/superpowers/registry/oracle-lab-requirements.json`, the precedence rule, and the document's ID prefix.
+Each Status section names `docs/superpowers/registry/oracle-lab-requirements.json`, the precedence rule, and the document's ID prefix. Inventory every P0/P1 normative group in the three documents, including all IDs in the Task Metadata table, `OL-LEGACY-001`, and every Phase 0 exit gate; the single example record below is the required shape, not the complete inventory.
 
 - [ ] **Step 2: Seed the registry**
 
@@ -87,7 +135,7 @@ Use this exact record shape:
 
 - [ ] **Step 3: Write and run the failing registry test**
 
-Test duplicate IDs, invalid precedence, missing sections, invalid status ordering, missing P0/P1 owners, and `production_verified` without an upstream canary dependency.
+Test duplicate IDs, invalid precedence, missing sections, invalid status ordering, missing P0/P1 owners, and `production_verified` without all of: upstream canary evidence, production gates, rollback evidence, current deployed commit/digests, non-expired evidence, and an empty contradiction list.
 
 Run: `npm exec tsx tests/oracle-lab-traceability.test.ts`
 
@@ -118,6 +166,8 @@ git commit -m "feat: add oracle lab requirement traceability"
 - Claim classes: `local_structural`, `local_observational`, `upstream_canary`, `provider_internal`.
 - Authority states: `unverified`, `package_observed`, `local_wire_observed`, `cross_checked`, `gateway_wire_equivalent`, `stateful_behavior_equivalent`, `upstream_canary_observed`, `production_verified`.
 - A provider-internal claim remains unknown without authoritative provider disclosure; a local claim cannot imply server acceptance.
+- `validateClaims(path: string, requirements: RequirementRecord[]): ValidationResult` uses the same structured error type as Task 1.
+- A `production_verified` claim requires `upstream_canary_observed`, all production gate IDs, rollback evidence, deployed code/config/manifest digests, non-expired evidence, and no unresolved contradiction.
 
 - [ ] **Step 1: Write RED claim fixtures**
 
@@ -129,7 +179,7 @@ Expected: FAIL because claim validation does not exist.
 
 - [ ] **Step 2: Implement strict claim validation**
 
-Validate class, authority ceiling, evidence scope, server dependency, confidence, contradiction, expiry, and canary linkage.
+Implement strict enum parsing and validate class, authority ceiling, evidence scope, server dependency, confidence, contradiction, expiry, canary linkage, deployed digests, rollback evidence, and production-gate references.
 
 Run: `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`
 
@@ -142,7 +192,9 @@ git add docs/superpowers/registry/oracle-lab-claims.json docs/superpowers/schema
 git commit -m "feat: add oracle lab claim authority matrix"
 ```
 
-## Task 3: Freeze Both Repositories and the Shared Contract
+## Task 0.5: Capture the Immutable Entry Baseline
+
+This task runs immediately after Task 0 and before Task 1. It provides the actual Phase 0 entry snapshot; Task 9 creates a separate exit snapshot.
 
 **Files:**
 - Create: `docs/superpowers/schemas/oracle-lab-run-manifest.schema.json`
@@ -152,12 +204,14 @@ git commit -m "feat: add oracle lab claim authority matrix"
 
 **Interfaces:**
 - CLI: `npm exec tsx tools/oracle-lab/freeze-baseline.ts -- --cc-gateway-root "$CC_GATEWAY_ROOT" --sub2api-root "$SUB2API_ROOT" --contract-path "$SUB2API_FORMAL_POOL_CONTRACT_PATH" --out /tmp/oracle-lab-phase-0-baseline.json`.
-- Persist commits, dirty-state digests, path categories, package/runtime/tool digests, contract digest, and declared network/sensitivity policy; do not persist machine absolute paths.
+- Persist commits, dirty-state digests, path categories, package/runtime/tool digests, contract digest, declared network/sensitivity policy, persona/request-shape/CCH/TLS registry digests, manifest/root metadata digests or explicit absence markers, CodeGraph index digest/fallback reason, and observer/parser/canonicalizer digests; do not persist machine absolute paths.
 - Reject an undeclared dirty tree. `--allow-dirty-digest` is accepted only when its supplied digest exactly matches the computed complete diff digest.
+- Compute dirty state from sorted `git status --porcelain=v1 -z --untracked-files=all`, `git diff --binary HEAD`, sorted untracked-file hashes, and recursive submodule status. Ignored files are excluded and every exclusion rule is recorded.
+- Freeze the current `2.1.197` persona/request/CCH/TLS tuple as `unverified_legacy` comparison-only evidence under requirement `OL-LEGACY-001`; it cannot be selected for promotion.
 
 - [ ] **Step 1: Write and run RED baseline tests**
 
-Cover undeclared dirty tree, missing contract, digest mismatch, symlink escape, and a clean two-repository fixture.
+Cover undeclared tracked and untracked changes, submodule drift, missing contract, digest mismatch, symlink escape, missing registry digests, CodeGraph absence/fallback, and a clean two-repository fixture.
 
 Run: `npm exec tsx tests/oracle-lab-baseline-freeze.test.ts`
 
@@ -165,19 +219,19 @@ Expected: FAIL because the baseline tool does not exist.
 
 - [ ] **Step 2: Implement baseline capture and validation**
 
-Capture repository role, HEAD, branch, dirty digest, contract source category/SHA-256, package lock, sidecar source/binary, OS/build/architecture/runtime/CA/tool digests, selected requirements, and policies.
+Implement the exact canonical dirty-state algorithm above. Hash `src/persona-registry.ts`, `src/persona-resolver.ts`, `src/policy.ts`, `src/egress-tls-profile.ts`, relevant CCH sections in `src/proxy.ts`, the sidecar profile/summary sources, current manifest/root files or absence markers, `tools/claude-*`, parser/canonicalizer modules, package locks, and CodeGraph index metadata.
 
 - [ ] **Step 3: Verify and capture the current baseline**
 
 ```bash
 export CC_GATEWAY_ROOT=/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-phase-0
-export SUB2API_ROOT=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main
-export SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json
+export SUB2API_ROOT=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0
+export SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json
 npm exec tsx tests/oracle-lab-baseline-freeze.test.ts
 npm exec tsx tools/oracle-lab/freeze-baseline.ts -- --cc-gateway-root "$CC_GATEWAY_ROOT" --sub2api-root "$SUB2API_ROOT" --contract-path "$SUB2API_FORMAL_POOL_CONTRACT_PATH" --out /tmp/oracle-lab-phase-0-baseline.json
 ```
 
-Expected: PASS and an entry manifest recording CC Gateway `7827aac`, Sub2API `a0c51e3`, and contract SHA-256 `70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`. Task 9 creates a separate exit manifest after the phase commits.
+Expected: PASS and an immutable entry manifest recording the actual approved-plan CC Gateway HEAD, Sub2API `a0c51e3`, contract SHA-256 `70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`, the `unverified_legacy` tuple, and every required dependency digest. Task 9 creates a separate exit manifest from the final worktree HEADs.
 
 - [ ] **Step 4: Commit**
 
@@ -192,6 +246,9 @@ git commit -m "feat: add oracle lab baseline freeze manifest"
 - Create: `docs/superpowers/adr/0001-gateway-compromise-boundary.md`
 - Modify: `src/config.ts`
 - Modify: `tests/config.test.ts`
+- Modify: `config.sub2api.formal-pool.example.yaml`
+- Modify: `docs/formal-pool-sub2api-safety.md`
+- Modify: `tests/formal-pool-safety-doc.test.ts`
 - Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 
 **Decision Gate:** Evaluate `protected_gateway` and `trusted_gateway`. The recommended choice is `protected_gateway`. Formal-pool configuration has no implicit default and must declare one choice.
@@ -200,11 +257,13 @@ git commit -m "feat: add oracle lab baseline freeze manifest"
 - Add `shared_pool.gateway_compromise_boundary?: 'protected_gateway' | 'trusted_gateway'`.
 - `validateFormalPoolMode` rejects omission or unknown values in formal-pool mode.
 - The safe run manifest records the normalized choice.
-- Phase 0 does not implement the policy broker; the ADR maps that work to Phase 4 when `protected_gateway` is selected.
+- `protected_gateway` is accepted only for local-capture/preflight in Phase 0. Any production or real-canary mode with `protected_gateway` fails closed with `protected_gateway_authority_unavailable` until the Phase 4 policy broker is locally verified.
+- `trusted_gateway` is the only Phase 0 production-compatible choice and the ADR/config/docs must state that a compromised Gateway is outside the sidecar prevention boundary.
+- The example config and operator safety document use an explicit boundary value and state the limitation; no implicit default is introduced.
 
 - [ ] **Step 1: Write the ADR and RED config tests**
 
-Cover missing, invalid, explicit trusted, and explicit protected values.
+Cover missing, invalid, explicit trusted, explicit protected local-capture, protected production rejection, and safe-document/config-example consistency.
 
 Run: `npm exec tsx tests/config.test.ts`
 
@@ -216,12 +275,12 @@ Update the config type, YAML parsing, validation, and safe summary.
 
 Run: `npm exec tsx tests/config.test.ts`
 
-Expected: PASS with both explicit choices accepted and omission rejected only for formal-pool mode.
+Expected: PASS with explicit trusted production accepted, protected local-capture accepted, protected production rejected, and omission rejected in formal-pool mode.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/superpowers/adr/0001-gateway-compromise-boundary.md src/config.ts tests/config.test.ts docs/superpowers/registry/oracle-lab-requirements.json
+git add docs/superpowers/adr/0001-gateway-compromise-boundary.md src/config.ts tests/config.test.ts config.sub2api.formal-pool.example.yaml docs/formal-pool-sub2api-safety.md tests/formal-pool-safety-doc.test.ts docs/superpowers/registry/oracle-lab-requirements.json
 git commit -m "feat: declare formal-pool gateway compromise boundary"
 ```
 
@@ -235,16 +294,18 @@ git commit -m "feat: declare formal-pool gateway compromise boundary"
 - Modify: `tests/proxy-sub2api.test.ts`
 
 **Interfaces:**
-- Export `resolveFormalPoolContract(input: { explicitPath?: string; gatewayRoot: string; sub2apiRoot?: string }): { path: string; sourceCategory: 'explicit_env' | 'sibling_main' | 'declared_root'; digest: string }`.
+- Export `resolveFormalPoolContract(input: { explicitPath?: string; gatewayRoot: string; sub2apiRoot?: string; expectedHead?: string; expectedDigest?: string }): { path: string; sourceCategory: 'explicit_env' | 'sibling_main' | 'declared_root' | 'declared_worktree'; digest: string; fixture: SharedContractFixture }`.
 - Resolution order is `SUB2API_FORMAL_POOL_CONTRACT_PATH`, then a declared `SUB2API_ROOT`, then the deterministic sibling main repository only when its current checkout is `main` and the contract exists.
-- Reject feature-worktree paths, stale branch names, missing files, symlinks escaping the declared root, and digest changes during one process.
-- The helper returns the parsed fixture plus source category; no test contains a machine-specific feature-worktree path.
+- Accept an explicitly declared worktree only when its root, HEAD, branch, and contract digest match the frozen manifest; reject undeclared or stale feature worktrees, missing files, symlinks escaping the root, and digest changes during one process.
+- `SharedContractFixture` is the exact union of fields already consumed by the three migrated tests: `materials`, `account`, `client_input`, `valid_context`, and optional `cases`.
 
 - [ ] **Step 1: Write and run RED discovery tests**
 
 Cover explicit override, current Sub2API main fallback, missing root, stale feature-worktree rejection, symlink escape rejection, digest mismatch, and source-category reporting.
 
-Run: `npm exec tsx tests/egress-tls-sidecar-real.test.ts && npm exec tsx tests/oracle-lab-contract-discovery.test.ts`
+Run: `npm exec tsx tests/egress-tls-sidecar-real.test.ts`.
+
+Run separately: `npm exec tsx tests/oracle-lab-contract-discovery.test.ts`.
 
 Expected: the existing real sidecar test fails with `ENOENT` for `claude-platform-aws-formal-pool`; the new discovery test fails because the resolver does not exist.
 
@@ -254,13 +315,19 @@ Remove the four stale constants from the three named test files. Resolve once at
 
 - [ ] **Step 3: Verify the focused tests**
 
-Run: `SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/oracle-lab-contract-discovery.test.ts && SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/egress-tls-sidecar.test.ts && SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/egress-tls-sidecar-real.test.ts`
+Run: `SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/oracle-lab-contract-discovery.test.ts`.
 
-Expected: all three pass while remaining local-only.
+Run separately: `SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/proxy-sub2api.test.ts`.
+
+Run separately: `SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/egress-tls-sidecar.test.ts`.
+
+Run separately: `SUB2API_FORMAL_POOL_CONTRACT_PATH=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json npm exec tsx tests/egress-tls-sidecar-real.test.ts`.
+
+Expected: all focused contract tests pass while remaining local-only.
 
 - [ ] **Step 4: Verify the Sub2API fixture**
 
-Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/backend`: `go test ./internal/service -run 'FormalPool|ClaudeCode|Contract' -count=1`.
+Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend`: `go test ./internal/service -run 'FormalPool|ClaudeCode|Contract' -count=1`.
 
 Expected: PASS against `backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json`.
 
@@ -273,7 +340,6 @@ Run: `git add tools/oracle-lab/resolve-formal-pool-contract.ts tests/oracle-lab-
 **Files:**
 - Create: `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/service/formal_pool_onboarding_phase0_red_test.go`
 - Create: `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go`
-- Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 
 **Interfaces and RED expectations:**
 - B1 `AttestBrowserEgress` must require a server-generated, session-bound, single-use proof or completed server-side egress observation. The current non-empty `verification_code` behavior is at `formal_pool_onboarding_service.go:663`.
@@ -290,7 +356,7 @@ Expected: the arbitrary non-empty code case fails against the current implementa
 
 - [ ] **Step 2: Add B2 failing authorization tests**
 
-Create two principals, groups, and tenants. Attempt cross-boundary reads/writes for `GetSession`, `TestProxy`, browser attestation, OAuth generation/exchange, healthcheck, activation, and promotion.
+Create two principals, two administrators, two groups, and two tenants. Attempt cross-boundary reads/writes for session creation, `GetSession`, `TestProxy`, browser attestation, OAuth generation/exchange, setup-token exchange, acceptance, refresh-only, runtime registration, healthcheck, start-warming, abort, activation, and promotion.
 
 Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend`: `go test -tags=phase0red ./internal/service ./internal/server/routes -run 'FormalPoolOnboarding|FormalPoolOperations' -count=1`.
 
@@ -302,11 +368,15 @@ Keep a positive configured-origin test. Add hostile `Host`, `X-Forwarded-Host`, 
 
 - [ ] **Step 4: Record provenance and commit the RED fixtures**
 
-Each B1-B3 record includes repository, commit, symbol, test name, observed date, failure digest, and `implementation_status: failing_test_added`. The RED files carry `//go:build phase0red`, so the normal backend suite remains green while the explicit revalidation suite records the known failures. The Sub2API implementation/test commit is created only in its Phase 0 worktree after this plan passes review.
+Each B1-B3 record includes repository, commit, symbol, test name, observed date, failure digest, and `implementation_status: failing_test_added`. The RED files carry `//go:build phase0red`, so the normal backend suite remains green while the explicit revalidation suite records the known failures.
 
 - [ ] **Step 5: Commit the Sub2API RED fixtures**
 
 Run from the Sub2API Phase 0 worktree: `git add backend/internal/service/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go && git commit -m "test: revalidate onboarding authorization boundaries"`.
+
+- [ ] **Step 6: Update the CC Gateway registry in its own repository commit**
+
+Run from `/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-phase-0`: `git add docs/superpowers/registry/oracle-lab-requirements.json && git commit -m "docs: record onboarding boundary revalidation"`.
 
 ## Task 7: Add B4-B6 Revalidation and RED Sidecar Tests
 
@@ -317,6 +387,7 @@ Run from the Sub2API Phase 0 worktree: `git add backend/internal/service/formal_
 - Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 
 **Interfaces and RED expectations:**
+- Both Go files begin with `//go:build phase0red` and are excluded from `go test ./...`; they run only with `-tags=phase0red`.
 - B4 formal-pool requests deny before DNS/socket creation unless context, proxy, sidecar, manifest, and account identity are present.
 - B5 sidecar authentication must bind complete control, final headers/body hashes, nonce/timestamp, profile, target, route, method, proxy identity, and expected summary. Current `computeProxyBinding` plus JSON `x-cc-egress-control` is incomplete.
 - B6 proxy destination policy must normalize addresses, reject unsafe ranges, pin resolution, and reject redirects/alternate dial targets. Current TypeScript/Go URL checks are primarily syntax checks.
@@ -333,7 +404,9 @@ Expected: missing manifest/generation cases remain RED until the Phase 2 contrac
 
 Mutate fields, duplicate/reorder JSON keys, alter Unicode escaping, change final hashes, replay after completion/restart, and replay against a second replica. Add equivalent Go control/server tests.
 
-Run: `npm exec tsx tests/red/phase0-boundary.red.test.ts && (cd sidecar/egress-tls-sidecar && go test -tags=phase0red ./internal/control ./internal/server -count=1)`.
+Run: `npm exec tsx tests/red/phase0-boundary.red.test.ts`.
+
+Run from `/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-phase-0/sidecar/egress-tls-sidecar`: `go test -tags=phase0red ./internal/control ./internal/server -count=1`.
 
 Expected: current partial-binding and restart-replay gaps are visible as deterministic failures.
 
@@ -353,19 +426,70 @@ Run: `git add tests/red/phase0-boundary.red.test.ts sidecar/egress-tls-sidecar/i
 - Create: `tools/oracle-lab/validate-run-manifest.ts`
 - Create: `tools/oracle-lab/build-context-pack.ts`
 - Create: `tools/oracle-lab/build-handoff-bundle.ts`
+- Create: `tools/oracle-lab/validate-command-catalog.ts`
+- Create: `tools/oracle-lab/validate-context-pack.ts`
+- Create: `tools/oracle-lab/run-command-catalog.ts`
+- Create: `tools/oracle-lab/build-exit-report.ts`
 - Create: `tests/oracle-lab-harness.test.ts`
 - Create: `docs/superpowers/schemas/oracle-lab-handoff.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-command-catalog.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-context-pack.schema.json`
+- Create: `docs/superpowers/registry/oracle-lab-command-catalog.json`
 - Modify: `package.json`
 
 **Interfaces:**
 - `npm run oracle:validate -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest /tmp/oracle-lab-phase-0-baseline.json`.
 - `npm run oracle:context -- --requirement HA-P0-001 --requirement HA-P0-002 --out /tmp/oracle-lab-context-pack.json`.
-- `npm run oracle:handoff -- --phase phase-0 --baseline /tmp/oracle-lab-phase-0-baseline.json --out /tmp/oracle-lab-phase-0-handoff.json`.
+- `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-green --results /tmp/oracle-lab-phase-0-green-results.json`.
+- `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-red --results /tmp/oracle-lab-phase-0-red-results.json`.
+- `npm run oracle:handoff -- --phase phase-0 --baseline docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json --command-results /tmp/oracle-lab-phase-0-command-results.json --out docs/superpowers/evidence/phase-0/phase-0-handoff.json`.
+- `npm run oracle:exit-report -- --handoff docs/superpowers/evidence/phase-0/phase-0-handoff.json --out docs/superpowers/evidence/phase-0/phase-0-exit-report.md`.
 - Packs contain approved files/symbols, line references, requirement records, and test status; they exclude raw secrets and unrestricted logs.
+- Add these exact package scripts: `oracle:validate`, `oracle:context`, `oracle:commands`, `oracle:handoff`, and `oracle:exit-report`; each delegates to the corresponding `tools/oracle-lab/*.ts` entry point through the existing `tsx` toolchain.
+- `oracle:validate` composes run-manifest, requirement, claim, and command-catalog validation and fails closed if any referenced digest or requirement is missing.
+
+`CommandCatalogEntry` is exact and versioned:
+
+```ts
+type CommandCatalogEntry = {
+  id: string;
+  schema_version: 1;
+  group: "phase0-green" | "phase0-red";
+  owner: string;
+  requirement_ids: string[];
+  repository: "cc-gateway" | "sub2api" | "egress-tls-sidecar";
+  cwd: "${CC_GATEWAY_ROOT}" | "${SUB2API_ROOT}/backend" | "${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar";
+  argv: string[];
+  timeout_ms: number;
+  expected_exit: 0 | "nonzero";
+  output_policy: "digest_only" | "redacted_excerpt";
+  rollback: string;
+};
+```
+
+`ContextPack` is also exact and versioned:
+
+```ts
+type ContextPack = {
+  schema_version: 1;
+  generated_at: string;
+  expires_at: string;
+  registry_digest: string;
+  claims_digest: string;
+  manifest_digest: string;
+  requirement_ids: string[];
+  repositories: Array<{ name: string; commit: string; dirty_digest: string }>;
+  sources: Array<{ path: string; symbol?: string; line?: number; digest: string }>;
+  tests: Array<{ command_id: string; status: "pass" | "expected_fail" | "unexpected_fail" | "unexpected_pass"; result_digest: string }>;
+  known_unknowns: string[];
+};
+```
+
+All H0 schemas use `schema_version: 1`, reject unknown fields, and carry `compatibility_policy`, `retention_class`, `redaction_policy`, and `destruction_procedure` metadata. Phase 0 allows additive backward-compatible changes only; a breaking schema change requires a new version and migration test. Generated context packs expire after 24 hours by default, command result excerpts after 7 days, and digest-only evidence follows the retention policy recorded in the handoff.
 
 - [ ] **Step 1: Write and run H0 RED tests**
 
-Reject missing repository digests, unknown requirements, artifacts outside the evidence root, incomplete handoffs, and raw secret canaries in safe artifacts.
+Reject missing repository digests, unknown requirements, duplicate command IDs, shell-string commands, undeclared environment expansion, invalid expected-exit values, artifacts outside the evidence root, expired context packs, incomplete handoffs, unknown schema fields, unsupported schema versions, and raw secret canaries in safe artifacts. Assert that a valid command catalog and context pack round-trip through validation, and that breaking schema changes fail without an explicit migration.
 
 Run: `npm exec tsx tests/oracle-lab-harness.test.ts`.
 
@@ -373,50 +497,69 @@ Expected: FAIL because the H0 commands and handoff schema do not exist.
 
 - [ ] **Step 2: Implement and verify H0**
 
-Add the three scripts and package commands without a new runtime dependency. All commands return `0` only when every referenced artifact and requirement validates.
+Add the scripts and package commands without a new runtime dependency. `run-command-catalog.ts` executes `argv` without a shell, expands only the declared root placeholders, runs one entry at a time, records the real exit code, duration, redacted output digest, and expected/observed classification, and continues after expected RED failures. All validation and generation commands return `0` only when every referenced artifact and requirement validates; the command runner returns non-zero for an unexpected failure or unexpected pass.
 
 Run: `npm exec tsx tests/oracle-lab-harness.test.ts`.
 
-Expected: PASS with invalid packs rejected and a valid pack/handoff generated twice with identical canonical digests.
+Expected: PASS with invalid catalogs/packs rejected and a valid catalog, pack, report, and handoff generated twice with identical canonical digests after volatile timestamps are excluded from the digest input.
 
 - [ ] **Step 3: Commit**
 
-Run: `git add tools/oracle-lab tests/oracle-lab-harness.test.ts docs/superpowers/schemas/oracle-lab-handoff.schema.json package.json && git commit -m "feat: add oracle lab phase handoff harness"`.
+Run: `git add tools/oracle-lab tests/oracle-lab-harness.test.ts docs/superpowers/schemas docs/superpowers/registry/oracle-lab-command-catalog.json package.json && git commit -m "feat: add oracle lab phase handoff harness"`.
 
 ## Task 9: Generate the Phase 0 Exit Report and Handoff Bundle
 
 **Files:**
+- Create: `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json`
 - Create: `docs/superpowers/evidence/phase-0/phase-0-exit-report.md`
 - Create: `docs/superpowers/evidence/phase-0/phase-0-handoff.json`
+- Create: `docs/superpowers/evidence/phase-0/phase-0-context-pack.json`
 - Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 - Modify: `docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md`
 
 **Interfaces:**
 - The report separates observed facts, local inferences, provider-internal unknowns, RED findings, disabled capabilities, and exact command results.
 - The handoff contains safe digests and references only.
+- The exit baseline is captured after all Phase 0 implementation commits and is distinct from the immutable entry baseline captured in Task 0.5.
 - The roadmap marks Phase 0 complete only if every exit condition is green; otherwise it records `blocked_by_baseline` with the failure digest.
 
 - [ ] **Step 1: Run the Phase 0 command set**
 
-Run: `npm run build && npm test && (cd sidecar/egress-tls-sidecar && go test ./...)`.
+Populate `oracle-lab-command-catalog.json` with separate entries for `npm run build`, `npm test`, the sidecar default suite, the Sub2API targeted default suite, the CC Gateway B4-B6 RED suite, the sidecar B4-B6 RED suite, and the Sub2API B1-B3 RED suite. Do not combine commands with `&&`, `;`, `sh -c`, or an equivalent shell wrapper.
 
-Run from `/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend`: `go test ./internal/service ./internal/server/routes ./internal/handler/admin -count=1`.
+Run: `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-green --results /tmp/oracle-lab-phase-0-green-results.json`.
 
-Run the explicit RED suites and capture their expected non-zero results: `npm exec tsx tests/red/phase0-boundary.red.test.ts; (cd sidecar/egress-tls-sidecar && go test -tags=phase0red ./internal/control ./internal/server -count=1); (cd /Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-phase-0/backend && go test -tags=phase0red ./internal/service ./internal/server/routes -count=1)`.
+Run: `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-red --results /tmp/oracle-lab-phase-0-red-results.json`.
+
+Merge only the safe result records into `/tmp/oracle-lab-phase-0-command-results.json`; each entry records command ID, repository commit, real exit code, expected exit, classification, duration, and output digest. Raw stdout/stderr stays outside the tracked evidence tree and is redacted before any excerpt is retained.
 
 Expected: the stale contract path failure is gone; normal H0/governance suites are green; explicit `phase0red` suites remain expected RED and are listed as `failing_test_added` until their implementation phases.
 
-- [ ] **Step 2: Generate and validate the safe report/handoff**
+- [ ] **Step 2: Re-freeze the exit baseline**
 
-Run: `npm run oracle:validate -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest /tmp/oracle-lab-phase-0-baseline.json`.
+After all Phase 0 implementation commits exist in both Phase 0 worktrees, run:
 
-Run: `npm run oracle:handoff -- --phase phase-0 --baseline /tmp/oracle-lab-phase-0-baseline.json --out /tmp/oracle-lab-phase-0-handoff.json`.
+`npm exec tsx tools/oracle-lab/freeze-baseline.ts -- --cc-gateway-root "$CC_GATEWAY_ROOT" --sub2api-root "$SUB2API_ROOT" --contract-path "$SUB2API_FORMAL_POOL_CONTRACT_PATH" --out docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json`.
 
-Expected: deterministic outputs with no raw material and populated Phase 1 entry conditions.
+Expected: the manifest contains the final CC Gateway and Sub2API Phase 0 commit IDs, clean or canonically described dirty state, shared-contract digest, CodeGraph provenance, schema/tool digests, and a parent reference to the immutable Task 0.5 entry-baseline digest. Fail if either repository commit differs from the just-reviewed Phase 0 heads.
 
-- [ ] **Step 3: Update statuses and commit**
+- [ ] **Step 3: Generate and validate the safe context, report, and handoff**
 
-Mark governance controls `locally_verified`, keep B1-B6 `failing_test_added`, record expiry/known gaps, and commit the safe report/handoff.
+Run: `npm run oracle:validate -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json`.
+
+Run: `npm run oracle:context -- --requirement HA-P0-001 --requirement HA-P0-002 --requirement AV-B1-001 --requirement AV-B2-001 --requirement AV-B3-001 --requirement AV-B4-001 --requirement AV-B5-001 --requirement AV-B6-001 --out docs/superpowers/evidence/phase-0/phase-0-context-pack.json`.
+
+Run: `npm exec tsx tools/oracle-lab/validate-context-pack.ts -- --pack docs/superpowers/evidence/phase-0/phase-0-context-pack.json`.
+
+Run: `npm run oracle:handoff -- --phase phase-0 --baseline docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json --command-results /tmp/oracle-lab-phase-0-command-results.json --context docs/superpowers/evidence/phase-0/phase-0-context-pack.json --out docs/superpowers/evidence/phase-0/phase-0-handoff.json`.
+
+Run: `npm run oracle:exit-report -- --handoff docs/superpowers/evidence/phase-0/phase-0-handoff.json --out docs/superpowers/evidence/phase-0/phase-0-exit-report.md`.
+
+Expected: tracked deterministic outputs with no raw secrets or unrestricted logs, populated Phase 1 entry conditions, explicit entry-to-exit baseline differences, and command-by-command classifications. Regenerating them from the same commits and safe result records produces the same canonical digests.
+
+- [ ] **Step 4: Update statuses and commit**
+
+Mark governance controls `locally_verified`, keep B1-B6 `failing_test_added`, record expiry/known gaps, and commit the safe exit baseline, context pack, report, and handoff. Do not mark Phase 0 complete if a phase0-green command is not `pass`, a phase0-red command is not `expected_fail`, the Protected-Gateway production authority is still required, or the committed artifact digests do not match regeneration.
 
 Run: `git add docs/superpowers/evidence/phase-0 docs/superpowers/registry/oracle-lab-requirements.json docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md && git commit -m "docs: record oracle lab phase 0 handoff"`.
 
