@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   captureBaseline,
   computeRepositoryState,
@@ -99,6 +100,80 @@ const common = {
   approvedToolHead: git(gateway, 'rev-parse', 'HEAD'),
   strictBindings: false,
 };
+
+// Exercise the real argv/exit/output path with explicit strict bindings in isolated repositories.
+const cliFixtureRoot = mkdtempSync(path.join(tmpdir(), 'oracle-cli-fixture-'));
+const cliGateway = path.join(cliFixtureRoot, 'gateway');
+const cliSub2api = path.join(cliFixtureRoot, 'sub2api');
+execFileSync('git', ['clone', '-q', gateway, cliGateway]);
+execFileSync('git', ['clone', '-q', sub2api, cliSub2api]);
+git(cliGateway, 'config', 'user.email', 'oracle@example.invalid');
+git(cliGateway, 'config', 'user.name', 'Oracle Test');
+const cliContract = path.join(cliSub2api, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json');
+const fixtureSchemaPath = path.join(cliGateway, 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
+mkdirSync(path.dirname(fixtureSchemaPath), { recursive: true });
+writeFileSync(fixtureSchemaPath, readFileSync(path.join(process.cwd(), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json')));
+git(cliGateway, 'add', '.');
+git(cliGateway, 'commit', '-qm', 'schema');
+const cliBindings = {
+  ccGatewayHead: git(cliGateway, 'rev-parse', 'HEAD'),
+  ccGatewayBranch: git(cliGateway, 'branch', '--show-current'),
+  sub2apiHead: git(cliSub2api, 'rev-parse', 'HEAD'),
+  sub2apiBranch: git(cliSub2api, 'branch', '--show-current'),
+  contractSha256: sha256(readFileSync(cliContract)),
+  contractRelativePath: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
+};
+
+const cliHarness = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-cli-harness-')), 'run.ts');
+writeFileSync(cliHarness, `
+import { runFreezeBaselineCli } from ${JSON.stringify(pathToFileURL(path.join(process.cwd(), 'tools/oracle-lab/freeze-baseline.ts')).href)};
+const bindings = JSON.parse(process.env.ORACLE_TEST_BINDINGS!);
+const receiptTransform = process.env.ORACLE_TAMPER_BOOTSTRAP === '1'
+  ? (receipt: any) => ({ ...receipt, bootstrap_commit: 'a'.repeat(40) })
+  : undefined;
+process.exitCode = runFreezeBaselineCli(process.argv.slice(2), { bindings, receiptTransform });
+`);
+const cliArgs = [
+  cliHarness,
+  '--cc-gateway-root', cliGateway,
+  '--sub2api-root', cliSub2api,
+  '--contract-path', cliContract,
+  '--approved-tool-head', cliBindings.ccGatewayHead,
+  '--out', 'docs/entry.json',
+  '--receipt', 'docs/entry.receipt.json',
+];
+const cliEnvironment = { ...process.env, ORACLE_TEST_BINDINGS: JSON.stringify(cliBindings) };
+const tamperedCli = spawnSync('tsx', cliArgs, {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-cli-cwd-')),
+  encoding: 'utf8',
+  env: { ...cliEnvironment, ORACLE_TAMPER_BOOTSTRAP: '1' },
+});
+assert.equal(tamperedCli.status, 1);
+assert.match(tamperedCli.stderr, /"code":"receipt_bootstrap_mismatch"/);
+assert.match(tamperedCli.stderr, /receipt bootstrap commit does not match manifest approved tool head/);
+assert.equal(existsSync(path.join(cliGateway, 'docs/entry.json')), false);
+assert.equal(existsSync(path.join(cliGateway, 'docs/entry.receipt.json')), false);
+
+const successfulCli = spawnSync('tsx', cliArgs, {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-cli-cwd-')),
+  encoding: 'utf8',
+  env: cliEnvironment,
+});
+assert.equal(successfulCli.status, 0, successfulCli.stderr);
+assert.equal(successfulCli.stderr, '');
+const cliManifestPath = path.join(cliGateway, 'docs/entry.json');
+const cliReceiptPath = path.join(cliGateway, 'docs/entry.receipt.json');
+const cliManifestBytes = readFileSync(cliManifestPath);
+const cliManifest = JSON.parse(cliManifestBytes.toString('utf8'));
+const cliReceipt = JSON.parse(readFileSync(cliReceiptPath, 'utf8'));
+assert.equal(cliManifest.approved_tool_head, cliBindings.ccGatewayHead);
+assert.equal(cliReceipt.bootstrap_commit, cliBindings.ccGatewayHead);
+assert.equal(cliReceipt.manifest_sha256, sha256(cliManifestBytes));
+assert.equal(cliReceipt.schema_sha256, sha256(readFileSync(fixtureSchemaPath)));
+assert.deepEqual(JSON.parse(successfulCli.stdout), {
+  manifest_sha256: sha256(cliManifestBytes),
+  receipt_written: true,
+});
 expectCode(() => captureBaseline({ ...common, contractPath: path.join(sub2api, 'missing.json') }), 'missing_contract');
 const outside = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-outside-')), 'vectors.json');
 writeFileSync(outside, '{}\n');

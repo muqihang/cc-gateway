@@ -22,6 +22,15 @@ type DigestMarker = { status: 'present'; sha256: string } | { status: 'absent'; 
 type GovernanceMarker = { status: 'absent_pre_governance_bootstrap' } | { status: 'present'; sha256: string };
 type ToolDigest = { status: 'present'; sha256: string; provenance: string } | { status: 'absent'; reason: 'tool_not_found'; required: boolean };
 
+export type FrozenBindings = {
+  ccGatewayHead: string;
+  ccGatewayBranch: string;
+  sub2apiHead: string;
+  sub2apiBranch: string;
+  contractSha256: string;
+  contractRelativePath: string;
+};
+
 export const PHASE_0_BINDINGS = {
   ccGatewayHead: 'b9745da781397111a77465a1afb6bbbcb7cfd692',
   ccGatewayBranch: 'codex/oracle-phase-0-governance',
@@ -29,7 +38,7 @@ export const PHASE_0_BINDINGS = {
   sub2apiBranch: 'codex/oracle-phase-0-governance',
   contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   contractRelativePath: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
-} as const;
+} as const satisfies FrozenBindings;
 
 export type DirtyRecord = {
   status: string;
@@ -303,9 +312,10 @@ function governanceMarker(root: string, relative: string): GovernanceMarker {
 
 function ensureOutputContainment(rootInput: string, candidateInput: string): void {
   const root = realpathSync(rootInput);
-  const candidate = path.resolve(candidateInput);
-  const parent = path.dirname(candidate);
+  const resolved = path.resolve(candidateInput);
+  const parent = path.dirname(resolved);
   const parentReal = realpathSync(parent);
+  const candidate = path.join(parentReal, path.basename(resolved));
   if (!pathInside(root, parentReal) || !pathInside(root, candidate)) throw new BaselineError('output_path_escape', 'output parent must resolve inside CC Gateway root');
 }
 
@@ -363,7 +373,7 @@ function validateDigestMarker(value: unknown): void {
   if (marker.status !== 'absent' || marker.reason !== ABSENT_REASON) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
 }
 
-export function validateManifestArtifact(value: unknown): void {
+function validateManifestArtifactAgainstBindings(value: unknown, bindings: FrozenBindings): void {
   exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
   const v = value as any;
   if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
@@ -384,7 +394,11 @@ export function validateManifestArtifact(value: unknown): void {
   exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
   if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
   exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
-  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== PHASE_0_BINDINGS.ccGatewayHead || v.repositories.cc_gateway.head !== PHASE_0_BINDINGS.ccGatewayHead || v.repositories.cc_gateway.branch !== PHASE_0_BINDINGS.ccGatewayBranch || v.repositories.sub2api.head !== PHASE_0_BINDINGS.sub2apiHead || v.repositories.sub2api.branch !== PHASE_0_BINDINGS.sub2apiBranch || v.contract.sha256 !== PHASE_0_BINDINGS.contractSha256 || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== PHASE_0_BINDINGS.contractRelativePath)) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
+  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== bindings.ccGatewayHead || v.repositories.cc_gateway.head !== bindings.ccGatewayHead || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch || v.repositories.sub2api.head !== bindings.sub2apiHead || v.repositories.sub2api.branch !== bindings.sub2apiBranch || v.contract.sha256 !== bindings.contractSha256 || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== bindings.contractRelativePath)) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
+}
+
+export function validateManifestArtifact(value: unknown): void {
+  validateManifestArtifactAgainstBindings(value, PHASE_0_BINDINGS);
 }
 
 export function validateReceiptArtifact(value: unknown): void {
@@ -393,8 +407,8 @@ export function validateReceiptArtifact(value: unknown): void {
   if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !validCommit(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
 }
 
-export function writeEvidencePair(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer): void {
-  validateManifestArtifact(manifest);
+function writeEvidencePairWithBindings(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer, bindings: FrozenBindings): void {
+  validateManifestArtifactAgainstBindings(manifest, bindings);
   validateReceiptArtifact(receiptValue);
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const validatedReceipt = receiptValue as any;
@@ -403,22 +417,30 @@ export function writeEvidencePair(out: string, manifest: unknown, receiptPath: s
   writeEvidencePairInternal(out, manifest, receiptPath, receiptValue);
 }
 
-export function validateFrozenBindings(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string): void {
-  if (ccState.head !== PHASE_0_BINDINGS.ccGatewayHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD is not the frozen Phase 0 bootstrap head');
-  if (ccState.branch !== PHASE_0_BINDINGS.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the frozen Phase 0 governance branch');
-  if (subState.head !== PHASE_0_BINDINGS.sub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD is not the frozen Phase 0 head');
-  if (subState.branch !== PHASE_0_BINDINGS.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the frozen Phase 0 governance branch');
-  if (approvedToolHead !== PHASE_0_BINDINGS.ccGatewayHead) throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit does not match frozen bootstrap head');
-  if (contractSha !== PHASE_0_BINDINGS.contractSha256) throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest is not the frozen Phase 0 digest');
+export function writeEvidencePair(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer): void {
+  writeEvidencePairWithBindings(out, manifest, receiptPath, receiptValue, schemaBytes, PHASE_0_BINDINGS);
 }
 
-export function captureBaseline(options: BaselineOptions) {
+function validateFrozenBindingsAgainst(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string, bindings: FrozenBindings): void {
+  if (ccState.head !== bindings.ccGatewayHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD is not the frozen Phase 0 bootstrap head');
+  if (ccState.branch !== bindings.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the frozen Phase 0 governance branch');
+  if (subState.head !== bindings.sub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD is not the frozen Phase 0 head');
+  if (subState.branch !== bindings.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the frozen Phase 0 governance branch');
+  if (approvedToolHead !== bindings.ccGatewayHead) throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit does not match frozen bootstrap head');
+  if (contractSha !== bindings.contractSha256) throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest is not the frozen Phase 0 digest');
+}
+
+export function validateFrozenBindings(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string): void {
+  validateFrozenBindingsAgainst(ccState, subState, approvedToolHead, contractSha, PHASE_0_BINDINGS);
+}
+
+function captureBaselineWithBindings(options: BaselineOptions, bindings: FrozenBindings) {
   const ccRoot = realpathSync(options.ccGatewayRoot);
   const subRoot = realpathSync(options.sub2apiRoot);
   if (!existsSync(options.contractPath)) throw new BaselineError('missing_contract', 'formal-pool contract does not exist');
   const contractReal = realpathSync(options.contractPath);
   if (!pathInside(subRoot, contractReal)) throw new BaselineError('contract_symlink_escape', 'formal-pool contract resolves outside the declared Sub2API root');
-  if (path.relative(subRoot, contractReal).split(path.sep).join('/') !== PHASE_0_BINDINGS.contractRelativePath) throw new BaselineError('contract_path_mismatch', 'formal-pool contract must use the frozen repository-relative path');
+  if (path.relative(subRoot, contractReal).split(path.sep).join('/') !== bindings.contractRelativePath) throw new BaselineError('contract_path_mismatch', 'formal-pool contract must use the frozen repository-relative path');
   if (options.outputPath) ensureOutputContainment(ccRoot, options.outputPath);
   const ccState = computeRepositoryState(ccRoot, options.allowCcGatewayDirtyDigest);
   const subState = computeRepositoryState(subRoot, options.allowSub2apiDirtyDigest);
@@ -427,7 +449,7 @@ export function captureBaseline(options: BaselineOptions) {
     throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit must exactly equal the CC Gateway repository HEAD');
   }
   const contractSha = sha256(readFileSync(contractReal));
-  if (strict) validateFrozenBindings(ccState, subState, options.approvedToolHead, contractSha);
+  if (strict) validateFrozenBindingsAgainst(ccState, subState, options.approvedToolHead, contractSha, bindings);
   const governance = {
     requirement_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-requirements.json'),
     claim_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-claims.json'),
@@ -503,6 +525,10 @@ export function captureBaseline(options: BaselineOptions) {
   } as const;
 }
 
+export function captureBaseline(options: BaselineOptions) {
+  return captureBaselineWithBindings(options, PHASE_0_BINDINGS);
+}
+
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
@@ -562,26 +588,34 @@ function writeEvidencePairInternal(out: string, manifest: unknown, receipt: stri
   }
 }
 
-function main(): void {
-  const args = parseArgs(process.argv.slice(2));
+type CliRuntime = {
+  bindings?: FrozenBindings;
+  receiptTransform?: (receipt: Record<string, unknown>) => unknown;
+  stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
+};
+
+function executeFreezeBaseline(argv: string[], runtime: CliRuntime): void {
+  const args = parseArgs(argv);
+  const bindings = runtime.bindings ?? PHASE_0_BINDINGS;
   for (const required of ['cc-gateway-root', 'sub2api-root', 'contract-path', 'approved-tool-head', 'out', 'receipt']) {
     if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
   }
-  const manifest = captureBaseline({
+  const manifest = captureBaselineWithBindings({
     ccGatewayRoot: args['cc-gateway-root'],
     sub2apiRoot: args['sub2api-root'],
     contractPath: args['contract-path'],
     approvedToolHead: args['approved-tool-head'],
     allowCcGatewayDirtyDigest: args['allow-dirty-digest'],
     outputPath: path.resolve(args['cc-gateway-root'], args.out),
-  });
+  }, bindings);
   const out = path.resolve(args['cc-gateway-root'], args.out);
   const receipt = path.resolve(args['cc-gateway-root'], args.receipt);
   ensureOutputContainment(args['cc-gateway-root'], out);
   ensureOutputContainment(args['cc-gateway-root'], receipt);
   const schemaPath = path.join(realpathSync(args['cc-gateway-root']), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
-  const receiptValue = {
+  const constructedReceipt = {
     schema_version: '1.0.0',
     compatibility_policy: 'fail_closed_exact_schema',
     retention_class: 'phase_evidence_permanent',
@@ -591,18 +625,25 @@ function main(): void {
     schema_sha256: sha256(readFileSync(schemaPath)),
     bootstrap_commit: args['approved-tool-head'],
   };
-  validateManifestArtifact(manifest);
+  const receiptValue = runtime.receiptTransform?.(constructedReceipt) ?? constructedReceipt;
+  validateManifestArtifactAgainstBindings(manifest, bindings);
   validateReceiptArtifact(receiptValue);
-  writeEvidencePair(out, manifest, receipt, receiptValue, readFileSync(schemaPath));
-  console.log(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: true }));
+  writeEvidencePairWithBindings(out, manifest, receipt, receiptValue, readFileSync(schemaPath), bindings);
+  (runtime.stdout ?? console.log)(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: true }));
+}
+
+export function runFreezeBaselineCli(argv: string[], runtime: CliRuntime = {}): number {
+  try {
+    executeFreezeBaseline(argv, runtime);
+    return 0;
+  } catch (error) {
+    const typed = error as Error & { code?: string };
+    (runtime.stderr ?? console.error)(JSON.stringify({ code: typed.code || 'baseline_capture_failed', message: typed.message }));
+    return 1;
+  }
 }
 
 const invoked = process.argv[1] ? realpathSync(process.argv[1]) : '';
 if (invoked === fileURLToPath(import.meta.url)) {
-  try { main(); }
-  catch (error) {
-    const typed = error as Error & { code?: string };
-    console.error(JSON.stringify({ code: typed.code || 'baseline_capture_failed', message: typed.message }));
-    process.exitCode = 1;
-  }
+  process.exitCode = runFreezeBaselineCli(process.argv.slice(2));
 }
