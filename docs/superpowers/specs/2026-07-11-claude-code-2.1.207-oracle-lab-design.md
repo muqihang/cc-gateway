@@ -8,6 +8,9 @@
 - npm release state at design time: `latest=2.1.207`, `next=2.1.207`, `stable=2.1.197`
 - Real Anthropic requests: forbidden during this design's capture and integration phases
 - Real account credentials: forbidden during this design's capture and integration phases
+- Requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json`
+- Normative precedence: `hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; missing or contradictory authority fails closed
+- Requirement ID prefix: `OL-*`
 
 ## Objective
 

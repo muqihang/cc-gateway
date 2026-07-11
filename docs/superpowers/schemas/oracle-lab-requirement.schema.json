@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json",
+  "title": "Oracle Lab Requirement",
+  "schema_version": "1.0.0",
+  "compatibility_policy": "fail_closed_exact_schema",
+  "retention_class": "phase_governance_permanent",
+  "redaction_policy": "references_and_safe_categories_only",
+  "destruction_procedure": "git_revert_after_security_review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requirement_id", "source_document", "source_section", "precedence", "priority",
+    "depends_on", "acceptance_gate", "implementation_status", "owner", "repository",
+    "implementation_files", "test_files", "verification_command", "evidence_artifact",
+    "last_verified_commit", "last_verified_at", "expiry", "known_gaps",
+    "canary_evidence_ids", "production_gate_ids", "rollback_evidence_ids",
+    "deployed_artifacts", "contradiction_ids"
+  ],
+  "properties": {
+    "requirement_id": { "type": "string", "pattern": "^(OL|AV|HA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
+    "source_document": { "type": "string", "minLength": 1 },
+    "source_section": { "type": "string", "minLength": 1 },
+    "precedence": { "enum": ["oracle_lab_design", "adversarial_validation_v2", "hardening_amendments"] },
+    "priority": { "enum": ["P0", "P1", "P2"] },
+    "depends_on": { "$ref": "#/$defs/stringArray" },
+    "acceptance_gate": { "type": "string", "minLength": 1 },
+    "implementation_status": {
+      "enum": [
+        "design_only", "deferred", "failing_test_added", "locally_verified",
+        "upstream_canary_observed", "production_verified", "blocked_by_baseline"
+      ]
+    },
+    "owner": { "type": "string" },
+    "repository": { "type": "string", "minLength": 1 },
+    "implementation_files": { "$ref": "#/$defs/stringArray" },
+    "test_files": { "$ref": "#/$defs/stringArray" },
+    "verification_command": { "type": "string" },
+    "evidence_artifact": { "type": "string" },
+    "last_verified_commit": { "type": ["string", "null"] },
+    "last_verified_at": { "type": ["string", "null"], "format": "date-time" },
+    "expiry": { "type": ["string", "null"], "format": "date-time" },
+    "known_gaps": { "$ref": "#/$defs/stringArray" },
+    "canary_evidence_ids": { "$ref": "#/$defs/stringArray" },
+    "production_gate_ids": { "$ref": "#/$defs/stringArray" },
+    "rollback_evidence_ids": { "$ref": "#/$defs/stringArray" },
+    "deployed_artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/deployedArtifact" }
+    },
+    "contradiction_ids": { "$ref": "#/$defs/stringArray" }
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "deployedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "config_digest", "manifest_digest", "deployed_at"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "minLength": 1 },
+        "config_digest": { "type": "string", "minLength": 1 },
+        "manifest_digest": { "type": "string", "minLength": 1 },
+        "deployed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

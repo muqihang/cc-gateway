@@ -10,6 +10,9 @@
 - Scope: evidence acquisition, local security boundaries, controlled upstream canary evidence,
   production safety, and document traceability
 - Delivery state: amendment design only; it does not claim that any listed control is implemented
+- Requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json`
+- Normative precedence: `hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; missing or contradictory authority fails closed
+- Requirement ID prefix: `HA-*`
 
 ## 1. Amendment Objective
 
@@ -65,8 +68,12 @@ Each entry must contain:
 requirement_id
 source_document
 source_section
+precedence
 priority
+depends_on
+acceptance_gate
 implementation_status
+owner
 repository
 implementation_files
 test_files
@@ -74,23 +81,32 @@ verification_command
 evidence_artifact
 last_verified_commit
 last_verified_at
-owner
+expiry
 known_gaps
+canary_evidence_ids
+production_gate_ids
+rollback_evidence_ids
+deployed_artifacts
+contradiction_ids
 ```
 
 Allowed `implementation_status` values are:
 
 ```text
 design_only
+deferred
 failing_test_added
-implemented_unverified
 locally_verified
-staging_verified
 upstream_canary_observed
 production_verified
-disabled
-superseded
+blocked_by_baseline
 ```
+
+Unknown fields, unknown statuses, missing owners for Priority 0 or Priority 1 requirements,
+unresolved dependencies, and invalid verification-state transitions fail closed. The production
+evidence fields are always present. They remain empty (and `expiry` remains `null`) before
+`production_verified`; production verification requires current canary, gate, rollback,
+deployment, and expiry evidence with no open contradiction IDs.
 
 No prose statement in a design document may be presented in operational dashboards as an active
 control unless the registry status is at least `locally_verified` and its commit and evidence

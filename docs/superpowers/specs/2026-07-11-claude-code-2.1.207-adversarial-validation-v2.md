@@ -7,6 +7,9 @@
 - Purpose: authorized defensive red-team validation of CC Gateway and Sub2API
 - Delivery state: implementation-driving design; code work has not started under this document
 - Real Anthropic credentials and production accounts: forbidden until an explicitly approved canary phase
+- Requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json`
+- Normative precedence: `hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; missing or contradictory authority fails closed
+- Requirement ID prefix: `AV-*`
 
 ## Baseline Corrections
 

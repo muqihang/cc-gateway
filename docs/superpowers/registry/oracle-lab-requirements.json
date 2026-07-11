@@ -1,0 +1,221 @@
+[
+  {
+    "requirement_id": "HA-P0-000",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "Adversarial Validation WP0. Baseline and Contract Discovery plus Design Phase 0: Restore Trustworthy Baselines",
+    "precedence": "hardening_amendments",
+    "priority": "P0",
+    "depends_on": [],
+    "acceptance_gate": "phase_0_entry_baseline",
+    "implementation_status": "locally_verified",
+    "owner": "release-engineering",
+    "repository": "cc-gateway",
+    "implementation_files": ["tools/oracle-lab/freeze-baseline.ts"],
+    "test_files": ["tests/oracle-lab-baseline-freeze.test.ts"],
+    "verification_command": "npm exec tsx tests/oracle-lab-baseline-freeze.test.ts",
+    "evidence_artifact": "docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json",
+    "last_verified_commit": "ab1b48fdd731b5f82cc4735de54416fbb858e6d6",
+    "last_verified_at": "2026-07-11T11:37:16-07:00",
+    "expiry": null,
+    "known_gaps": [],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-001",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "3.1 Requirement Status Registry",
+    "precedence": "hardening_amendments",
+    "priority": "P0",
+    "depends_on": ["HA-P0-000"],
+    "acceptance_gate": "phase_0_traceability",
+    "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner",
+    "repository": "cc-gateway",
+    "implementation_files": ["tools/oracle-lab/validate-requirements.ts", "docs/superpowers/schemas/oracle-lab-requirement.schema.json"],
+    "test_files": ["tests/oracle-lab-traceability.test.ts"],
+    "verification_command": "npm exec tsx tests/oracle-lab-traceability.test.ts",
+    "evidence_artifact": "phase-0/traceability.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null,
+    "known_gaps": ["task commit is not yet bound by the Phase 0 exit receipt"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-002",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "3. Normative Status and Traceability",
+    "precedence": "hardening_amendments",
+    "priority": "P0",
+    "depends_on": ["HA-P0-001"],
+    "acceptance_gate": "phase_0_document_authority",
+    "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner",
+    "repository": "cc-gateway",
+    "implementation_files": ["docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md", "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md"],
+    "test_files": ["tests/oracle-lab-traceability.test.ts"],
+    "verification_command": "npm exec tsx tests/oracle-lab-traceability.test.ts",
+    "evidence_artifact": "phase-0/traceability.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null,
+    "known_gaps": ["task commit is not yet bound by the Phase 0 exit receipt"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-003",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "3.3 Claim Matrix",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-002"],
+    "acceptance_gate": "phase_0_claim_matrix", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/oracle-lab-claim-matrix.test.ts", "evidence_artifact": "phase-0/claim-matrix.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["claim matrix is scheduled for Task 2"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-004",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "3.2 Baseline Freeze Record",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-000"],
+    "acceptance_gate": "phase_0_entry_baseline", "implementation_status": "locally_verified",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": ["tools/oracle-lab/freeze-baseline.ts"], "test_files": ["tests/oracle-lab-baseline-freeze.test.ts"],
+    "verification_command": "npm exec tsx tests/oracle-lab-baseline-freeze.test.ts", "evidence_artifact": "docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json",
+    "last_verified_commit": "ab1b48fdd731b5f82cc4735de54416fbb858e6d6", "last_verified_at": "2026-07-11T11:37:16-07:00", "expiry": null, "known_gaps": [],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-005",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "4. Required Architecture Decision: Gateway Compromise Boundary",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-003"],
+    "acceptance_gate": "phase_0_gateway_boundary_adr", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner and release-approver", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/oracle-lab-boundary-adr.test.ts", "evidence_artifact": "phase-0/gateway-compromise-boundary.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["boundary decision is scheduled for Task 4"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-006",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-design.md",
+    "source_section": "Design 9. Shared Contract Discovery plus Adversarial Validation WP0. Baseline and Contract Discovery",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-004"],
+    "acceptance_gate": "phase_0_shared_contract_discovery", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/formal-pool-contract-fixture.test.ts", "evidence_artifact": "phase-0/shared-contract-discovery.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["contract discovery repair is scheduled for Task 5"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-007",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "16. Required Deliverables (H0 traceability/context/command harness)",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-003", "HA-P0-004", "HA-P0-006"],
+    "acceptance_gate": "phase_0_h0_harness", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/oracle-lab-h0-harness.test.ts", "evidence_artifact": "phase-0/h0-handoff.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["H0 harness is scheduled for Task 8"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-008",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "18. Acceptance Criteria for This Amendment plus Design Validation Gates",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-003", "HA-P0-004", "HA-P0-005", "HA-P0-006", "HA-P0-007", "HA-P0-009", "AV-B1-001", "AV-B2-001", "AV-B3-001", "AV-B4-001", "AV-B5-001", "AV-B6-001"],
+    "acceptance_gate": "phase_0_exit", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner and security-reviewer", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/oracle-lab-phase-0-exit.test.ts", "evidence_artifact": "phase-0/exit-report.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["all Phase 0 exit dependencies remain mandatory"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P0-009",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+    "source_section": "15. Priority 0 item 4 plus Design Normative Compatibility Contract plus Adversarial Validation WP0.5",
+    "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-002", "HA-P0-006"],
+    "acceptance_gate": "phase_1_compatibility_contract", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
+    "verification_command": "npm exec tsx tests/oracle-lab-compatibility-contract.test.ts", "evidence_artifact": "phase-1/compatibility-contract.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["deferred to compatibility-contract phase", "negative capabilities remain disabled by default", "promotion is prohibited before all compatibility gates and rollback review pass"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "OL-LEGACY-001",
+    "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-design.md",
+    "source_section": "Reset of Trust and Normative Compatibility Contract (comparison-only 2.1.197 tuple)",
+    "precedence": "oracle_lab_design", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-004"],
+    "acceptance_gate": "phase_0_legacy_comparison", "implementation_status": "locally_verified",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": ["tools/oracle-lab/freeze-baseline.ts"], "test_files": ["tests/oracle-lab-baseline-freeze.test.ts"],
+    "verification_command": "npm exec tsx tests/oracle-lab-baseline-freeze.test.ts", "evidence_artifact": "docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json",
+    "last_verified_commit": "ab1b48fdd731b5f82cc4735de54416fbb858e6d6", "last_verified_at": "2026-07-11T11:37:16-07:00", "expiry": null, "known_gaps": ["2.1.197 remains unverified_legacy and comparison-only"],
+    "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B1-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B1. Browser Egress Attestation Bypass",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001"], "acceptance_gate": "phase_0_b1_revalidation", "implementation_status": "design_only",
+    "owner": "sub2api-formal-pool-owner", "repository": "Sub2API", "implementation_files": [], "test_files": [], "verification_command": "task-6 exact command pending revalidation", "evidence_artifact": "phase-0/b1-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 6"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B2-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B2. Onboarding Object Authorization",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001"], "acceptance_gate": "phase_0_b2_revalidation", "implementation_status": "design_only",
+    "owner": "sub2api-formal-pool-owner", "repository": "Sub2API", "implementation_files": [], "test_files": [], "verification_command": "task-6 exact command pending revalidation", "evidence_artifact": "phase-0/b2-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 6"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B3-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B3. Forwarded-Header and Public-Origin Authority",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001"], "acceptance_gate": "phase_0_b3_revalidation", "implementation_status": "design_only",
+    "owner": "sub2api-formal-pool-owner", "repository": "Sub2API", "implementation_files": [], "test_files": [], "verification_command": "task-6 exact command pending revalidation", "evidence_artifact": "phase-0/b3-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 6"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B4-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B4. Formal-Pool Direct-Egress Elimination",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001", "HA-P0-005"], "acceptance_gate": "phase_0_b4_revalidation", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner and sidecar-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "task-7 exact command pending revalidation", "evidence_artifact": "phase-0/b4-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 7"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B5-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B5. Sidecar Request Authentication v2",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001", "HA-P0-005"], "acceptance_gate": "phase_0_b5_revalidation", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner and sidecar-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "task-7 exact command pending revalidation", "evidence_artifact": "phase-0/b5-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 7"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "AV-B6-001", "source_document": "2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "source_section": "B6. Proxy Destination Policy",
+    "precedence": "adversarial_validation_v2", "priority": "P0", "depends_on": ["HA-P0-000", "HA-P0-001", "HA-P0-005"], "acceptance_gate": "phase_0_b6_revalidation", "implementation_status": "design_only",
+    "owner": "cc-gateway-oracle-owner and sidecar-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "task-7 exact command pending revalidation", "evidence_artifact": "phase-0/b6-revalidation.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["source revalidation and failing test are scheduled for Task 7"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-001", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "5.1 Key Control-Flow Recovery and 5.2 Selective Dynamic Instrumentation",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-004", "HA-P0-009"], "acceptance_gate": "phase_1_control_flow_evidence", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-1 command pending approved plan amendment", "evidence_artifact": "phase-1/control-flow-evidence.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-002", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "5.6 Long-Duration and Lifecycle Runs and 5.9 Stability Convergence Instead of Three Runs",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-004", "HA-P0-009", "HA-P1-001"], "acceptance_gate": "phase_2_stability_convergence", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-2 command pending approved plan amendment", "evidence_artifact": "phase-2/stability-convergence.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-003", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "6.1 Safe Error Classifier",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-003", "HA-P0-009"], "acceptance_gate": "phase_1_safe_error_classifier", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-1 command pending approved plan amendment", "evidence_artifact": "phase-1/safe-error-classifier.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-004", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "7.1 Proxy Identity Contract and 7.2 Transport-Cell Resource Model",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-005", "HA-P0-009", "AV-B4-001", "AV-B6-001"], "acceptance_gate": "phase_3_transport_cell_contract", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner and sidecar-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-3 command pending approved plan amendment", "evidence_artifact": "phase-3/transport-cell-contract.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-005", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "7.3 Rotation and Drain State Machine, 7.4 Restart Recovery, 8.1 Fail-Closed Backpressure, and 8.2 Replay-Ledger Partition Semantics",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-005", "HA-P0-009", "HA-P1-004"], "acceptance_gate": "phase_3_transport_lifecycle", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner and sidecar-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-3 command pending approved plan amendment", "evidence_artifact": "phase-3/transport-lifecycle.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  },
+  {
+    "requirement_id": "HA-P1-006", "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "source_section": "8.3 Complete Authorization Matrix and 8.4 Operator and Administrator Threats",
+    "precedence": "hardening_amendments", "priority": "P1", "depends_on": ["HA-P0-003", "HA-P0-005", "HA-P0-009", "AV-B2-001", "AV-B5-001"], "acceptance_gate": "phase_3_authorization_matrix", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner and security-reviewer", "repository": "cc-gateway", "implementation_files": [], "test_files": [], "verification_command": "phase-3 command pending approved plan amendment", "evidence_artifact": "phase-3/authorization-matrix.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["later-phase input", "promotion prohibited until acceptance gate and rollback review pass"], "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
+  }
+]
