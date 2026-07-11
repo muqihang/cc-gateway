@@ -1,11 +1,27 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import dns from "node:dns";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 
 import {
+  computeProxyBinding,
   prepareEgressSidecarRequest,
   type EgressSidecarConfig,
 } from "../../src/egress-sidecar-client.js";
 import { resolveEgressBucket } from "../../src/policy.js";
+import { startProxy } from "../../src/proxy.js";
+import { resolveFormalPoolContract } from "../../tools/oracle-lab/resolve-formal-pool-contract.js";
+import {
+  baseConfig,
+  close,
+  httpJson,
+  listen,
+  serverUrl,
+  startFakeConnectProxy,
+  startFakeUpstream,
+} from "../helpers.js";
 
 const primaryProfile = "tls-profile:claude-code-2.1.179-real-oracle-tcp-v1";
 const alternateProfile = "tls-profile:phase0-alternate-v1";
@@ -64,50 +80,165 @@ function requestInput(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-type Observer = { dns: number; sockets: number };
+const fixture = resolveFormalPoolContract({
+  gatewayRoot: new URL("../..", import.meta.url).pathname,
+  sub2apiRoot: process.env.SUB2API_ROOT,
+  manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+}).fixture as any;
 
-function exercisePreSocketBoundary(overrides: Record<string, unknown>): {
-  decision: ReturnType<typeof prepareEgressSidecarRequest>;
-  observer: Observer;
-} {
-  const observer: Observer = { dns: 0, sockets: 0 };
-  const decision = prepareEgressSidecarRequest(requestInput(overrides));
-  if (decision.ok) {
-    // These hooks stand in for the first resolver/dial operations after policy preparation.
-    observer.dns++;
-    observer.sockets++;
-  }
-  return { decision, observer };
+function canonicalContext(value: Record<string, unknown>): string {
+  return JSON.stringify(Object.keys(value).sort().reduce((out, key) => {
+    out[key] = value[key];
+    return out;
+  }, {} as Record<string, unknown>));
 }
 
-const b4Cases: Array<[string, Record<string, unknown>]> = [
-  ["missing sidecar", { config: {} }],
-  ["missing verified context", { verifiedContextRef: undefined }],
-  ["missing proxy generation", { proxyGeneration: undefined }],
-  ["mismatched proxy generation", { expectedProxyGeneration: 8 }],
-  ["missing profile", { profileRef: undefined }],
-  ["disabled profile", { profileEnabled: false }],
-  ["missing manifest authority", { manifestAuthorityRef: undefined }],
-  [
-    "unknown manifest authority",
-    { manifestAuthorityRef: "opaque:manifest-ref:v1:unknown" },
-  ],
-  [
-    "missing account identity",
-    { accountIdentityRef: undefined, proxyIdentityRef: undefined },
-  ],
-  ["direct fallback enabled", { directFallback: true }],
+function signedContextHeaders(context: Record<string, unknown>) {
+  const canonical = canonicalContext(context);
+  return {
+    "x-cc-formal-pool-context": Buffer.from(canonical).toString("base64url"),
+    "x-cc-formal-pool-signature": `hmac-sha256:${createHmac("sha256", fixture.materials.context_attestation_material).update(canonical).digest("hex")}`,
+  };
+}
+
+function credentialBinding(raw: string): string {
+  return `hmac-sha256:${createHmac("sha256", fixture.materials.context_attestation_material)
+    .update("formal_pool_credential_binding_v1\0oauth\0" + raw).digest("hex")}`;
+}
+
+async function startObservedSidecar() {
+  const sockets: string[] = [];
+  const server = createServer((req, res) => {
+    sockets.push(req.socket.remoteAddress || "unknown");
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "x-cc-egress-tls-summary-bucket": primarySummary,
+      });
+      res.end('{"ok":true}');
+    });
+  });
+  await listen(server);
+  return { server, sockets, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/egress` };
+}
+
+function b4Config(upstreamUrl: string, sidecarUrl: string, proxyUrl: string, overrides: Record<string, unknown> = {}) {
+  return baseConfig({
+    mode: "sub2api",
+    upstream: { url: upstreamUrl },
+    auth: { gateway_token: fixture.materials.gateway_control_material, internal_control_token: fixture.materials.internal_control_material, tokens: [] },
+    oauth: undefined,
+    shared_pool: {
+      gateway_compromise_boundary: "protected_gateway",
+      context_attestation_secret_ref: "opaque:attestation-ref:v1:phase0-red",
+      context_attestation_secret: fixture.materials.context_attestation_material,
+      egress_tls: { enabled: true, strict: true },
+    },
+    egress_tls_sidecar: sidecarConfig({ endpoint: sidecarUrl }),
+    tls_profiles: { primary: { profile_ref: primaryProfile, source: "observed-oracle-63", enabled: true } },
+    account_identities: {
+      [fixture.account.account_id]: {
+        device_id: fixture.account.device_id,
+        account_uuid_ref: fixture.account.account_uuid_ref,
+        email_ref: fixture.account.email_ref,
+        account_ref: fixture.account.account_ref,
+        credential_ref: fixture.account.credential_ref,
+        credential_binding_hmac: credentialBinding("Bearer selected-oauth-credential-fixture"),
+        persona_variant: fixture.account.persona_profile,
+        session_policy: "preserve_downstream_session_id",
+        policy_version: fixture.account.policy_version,
+      },
+    },
+    egress_buckets: {
+      [fixture.account.egress_bucket]: {
+        enabled: true,
+        proxy_url: proxyUrl,
+        proxy_identity_ref: fixture.account.proxy_identity_ref,
+        allowed_account_ids: [fixture.account.account_id],
+        tls_profile_ref: primaryProfile,
+      },
+    },
+    env: { ...baseConfig().env, version: fixture.account.policy_version, version_base: fixture.account.policy_version },
+    ...overrides,
+  } as any);
+}
+
+function b4Context(overrides: Record<string, unknown> = {}) {
+  return {
+    ...fixture.valid_context,
+    timestamp_ms: Date.now(),
+    nonce: `phase0-b4-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    verified_context_ref: "opaque:context-ref:v1:phase0",
+    manifest_authority_ref: "opaque:manifest-ref:v1:phase0",
+    proxy_generation: 7,
+    expected_proxy_generation: 7,
+    ...overrides,
+  };
+}
+
+function b4Headers(context?: Record<string, unknown>) {
+  return {
+    "x-cc-gateway-token": fixture.materials.gateway_control_material,
+    "x-cc-provider": "anthropic",
+    "x-cc-account-id": fixture.account.account_id,
+    "x-cc-token-type": "oauth",
+    "x-cc-credential-ref": fixture.account.credential_ref,
+    "x-cc-egress-bucket": fixture.account.egress_bucket,
+    "x-cc-policy-version": fixture.account.policy_version,
+    "x-claude-code-session-id": fixture.valid_context.session_id,
+    authorization: "Bearer selected-oauth-credential-fixture",
+    ...(context ? signedContextHeaders(context) : {}),
+  };
+}
+
+const b4Cases: Array<[string, (config: any, context: any) => void, boolean]> = [
+  ["missing sidecar", (config) => { delete config.egress_tls_sidecar; config.shared_pool.egress_tls = { enabled: false, strict: false }; }, true],
+  ["missing verified context", (_config, context) => { delete context.verified_context_ref; }, false],
+  ["missing proxy generation", (_config, context) => { delete context.proxy_generation; }, false],
+  ["mismatched proxy generation", (_config, context) => { context.expected_proxy_generation = 8; }, false],
+  ["disabled profile", (config) => { config.tls_profiles.primary.enabled = false; }, false],
+  ["missing manifest authority", (_config, context) => { delete context.manifest_authority_ref; }, false],
+  ["unknown manifest authority", (_config, context) => { context.manifest_authority_ref = "opaque:manifest-ref:v1:unknown"; }, false],
+  ["missing account identity with valid proxy identity", (config) => { delete config.account_identities[fixture.account.account_id]; }, false],
+  ["direct fallback configuration", (config) => { config.shared_pool.direct_fallback = true; }, false],
 ];
 
-for (const [name, overrides] of b4Cases) {
-  test(`B4 denies ${name} before DNS or socket creation`, () => {
-    const { decision, observer } = exercisePreSocketBoundary(overrides);
-    assert.equal(decision.ok, false, `${name} reached the transport boundary`);
-    assert.deepEqual(
-      observer,
-      { dns: 0, sockets: 0 },
-      `${name} performed resolver or socket work`,
-    );
+for (const [name, mutate, ordinaryPath] of b4Cases) {
+  test(`B4 handleRequest denies ${name} before DNS socket or dial`, async () => {
+    const upstream = await startFakeUpstream();
+    const proxy = await startFakeConnectProxy();
+    const sidecar = await startObservedSidecar();
+    const proxyHostUrl = proxy.url.replace("127.0.0.1", "phase0-proxy.invalid");
+    const config: any = b4Config(upstream.url, sidecar.url, proxyHostUrl);
+    const context: any = b4Context();
+    mutate(config, context);
+    const dnsLookups: string[] = [];
+    const originalLookup = dns.lookup;
+    (dns as any).lookup = (hostname: string, options: any, callback?: any) => {
+      dnsLookups.push(hostname);
+      const cb = typeof options === "function" ? options : callback;
+      if (typeof options === "object" && options?.all) cb(null, [{ address: "127.0.0.1", family: 4 }]);
+      else cb(null, "127.0.0.1", 4);
+    };
+    const gateway = startProxy(config);
+    try {
+      const response = await httpJson(serverUrl(gateway, "/v1/messages?beta=true"), {
+        headers: b4Headers(context),
+        body: { stream: true, metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) }, model: "claude-sonnet-4-6", messages: [{ role: "user", content: "hello" }] },
+      });
+      assert.deepEqual(dnsLookups, [], `${name} reached ordinary Node DNS lookup`);
+      assert.equal(proxy.connectTargets.length, 0, `${name} created an ordinary upstream proxy dial`);
+      assert.equal(sidecar.sockets.length, 0, `${name} created a sidecar socket`);
+      assert.equal(response.status, 403, `${name} was not denied by handleRequest`);
+      assert.equal(ordinaryPath && dnsLookups.length > 0, false);
+    } finally {
+      (dns as any).lookup = originalLookup;
+      await close(gateway);
+      await close(sidecar.server);
+      await close(proxy.server);
+      await close(upstream.server);
+    }
   });
 }
 
@@ -122,6 +253,10 @@ function prepared(overrides: Record<string, unknown> = {}) {
 }
 
 const requiredEnvelopeFields = [
+  "verified_context_ref",
+  "account_identity_ref",
+  "manifest_authority_ref",
+  "proxy_generation",
   "nonce",
   "timestamp_ms",
   "final_headers_hash",
@@ -145,65 +280,42 @@ for (const field of requiredEnvelopeFields) {
   });
 }
 
-const bindingMutations: Array<[string, Record<string, unknown>]> = [
-  ["nonce", { nonce: "nonce-ref-phase0-0002" }],
-  ["timestamp", { timestampMs: 1783796400001 }],
-  ["profile ref", { profileRef: alternateProfile }],
-  ["egress bucket", { egressBucket: "bucket-b" }],
-  ["proxy identity", { proxyIdentityRef: "opaque:proxy-ref:v1:bucket-b" }],
-  ["canonical proxy URL", { proxyUrl: "http://198.51.100.41:8080" }],
-  [
-    "target host",
-    {
-      config: {
-        egress_tls_sidecar: sidecarConfig({
-          allowed_target_hosts: ["api-alt.anthropic.com"],
-          logical_target_host: "api-alt.anthropic.com",
-        }),
-      },
-      targetHost: "api-alt.anthropic.com",
-    },
-  ],
-  [
-    "expected summary",
-    {
-      config: {
-        egress_tls_sidecar: sidecarConfig({
-          expected_tls_summary_bucket: "tls-bucket:alternate",
-        }),
-      },
-    },
-  ],
-  [
-    "target path and route",
-    { targetPath: "/v1/alternate", route: "/v1/alternate" },
-  ],
-  ["method", { method: "PUT" }],
-  [
-    "final forwarded-header hash",
-    { finalHeadersHash: "sha256:" + "c".repeat(64) },
-  ],
-  ["final request-body hash", { requestBodyHash: "sha256:" + "d".repeat(64) }],
-  ["key epoch", { keyEpoch: 12 }],
-  ["attempt ID", { attemptId: "attempt-ref-phase0-0002" }],
-  ["absolute deadline", { absoluteDeadlineMs: 1783796460001 }],
-  ["content length", { contentLength: 18 }],
-  ["content encoding", { contentEncoding: "gzip" }],
-  [
-    "response policy",
-    { expectedResponsePolicyRef: "response-policy:anthropic-v2" },
-  ],
+const controlMutations: Array<[string, string, unknown]> = [
+  ["target scheme", "target_scheme", "http"], ["target host", "target_host", "api-alt.anthropic.com"],
+  ["target port", "target_port", 8443], ["target path", "target_path", "/v1/alternate"],
+  ["route", "route", "/v1/alternate"], ["method", "method", "PUT"],
+  ["proxy identity", "proxy_identity_ref", "opaque:proxy-ref:v1:bucket-b"],
+  ["account identity", "account_identity_ref", "opaque:account-ref:v1:other"],
+  ["verified context", "verified_context_ref", "opaque:context-ref:v1:other"],
+  ["proxy generation", "proxy_generation", 8], ["profile ref", "profile_ref", alternateProfile],
+  ["manifest authority", "manifest_authority_ref", "opaque:manifest-ref:v1:other"],
+  ["egress bucket", "egress_bucket", "bucket-b"], ["expected summary", "expected_tls_summary_bucket", "tls-bucket:alternate"],
+  ["nonce", "nonce", "nonce-ref-phase0-0002"], ["timestamp", "timestamp_ms", 1783796400001],
+  ["final forwarded-header hash", "final_headers_hash", "sha256:" + "c".repeat(64)],
+  ["final request-body hash", "request_body_hash", "sha256:" + "d".repeat(64)],
+  ["content length", "content_length", 18], ["content encoding", "content_encoding", "gzip"],
+  ["absolute deadline", "absolute_deadline_ms", 1783796460001],
+  ["response policy", "expected_response_policy_ref", "response-policy:anthropic-v2"],
+  ["envelope version", "envelope_version", 3], ["key epoch", "key_epoch", 12],
+  ["attempt ID", "attempt_id", "attempt-ref-phase0-0002"],
 ];
 
-for (const [name, mutation] of bindingMutations) {
+for (const [name, field, value] of controlMutations) {
   test(`B5 authentication changes after ${name} mutation`, () => {
+    const base = prepared();
+    const mutatedControl = { ...base.control, [field]: value } as any;
     assert.notEqual(
-      prepared(mutation).proxyBinding,
-      prepared().proxyBinding,
+      computeProxyBinding(bindingSecret, mutatedControl, base.proxyUrl),
+      base.proxyBinding,
       `${name} is unsigned`,
     );
   });
 }
+
+test("B5 authentication changes after canonical proxy URL mutation", () => {
+  const base = prepared();
+  assert.notEqual(computeProxyBinding(bindingSecret, base.control, "http://198.51.100.41:8080"), base.proxyBinding);
+});
 
 function bucketResolution(
   proxyUrl: string,

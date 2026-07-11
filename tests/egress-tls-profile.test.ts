@@ -141,6 +141,7 @@ auth:
   gateway_token: gateway-token
   internal_control_token: ${internalControlToken}
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${attestationSecret}
   egress_tls:

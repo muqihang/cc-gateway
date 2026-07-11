@@ -299,7 +299,7 @@ export async function openEgressSidecar(prepared: EgressSidecarPrepared, body: B
 }
 
 
-function computeProxyBinding(secret: string, control: EgressSidecarControl, proxyUrl: string): string {
+export function computeProxyBinding(secret: string, control: EgressSidecarControl, proxyUrl: string): string {
   const hmac = createHmac('sha256', secret)
   hmac.update('cc-egress-sidecar-proxy-binding-v1')
   hmac.update('\0')

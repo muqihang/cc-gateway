@@ -22,6 +22,7 @@
     "B6 rejects private IPv4 without explicit policy",
     "B6 rejects redirect directive",
     "B6 rejects scheme confusion",
+    "TestPhase0B6RebindingResolutionIsPinnedBeforeDial",
     "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/alternate_dial_target",
     "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/dns_rebinding_unpinned",
     "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/expanded_mapped_ipv6",

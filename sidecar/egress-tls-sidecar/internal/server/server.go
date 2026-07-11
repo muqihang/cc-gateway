@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -28,6 +29,8 @@ type Config struct {
 	RequireProxyEgress    bool
 	ProxyBindingSecret    string
 	ForwardTimeout        time.Duration
+	ProxyResolver         func(context.Context, string) ([]net.IP, error)
+	ProxyDialObserver     func(string)
 }
 
 type CapturedSummary = summary.SafeSummary

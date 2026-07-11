@@ -349,6 +349,7 @@ process:
   heap_total_range: [40000000, 80000000]
   heap_used_range: [100000000, 200000000]
 shared_pool:
+  gateway_compromise_boundary: trusted_gateway
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   context_attestation_secret: ${attestationSecret}
   billing_cch_mode: strip
