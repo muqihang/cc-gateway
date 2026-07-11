@@ -5,6 +5,7 @@
   "redaction_policy": "digests_and_safe_categories_only",
   "destruction_procedure": "git_revert_artifact_commit_after_security_approval",
   "phase": "phase_0_entry",
+  "entry_kind": "phase_0_entry",
   "approved_tool_head": "b9745da781397111a77465a1afb6bbbcb7cfd692",
   "repositories": {
     "cc_gateway": {

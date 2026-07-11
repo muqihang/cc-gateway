@@ -84,7 +84,8 @@ for (const file of [
 ]) {
   writeFileSync(path.join(gateway, file), `${file}\n`);
 }
-const contract = path.join(sub2api, 'vectors.json');
+const contract = path.join(sub2api, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json');
+mkdirSync(path.dirname(contract), { recursive: true });
 writeFileSync(contract, '{"fixture":true}\n');
 git(gateway, 'add', '.');
 git(gateway, 'commit', '-qm', 'inputs');
@@ -112,7 +113,17 @@ expectCode(
 );
 
 const manifest = captureBaseline(common);
-validateManifestArtifact(manifest);
+Object.assign(manifest as any, {
+  entry_kind: 'phase_0_entry',
+  approved_tool_head: PHASE_0_BINDINGS.ccGatewayHead,
+});
+(manifest as any).repositories.cc_gateway.head = PHASE_0_BINDINGS.ccGatewayHead;
+(manifest as any).repositories.cc_gateway.branch = PHASE_0_BINDINGS.ccGatewayBranch;
+(manifest as any).repositories.sub2api.head = PHASE_0_BINDINGS.sub2apiHead;
+(manifest as any).repositories.sub2api.branch = PHASE_0_BINDINGS.sub2apiBranch;
+(manifest as any).contract.sha256 = PHASE_0_BINDINGS.contractSha256;
+(manifest as any).contract.repository_relative_path_base64url = Buffer.from(PHASE_0_BINDINGS.contractRelativePath).toString('base64url');
+validateManifestArtifact({ ...manifest, phase: 'phase_0_exit', entry_kind: 'phase_0_exit' });
 assert.equal(manifest.repositories.cc_gateway.clean, true);
 assert.equal(manifest.repositories.sub2api.clean, true);
 assert.equal(manifest.governance.requirement_registry.status, 'absent_pre_governance_bootstrap');
@@ -135,6 +146,7 @@ assert.deepEqual(PHASE_0_BINDINGS, {
   sub2apiHead: 'a0c51e3c674c858fb11b09f21d94d72ec909f554',
   sub2apiBranch: 'codex/oracle-phase-0-governance',
   contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
+  contractRelativePath: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
 });
 const frozenState = { head: PHASE_0_BINDINGS.ccGatewayHead, branch: PHASE_0_BINDINGS.ccGatewayBranch };
 const frozenSubState = { head: PHASE_0_BINDINGS.sub2apiHead, branch: PHASE_0_BINDINGS.sub2apiBranch };
@@ -187,7 +199,7 @@ const receiptValue = {
   destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
   manifest_sha256: sha256(manifestBytes),
   schema_sha256: sha256(schemaBytes),
-  bootstrap_commit: common.approvedToolHead,
+  bootstrap_commit: PHASE_0_BINDINGS.ccGatewayHead,
 };
 
 // Evidence writes validate the supplied manifest/schema linkage before staging either file.
@@ -226,6 +238,42 @@ symlinkSync(outputRoot, outputLink);
 expectCode(() => captureBaseline({ ...common, outputPath: path.join(outputLink, 'manifest.json') }), 'output_path_escape');
 unlinkSync(outputLink);
 
+// Entry artifacts bind exact frozen heads, branches, contract path and digest.
+const entryBindingTampering: Array<(candidate: any) => void> = [
+  (candidate) => { candidate.approved_tool_head = 'a'.repeat(40); },
+  (candidate) => { candidate.repositories.cc_gateway.head = 'a'.repeat(40); },
+  (candidate) => { candidate.repositories.cc_gateway.branch = 'other'; },
+  (candidate) => { candidate.repositories.sub2api.head = 'a'.repeat(40); },
+  (candidate) => { candidate.repositories.sub2api.branch = 'other'; },
+  (candidate) => { candidate.contract.sha256 = '0'.repeat(64); },
+  (candidate) => { candidate.contract.repository_relative_path_base64url = Buffer.from('vectors.json').toString('base64url'); },
+];
+const frozenLike = clone(manifest) as any;
+frozenLike.phase = 'phase_0_entry';
+frozenLike.entry_kind = 'phase_0_entry';
+frozenLike.approved_tool_head = PHASE_0_BINDINGS.ccGatewayHead;
+frozenLike.repositories.cc_gateway.head = PHASE_0_BINDINGS.ccGatewayHead;
+frozenLike.repositories.cc_gateway.branch = PHASE_0_BINDINGS.ccGatewayBranch;
+frozenLike.repositories.sub2api.head = PHASE_0_BINDINGS.sub2apiHead;
+frozenLike.repositories.sub2api.branch = PHASE_0_BINDINGS.sub2apiBranch;
+frozenLike.contract.sha256 = PHASE_0_BINDINGS.contractSha256;
+frozenLike.contract.repository_relative_path_base64url = Buffer.from(PHASE_0_BINDINGS.contractRelativePath).toString('base64url');
+for (const tamper of entryBindingTampering) {
+  const candidate = clone(frozenLike);
+  tamper(candidate);
+  expectCode(() => validateManifestArtifact(candidate), 'manifest_binding_mismatch');
+}
+
+// Staging rejects identical/aliased outputs and pre-existing temporary symlinks.
+expectCode(() => writeEvidencePair(pairManifest, frozenLike, pairManifest, receiptValue, schemaBytes), 'output_paths_alias');
+const aliasReceipt = path.join(pairRoot, 'alias-receipt.json');
+symlinkSync(pairManifest, aliasReceipt);
+expectCode(() => writeEvidencePair(pairManifest, frozenLike, aliasReceipt, receiptValue, schemaBytes), 'output_paths_alias');
+unlinkSync(aliasReceipt);
+symlinkSync(path.join(pairRoot, 'outside-temp'), `${pairManifest}.tmp`);
+expectCode(() => writeEvidencePair(pairManifest, frozenLike, pairReceipt, receiptValue, schemaBytes), 'temporary_path_exists');
+unlinkSync(`${pairManifest}.tmp`);
+
 // Invalid raw path bytes are retained as bytes in dirty records.
 const invalidPath = Buffer.from([0x62, 0x61, 0x64, 0xff]);
 const rawRecords = parsePorcelainPathRecords(Buffer.concat([Buffer.from('?? '), invalidPath, Buffer.from([0])]));
@@ -235,5 +283,8 @@ const checkedManifest = JSON.parse(readFileSync(path.join(process.cwd(), 'docs/s
 const checkedReceipt = JSON.parse(readFileSync(path.join(process.cwd(), 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json'), 'utf8'));
 validateManifestArtifact(checkedManifest);
 validateReceiptArtifact(checkedReceipt);
+assert.equal(checkedReceipt.bootstrap_commit, checkedManifest.approved_tool_head);
+assert.equal(checkedReceipt.manifest_sha256, sha256(readFileSync(path.join(process.cwd(), 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'))));
+assert.equal(checkedReceipt.schema_sha256, sha256(schemaBytes));
 
 console.log('oracle lab baseline freeze tests passed');

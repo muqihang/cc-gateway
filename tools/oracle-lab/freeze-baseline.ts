@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   renameSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -24,6 +28,7 @@ export const PHASE_0_BINDINGS = {
   sub2apiHead: 'a0c51e3c674c858fb11b09f21d94d72ec909f554',
   sub2apiBranch: 'codex/oracle-phase-0-governance',
   contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
+  contractRelativePath: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
 } as const;
 
 export type DirtyRecord = {
@@ -336,6 +341,12 @@ function validateRepositoryArtifact(value: unknown): void {
     if (record.object_type === 'symlink' && !validSha(record.symlink_target_sha256)) throw new BaselineError('manifest_schema_invalid', 'symlink requires target digest');
     if (record.object_type === 'deleted' && record.deletion_marker !== true) throw new BaselineError('manifest_schema_invalid', 'deleted record requires deletion marker');
     if (record.object_type === 'submodule' && (!validCommit(record.submodule_head) || typeof record.submodule_dirty !== 'boolean')) throw new BaselineError('manifest_schema_invalid', 'submodule requires provenance');
+    const sourceExpected = record.status[0] === 'R' || record.status[0] === 'C';
+    if (sourceExpected !== (record.source_path_base64url !== undefined)) throw new BaselineError('manifest_schema_invalid', 'rename/copy source field incompatible with status');
+    if (record.object_type !== 'regular_file' && record.content_sha256 !== undefined) throw new BaselineError('manifest_schema_invalid', 'content digest incompatible with object type');
+    if (record.object_type !== 'symlink' && record.symlink_target_sha256 !== undefined) throw new BaselineError('manifest_schema_invalid', 'symlink digest incompatible with object type');
+    if (record.object_type !== 'deleted' && record.deletion_marker !== undefined) throw new BaselineError('manifest_schema_invalid', 'deletion marker incompatible with object type');
+    if (record.object_type !== 'submodule' && (record.submodule_head !== undefined || record.submodule_dirty !== undefined)) throw new BaselineError('manifest_schema_invalid', 'submodule fields incompatible with object type');
   }
   for (const rule of repository.ignored_exclusion_rules) {
     if (!rule || typeof rule !== 'object' || Array.isArray(rule)) throw new BaselineError('manifest_schema_invalid', 'invalid exclusion rule');
@@ -353,9 +364,9 @@ function validateDigestMarker(value: unknown): void {
 }
 
 export function validateManifestArtifact(value: unknown): void {
-  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
   const v = value as any;
-  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || v.phase !== 'phase_0_entry' || !validCommit(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head)) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
   exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
   exactObject(v.contract, ['path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (v.contract.path_category !== 'sub2api_formal_pool_contract' || !validPathBytes(v.contract.repository_relative_path_base64url) || !validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract');
   exactObject(v.governance, ['requirement_registry', 'claim_registry'], 'manifest_schema_invalid'); validateGovernanceMarkers(v.governance);
@@ -373,6 +384,7 @@ export function validateManifestArtifact(value: unknown): void {
   exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
   if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
   exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
+  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== PHASE_0_BINDINGS.ccGatewayHead || v.repositories.cc_gateway.head !== PHASE_0_BINDINGS.ccGatewayHead || v.repositories.cc_gateway.branch !== PHASE_0_BINDINGS.ccGatewayBranch || v.repositories.sub2api.head !== PHASE_0_BINDINGS.sub2apiHead || v.repositories.sub2api.branch !== PHASE_0_BINDINGS.sub2apiBranch || v.contract.sha256 !== PHASE_0_BINDINGS.contractSha256 || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== PHASE_0_BINDINGS.contractRelativePath)) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
 }
 
 export function validateReceiptArtifact(value: unknown): void {
@@ -387,6 +399,7 @@ export function writeEvidencePair(out: string, manifest: unknown, receiptPath: s
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   const validatedReceipt = receiptValue as any;
   if (validatedReceipt.manifest_sha256 !== sha256(manifestBytes) || validatedReceipt.schema_sha256 !== sha256(schemaBytes)) throw new BaselineError('receipt_digest_mismatch', 'receipt does not bind supplied manifest and schema');
+  if (validatedReceipt.bootstrap_commit !== (manifest as any).approved_tool_head) throw new BaselineError('receipt_bootstrap_mismatch', 'receipt bootstrap commit does not match manifest approved tool head');
   writeEvidencePairInternal(out, manifest, receiptPath, receiptValue);
 }
 
@@ -405,6 +418,7 @@ export function captureBaseline(options: BaselineOptions) {
   if (!existsSync(options.contractPath)) throw new BaselineError('missing_contract', 'formal-pool contract does not exist');
   const contractReal = realpathSync(options.contractPath);
   if (!pathInside(subRoot, contractReal)) throw new BaselineError('contract_symlink_escape', 'formal-pool contract resolves outside the declared Sub2API root');
+  if (path.relative(subRoot, contractReal).split(path.sep).join('/') !== PHASE_0_BINDINGS.contractRelativePath) throw new BaselineError('contract_path_mismatch', 'formal-pool contract must use the frozen repository-relative path');
   if (options.outputPath) ensureOutputContainment(ccRoot, options.outputPath);
   const ccState = computeRepositoryState(ccRoot, options.allowCcGatewayDirtyDigest);
   const subState = computeRepositoryState(subRoot, options.allowSub2apiDirtyDigest);
@@ -436,6 +450,7 @@ export function captureBaseline(options: BaselineOptions) {
     redaction_policy: 'digests_and_safe_categories_only',
     destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
     phase: 'phase_0_entry',
+    entry_kind: 'phase_0_entry',
     approved_tool_head: options.approvedToolHead,
     repositories: { cc_gateway: ccState, sub2api: subState },
     contract: {
@@ -502,17 +517,49 @@ function parseArgs(argv: string[]): Record<string, string> {
 function writeJsonAtomic(target: string, value: unknown): void {
   mkdirSync(path.dirname(target), { recursive: true });
   const temporary = `${target}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, target);
+  let fd: number | undefined;
+  try {
+    fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600);
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    closeSync(fd); fd = undefined;
+    renameSync(temporary, target);
+  } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+function canonicalOutputPath(candidate: string): string {
+  const absolute = path.resolve(candidate);
+  if (existsSync(absolute)) return realpathSync(absolute);
+  const parent = path.dirname(absolute);
+  const parentReal = realpathSync(parent);
+  return path.join(parentReal, path.basename(absolute));
 }
 
 function writeEvidencePairInternal(out: string, manifest: unknown, receipt: string, receiptValue: unknown): void {
-  const outTemporary = `${out}.tmp`;
-  const receiptTemporary = `${receipt}.tmp`;
-  writeFileSync(outTemporary, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-  writeFileSync(receiptTemporary, `${JSON.stringify(receiptValue, null, 2)}\n`, { mode: 0o600 });
-  renameSync(outTemporary, out);
-  renameSync(receiptTemporary, receipt);
+  const outCanonical = canonicalOutputPath(out);
+  const receiptCanonical = canonicalOutputPath(receipt);
+  if (outCanonical === receiptCanonical) throw new BaselineError('output_paths_alias', 'manifest and receipt paths must be distinct');
+  for (const target of [out, receipt]) {
+    if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new BaselineError('output_path_symlink', 'final output path must not be a symlink');
+  }
+  const temps = [`${out}.tmp`, `${receipt}.tmp`];
+  const fds: Array<{ path: string; fd: number }> = [];
+  try {
+    for (const temporary of temps) {
+      if (!pathInside(realpathSync(path.dirname(temporary)), canonicalOutputPath(temporary))) throw new BaselineError('output_path_escape', 'temporary path escapes output root');
+      let fd: number;
+      try { fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600); }
+      catch { throw new BaselineError('temporary_path_exists', 'temporary evidence path already exists'); }
+      fds.push({ path: temporary, fd });
+    }
+    writeFileSync(fds[0].fd, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(fds[1].fd, `${JSON.stringify(receiptValue, null, 2)}\n`);
+    for (const item of fds) closeSync(item.fd);
+    renameSync(fds[0].path, out);
+    renameSync(fds[1].path, receipt);
+  } catch (error) {
+    for (const item of fds) { try { closeSync(item.fd); } catch {} try { unlinkSync(item.path); } catch {} }
+    throw error;
+  }
 }
 
 function main(): void {
