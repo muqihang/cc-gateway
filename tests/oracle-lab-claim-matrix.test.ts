@@ -10,17 +10,22 @@ const registryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirem
 const claimsPath = path.resolve('docs/superpowers/registry/oracle-lab-claims.json')
 const schemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-claim.schema.json')
 
-type Claim = Record<string, unknown>
+type RecordValue = Record<string, unknown>
+type Claim = RecordValue
 
-async function requirements(): Promise<Record<string, unknown>[]> {
-  return JSON.parse(await readFile(registryPath, 'utf8')) as Record<string, unknown>[]
+async function requirements(): Promise<RecordValue[]> {
+  return JSON.parse(await readFile(registryPath, 'utf8')) as RecordValue[]
 }
 
-async function validateFixture(claims: Claim[]) {
+async function validateRaw(contents: string, records?: RecordValue[]) {
   const directory = await mkdtemp(path.join(tmpdir(), 'oracle-lab-claims-'))
   const fixturePath = path.join(directory, 'claims.json')
-  await writeFile(fixturePath, JSON.stringify(claims))
-  return validateClaims(fixturePath, await requirements())
+  await writeFile(fixturePath, contents)
+  return validateClaims(fixturePath, records ?? await requirements())
+}
+
+async function validateFixture(claims: unknown, records?: RecordValue[]) {
+  return validateRaw(JSON.stringify(claims), records)
 }
 
 function expectError(result: Awaited<ReturnType<typeof validateClaims>>, code: string) {
@@ -50,60 +55,214 @@ const pinnedObservation: Claim = {
   authoritative_provider_disclosure: false,
 }
 
+const productionArtifact = {
+  repository: 'cc-gateway',
+  commit: '0123456789abcdef0123456789abcdef01234567',
+  config_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  manifest_digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  deployed_at: '2026-07-11T18:00:00Z',
+}
+
+function authoritativeRequirement(record: RecordValue): RecordValue {
+  return {
+    ...record,
+    implementation_status: 'production_verified',
+    repository: productionArtifact.repository,
+    last_verified_commit: productionArtifact.commit,
+    last_verified_at: '2026-07-11T18:00:00Z',
+    expiry: '2099-07-11T18:00:00Z',
+    canary_evidence_ids: ['canary-authoritative'],
+    production_gate_ids: ['gate-authoritative'],
+    rollback_evidence_ids: ['rollback-authoritative'],
+    deployed_artifacts: [productionArtifact],
+    contradiction_ids: [],
+  }
+}
+
+function productionClaim(changes: Claim = {}): Claim {
+  return {
+    ...directEgressStructural,
+    claim_id: 'CL-PRODUCTION-VALID-001',
+    claim_class: 'upstream_canary',
+    authority_state: 'production_verified',
+    observation_scope: 'production',
+    server_dependency: 'server',
+    evidence_ids: ['canary-authoritative', 'gate-authoritative', 'rollback-authoritative'],
+    canary_evidence_ids: ['canary-authoritative'],
+    production_gate_ids: ['gate-authoritative'],
+    rollback_evidence_ids: ['rollback-authoritative'],
+    deployed_artifacts: [productionArtifact],
+    expiry: '2099-07-11T18:00:00Z',
+    ...changes,
+  }
+}
+
+async function authoritativeRecords(requirementId = 'HA-P0-003') {
+  const records = await requirements()
+  const index = records.findIndex((entry) => entry.requirement_id === requirementId)
+  assert.notEqual(index, -1)
+  records[index] = authoritativeRequirement(records[index])
+  return records
+}
+
 test('accepts valid direct-egress structural and pinned-client observation claims', async () => {
   assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation]), { ok: true, errors: [] })
 })
 
-test('seeded claim matrix and strict schema expose the fixed authority enums', async () => {
+test('seeded claim matrix and strict schema expose runtime-equivalent authority rules', async () => {
   assert.deepEqual(validateClaims(claimsPath, await requirements()), { ok: true, errors: [] })
-  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as Record<string, any>
-  assert.equal(schema.items.additionalProperties, false)
-  assert.deepEqual(schema.items.properties.claim_class.enum, ['local_structural', 'local_observational', 'upstream_canary', 'provider_internal'])
-  assert.deepEqual(schema.items.properties.authority_state.enum, ['unverified', 'package_observed', 'local_wire_observed', 'cross_checked', 'gateway_wire_equivalent', 'stateful_behavior_equivalent', 'upstream_canary_observed', 'production_verified'])
-  assert(Array.isArray(schema.items.allOf) && schema.items.allOf.length >= 3, 'schema must encode authority ceilings and production evidence conditions')
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as RecordValue
+  const items = schema.items as RecordValue
+  const serialized = JSON.stringify(items.allOf)
+  assert.equal(items.additionalProperties, false)
+  assert.deepEqual((items.properties as RecordValue).claim_class && ((items.properties as RecordValue).claim_class as RecordValue).enum,
+    ['local_structural', 'local_observational', 'upstream_canary', 'provider_internal'])
+  for (const token of ['local_structural', 'local_observational', 'server_dependency', 'provider',
+    'authoritative_provider_disclosure', 'evidence_ids', 'observation_scope', 'production_verified',
+    'canary_evidence_ids', 'production_gate_ids', 'rollback_evidence_ids', 'deployed_artifacts']) {
+    assert(serialized.includes(token), `schema conditionals are missing ${token}`)
+  }
+  const definitions = schema.$defs as RecordValue
+  assert.equal(((definitions.stringArray as RecordValue).uniqueItems), true)
+  assert.equal(((definitions.rfc3339Timestamp as RecordValue).pattern),
+    '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$')
 })
 
-test('rejects provider-internal claims derived only from synthetic correlation', async () => {
-  expectError(await validateFixture([{
-    ...directEgressStructural, claim_id: 'CL-PROVIDER-001', requirement_ids: ['HA-P0-003'],
-    claim_class: 'provider_internal', authority_state: 'cross_checked', server_dependency: 'provider',
-    statement: 'Provider linked this request to an account.', derived_from: 'synthetic-correlation',
-  }]), 'provider_disclosure_required')
+test('rejects malformed registries, missing and unknown fields, and duplicate values', async () => {
+  expectError(await validateRaw('{'), 'invalid_registry')
+  expectError(await validateFixture({}), 'invalid_registry')
+  expectError(await validateFixture([42]), 'invalid_record')
+  const { statement: _statement, ...missing } = directEgressStructural
+  expectError(await validateFixture([missing]), 'missing_field')
+  expectError(await validateFixture([{ ...directEgressStructural, unexpected: true }]), 'unknown_field')
+  expectError(await validateFixture([directEgressStructural, directEgressStructural]), 'duplicate_claim_id')
+  for (const field of ['requirement_ids', 'evidence_ids', 'contradiction_ids', 'canary_evidence_ids',
+    'production_gate_ids', 'rollback_evidence_ids'] as const) {
+    expectError(await validateFixture([{ ...directEgressStructural, [field]: ['duplicate', 'duplicate'] }]), 'invalid_field')
+  }
 })
 
-test('rejects authority/scope mismatches and local claims that imply server acceptance', async () => {
+test('rejects provider-internal authority without authoritative disclosure at every elevated state', async () => {
+  for (const authority of ['package_observed', 'cross_checked', 'production_verified']) {
+    const claim = productionClaim({
+      claim_id: `CL-PROVIDER-${authority.toUpperCase().replaceAll('_', '-')}`,
+      claim_class: 'provider_internal', authority_state: authority,
+      observation_scope: authority === 'production_verified' ? 'production' : authority === 'cross_checked' ? 'cross_checked' : 'package',
+      server_dependency: 'provider', authoritative_provider_disclosure: false,
+      derived_from: authority === 'package_observed' ? 'provider-shaped-package' : 'synthetic-correlation',
+    })
+    expectError(await validateFixture([claim], await authoritativeRecords()), 'provider_disclosure_required')
+  }
+  assert.deepEqual(await validateFixture([{
+    ...directEgressStructural, claim_id: 'CL-PROVIDER-UNVERIFIED', claim_class: 'provider_internal',
+    authority_state: 'unverified', observation_scope: 'local', server_dependency: 'provider',
+    evidence_ids: [], authoritative_provider_disclosure: false, derived_from: 'synthetic-correlation',
+  }]), { ok: true, errors: [] })
+})
+
+test('enforces local claim authority ceilings and forbids every server/provider dependency conclusion', async () => {
   expectError(await validateFixture([{ ...directEgressStructural, observation_scope: 'local' }]), 'authority_scope_mismatch')
-  expectError(await validateFixture([{ ...pinnedObservation, server_dependency: 'server' }]), 'server_acceptance_unproven')
-})
-
-test('rejects production claims without upstream canary evidence', async () => {
+  for (const claimClass of ['local_structural', 'local_observational']) {
+    for (const dependency of ['server', 'provider']) {
+      expectError(await validateFixture([{
+        ...directEgressStructural,
+        claim_id: `CL-LOCAL-${claimClass.toUpperCase().replaceAll('_', '-')}-${dependency.toUpperCase()}`,
+        claim_class: claimClass, authority_state: 'unverified', observation_scope: 'local',
+        evidence_ids: [], server_dependency: dependency,
+      }]), 'server_dependency_unproven')
+    }
+  }
   expectError(await validateFixture([{
-    ...directEgressStructural, claim_id: 'CL-PRODUCTION-001', authority_state: 'production_verified',
-    server_dependency: 'server', observation_scope: 'production',
-    production_gate_ids: ['gate-1'], rollback_evidence_ids: ['rollback-1'],
-    deployed_artifacts: [{ repository: 'cc-gateway', commit: '0123456789abcdef0123456789abcdef01234567',
-      config_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      manifest_digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-      deployed_at: new Date().toISOString() }],
-    expiry: new Date(Date.now() + 3600000).toISOString(),
-  }]), 'production_canary_required')
+    ...pinnedObservation, authority_state: 'upstream_canary_observed', observation_scope: 'upstream_canary',
+  }]), 'authority_ceiling_exceeded')
 })
 
-test('accepts production authority only after canary, gates, rollback, deployment, and current evidence', async () => {
-  const records = await requirements()
-  const requirement = records.find((entry) => entry.requirement_id === 'HA-P0-003')
-  assert(requirement)
-  requirement.production_gate_ids = ['gate-required']
-  const directory = await mkdtemp(path.join(tmpdir(), 'oracle-lab-production-'))
-  const fixturePath = path.join(directory, 'claims.json')
-  await writeFile(fixturePath, JSON.stringify([{
-    ...directEgressStructural, claim_id: 'CL-PRODUCTION-VALID-001', claim_class: 'upstream_canary',
-    authority_state: 'production_verified', observation_scope: 'production', server_dependency: 'server',
-    canary_evidence_ids: ['canary-1'], production_gate_ids: ['gate-required'], rollback_evidence_ids: ['rollback-1'],
-    deployed_artifacts: [{ repository: 'cc-gateway', commit: '0123456789abcdef0123456789abcdef01234567',
-      config_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      manifest_digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-      deployed_at: new Date().toISOString() }], expiry: new Date(Date.now() + 3600000).toISOString(),
-  }]))
-  assert.deepEqual(validateClaims(fixturePath, records), { ok: true, errors: [] })
+test('non-unverified authority requires evidence and non-production claims reject production fields', async () => {
+  expectError(await validateFixture([{ ...pinnedObservation, evidence_ids: [] }]), 'evidence_required')
+  expectError(await validateFixture([{ ...directEgressStructural, expiry: '2099-07-11T18:00:00Z' }]), 'non_production_evidence')
+  expectError(await validateFixture([{ ...directEgressStructural, canary_evidence_ids: ['invented'] }]), 'non_production_evidence')
+})
+
+test('production authority rejects non-authoritative requirement records and invented registry evidence', async () => {
+  for (const status of ['design_only', 'deferred', 'failing_test_added', 'locally_verified', 'upstream_canary_observed']) {
+    const records = await authoritativeRecords()
+    const record = records.find((entry) => entry.requirement_id === 'HA-P0-003')
+    assert(record)
+    record.implementation_status = status
+    expectError(await validateFixture([productionClaim()], records), 'requirement_authority_insufficient')
+  }
+  for (const [field, value] of [
+    ['canary_evidence_ids', ['invented-canary']],
+    ['production_gate_ids', ['invented-gate']],
+    ['rollback_evidence_ids', ['invented-rollback']],
+    ['evidence_ids', ['invented-evidence']],
+  ] as const) {
+    expectError(await validateFixture([productionClaim({ [field]: value })], await authoritativeRecords()), 'requirement_evidence_mismatch')
+  }
+})
+
+test('production authority requires exact requirement repository, commit, and artifact digests', async () => {
+  const mutations: Claim[] = [
+    { deployed_artifacts: [{ ...productionArtifact, repository: 'other-repository' }] },
+    { deployed_artifacts: [{ ...productionArtifact, commit: 'fedcba9876543210fedcba9876543210fedcba98' }] },
+    { deployed_artifacts: [{ ...productionArtifact, config_digest: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' }] },
+    { deployed_artifacts: [{ ...productionArtifact, manifest_digest: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd' }] },
+    { deployed_artifacts: [{ ...productionArtifact, deployed_at: '2026-02-30T12:00:00Z' }] },
+    { deployed_artifacts: [{ ...productionArtifact, unexpected: true }] },
+    { deployed_artifacts: 'not-an-array' },
+  ]
+  for (const mutation of mutations) {
+    expectError(await validateFixture([productionClaim(mutation)], await authoritativeRecords()),
+      Array.isArray(mutation.deployed_artifacts) && mutation.deployed_artifacts.some((artifact) =>
+        typeof artifact === 'object' && artifact !== null && ('unexpected' in artifact || (artifact as RecordValue).deployed_at === '2026-02-30T12:00:00Z'))
+        ? 'invalid_deployed_artifact' : 'requirement_artifact_mismatch')
+  }
+
+  const records = await authoritativeRecords()
+  const record = records.find((entry) => entry.requirement_id === 'HA-P0-003')
+  assert(record)
+  record.last_verified_commit = 'fedcba9876543210fedcba9876543210fedcba98'
+  expectError(await validateFixture([productionClaim()], records), 'requirement_artifact_mismatch')
+})
+
+test('production evidence must be current, contradiction-free, and exactly linked across all requirements', async () => {
+  expectError(await validateFixture([productionClaim({ expiry: '2020-01-01T00:00:00Z' })], await authoritativeRecords()), 'production_expiry_required')
+  expectError(await validateFixture([productionClaim({ contradiction_ids: ['open-contradiction'] })], await authoritativeRecords()), 'production_contradiction')
+
+  for (const requirementMutation of [
+    { expiry: '2020-01-01T00:00:00Z' },
+    { contradiction_ids: ['requirement-contradiction'] },
+  ]) {
+    const expiredOrContradicted = await authoritativeRecords()
+    const record = expiredOrContradicted.find((entry) => entry.requirement_id === 'HA-P0-003')
+    assert(record)
+    Object.assign(record, requirementMutation)
+    expectError(await validateFixture([productionClaim()], expiredOrContradicted), 'requirement_authority_insufficient')
+  }
+
+  const records = await authoritativeRecords()
+  const secondIndex = records.findIndex((entry) => entry.requirement_id === 'HA-P0-006')
+  assert.notEqual(secondIndex, -1)
+  records[secondIndex] = {
+    ...authoritativeRequirement(records[secondIndex]),
+    canary_evidence_ids: ['canary-second'], production_gate_ids: ['gate-second'], rollback_evidence_ids: ['rollback-second'],
+  }
+  expectError(await validateFixture([productionClaim({ requirement_ids: ['HA-P0-003', 'HA-P0-006'] })], records), 'requirement_evidence_mismatch')
+  assert.deepEqual(await validateFixture([productionClaim({
+    requirement_ids: ['HA-P0-003', 'HA-P0-006'],
+    evidence_ids: ['canary-authoritative', 'canary-second', 'gate-authoritative', 'gate-second', 'rollback-authoritative', 'rollback-second'],
+    canary_evidence_ids: ['canary-authoritative', 'canary-second'],
+    production_gate_ids: ['gate-authoritative', 'gate-second'],
+    rollback_evidence_ids: ['rollback-authoritative', 'rollback-second'],
+  })], records), { ok: true, errors: [] })
+})
+
+test('accepts production authority only with fully authoritative requirements and exact artifacts', async () => {
+  assert.deepEqual(await validateFixture([productionClaim()], await authoritativeRecords()), { ok: true, errors: [] })
+})
+
+test('timestamps reject impossible calendar dates using Task 1 RFC3339 strictness', async () => {
+  for (const timestamp of ['2026-02-30T12:00:00Z', '2026-13-01T12:00:00Z', '2026-07-11T25:00:00Z', '2026-07-11 12:00:00Z']) {
+    expectError(await validateFixture([productionClaim({ expiry: timestamp })], await authoritativeRecords()), 'invalid_field')
+  }
 })

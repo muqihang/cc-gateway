@@ -5,31 +5,149 @@
   "items": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["claim_id", "requirement_ids", "claim_class", "authority_state", "statement", "evidence_ids", "observation_scope", "server_dependency", "stability_class", "confidence", "contradiction_ids", "expiry", "canary_evidence_ids", "production_gate_ids", "rollback_evidence_ids", "deployed_artifacts", "derived_from", "authoritative_provider_disclosure"],
+    "required": [
+      "claim_id", "requirement_ids", "claim_class", "authority_state", "statement",
+      "evidence_ids", "observation_scope", "server_dependency", "stability_class",
+      "confidence", "contradiction_ids", "expiry", "canary_evidence_ids",
+      "production_gate_ids", "rollback_evidence_ids", "deployed_artifacts",
+      "derived_from", "authoritative_provider_disclosure"
+    ],
     "properties": {
-      "claim_id": {"type": "string", "pattern": "^CL-[A-Z0-9]+(?:-[A-Z0-9]+)*$"},
-      "requirement_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-      "claim_class": {"enum": ["local_structural", "local_observational", "upstream_canary", "provider_internal"]},
-      "authority_state": {"enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent", "stateful_behavior_equivalent", "upstream_canary_observed", "production_verified"]},
-      "statement": {"type": "string", "minLength": 1},
-      "evidence_ids": {"type": "array", "items": {"type": "string"}},
-      "observation_scope": {"enum": ["package", "local", "local_wire", "cross_checked", "gateway", "stateful", "upstream_canary", "production"]},
-      "server_dependency": {"enum": ["none", "local", "server", "provider"]},
-      "stability_class": {"type": "string", "minLength": 1},
-      "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-      "contradiction_ids": {"type": "array", "items": {"type": "string"}},
-      "expiry": {"type": ["string", "null"], "format": "date-time"},
-      "canary_evidence_ids": {"type": "array", "items": {"type": "string"}},
-      "production_gate_ids": {"type": "array", "items": {"type": "string"}},
-      "rollback_evidence_ids": {"type": "array", "items": {"type": "string"}},
-      "deployed_artifacts": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["repository", "commit", "config_digest", "manifest_digest", "deployed_at"], "properties": {"repository": {"type": "string"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "config_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "deployed_at": {"type": "string", "format": "date-time"}}}},
-      "derived_from": {"type": "string", "minLength": 1},
-      "authoritative_provider_disclosure": {"type": "boolean"}
+      "claim_id": { "type": "string", "pattern": "^CL-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
+      "requirement_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+      "claim_class": { "enum": ["local_structural", "local_observational", "upstream_canary", "provider_internal"] },
+      "authority_state": { "enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent", "stateful_behavior_equivalent", "upstream_canary_observed", "production_verified"] },
+      "statement": { "type": "string", "minLength": 1 },
+      "evidence_ids": { "$ref": "#/$defs/stringArray" },
+      "observation_scope": { "enum": ["package", "local", "local_wire", "cross_checked", "gateway", "stateful", "upstream_canary", "production"] },
+      "server_dependency": { "enum": ["none", "local", "server", "provider"] },
+      "stability_class": { "type": "string", "minLength": 1 },
+      "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+      "contradiction_ids": { "$ref": "#/$defs/stringArray" },
+      "expiry": { "oneOf": [{ "$ref": "#/$defs/rfc3339Timestamp" }, { "type": "null" }] },
+      "canary_evidence_ids": { "$ref": "#/$defs/stringArray" },
+      "production_gate_ids": { "$ref": "#/$defs/stringArray" },
+      "rollback_evidence_ids": { "$ref": "#/$defs/stringArray" },
+      "deployed_artifacts": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/deployedArtifact" } },
+      "derived_from": { "type": "string", "minLength": 1 },
+      "authoritative_provider_disclosure": { "type": "boolean" }
     },
     "allOf": [
-      {"if": {"properties": {"claim_class": {"enum": ["local_structural"]}}}, "then": {"properties": {"authority_state": {"enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent"]}}}},
-      {"if": {"properties": {"claim_class": {"enum": ["local_observational"]}}}, "then": {"properties": {"authority_state": {"enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent", "stateful_behavior_equivalent"]}}}},
-      {"if": {"properties": {"authority_state": {"const": "production_verified"}}}, "then": {"properties": {"claim_class": {"enum": ["upstream_canary", "provider_internal"]}, "observation_scope": {"const": "production"}, "canary_evidence_ids": {"minItems": 1}, "production_gate_ids": {"minItems": 1}, "rollback_evidence_ids": {"minItems": 1}, "deployed_artifacts": {"minItems": 1}, "contradiction_ids": {"maxItems": 0}, "expiry": {"type": "string", "format": "date-time"}}}, "else": {"properties": {"canary_evidence_ids": {"maxItems": 0}, "production_gate_ids": {"maxItems": 0}, "rollback_evidence_ids": {"maxItems": 0}, "deployed_artifacts": {"maxItems": 0}, "expiry": {"type": "null"}}}}
+      {
+        "if": { "properties": { "claim_class": { "const": "local_structural" } }, "required": ["claim_class"] },
+        "then": {
+          "properties": {
+            "authority_state": { "enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent"] },
+            "server_dependency": { "enum": ["none", "local"] }
+          }
+        }
+      },
+      {
+        "if": { "properties": { "claim_class": { "const": "local_observational" } }, "required": ["claim_class"] },
+        "then": {
+          "properties": {
+            "authority_state": { "enum": ["unverified", "package_observed", "local_wire_observed", "cross_checked", "gateway_wire_equivalent", "stateful_behavior_equivalent"] },
+            "server_dependency": { "enum": ["none", "local"] }
+          }
+        }
+      },
+      {
+        "if": {
+          "properties": {
+            "claim_class": { "const": "provider_internal" },
+            "authoritative_provider_disclosure": { "const": false }
+          },
+          "required": ["claim_class", "authoritative_provider_disclosure"]
+        },
+        "then": { "properties": { "authority_state": { "const": "unverified" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "unverified" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "local" } } },
+        "else": { "properties": { "evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "package_observed" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "package" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "local_wire_observed" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "local_wire" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "cross_checked" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "cross_checked" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "gateway_wire_equivalent" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "gateway" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "stateful_behavior_equivalent" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "stateful" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "upstream_canary_observed" } }, "required": ["authority_state"] },
+        "then": { "properties": { "observation_scope": { "const": "upstream_canary" } } }
+      },
+      {
+        "if": { "properties": { "authority_state": { "const": "production_verified" } }, "required": ["authority_state"] },
+        "then": {
+          "properties": {
+            "claim_class": { "enum": ["upstream_canary", "provider_internal"] },
+            "observation_scope": { "const": "production" },
+            "canary_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+            "production_gate_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+            "rollback_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+            "deployed_artifacts": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/deployedArtifact" } },
+            "contradiction_ids": { "type": "array", "maxItems": 0 },
+            "expiry": { "$ref": "#/$defs/rfc3339Timestamp" }
+          }
+        },
+        "else": {
+          "properties": {
+            "canary_evidence_ids": { "type": "array", "maxItems": 0 },
+            "production_gate_ids": { "type": "array", "maxItems": 0 },
+            "rollback_evidence_ids": { "type": "array", "maxItems": 0 },
+            "deployed_artifacts": { "type": "array", "maxItems": 0 },
+            "expiry": { "type": "null" }
+          }
+        }
+      }
     ]
+  },
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "rfc3339Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^(?!.*(?:\\.\\.|//))(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
+    },
+    "deployedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "config_digest", "manifest_digest", "deployed_at"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "config_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "deployed_at": { "$ref": "#/$defs/rfc3339Timestamp" }
+      }
+    }
   }
 }

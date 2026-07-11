@@ -68,7 +68,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isTimestamp(value: unknown): value is string {
+export function isRfc3339Timestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value)
   if (!match) return false
@@ -195,14 +195,14 @@ export function validateRequirements(path: string): ValidationResult {
             artifact.commit !== value.last_verified_commit ||
             typeof artifact.config_digest !== 'string' || !digestPattern.test(artifact.config_digest) ||
             typeof artifact.manifest_digest !== 'string' || !digestPattern.test(artifact.manifest_digest) ||
-            !isTimestamp(artifact.deployed_at)) {
+            !isRfc3339Timestamp(artifact.deployed_at)) {
           add(errors, 'invalid_deployed_artifact', artifactPath, 'deployed artifact is incomplete or invalid')
         }
       })
     }
 
     for (const field of ['last_verified_at', 'expiry'] as const) {
-      if (value[field] !== null && !isTimestamp(value[field])) {
+      if (value[field] !== null && !isRfc3339Timestamp(value[field])) {
         add(errors, 'invalid_field', `${base}.${field}`, `${field} must be an ISO-8601 timestamp or null`)
       }
     }
@@ -215,7 +215,7 @@ export function validateRequirements(path: string): ValidationResult {
     }
     const verifiedStatus = status === 'locally_verified' || status === 'upstream_canary_observed' || status === 'production_verified'
     if (verifiedStatus && (typeof value.last_verified_commit !== 'string' || !commitPattern.test(value.last_verified_commit) ||
-        !isTimestamp(value.last_verified_at))) {
+        !isRfc3339Timestamp(value.last_verified_at))) {
       add(errors, 'invalid_status_transition', `${base}.implementation_status`, `${status} requires verification commit and timestamp`)
     }
     if (status === 'failing_test_added' && (!Array.isArray(value.test_files) || value.test_files.length === 0)) {
@@ -236,7 +236,7 @@ export function validateRequirements(path: string): ValidationResult {
     } else {
       const complete = productionFields.every((field) => Array.isArray(value[field]) && value[field].length > 0) &&
         Array.isArray(value.deployed_artifacts) && value.deployed_artifacts.length > 0 &&
-        isTimestamp(value.expiry) && Date.parse(value.expiry) > Date.now() &&
+        isRfc3339Timestamp(value.expiry) && Date.parse(value.expiry) > Date.now() &&
         Array.isArray(value.contradiction_ids) && value.contradiction_ids.length === 0
       if (!complete) {
         add(errors, 'invalid_production_evidence', base, 'production_verified requires current canary, gate, rollback, deployment, expiry, and no contradictions')
