@@ -7,6 +7,7 @@ import type { AddressInfo } from 'net'
 import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
 import { prepareEgressSidecarRequest, validateEgressSidecarConfig } from '../src/egress-sidecar-client.js'
+import { resolveFormalPoolContract, type SharedContractFixture } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
 
 console.log('\ntests/egress-tls-sidecar.test.ts')
 
@@ -17,7 +18,20 @@ const proxyBindingSecret = 'proxy-binding-material-v1-local-safe-fixture-123456'
 const expectedTLSProfileRef = 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1'
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
 const sessionId = '123e4567-e89b-42d3-a456-426614174999'
-const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+const repoRoot = new URL('..', import.meta.url).pathname
+const sharedContract = resolveFormalPoolContract({
+  explicitPath: process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH,
+  gatewayRoot: repoRoot,
+  sub2apiRoot: process.env.SUB2API_ROOT,
+  manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+})
+const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
+  ? 'explicit_env'
+  : process.env.SUB2API_ROOT
+    ? process.env.ORACLE_LAB_MANIFEST_PATH ? 'declared_worktree' : 'declared_root'
+    : 'sibling_main'
+assert.equal(sharedContract.sourceCategory, expectedSourceCategory)
+assert.equal(sharedContract.digest, '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1')
 const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
@@ -44,15 +58,8 @@ type SidecarCapture = {
   bodyLength: number
 }
 
-type SharedContractFixture = {
-  materials: Record<string, string>
-  account: Record<string, string>
-  client_input: Record<string, string>
-  valid_context: Record<string, unknown>
-}
-
 function loadSharedContractFixture(): SharedContractFixture {
-  return JSON.parse(readFileSync(sharedContractFixturePath, 'utf-8')) as SharedContractFixture
+  return sharedContract.fixture
 }
 
 function sharedFixtureContext(fixture: SharedContractFixture, overrides: Record<string, unknown> = {}) {

@@ -10,12 +10,25 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { baseConfig, close, httpJson, listen, serverUrl, startFakeUpstream, test } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
+import { resolveFormalPoolContract } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
 
 console.log('\ntests/egress-tls-sidecar-real.test.ts')
 
 const repoRoot = new URL('..', import.meta.url).pathname
 const sidecarDir = join(repoRoot, 'sidecar/egress-tls-sidecar')
-const fixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+const sharedContract = resolveFormalPoolContract({
+  explicitPath: process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH,
+  gatewayRoot: repoRoot,
+  sub2apiRoot: process.env.SUB2API_ROOT,
+  manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+})
+const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
+  ? 'explicit_env'
+  : process.env.SUB2API_ROOT
+    ? process.env.ORACLE_LAB_MANIFEST_PATH ? 'declared_worktree' : 'declared_root'
+    : 'sibling_main'
+assert.equal(sharedContract.sourceCategory, expectedSourceCategory)
+assert.equal(sharedContract.digest, '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1')
 const controlToken = 'sidecar-control-material-v1-local-safe-fixture-123456'
 const proxyBindingSecret = 'proxy-binding-material-v1-local-safe-fixture-123456'
 const expectedTLSBucket = 'tls-bucket:claude-code-real-oracle-2179'
@@ -95,7 +108,7 @@ async function stopProcess(proc: ChildProcessWithoutNullStreams) {
 }
 
 test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages response', async () => {
-  const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'))
+  const fixture = sharedContract.fixture
   const localTLSUpstream = await startLocalTLSMessagesUpstream()
   const realSidecar = await startRealSidecar(localTLSUpstream.address, String(fixture.account.egress_bucket), String(fixture.account.proxy_identity_ref))
   const upstream = await startFakeUpstream()

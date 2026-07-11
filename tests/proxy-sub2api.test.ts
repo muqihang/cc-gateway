@@ -6,6 +6,7 @@ import { join } from 'path'
 import { request as httpRequest } from 'http'
 import { startProxy } from '../src/proxy.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { resolveFormalPoolContract, type SharedContractFixture as BaseSharedContractFixture } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
 
 console.log('\ntests/proxy-sub2api.test.ts')
 
@@ -21,12 +22,22 @@ const internalControlToken = 'internal-control-material-v1-local-safe-fixture-12
 const envResidueProfileRef = 'env-residue-profile:claude-code-2.1.179-us-pacific-official-anthropic-v1'
 const localeProfileRef = 'locale-profile:us-pacific-v1'
 const baseUrlResidueProfileRef = 'base-url-residue-profile:official-anthropic-v1'
-const sharedContractFixturePath = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+const repoRoot = new URL('..', import.meta.url).pathname
+const sharedContract = resolveFormalPoolContract({
+  explicitPath: process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH,
+  gatewayRoot: repoRoot,
+  sub2apiRoot: process.env.SUB2API_ROOT,
+  manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+})
+const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
+  ? 'explicit_env'
+  : process.env.SUB2API_ROOT
+    ? process.env.ORACLE_LAB_MANIFEST_PATH ? 'declared_worktree' : 'declared_root'
+    : 'sibling_main'
+assert.equal(sharedContract.sourceCategory, expectedSourceCategory)
+assert.equal(sharedContract.digest, '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1')
 
-type SharedContractFixture = {
-  materials: Record<string, string>
-  account: Record<string, string>
-  valid_context: Record<string, unknown>
+type SharedContractFixture = BaseSharedContractFixture & {
   cases: {
     one_field_mismatch: { mutate_context: Record<string, unknown>; expected_cc_gateway_error_code: string }
     expired: { timestamp_offset_ms: number; expected_cc_gateway_error_code: string }
@@ -97,11 +108,10 @@ function signedFormalPoolHeaders(context: Record<string, unknown>, secret = 'sch
 }
 
 function loadSharedContractFixture(): SharedContractFixture {
-  return JSON.parse(readFileSync(sharedContractFixturePath, 'utf-8')) as SharedContractFixture
+  return sharedContract.fixture as SharedContractFixture
 }
 
-test('sub2api shared contract fixture is loaded from current Phase B worktree and carries TLS profile ref', () => {
-  assert.equal(sharedContractFixturePath, '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/claude-platform-aws-formal-pool/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json')
+test('sub2api shared contract fixture is loaded from declared repository and carries TLS profile ref', () => {
   const fixture = loadSharedContractFixture()
   assert.equal(fixture.valid_context.egress_tls_profile_ref, 'tls-profile:claude-code-2.1.179-real-oracle-tcp-v1')
 })
