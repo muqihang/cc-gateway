@@ -72,7 +72,7 @@ export type PostIntegrationEntryManifest = {
   next_phase_gates: string[]
 }
 
-type RepositoryExpectation = { head: string; branch: string; remoteName: string; remoteRef: string; remoteUrl?: string }
+type RepositoryExpectation = { head: string; branch: string; remoteName: string; remoteRef: string; remoteUrl?: string; remoteUrlDigest?: string }
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
@@ -92,9 +92,10 @@ export function inspectIntegratedRepository(rootInput: string, expected: Reposit
   try { remoteCommit = git(root, 'rev-parse', '--verify', expected.remoteRef) } catch { fail('wrong_remote_ref', `${expected.remoteRef} is missing`) }
   if (remoteCommit !== head) fail('wrong_remote_ref', `${expected.remoteRef} does not bind integrated HEAD`)
   let remoteUrl = 'test-fixture-remote'
-  if (expected.remoteUrl) {
+  if (expected.remoteUrl || expected.remoteUrlDigest) {
     try { remoteUrl = git(root, 'remote', 'get-url', expected.remoteName) } catch { fail('wrong_remote_ref', `${expected.remoteName} remote is missing`) }
-    if (remoteUrl !== expected.remoteUrl) fail('wrong_remote_ref', `${expected.remoteName} remote URL is not the user fork`)
+    if (expected.remoteUrl && remoteUrl !== expected.remoteUrl) fail('wrong_remote_ref', `${expected.remoteName} remote URL is not the user fork`)
+    if (expected.remoteUrlDigest && sha256(remoteUrl) !== expected.remoteUrlDigest) fail('wrong_remote_ref', `${expected.remoteName} remote URL digest differs from the manifest`)
   }
   const status = execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'buffer' })
   if (status.length !== 0) fail('dirty_repository', 'integrated repository must be clean')

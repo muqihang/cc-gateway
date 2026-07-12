@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process'
-import { execFileSync } from 'node:child_process'
 import { readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { assertSafeArtifact, canonicalJson, cli, COMMIT_RE, DIGEST_RE, digestFile, digestValue, exactKeys, getField, isObject, parseArgs, readJson, result, sha256, writeExclusiveJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
-import { validatePostIntegrationEntryArtifact, type PostIntegrationEntryManifest } from './post-integration-entry.js'
+import { assertSafeArtifact, canonicalJson, cli, COMMIT_RE, DIGEST_RE, digestFile, digestValue, exactKeys, isObject, parseArgs, readJson, result, sha256, writeExclusiveJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import { inspectIntegratedRepository, validatePostIntegrationEntryArtifact, type PostIntegrationEntryManifest } from './post-integration-entry.js'
 
 export type PostIntegrationCommandCatalogEntry = {
   id: string; schema_version: 1; group: 'post-integration-green' | 'post-integration-red'; owner: string; requirement_ids: string[]
@@ -15,6 +14,8 @@ export type PostIntegrationCommandCatalogEntry = {
   allowed_worktree_delta: []; timeout_ms: number; expected_exit: 0 | 'nonzero'; output_policy: 'digest_only' | 'redacted_excerpt'; rollback: string
 }
 type CommandStatus = 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass'
+type PostIntegrationRepositoryName = keyof PostIntegrationEntryManifest['repositories']
+type PostIntegrationRoots = { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string; TOOL_ROOT: string; POST_INTEGRATION_MANIFEST: string }
 export type PostIntegrationCommandResultRecord = {
   command_id: string; repository: 'cc-gateway' | 'sub2api' | 'egress-tls-sidecar'; repository_commit: string; contract_digest?: string
   manifest_digest: string; environment_digest: string; exit_code: number; expected_exit: 0 | 'nonzero'; status: CommandStatus
@@ -144,8 +145,6 @@ export function postIntegrationCommandEnvironment(entry: PostIntegrationCommandC
   const declared = Object.fromEntries(Object.entries(entry.env).map(([key, value]) => [key, expand(value, roots)]))
   return { ...inherited, ...declared }
 }
-function git(root: string, ...args: string[]): string { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim() }
-function status(root: string): Buffer { return execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'buffer' }) }
 function execute(argv: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: number): Promise<{ exitCode: number; durationMs: number; output: Buffer }> {
   return new Promise((resolve) => {
     const started = process.hrtime.bigint(); const chunks: Buffer[] = []; const child = spawn(argv[0], argv.slice(1), { cwd, env, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -156,7 +155,61 @@ function execute(argv: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: n
 }
 function redact(output: string): string { return output.replace(/(?:Cookie|Set-Cookie|Authorization)\s*:.*$/gim, '[REDACTED]').replace(/(?:\/Users\/|\/home\/|\/tmp\/)[^\s"']+/g, '[REDACTED_PATH]').replace(/[\r\n]+/g, ' ').slice(0, 2048) }
 
-export async function runPostIntegrationCommandCatalog(catalogPath: string, group: 'post-integration-green' | 'post-integration-red', rootsInput: { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string; TOOL_ROOT: string; POST_INTEGRATION_MANIFEST: string }, generatedAt = new Date().toISOString()): Promise<PostIntegrationCommandResultSet> {
+export function postIntegrationTouchedRepositories(entry: PostIntegrationCommandCatalogEntry): PostIntegrationRepositoryName[] {
+  const declaredValues = [entry.cwd, ...entry.argv, ...Object.values(entry.env)]
+  const touched = new Set<PostIntegrationRepositoryName>()
+  touched.add(entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway')
+  if (declaredValues.some((value) => value.includes('${CC_GATEWAY_ROOT}'))) touched.add('cc_gateway')
+  if (declaredValues.some((value) => value.includes('${SUB2API_ROOT}'))) touched.add('sub2api')
+  return (['cc_gateway', 'sub2api'] as const).filter((repository) => touched.has(repository))
+}
+
+function assertTouchedRepositoryBindings(entry: PostIntegrationCommandCatalogEntry, manifest: PostIntegrationEntryManifest, roots: PostIntegrationRoots): void {
+  for (const repository of postIntegrationTouchedRepositories(entry)) {
+    const binding = manifest.repositories[repository]
+    const root = repository === 'sub2api' ? roots.SUB2API_ROOT : roots.CC_GATEWAY_ROOT
+    const observed = inspectIntegratedRepository(root, {
+      head: binding.head,
+      branch: 'main',
+      remoteName: 'muqihang',
+      remoteRef: 'refs/remotes/muqihang/main',
+      remoteUrlDigest: binding.remote.url_digest,
+    })
+    if (canonicalJson(observed) !== canonicalJson(binding)) throw Object.assign(new Error(`${entry.id} ${repository} binding differs from the manifest`), { code: 'manifest_binding_mismatch' })
+  }
+}
+
+export async function runPostIntegrationCommandEntry(entry: PostIntegrationCommandCatalogEntry, manifest: PostIntegrationEntryManifest, roots: PostIntegrationRoots, manifestDigest: string): Promise<PostIntegrationCommandResultRecord> {
+  assertTouchedRepositoryBindings(entry, manifest, roots)
+  const touched = postIntegrationTouchedRepositories(entry)
+  let contractDigest: string | undefined
+  if (touched.includes('sub2api')) {
+    contractDigest = manifest.contract.sha256
+    if (contractDigest !== digestFile(path.join(roots.SUB2API_ROOT, manifest.contract.repository_relative_path))) throw Object.assign(new Error('contract drift'), { code: 'contract_digest_mismatch' })
+  }
+  const env = postIntegrationCommandEnvironment(entry, roots)
+  const observed = await execute(entry.argv.map((value) => expand(value, roots)), expand(entry.cwd, roots), env, entry.timeout_ms)
+  try { assertTouchedRepositoryBindings(entry, manifest, roots) }
+  catch (error) { throw Object.assign(new Error(`${entry.id} changed a bound integrated repository: ${(error as Error).message}`), { code: 'worktree_delta_mismatch', cause: error }) }
+  const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+  const classification = expectedStatus(observed.exitCode, entry.expected_exit)
+  const unsigned = {
+    command_id: entry.id,
+    repository: entry.repository,
+    repository_commit: manifest.repositories[repositoryName].head,
+    ...(entry.repository === 'sub2api' && contractDigest ? { contract_digest: contractDigest } : {}),
+    manifest_digest: manifestDigest,
+    environment_digest: sha256(canonicalJson(env)),
+    exit_code: observed.exitCode,
+    expected_exit: entry.expected_exit,
+    status: classification,
+    output_digest: sha256(observed.output),
+    ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: redact(observed.output.toString('utf8')) } : {}),
+  }
+  return { ...unsigned, duration_ms: observed.durationMs, result_digest: postIntegrationCommandRecordDigest(unsigned) }
+}
+
+export async function runPostIntegrationCommandCatalog(catalogPath: string, group: 'post-integration-green' | 'post-integration-red', rootsInput: PostIntegrationRoots, generatedAt = new Date().toISOString()): Promise<PostIntegrationCommandResultSet> {
   const catalog = readJson(catalogPath); const validation = validatePostIntegrationCommandCatalogValue(catalog)
   if (!validation.ok) throw Object.assign(new Error(JSON.stringify(validation.errors)), { code: validation.errors[0].code })
   const entries = (catalog as PostIntegrationCommandCatalogEntry[]).filter((entry) => entry.group === group)
@@ -167,19 +220,7 @@ export async function runPostIntegrationCommandCatalog(catalogPath: string, grou
   if (digestFile(catalogPath) !== (manifest as PostIntegrationEntryManifest).capture_inputs.command_catalog.digest) throw Object.assign(new Error('catalog differs from the reviewed manifest input'), { code: 'cross_catalog_results' })
   const manifestDigest = digestFile(roots.POST_INTEGRATION_MANIFEST); const records: PostIntegrationCommandResultRecord[] = []
   for (const entry of entries) {
-    const root = entry.repository === 'sub2api' ? roots.SUB2API_ROOT : roots.CC_GATEWAY_ROOT
-    const expectedHead = getField(manifest, entry.manifest_binding.repository_head_field); const commit = git(root, 'rev-parse', 'HEAD')
-    if (commit !== expectedHead || status(root).length !== 0) throw Object.assign(new Error(`${entry.id} repository binding drift`), { code: 'manifest_binding_mismatch' })
-    let contractDigest: string | undefined
-    if (entry.repository === 'sub2api') {
-      contractDigest = String(getField(manifest, 'contract.sha256')); const relative = String(getField(manifest, 'contract.repository_relative_path'))
-      if (contractDigest !== digestFile(path.join(root, relative))) throw Object.assign(new Error('contract drift'), { code: 'contract_digest_mismatch' })
-    }
-    const env = postIntegrationCommandEnvironment(entry, roots)
-    const observed = await execute(entry.argv.map((value) => expand(value, roots)), expand(entry.cwd, roots), env, entry.timeout_ms)
-    if (status(root).length !== 0) throw Object.assign(new Error(`${entry.id} changed integrated main`), { code: 'worktree_delta_mismatch' })
-    const classification = expectedStatus(observed.exitCode, entry.expected_exit); const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: commit, ...(contractDigest ? { contract_digest: contractDigest } : {}), manifest_digest: manifestDigest, environment_digest: sha256(canonicalJson(env)), exit_code: observed.exitCode, expected_exit: entry.expected_exit, status: classification, output_digest: sha256(observed.output), ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: redact(observed.output.toString('utf8')) } : {}) }
-    records.push({ ...unsigned, duration_ms: observed.durationMs, result_digest: postIntegrationCommandRecordDigest(unsigned) })
+    records.push(await runPostIntegrationCommandEntry(entry, manifest as unknown as PostIntegrationEntryManifest, roots as PostIntegrationRoots, manifestDigest))
   }
   const generated = new Date(generatedAt); const unsigned = { schema_version: 1 as const, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 7 * 86_400_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: manifestDigest, records }
   const output = { ...unsigned, result_set_digest: postIntegrationCommandSetDigest(unsigned) }; assertSafeArtifact(output); return output

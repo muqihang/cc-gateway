@@ -24,7 +24,9 @@ import {
 import {
   postIntegrationCommandRecordDigest,
   postIntegrationCommandEnvironment,
+  postIntegrationTouchedRepositories,
   postIntegrationCommandSetDigest,
+  runPostIntegrationCommandEntry,
   runPostIntegrationCommandCatalog,
   validatePostIntegrationCommandCatalogValue,
   validatePostIntegrationResultsBindings,
@@ -99,6 +101,7 @@ async function repositoryFixture(): Promise<{ root: string; head: string }> {
   git(root, 'add', 'tracked.txt')
   git(root, 'commit', '-m', 'fixture')
   const head = git(root, 'rev-parse', 'HEAD')
+  git(root, 'remote', 'add', 'muqihang', 'https://example.invalid/oracle-fixture.git')
   git(root, 'update-ref', 'refs/remotes/muqihang/main', head)
   return { root, head }
 }
@@ -148,6 +151,93 @@ test('cross-repository command environment digest binds the explicit Sub2API cap
   const second = postIntegrationCommandEnvironment(crossRepo, { ...baseRoots, SUB2API_ROOT: '/capture/sub-b' }, {})
   assert.notEqual(sha256(canonicalJson(first)), sha256(canonicalJson(second)))
   assert.equal(first.SUB2API_ROOT, '/capture/sub-a')
+  assert.deepEqual(postIntegrationTouchedRepositories(crossRepo), ['cc_gateway', 'sub2api'])
+})
+
+test('cross-repository runner rejects a command that changes the bound Sub2API repository', async () => {
+  const cc = await repositoryFixture()
+  const sub = await repositoryFixture()
+  const temporary = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-cross-repo-'))
+  const manifestPath = path.join(temporary, 'manifest.json')
+  const manifest = validManifest()
+  const bindFixture = (fixture: { root: string; head: string }) => ({
+    head: fixture.head,
+    branch: 'main' as const,
+    clean: true as const,
+    dirty_digest: sha256(Buffer.alloc(0)),
+    remote: {
+      name: 'muqihang' as const,
+      ref: 'refs/remotes/muqihang/main' as const,
+      commit: fixture.head,
+      url_digest: sha256(git(fixture.root, 'remote', 'get-url', 'muqihang')),
+    },
+  })
+  manifest.repositories.cc_gateway = bindFixture(cc)
+  manifest.repositories.sub2api = bindFixture(sub)
+  manifest.contract.repository_relative_path = 'tracked.txt'
+  manifest.contract.sha256 = digestFile(path.join(sub.root, 'tracked.txt'))
+  await writeFile(manifestPath, `${canonicalJson(manifest)}\n`)
+
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const crossRepo = structuredClone(entries.find((entry) => entry.id === 'cc-cross-repo-baseline')!)
+  crossRepo.argv = [
+    process.execPath,
+    '-e',
+    "require('node:fs').appendFileSync(process.env.SUB2API_ROOT + '/tracked.txt', 'drift\\n')",
+  ]
+
+  await assert.rejects(
+    runPostIntegrationCommandEntry(crossRepo, manifest, {
+      CC_GATEWAY_ROOT: cc.root,
+      SUB2API_ROOT: sub.root,
+      TOOL_ROOT: process.cwd(),
+      POST_INTEGRATION_MANIFEST: manifestPath,
+    }, digestFile(manifestPath)),
+    (error: Error & { code?: string }) => error.code === 'worktree_delta_mismatch',
+  )
+})
+
+test('cross-repository runner rejects a clean committed Sub2API HEAD change', async () => {
+  const cc = await repositoryFixture()
+  const sub = await repositoryFixture()
+  const temporary = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-cross-repo-head-'))
+  const manifestPath = path.join(temporary, 'manifest.json')
+  const manifest = validManifest()
+  const bindFixture = (fixture: { root: string; head: string }) => ({
+    head: fixture.head,
+    branch: 'main' as const,
+    clean: true as const,
+    dirty_digest: sha256(Buffer.alloc(0)),
+    remote: {
+      name: 'muqihang' as const,
+      ref: 'refs/remotes/muqihang/main' as const,
+      commit: fixture.head,
+      url_digest: sha256(git(fixture.root, 'remote', 'get-url', 'muqihang')),
+    },
+  })
+  manifest.repositories.cc_gateway = bindFixture(cc)
+  manifest.repositories.sub2api = bindFixture(sub)
+  manifest.contract.repository_relative_path = 'tracked.txt'
+  manifest.contract.sha256 = digestFile(path.join(sub.root, 'tracked.txt'))
+  await writeFile(manifestPath, `${canonicalJson(manifest)}\n`)
+
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const crossRepo = structuredClone(entries.find((entry) => entry.id === 'cc-cross-repo-baseline')!)
+  crossRepo.argv = [
+    process.execPath,
+    '-e',
+    "const {appendFileSync}=require('node:fs');const {execFileSync}=require('node:child_process');const r=process.env.SUB2API_ROOT;appendFileSync(r+'/tracked.txt','committed drift\\n');execFileSync('git',['-C',r,'add','tracked.txt']);execFileSync('git',['-C',r,'commit','-m','fixture drift'])",
+  ]
+
+  await assert.rejects(
+    runPostIntegrationCommandEntry(crossRepo, manifest, {
+      CC_GATEWAY_ROOT: cc.root,
+      SUB2API_ROOT: sub.root,
+      TOOL_ROOT: process.cwd(),
+      POST_INTEGRATION_MANIFEST: manifestPath,
+    }, digestFile(manifestPath)),
+    (error: Error & { code?: string }) => error.code === 'worktree_delta_mismatch',
+  )
 })
 
 test('repository binding rejects wrong head, branch, remote ref, and dirty tree', async () => {
@@ -160,6 +250,7 @@ test('repository binding rejects wrong head, branch, remote ref, and dirty tree'
   git(fixture.root, 'update-ref', '-d', 'refs/remotes/muqihang/main')
   assert.throws(() => inspectIntegratedRepository(fixture.root, { head: fixture.head, branch: 'main', remoteName: 'muqihang', remoteRef: 'refs/remotes/muqihang/main' }), (error: Error & { code?: string }) => error.code === 'wrong_remote_ref')
   git(fixture.root, 'update-ref', 'refs/remotes/muqihang/main', fixture.head)
+  assert.throws(() => inspectIntegratedRepository(fixture.root, { head: fixture.head, branch: 'main', remoteName: 'muqihang', remoteRef: 'refs/remotes/muqihang/main', remoteUrlDigest: d('f') }), (error: Error & { code?: string }) => error.code === 'wrong_remote_ref')
   await writeFile(path.join(fixture.root, 'dirty.txt'), 'dirty\n')
   assert.throws(() => inspectIntegratedRepository(fixture.root, { head: fixture.head, branch: 'main', remoteName: 'muqihang', remoteRef: 'refs/remotes/muqihang/main' }), (error: Error & { code?: string }) => error.code === 'dirty_repository')
 })
