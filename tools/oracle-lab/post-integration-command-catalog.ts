@@ -179,17 +179,23 @@ function assertTouchedRepositoryBindings(entry: PostIntegrationCommandCatalogEnt
   }
 }
 
+function assertTouchedContractBinding(touched: PostIntegrationRepositoryName[], manifest: PostIntegrationEntryManifest, roots: PostIntegrationRoots): string | undefined {
+  if (!touched.includes('sub2api')) return undefined
+  const contractDigest = digestFile(path.join(roots.SUB2API_ROOT, manifest.contract.repository_relative_path))
+  if (contractDigest !== manifest.contract.sha256) throw Object.assign(new Error('contract drift'), { code: 'contract_digest_mismatch' })
+  return contractDigest
+}
+
 export async function runPostIntegrationCommandEntry(entry: PostIntegrationCommandCatalogEntry, manifest: PostIntegrationEntryManifest, roots: PostIntegrationRoots, manifestDigest: string): Promise<PostIntegrationCommandResultRecord> {
   assertTouchedRepositoryBindings(entry, manifest, roots)
   const touched = postIntegrationTouchedRepositories(entry)
-  let contractDigest: string | undefined
-  if (touched.includes('sub2api')) {
-    contractDigest = manifest.contract.sha256
-    if (contractDigest !== digestFile(path.join(roots.SUB2API_ROOT, manifest.contract.repository_relative_path))) throw Object.assign(new Error('contract drift'), { code: 'contract_digest_mismatch' })
-  }
+  const contractDigest = assertTouchedContractBinding(touched, manifest, roots)
   const env = postIntegrationCommandEnvironment(entry, roots)
   const observed = await execute(entry.argv.map((value) => expand(value, roots)), expand(entry.cwd, roots), env, entry.timeout_ms)
-  try { assertTouchedRepositoryBindings(entry, manifest, roots) }
+  try {
+    assertTouchedRepositoryBindings(entry, manifest, roots)
+    assertTouchedContractBinding(touched, manifest, roots)
+  }
   catch (error) { throw Object.assign(new Error(`${entry.id} changed a bound integrated repository: ${(error as Error).message}`), { code: 'worktree_delta_mismatch', cause: error }) }
   const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
   const classification = expectedStatus(observed.exitCode, entry.expected_exit)
