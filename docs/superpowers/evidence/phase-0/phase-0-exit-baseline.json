@@ -6,11 +6,11 @@
   "destruction_procedure": "git_revert_artifact_commit_after_security_approval",
   "phase": "phase_0_exit",
   "entry_kind": "phase_0_exit",
-  "approved_tool_head": "a94462b372b9397d914868450e12f2cc1f6dc002",
+  "approved_tool_head": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
   "gateway_compromise_boundary": "protected_gateway",
   "repositories": {
     "cc_gateway": {
-      "head": "a94462b372b9397d914868450e12f2cc1f6dc002",
+      "head": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
       "branch": "codex/oracle-phase-0-governance",
       "clean": true,
       "dirty_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -853,7 +853,7 @@
     },
     "claim_registry": {
       "status": "present",
-      "sha256": "54b617abb2af90f0587182e5808f5c89647dad0818735c8bd92feca220a5c01c"
+      "sha256": "b389c3655641f990bd7e31e9a176576f9664b7620ae90c5829a21dc9ff087943"
     }
   },
   "policies": {

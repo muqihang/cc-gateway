@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "phase": "phase-0",
-  "generated_at": "2026-07-12T09:46:31.684Z",
-  "expires_at": "2026-07-13T09:46:31.684Z",
-  "baseline_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
-  "command_results_digest": "sha256:342daec47a5929b6d2cef0ca9a8bb2e244863e196058dc3ef4a506efcde7da99",
-  "context_pack_digest": "sha256:19af668c3eca4af0ba2758b9b88ab3e03f1d072874df8ff8040dfa474301849b",
+  "generated_at": "2026-07-12T10:21:14.655Z",
+  "expires_at": "2026-07-13T10:21:14.655Z",
+  "baseline_digest": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6",
+  "command_results_digest": "sha256:a6f5380765e814267455086a2f1c863ae96473319650eeab4d61f80b06db399f",
+  "context_pack_digest": "sha256:ac32f372ad6037c1213c245ad42c2f30c31074e495a60a91fea5806b97cd70dc",
   "repositories": [
     {
       "name": "cc_gateway",
-      "commit": "a94462b372b9397d914868450e12f2cc1f6dc002",
+      "commit": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
       "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
@@ -22,47 +22,47 @@
     {
       "command_id": "cc-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da"
+      "result_digest": "sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d"
     },
     {
       "command_id": "cc-build",
       "status": "pass",
-      "result_digest": "sha256:edbabc11a3752c71cfa7e7a9d924e5db2b40eafae1dd62645421e0928f2cd1bb"
+      "result_digest": "sha256:7fa65c670ba7dd70365176d1b7b80adfcf09578bfb7e22d31a01402e500807d0"
     },
     {
       "command_id": "cc-test",
       "status": "pass",
-      "result_digest": "sha256:bba3427750b1bae8b8918ed80f9bf6305153db2f45e95b864037b26372c2b6b9"
+      "result_digest": "sha256:ee8f3c8868bd80fd8145ddc3c462297d01d14d759e291c8a39dca5e1a1838bef"
     },
     {
       "command_id": "sidecar-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669"
+      "result_digest": "sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7"
     },
     {
       "command_id": "sidecar-test",
       "status": "pass",
-      "result_digest": "sha256:b17f5dcfd3c11378773f3fae785dcfeac1f13c7b3b4fe52e806c92b42722808f"
+      "result_digest": "sha256:d7acccb7813d4ad62ce8a95373f771e5ee0fc7a4f8ca1219311ef6dfe2218238"
     },
     {
       "command_id": "sub2api-b1-b3-red",
       "status": "expected_fail",
-      "result_digest": "sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e"
+      "result_digest": "sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f"
     },
     {
       "command_id": "sub2api-test",
       "status": "pass",
-      "result_digest": "sha256:928ac7ec3b17e2bb94df59d318886585a94aa13c80a2d8d2d6053dfcdb5a6bba"
+      "result_digest": "sha256:2db82fb409a4d45eab5d4b698d5de1a9023e7de7e9741f2cb8314a12fdbc15f0"
     }
   ],
   "artifacts": [
     {
       "path": "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json",
-      "digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f"
+      "digest": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6"
     },
     {
       "path": "docs/superpowers/evidence/phase-0/phase-0-context-pack.json",
-      "digest": "sha256:19af668c3eca4af0ba2758b9b88ab3e03f1d072874df8ff8040dfa474301849b"
+      "digest": "sha256:ac32f372ad6037c1213c245ad42c2f30c31074e495a60a91fea5806b97cd70dc"
     }
   ],
   "known_unknowns": [
@@ -90,6 +90,13 @@
     "symbols resolveEgressBucket, isSafeProxyUrl, safeProxyURLHeader, Handler.ServeHTTP, and the sidecar dial path; URL destination cases plus an injected public-then-unsafe resolver and pinned-dial observer produce thirty-six stable leaf failures; failure-name digest sha256:765866c3772e802a90779967dfa21ccd5abbbb623fc7cd13f6e3a70edb43c7b2 reproducible from the committed evidence artifact",
     "symbols startProxy, handleRequest, prepareEgressSidecarRequest, and the ordinary Node proxy path; real gateway requests use deterministic DNS, proxy-dial, and sidecar-socket observers; expected RED exit 1 with seven stable leaf failures; failure-name digest sha256:33bc5b4d516ab1f717f98180fe396e0f861ed8fd4537caf3eddec440bb34ece5 reproducible from the committed evidence artifact",
     "the deterministic Go complete-envelope fixture first passes the production control schema and actual HMAC verification, then independently mutates target authority/path/route/method, proxy/account/context/generation/profile/manifest, freshness, final hashes, encoding/deadline/response policy, and envelope metadata at the authentication boundary; reordered JSON with an equivalent Unicode escape also passes control validation and actual verification"
+  ],
+  "next_entry_conditions": [
+    "phase_0_exit_receipt_valid",
+    "fresh_baseline_and_context_required",
+    "b1_b6_and_ha_p0_009_remain_non_promotable",
+    "real_upstream_credentials_promotion_and_deploy_disabled",
+    "named_owner_and_gate_approval_required"
   ],
   "retention_policy": {
     "digest_only": "phase_evidence_permanent",

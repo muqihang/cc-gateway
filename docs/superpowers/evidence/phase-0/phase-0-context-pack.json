@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-12T09:46:31.346Z",
-  "expires_at": "2026-07-13T09:46:31.346Z",
-  "registry_digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5",
-  "claims_digest": "sha256:54b617abb2af90f0587182e5808f5c89647dad0818735c8bd92feca220a5c01c",
-  "manifest_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
+  "generated_at": "2026-07-12T10:21:04.313Z",
+  "expires_at": "2026-07-13T10:21:04.313Z",
+  "registry_digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5",
+  "claims_digest": "sha256:b389c3655641f990bd7e31e9a176576f9664b7620ae90c5829a21dc9ff087943",
+  "manifest_digest": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6",
   "requirement_ids": [
     "AV-B1-001",
     "AV-B2-001",
@@ -19,7 +19,7 @@
   "repositories": [
     {
       "name": "cc_gateway",
-      "commit": "a94462b372b9397d914868450e12f2cc1f6dc002",
+      "commit": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
       "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
@@ -58,55 +58,55 @@
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B1-001",
       "line": 150,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B2-001",
       "line": 156,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B3-001",
       "line": 162,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B4-001",
       "line": 168,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B5-001",
       "line": 174,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "AV-B6-001",
       "line": 180,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "HA-P0-001",
       "line": 24,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "HA-P0-002",
       "line": 43,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/registry/oracle-lab-requirements.json",
       "symbol": "HA-P0-009",
       "line": 128,
-      "digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5"
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
     },
     {
       "path": "docs/superpowers/schemas/oracle-lab-requirement.schema.json",
@@ -170,27 +170,27 @@
     {
       "command_id": "cc-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da"
+      "result_digest": "sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d"
     },
     {
       "command_id": "cc-test",
       "status": "pass",
-      "result_digest": "sha256:bba3427750b1bae8b8918ed80f9bf6305153db2f45e95b864037b26372c2b6b9"
+      "result_digest": "sha256:ee8f3c8868bd80fd8145ddc3c462297d01d14d759e291c8a39dca5e1a1838bef"
     },
     {
       "command_id": "sidecar-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669"
+      "result_digest": "sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7"
     },
     {
       "command_id": "sidecar-test",
       "status": "pass",
-      "result_digest": "sha256:b17f5dcfd3c11378773f3fae785dcfeac1f13c7b3b4fe52e806c92b42722808f"
+      "result_digest": "sha256:d7acccb7813d4ad62ce8a95373f771e5ee0fc7a4f8ca1219311ef6dfe2218238"
     },
     {
       "command_id": "sub2api-b1-b3-red",
       "status": "expected_fail",
-      "result_digest": "sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e"
+      "result_digest": "sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f"
     }
   ],
   "known_unknowns": [

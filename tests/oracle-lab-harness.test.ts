@@ -59,14 +59,14 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
       .map((cells) => [cells[1], cells]),
   )
   const expectedEvidence = new Map([
-    ['P0 governance/exit', ['sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1']],
-    ['HA-P0-009', ['sha256:4e13136e25eb6a1990be46334c83270847230effad58a7742fb67a1cfccf5b4d']],
-    ['AV-B1-001', ['sha256:9a8e8243d5433ad61c73e0f0ea58a18c4be5e0a8afd70a1152de3413e2b81339']],
-    ['AV-B2-001', ['sha256:3e05b74f37ec8e16f720bc4409b8a10aa930464f961076b211c1299daa4cb6da']],
-    ['AV-B3-001', ['sha256:302effcdb78c69f0fb128ef0415667d207300ed030a4605d5f56d7552e7598be']],
-    ['AV-B4-001', ['sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
-    ['AV-B5-001', ['sha256:29fd4e3bf4432003fcf6a560c0a5cf69b05b902e637f82dfdfbeef98460745cf']],
-    ['AV-B6-001', ['sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4']],
+    ['P0 governance/exit', ['sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6', 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1']],
+    ['HA-P0-009', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:4e13136e25eb6a1990be46334c83270847230effad58a7742fb67a1cfccf5b4d']],
+    ['AV-B1-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:9a8e8243d5433ad61c73e0f0ea58a18c4be5e0a8afd70a1152de3413e2b81339']],
+    ['AV-B2-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:3e05b74f37ec8e16f720bc4409b8a10aa930464f961076b211c1299daa4cb6da']],
+    ['AV-B3-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:302effcdb78c69f0fb128ef0415667d207300ed030a4605d5f56d7552e7598be']],
+    ['AV-B4-001', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
+    ['AV-B5-001', ['sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:29fd4e3bf4432003fcf6a560c0a5cf69b05b902e637f82dfdfbeef98460745cf']],
+    ['AV-B6-001', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4']],
   ])
   for (const [decision, digests] of expectedEvidence) {
     const row = decisionRows.get(decision)
@@ -74,9 +74,9 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
     assert.equal(row.length, 10, `${decision} must populate every decision column`)
     for (const digest of digests) assert.match(row[2], new RegExp(digest))
   }
-  for (const decision of expectedEvidence.keys()) assert.match(String(decisionRows.get(decision)?.[2]), /pending Task 9 (?:freeze|catalog rerun)/)
-  assert.match(roadmap, /Delivery state: Phase 0 exit evidence pending/)
-  assert.match(roadmap, /Phase 1 remains blocked/)
+  assert.match(roadmap, /Delivery state: Phase 0 complete/)
+  assert.match(roadmap, /phase-0-exit-baseline\.json.*sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6/)
+  assert.match(roadmap, /phase-0-exit-receipt\.json.*binds the final roadmap bytes/)
 })
 
 function record(commandId: string, repository: CommandResultRecord['repository'] = 'cc-gateway'): CommandResultRecord {
