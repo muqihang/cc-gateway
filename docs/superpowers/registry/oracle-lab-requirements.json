@@ -132,7 +132,7 @@
     "acceptance_gate": "phase_2_negative_capability_enforcement", "implementation_status": "deferred",
     "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": ["tests/red/phase0-boundary.red.test.ts"],
     "verification_command": "npm exec tsx tests/red/phase0-boundary.red.test.ts", "evidence_artifact": "docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json",
-    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["Phase 0 fixture proves missing, unknown, contradictory, unsupported, and incoherent negative capabilities are not enforced fail-closed", "implementation and enforcement are deferred to Phase 2", "promotion is prohibited before all compatibility gates and rollback review pass"],
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["Phase 0 fixture drives complete local HTTP requests through startProxy/handleRequest and proves missing, unknown, contradictory, unsupported, and incoherent compatibility declarations reach the upstream observer instead of failing closed", "implementation and enforcement are deferred to Phase 2", "promotion is prohibited before all compatibility gates and rollback review pass"],
     "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
   },
   {

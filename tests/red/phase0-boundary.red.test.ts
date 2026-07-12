@@ -80,131 +80,6 @@ function requestInput(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
-const supportedCapability = {
-  model: "claude-sonnet-4-6",
-  transport_mode: "sidecar_https",
-  entrypoint: "messages",
-  beta_tokens: [] as string[],
-};
-
-function negativeCapabilityInput(
-  overrides: Record<string, unknown> = {},
-) {
-  return requestInput({
-    requested_capability: supportedCapability,
-    compatibility_contract: {
-      schema_version: 1,
-      supported_capabilities: [supportedCapability],
-      negative_capabilities: {
-        unsupported_models: [],
-        unsupported_beta_tokens: [],
-        unsupported_transport_modes: [],
-        unsupported_entrypoints: [],
-        unsupported_fallbacks: [],
-        unsupported_feature_combinations: [],
-        unsupported_authority_states: [],
-      },
-    },
-    ...overrides,
-  });
-}
-
-const negativeCapabilityCases: Array<[string, Record<string, unknown>]> = [
-  [
-    "HA-P0-009 rejects missing negative-capability declaration",
-    {
-      compatibility_contract: {
-        schema_version: 1,
-        supported_capabilities: [supportedCapability],
-      },
-    },
-  ],
-  [
-    "HA-P0-009 rejects unknown negative-capability declaration",
-    {
-      compatibility_contract: {
-        schema_version: 1,
-        supported_capabilities: [supportedCapability],
-        negative_capabilities: {
-          unsupported_models: [],
-          unsupported_beta_tokens: [],
-          unsupported_transport_modes: [],
-          unsupported_entrypoints: [],
-          unsupported_fallbacks: [],
-          unsupported_feature_combinations: [],
-          unsupported_authority_states: [],
-          unknown_capability_class: ["opaque-capability:v1:unknown"],
-        },
-      },
-    },
-  ],
-  [
-    "HA-P0-009 rejects contradictory positive and negative capability",
-    {
-      compatibility_contract: {
-        schema_version: 1,
-        supported_capabilities: [supportedCapability],
-        negative_capabilities: {
-          unsupported_models: [supportedCapability.model],
-          unsupported_beta_tokens: [],
-          unsupported_transport_modes: [],
-          unsupported_entrypoints: [],
-          unsupported_fallbacks: [],
-          unsupported_feature_combinations: [],
-          unsupported_authority_states: [],
-        },
-      },
-    },
-  ],
-  [
-    "HA-P0-009 rejects requested capability declared unsupported",
-    {
-      compatibility_contract: {
-        schema_version: 1,
-        supported_capabilities: [],
-        negative_capabilities: {
-          unsupported_models: [supportedCapability.model],
-          unsupported_beta_tokens: [],
-          unsupported_transport_modes: [],
-          unsupported_entrypoints: [],
-          unsupported_fallbacks: [],
-          unsupported_feature_combinations: [],
-          unsupported_authority_states: [],
-        },
-      },
-    },
-  ],
-  [
-    "HA-P0-009 rejects incoherent negative-capability tuple",
-    {
-      compatibility_contract: {
-        schema_version: 1,
-        supported_capabilities: [supportedCapability],
-        negative_capabilities: {
-          unsupported_models: [],
-          unsupported_beta_tokens: [],
-          unsupported_transport_modes: [],
-          unsupported_entrypoints: [],
-          unsupported_fallbacks: [],
-          unsupported_feature_combinations: [supportedCapability],
-          unsupported_authority_states: [],
-        },
-      },
-    },
-  ],
-];
-
-for (const [name, overrides] of negativeCapabilityCases) {
-  test(name, () => {
-    const result = prepareEgressSidecarRequest(negativeCapabilityInput(overrides));
-    assert.equal(
-      result.ok,
-      false,
-      `${name} was accepted because Phase 2 compatibility enforcement is absent`,
-    );
-  });
-}
-
 const fixture = resolveFormalPoolContract({
   gatewayRoot: new URL("../..", import.meta.url).pathname,
   sub2apiRoot: process.env.SUB2API_ROOT,
@@ -315,6 +190,105 @@ function b4Headers(context?: Record<string, unknown>) {
     authorization: "Bearer selected-oauth-credential-fixture",
     ...(context ? signedContextHeaders(context) : {}),
   };
+}
+
+const compatibleSub2APIHeaders: Record<string, string> = {
+  "x-sub2api-compat-inbound-route": "/v1/messages",
+  "x-sub2api-compat-cc-gateway-route": "/v1/messages?beta=true",
+  "x-sub2api-compat-client-type": "claude_code_compat",
+  "x-sub2api-compat-server-filled-shape": "true",
+  "x-sub2api-compat-server-filled-fields": "system,metadata.user_id,tool_reference",
+  "x-sub2api-compat-persona-source": "server_selected",
+  "x-sub2api-compat-fidelity-level": "L2",
+  "x-sub2api-compat-tool-search-mode": "strip_with_audit",
+  "x-sub2api-compat-tool-reference-present": "true",
+  "x-sub2api-compat-defer-loading-present": "false",
+  "x-sub2api-compat-eager-input-streaming-present": "false",
+  "x-sub2api-compat-capability-backed": "false",
+};
+
+const negativeCapabilityCases: Array<[
+  string,
+  (headers: Record<string, string>) => void,
+]> = [
+  [
+    "HA-P0-009 rejects missing negative-capability declaration",
+    (headers) => { delete headers["x-sub2api-compat-tool-search-mode"]; },
+  ],
+  [
+    "HA-P0-009 rejects unknown negative-capability declaration",
+    (headers) => { headers["x-sub2api-compat-tool-search-mode"] = "unknown_mode"; },
+  ],
+  [
+    "HA-P0-009 rejects contradictory positive and negative capability",
+    (headers) => {
+      headers["x-sub2api-compat-tool-search-mode"] = "capability_backed";
+      headers["x-sub2api-compat-capability-backed"] = "false";
+    },
+  ],
+  [
+    "HA-P0-009 rejects requested capability declared unsupported",
+    (headers) => { headers["x-sub2api-compat-tool-search-mode"] = "not_present"; },
+  ],
+  [
+    "HA-P0-009 rejects incoherent negative-capability tuple",
+    (headers) => {
+      headers["x-sub2api-compat-fidelity-level"] = "L0";
+      headers["x-sub2api-compat-tool-search-mode"] = "capability_backed";
+    },
+  ],
+];
+
+function negativeCapabilityBody() {
+  return {
+    stream: true,
+    metadata: { user_id: JSON.stringify({ session_id: fixture.valid_context.session_id }) },
+    model: "claude-sonnet-4-6",
+    tools: [{ name: "fixture_tool", description: "fixture", input_schema: { type: "object", properties: {} } }],
+    messages: [{ role: "user", content: "hello" }],
+  };
+}
+
+async function requestThroughNegativeCapabilityBoundary(compatHeaders: Record<string, string>) {
+  const upstream = await startFakeUpstream();
+  const proxy = await startFakeConnectProxy();
+  const config: any = b4Config(upstream.url, "http://127.0.0.1:9/egress", proxy.url);
+  config.shared_pool.egress_tls = { enabled: false, strict: false };
+  delete config.egress_tls_sidecar;
+  const gateway = startProxy(config);
+  try {
+    const response = await httpJson(serverUrl(gateway, "/v1/messages?beta=true"), {
+      headers: { ...b4Headers(b4Context()), ...compatHeaders },
+      body: negativeCapabilityBody(),
+    });
+    return { response, upstreamRequests: upstream.captured.length };
+  } finally {
+    await close(gateway);
+    await close(proxy.server);
+    await close(upstream.server);
+  }
+}
+
+test("HA-P0-009 positive compatibility baseline reaches local upstream", async () => {
+  const { response, upstreamRequests } = await requestThroughNegativeCapabilityBoundary({
+    ...compatibleSub2APIHeaders,
+  });
+  assert.equal(response.status, 200, response.body);
+  assert.equal(upstreamRequests, 1, "valid baseline did not reach the local upstream observer");
+});
+
+for (const [name, mutateHeaders] of negativeCapabilityCases) {
+  test(name, async () => {
+    const headers = { ...compatibleSub2APIHeaders };
+    mutateHeaders(headers);
+    const { response, upstreamRequests } = await requestThroughNegativeCapabilityBoundary(headers);
+    assert.equal(
+      upstreamRequests,
+      0,
+      `${name}: current Gateway returned ${response.status} and reached the local upstream because Phase 2 compatibility enforcement is absent`,
+    );
+    assert.equal(response.status, 403, `${name}: Phase 2 gate must reject before upstream`);
+  });
 }
 
 const b4Cases: Array<[string, (config: any, context: any) => void, boolean]> = [

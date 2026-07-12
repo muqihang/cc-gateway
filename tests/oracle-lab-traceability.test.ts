@@ -210,7 +210,7 @@ test('HA-P0-009 records the Phase 0 RED fixture while deferring enforcement to P
   assert.equal(record.verification_command, 'npm exec tsx tests/red/phase0-boundary.red.test.ts')
   assert.equal(record.evidence_artifact, 'docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json')
   assert.deepEqual(record.known_gaps, [
-    'Phase 0 fixture proves missing, unknown, contradictory, unsupported, and incoherent negative capabilities are not enforced fail-closed',
+    'Phase 0 fixture drives complete local HTTP requests through startProxy/handleRequest and proves missing, unknown, contradictory, unsupported, and incoherent compatibility declarations reach the upstream observer instead of failing closed',
     'implementation and enforcement are deferred to Phase 2',
     'promotion is prohibited before all compatibility gates and rollback review pass',
   ])
