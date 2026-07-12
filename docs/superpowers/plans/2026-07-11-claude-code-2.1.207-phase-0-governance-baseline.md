@@ -251,6 +251,7 @@ This task runs immediately after Task 0 and before Task 1. It provides the actua
 - Freeze the current `2.1.197` persona/request/CCH/TLS tuple as `unverified_legacy` comparison-only evidence under requirement `OL-LEGACY-001`; it cannot be selected for promotion.
 - The bootstrap validator and baseline tool are committed before capture. `BOOTSTRAP_HEAD` is the reviewed CC Gateway commit containing only the plan-approved schema/tool/test bootstrap; implementation work begins only after the entry artifact is committed.
 - The entry manifest records `approved_tool_head` and both repository heads. A separate entry receipt records the manifest digest, schema digest, and bootstrap commit, avoiding an impossible self-digest. The tracked manifest plus receipt are the durable source for all later parent references; `/tmp` is permitted only for transient command output.
+- The post-integration regression is clone-portable and runs only through `npm run test:oracle:cross-repo`: ordinary `npm test` remains single-repository and does not pretend to execute this fixture. The explicit entrypoint fails closed unless `SUB2API_ROOT` is declared, clones clean `main` sources into temporary fixtures, proves each reviewed commit is an ancestor of `main`, and only then creates the historical governance branches at reviewed commits `a54a44d107164d11428da06cc3eea979f488d350` (CC Gateway) and `d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f` (Sub2API). It must not depend on a sibling checkout or pre-existing local feature refs.
 
 - [ ] **Step 1: Write and run RED baseline tests**
 

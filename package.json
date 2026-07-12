@@ -12,6 +12,7 @@
     "generate-token": "tsx src/scripts/generate-token.ts",
     "generate-identity": "tsx src/scripts/generate-identity.ts",
     "test": "tsx tests/run-all.ts",
+    "test:oracle:cross-repo": "ORACLE_REQUIRE_CROSS_REPO_FIXTURE=1 tsx tests/oracle-lab-baseline-freeze.cross-repo.ts",
     "oracle:validate": "tsx tools/oracle-lab/validate-run-manifest.ts",
     "oracle:context": "tsx tools/oracle-lab/build-context-pack.ts",
     "oracle:commands": "tsx tools/oracle-lab/run-command-catalog.ts",
