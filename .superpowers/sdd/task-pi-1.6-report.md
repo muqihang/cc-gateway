@@ -77,3 +77,38 @@ added.
 ## Concerns
 
 None.
+
+## Cross-Repository Binding Remediation
+
+Status: `DONE`
+
+- Remediation base: `ef9ab2d`
+- Implementation commit: `3b3d587`
+- Independent review finding addressed: `cc-cross-repo-baseline` touched both
+  CC Gateway and Sub2API, while the per-command pre/post guard checked only
+  the catalog entry's primary repository.
+- The runner now derives an explicit touched-repository set from the entry's
+  declared root placeholders. Every touched repository is checked both before
+  and after execution for the exact manifest HEAD, `main` branch,
+  `muqihang/main` remote ref and commit, remote URL digest, and clean worktree.
+- A touched Sub2API repository also revalidates the manifest-bound shared
+  contract before command execution.
+- Post-command drift throws `worktree_delta_mismatch` before a result record
+  can be returned or persisted. Both an uncommitted Sub2API mutation and a
+  clean committed Sub2API HEAD change are covered by real Git fixture commands.
+- The existing Phase 0 and post-integration evidence artifacts were not
+  modified. Phase 1 remains disabled.
+
+TDD RED was observed with the focused test failing because the new
+`postIntegrationTouchedRepositories` export did not yet exist. Final
+verification:
+
+| Command | Result |
+|---|---|
+| focused post-integration entry tests | `16 passed, 0 failed` |
+| strict TypeScript over changed tools/test | pass |
+| Phase 0 baseline freeze regression | pass |
+| H0 harness regression | `25 passed, 0 failed` |
+| `env -u SUB2API_ROOT npm test` | 37 files; `354 passed, 0 failed`; Node harness `82 passed, 0 failed` |
+| `npm run build` | pass |
+| `git diff --check` | pass |
