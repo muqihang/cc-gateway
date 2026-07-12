@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oracle Lab Post-Integration Entry Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entry_kind", "generated_at", "expires_at", "repositories", "contract", "governance", "phase_zero_exit", "capture_inputs", "runtime", "disabled_capabilities", "next_phase_gates"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "entry_kind": {"const": "post_integration_entry"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "repositories": {
+      "type": "object", "additionalProperties": false, "required": ["cc_gateway", "sub2api"],
+      "properties": {"cc_gateway": {"$ref": "#/$defs/repository"}, "sub2api": {"$ref": "#/$defs/repository"}}
+    },
+    "contract": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "repository_relative_path", "sha256"],
+      "properties": {"repository": {"const": "sub2api"}, "repository_relative_path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/digest"}}
+    },
+    "governance": {
+      "type": "object", "additionalProperties": false, "required": ["requirement_registry", "claim_registry", "roadmap"],
+      "properties": {"requirement_registry": {"$ref": "#/$defs/digest"}, "claim_registry": {"$ref": "#/$defs/digest"}, "roadmap": {"$ref": "#/$defs/digest"}}
+    },
+    "phase_zero_exit": {
+      "type": "object", "additionalProperties": false, "required": ["receipt_path", "receipt_digest", "handoff_commit", "handoff_is_ancestor_of_integrated_cc_gateway"],
+      "properties": {"receipt_path": {"type": "string", "minLength": 1}, "receipt_digest": {"$ref": "#/$defs/digest"}, "handoff_commit": {"$ref": "#/$defs/commit"}, "handoff_is_ancestor_of_integrated_cc_gateway": {"const": true}}
+    },
+    "capture_inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reviewed_tool_head", "manifest_schema", "context_schema", "results_schema", "catalog_schema", "capture_tool", "context_tool", "catalog_tool", "command_catalog"],
+      "properties": {"reviewed_tool_head": {"$ref": "#/$defs/commit"}, "manifest_schema": {"$ref": "#/$defs/path_digest"}, "context_schema": {"$ref": "#/$defs/path_digest"}, "results_schema": {"$ref": "#/$defs/path_digest"}, "catalog_schema": {"$ref": "#/$defs/path_digest"}, "capture_tool": {"$ref": "#/$defs/path_digest"}, "context_tool": {"$ref": "#/$defs/path_digest"}, "catalog_tool": {"$ref": "#/$defs/path_digest"}, "command_catalog": {"$ref": "#/$defs/path_digest"}}
+    },
+    "runtime": {
+      "type": "object", "additionalProperties": false, "required": ["node", "npm", "git", "go", "environment"],
+      "properties": {"node": {"$ref": "#/$defs/digest"}, "npm": {"$ref": "#/$defs/digest"}, "git": {"$ref": "#/$defs/digest"}, "go": {"$ref": "#/$defs/digest"}, "environment": {"$ref": "#/$defs/digest"}}
+    },
+    "disabled_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "next_phase_gates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "path_digest": {"type": "object", "additionalProperties": false, "required": ["path", "digest"], "properties": {"path": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/$defs/digest"}}},
+    "repository": {
+      "type": "object", "additionalProperties": false, "required": ["head", "branch", "clean", "dirty_digest", "remote"],
+      "properties": {
+        "head": {"$ref": "#/$defs/commit"}, "branch": {"const": "main"}, "clean": {"const": true}, "dirty_digest": {"$ref": "#/$defs/digest"},
+        "remote": {"type": "object", "additionalProperties": false, "required": ["name", "ref", "commit", "url_digest"], "properties": {"name": {"const": "muqihang"}, "ref": {"const": "refs/remotes/muqihang/main"}, "commit": {"$ref": "#/$defs/commit"}, "url_digest": {"$ref": "#/$defs/digest"}}}
+      }
+    }
+  }
+}

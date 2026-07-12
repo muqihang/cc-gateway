@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "title": "Oracle Lab Post-Integration Context", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "context_kind", "generated_at", "expires_at", "manifest_digest", "command_results_digest", "registry_digest", "claims_digest", "repositories", "command_evidence", "disabled_capabilities", "next_phase_gates"],
+  "properties": {
+    "schema_version": {"const": 1}, "context_kind": {"const": "post_integration_context"}, "generated_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"},
+    "manifest_digest": {"$ref": "#/$defs/digest"}, "command_results_digest": {"$ref": "#/$defs/digest"}, "registry_digest": {"$ref": "#/$defs/digest"}, "claims_digest": {"$ref": "#/$defs/digest"},
+    "repositories": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["name", "commit", "remote_ref"], "properties": {"name": {"enum": ["cc_gateway", "sub2api"]}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}, "remote_ref": {"const": "refs/remotes/muqihang/main"}}}},
+    "command_evidence": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["command_id", "status", "result_digest"], "properties": {"command_id": {"type": "string", "minLength": 1}, "status": {"enum": ["pass", "expected_fail"]}, "result_digest": {"$ref": "#/$defs/digest"}}}},
+    "disabled_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}, "next_phase_gates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+  }, "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}
