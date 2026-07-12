@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, unlinkSy
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import Ajv2020 from 'ajv/dist/2020.js';
 import {
   captureBaseline,
   computeRepositoryState,
@@ -61,27 +62,10 @@ function nonCanonicalBase64url(value: string): string {
   return alternate;
 }
 
-let ajvRoot: string | undefined;
-
 function ajvValidity(schema: unknown, values: unknown[]): boolean[] {
-  if (!ajvRoot) {
-    ajvRoot = mkdtempSync(path.join(tmpdir(), 'oracle-ajv-'));
-    execFileSync('npm', ['install', '--prefix', ajvRoot, '--no-save', '--no-package-lock', '--ignore-scripts', 'ajv@8.20.0'], {
-      stdio: 'ignore',
-    });
-  }
-  const payload = JSON.stringify({ schema, values });
-  const script = `
-    const Ajv2020 = require('ajv/dist/2020');
-    const input = JSON.parse(process.env.AJV_INPUT);
-    const ajv = new Ajv2020({ strict: false });
-    const validate = ajv.compile(input.schema);
-    process.stdout.write(JSON.stringify(input.values.map((value) => validate(value))));
-  `;
-  return JSON.parse(execFileSync('node', ['-e', script], {
-    encoding: 'utf8',
-    env: { ...process.env, AJV_INPUT: payload, NODE_PATH: path.join(ajvRoot, 'node_modules') },
-  }));
+  const ajv = new Ajv2020({ strict: false });
+  const validate = ajv.compile(schema);
+  return values.map((value) => validate(value));
 }
 
 const tracked = fixture('tracked');
