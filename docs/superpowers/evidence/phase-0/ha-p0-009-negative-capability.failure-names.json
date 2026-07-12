@@ -1,0 +1,14 @@
+{
+  "requirement_id": "HA-P0-009",
+  "content": "stable_leaf_failure_test_names_only",
+  "digest_algorithm": "SHA-256 over UTF-8 names sorted bytewise, unique, joined by LF, with one trailing LF",
+  "failure_name_digest": "sha256:f8d50139744cabec7df0134d3ef9ca4f8c2d9d4437ab7c4520f7933bb48cc347",
+  "reproduction_command": "export LC_ALL=C; jq -r '.failure_names[]' docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json | sort -u | shasum -a 256",
+  "failure_names": [
+    "HA-P0-009 rejects contradictory positive and negative capability",
+    "HA-P0-009 rejects incoherent negative-capability tuple",
+    "HA-P0-009 rejects missing negative-capability declaration",
+    "HA-P0-009 rejects requested capability declared unsupported",
+    "HA-P0-009 rejects unknown negative-capability declaration"
+  ]
+}

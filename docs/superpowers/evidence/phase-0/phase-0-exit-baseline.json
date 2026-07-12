@@ -1,0 +1,1004 @@
+{
+  "schema_version": "1.0.0",
+  "compatibility_policy": "fail_closed_exact_schema",
+  "retention_class": "phase_evidence_permanent",
+  "redaction_policy": "digests_and_safe_categories_only",
+  "destruction_procedure": "git_revert_artifact_commit_after_security_approval",
+  "phase": "phase_0_exit",
+  "entry_kind": "phase_0_exit",
+  "approved_tool_head": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
+  "gateway_compromise_boundary": "protected_gateway",
+  "repositories": {
+    "cc_gateway": {
+      "head": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
+      "branch": "codex/oracle-phase-0-governance",
+      "clean": true,
+      "dirty_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "dirty_records": [],
+      "dirty_record_format": "u32be_length_prefixed_fields(status,destination,source,object_type,file_mode,content_sha256,symlink_target_sha256,deletion_marker,submodule_head,submodule_dirty); records sorted by destination bytes then source bytes; sha256(records || git_diff_binary_head)",
+      "ignored_exclusion_rules": [
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f1a9a09b226cf8e98a4286200c5d9ebd5c28924707ac3317947f8ecf06ab167b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "887f42eeae4276a8ba8ed3e14ec6567107ed2760d18ea7303cc715a38670fbea"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "1d0f7f923c73f90d4e2a251f82543b23a0e2be512f9e01a055930340800fd7e6"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e9cbb0224c4a3d23a6019ba557e0cd568c1ad5e1582ff1e335fb7d99b7a1055d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d8d0422389f03d783e32e627250fe29834bd09c6361640d1ff00661dd6820034"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "49c095cd06d3b035b0d8edc9fb46e565096ada3993fec38f9468a88773f345c4"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3ada5e4891ba1b6addbc12133be0c6d3fecdab9cbedeaaec2362ee4e3fe7e451"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "beb31754a106a321076e76b323ca4d99ac8781fc04f7e3f547b4bc1f6d29deb8"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "ede05c182f3b9236a73aed9ddc4b81705becedeaf86ce92bf4ee3f9b3218eab9"
+        }
+      ]
+    },
+    "sub2api": {
+      "head": "d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f",
+      "branch": "codex/oracle-phase-0-governance",
+      "clean": true,
+      "dirty_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "dirty_records": [],
+      "dirty_record_format": "u32be_length_prefixed_fields(status,destination,source,object_type,file_mode,content_sha256,symlink_target_sha256,deletion_marker,submodule_head,submodule_dirty); records sorted by destination bytes then source bytes; sha256(records || git_diff_binary_head)",
+      "ignored_exclusion_rules": [
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "69274894e2fcf6be6a0583625e7aa02eb4a40a912a8fc001b7c8694b86868b7d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a1d1128ffe5a2849afb3ac4cad6413b6d75453babc7cac579b95c66a565fe4cc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "53e77a92a134f705efa4c63617cc9584b2b1ed42bc3feaedb300e1be0473de94"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b124d4b1f69f9c107c4881f88062826e68a37b1502201f87a9bedf793bb15ef4"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "51e90b17ed9dd7b608ef53ea5846eeb5194a4f8fb81e983161e6b439d69e1b01"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "85be1725847d7442dc3edf77c1dbe07e253be2e0ef12b574960fdeea031d00b2"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "220f338b2c8d6bcfdc609d55f27b980d50c40bc5a8d9ba8c58374dd9cc633b99"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f1b131dbf65d311bb4cd491c8934a355b657389c1553d276f4f78510624dd871"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c4410f200b14609ce92732ccf13c066232491d20aa1188d7a8752ed1f599a167"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d6df9736059821a44abae7831ee18675aeddc273b81dd098aa433d9b4035a089"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a9bfd844c0992bbfdb4d786cf66df1459874973355feaad83921eead81b552aa"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fd45ff7f8a5940a466be947fc4d952b95fa6559f0f9762f0d37fa554a0c6ee91"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "582587b049874541b9abeaf524a1a8efce096d0ef0dc07c738db6d4c3672472c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f6ed56d993af0938709be6930511a4697cb7982c92c319375d99fdfd527200b4"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e63b3cfa3ebd2c3ed9df99226dc31b180f2219c1c2ab32f9976cdb7e61e29186"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4dd94c9c4701c774aaa817ff546bd70197587586bf351ca695cea35ad1c4a428"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f1a9a09b226cf8e98a4286200c5d9ebd5c28924707ac3317947f8ecf06ab167b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f74dab7213102f6f6a47234d853b5476813d81a17de3e5bbb8b2d90be3274641"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "8d339bc629a498605532536633829963b81345df2f9f0200997305454768d2f3"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b55e5ad9300e95a3e76380efd172bb4e90db2f0f31488f2662f73a8e2465c2f5"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4ce347ef444cf1f9b8026b8a82cc00fa6cd93f6fc8ae85fc2e2819a9fa887781"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "732c6958b05bef50f194a2ce3e7ea315d4c1fd6cd9c85cd991b563197e5b9c7f"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a0e1a9f94c89923de6fb5ae4b63e74e35d96c1648edf8ba9182b20910fc8b301"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "33d6516d401e925f3ed01dc1377d00733665eeb89232c7110f56338d90139a4c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0eeb3730676a42783aa4fb5ecbe45c9fed0ab472e73f42002a7cbba0ebb3886f"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "8f13bb45a451cc82c5e9febd0c3d26beaef9ed911ffd20744a1c9644a6de45af"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "868ab5a270326b0fa45e34adf60c41194b6d52da95b07098d052e99acc70d338"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "454b21082bbf7cce73b1bf03e23d42b79a9b2615346ed39429fac86fd9ed5d1c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e9cbb0224c4a3d23a6019ba557e0cd568c1ad5e1582ff1e335fb7d99b7a1055d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "74dd9d08974aed4457940214a64b43ce175d062d74e72309b003f02c24f98b30"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a46d97909f0212e15447d02968c24894d4b09a234b89b6787f4c9784800bab4c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4b28cdde3bd6ed84e1dfeeee0de36d6342064db5e63533153c2b05a7fd201a35"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f2aeaa99ca4441bb9dbeba8bf60da774ffa442498d048937cfcfbdf5b1e89cd0"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "2286cdeca85adb587a9640aa34352ba7c2fb6e49c0129dab05892ff67d0d4c58"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4073be0dd9e3ae38beba97eed085d5f023a5f2cdc101ec35f2877b185b1f1193"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "79f5cbbb1f9d9911c93bb5a422b92cfcdce33145e3cef0ff9871df11fcbac94a"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "df146c263c77081956c0bda303314337bcea10ae83195615b70d3861878725be"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e5be2daab8ce0ed872b5be9a6ec78b5d6fab07800778938023cae7848abecdfd"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0931d70fad9101f461bba9e549b860096cfe942bf454e09c706ae6d79158546e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c57cfa0b2eb150c758c27034794698c823a25a22b7ef8267f2cc2e4b0ba814b7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0fae87a1692375a1c983db3f276456ca1c6623d411908f7e2a024a71d745b9fe"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "9e221d200144b470a60968c88e06ed553dfac7bb8701b08d55794bd6740078b1"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e2eb93a61ffd7877ea5c751abcb3a618e8e2e9a2073a27f66d4114fe10819f86"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3c1e3efdea694d4001f6085911ba63f462e897a98590f15072a997b1690dcfc0"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fe9281c87bbc688f91a82735c47287f21353867bbab0c0470526cb40ce41a42c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f307f403383c2c91ad3b7cda999f2c1ccf8044571e75308f2b5762b23a1f9e16"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c56042634c905b7d94950eca3933c064a630376752b76942b62f7669f062fa53"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "8208cd57e8de8d61b00525319f096c9105f6368bc480b3380ba8bc64e82e2017"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "6192ef4bf190ed0114c934e233d4edeafae9a04abb85c5b8f1b31825b1cfe0ac"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0183487e14e12c3ed34321d5793653710171bcd93b6ee77fe05736c21ad395d7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "464f970f377145beda9d16435f22108ee7c6b3ce3eac99b751d277f5a2dead6e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c7586350e75d4f16db42e8153d8746d41cda77d63964836a50549b47bb98a841"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "7df69b0a8df4de51aa5750f952790b19a5c95b400a7ed5a2b03553467bebff52"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e365c8508ac13ab07f1c152fb5a695f839bc65a03f3f1fc38976a5a088922159"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e7e6d1ff496352742d977ef28d9aa06142577ba6b121b7cb5c662b265c8321c0"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e2e8e294420e90cd06ec53520c00dbc6b180b0845944b2c3672e3eb563f87438"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fce76fdfe8d13584429d7fd1ecff99bd270533956003c2da01880e59296735aa"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "887f42eeae4276a8ba8ed3e14ec6567107ed2760d18ea7303cc715a38670fbea"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fe54d1fd9b0ea946a38c56b98ec8ad8dff0ce784bc926b25433e44d2703f6f0f"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d00b825927d34a28833ebc327d36a92d054ef621e7b5d316310cf41961167a8e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0d860e2e5c4157ca42fefce063c764d57cd2465c31c9ebb732f081903808c5af"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0f3f1d3f3a78cb4b7b0d7fc9f7c49751b802e95c30becc4e8cd3e6309ea87da6"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "24ce88ee395e546c8eecab93287aa94c04e40d68ab7a7bc93c78f937e9004ba8"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "205b1d0e32fa853bdb4f3e9cfc58c809b07bcf1d2f377d60e19e4d9fc944dae8"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a14cb4fa9d09771c75e48a7b49cff4f5adc0f83bafdfd7e7bb8a036e4d976a16"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "419d33c6d282e4b8ce0ccae00a6c95a9c8ba41b6d066748fc86233012d782a5f"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4808ad322ea434c6a7b093e17d35855712f42f9a65cf9128a3037ae567378b16"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a047b23ced5279c5348a0a4d26164f758544c801316e81baf1e31642fd2e65b2"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "59830ebc3a4184110566bf1a290d08473dfdcbd492ce498b14cd1a5e2fa2e441"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "9af838089e95ba6ef9d6197e1ca966a3a949b09122abcbbf8d741259f688583c"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0527842b02b2edbf5cbc62edcac12d9386f4ef32b1547f5026dff167ad6df669"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "355b1cc40b0a012e30cd0190d1f2d0ba22696641a06f89d49ddc85763b8b0fd4"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3f3945c3ef4993a5b36eb7be8702a9672bfa65841b8f9bcb8c06c0ea67f09bf7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "1d278aed21309bc31132a637e50a1a9771c7ac3bf89037137bdff85f422bf0e6"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c25a873f1d93efe723faf6858555b005be5f677785734ee60a4d320666ecb7da"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "79f0732407a4a09c62b699d0bdf5b19ef285f8fa57e2e17719a1a8146c884467"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d61394946856adf3d29785c9c092275af58237fc3241235db77e989d021968f9"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b62a78270e3d0f5436d925e5738d9a07fb0308b58c2578c8cd612b55280a20d7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "6ebdb617a8104a7756d0cf36578ab01103dc9f07e4dc6feb751296b9c402faf7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e026f56c08dcdea441a2aa620ab410ce91162062609b2430f5a13bc9b7cf93f1"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "8c5967fd8486f34493710cc39b240aad46536cf4ee421ffd0479e6542db03e36"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b6e9bfb8b96eda8c013eaf90fba977ff4f3f69344da1fda03f86295bcabc4354"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b45bf79e3b8e39c7f42b850689d7d1d120f752742a1837df1334d0d204531dca"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "8ea4fd1fd53af9db84b6945dcbb8c192384654656ddc37c1693e346e3050af10"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b0e828902cb31171d834d2af5f27847e061f342c66f6975c6be460545e213dc1"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f1c260c6cfd5065fb869c578a470c881566e6e78096ed471a68a2a975fe9625d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "53061b050d3406ce37fd230b54dc072d6bcccdd6df0079b0b6fbc715e0f12187"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "65e46f1e2739122cdb798fc56a489a443e00e6fa6a3c219c841f3ef002e7399e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "58e6f63d87181b1c6a8cb6e5f1691df04aa32854456efcd52ca71c8541375d26"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "9493864e5f678c8f0990a36e770bd6067a815e08f0c98b22ada7b3ce9d9fda21"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c80b8d165b3fa0fcc4da65611e8d99ac30b879adce35d42b5771a3f303f24181"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "6f37cc033d7b20e55465df34afa2ad5ab5239508a06b7d9207bfeccf6d5e5232"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d81c97562da1a8605b04545245812fa57005011ab3d0d5b07086f550ab296b13"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "6b75e2aba267d65816d70f945cc3241aa583f03371623a50430bcffdc4a962d7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d3ee38f448a6c31da9fd8b18d1396abd0fa0dc25cf3321a368cae887db2ec89d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "25cd380c16911361aee13a03120404d29ad8ba66a281d30a5b07a21658f7d988"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "b695cd9298c1e56d6d34591a72644ddb1d758de4319a6915c17a7fe760e3b6de"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c74400a653c04e9e358a52636c076da353e84be26b381e537c8621bd0fa7a4fd"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d1e9f049feae48ee1eecac87dabaf6a1210699b4265c13336a264ec5396ca04e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a7feede9c726bc002f26aa3ba364f7835ea2c054ab9a9b10eb086977e3189e3b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f5adf6703f4e411bd0dc47aac1cb3342bfe3bf3aa589e7e7a713a96b775b8278"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0a436702c9092a885362093c0c36d4cef5e75fc8d1f9d7af08f2f8506a0aa2cc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a98bb14ab36094908b6f986696cb3a6f7b479f50bf63b91654c64ff9665527dc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3436fd067f245804e558d9f49862683bad743d35315b9d6e05536023982ba2fc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "ef2e2c2df1b5ed5402eb7005ad8729e99b40d1fb8005eacf2aeef71a82c501a2"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f43fdc0982b2d5b0091d8a37cae06a7f85d03ad1dbd89c4509b95efffda7b915"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "5d4322826383768f293e0da9f6f234e548e45f66bf21dba290d1782d77a38a48"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3d6cb2c6a949ff9b8fb452677f67b6de4f9642d2c5a63555540d758db8f4f6c6"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e7476d1e6a02b617623cf5df91689a80f0f4ed6bc1718799ab65362a3e171bb8"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "e9aa670fd1b001e62274c8686e26f8ddf13be30f4d43263758c6670dc42555d2"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "041dc26c583ef4fb944da4ce494b7de682020754a2e8eddb6d3db413303b8765"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "4d181018dd30c52a809e8f8be9a5095504da1edf3184d504025287d0efc121ec"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "067b126c95fb3b266f486b1f53e0babcb8004343da2b77f69e3913440bd5f17a"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "93cea26535c2c1cab180efd37f244175f76b7763427bb8e451bcc1514fec8225"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "edcbaee083b21106213fe21f3dccad1a4dabf9e9474be4ed32a4a3d7ab0c8690"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "08442410273eed80a41fcad70357c999c84a947031e9b62abf90731ac4e3ed0b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "39aacac046bd4131d2dfa7e6e8ba664e34a94b9e76036d7adbc87e795b699ab2"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "faf2361d8c5f5be54be99154cf077eb7fcd7d321115f6a612699491530e0e2fa"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "c3cfcd8041ce3d26b8cf5be5ef61456f9240a939e2cb8fa7df10c56a509d8f94"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fce76fdfe8d13584429d7fd1ecff99bd270533956003c2da01880e59296735aa"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "cb800a3c3d9cab0b69c8b93ef9dd2df37aed80889f8ca7390a426bc1b24995d1"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "0820b2b503653708be9b04b02de5e05d9f80897b05c40913c09286dc27350e9d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "fe7c2307fad4008e7b11949d2bedfe3a9bf9472f2747b9cc9c26cf536aa7f6b1"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "7ca11f94c2250ee6433e3f2f0ef15099f7ad16d773636aec921408f5348ab1d6"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "143f4ca87f88328e3a31126aa56edf0cab5d1d4cab099eced273ecd3c7de2159"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "a451b6e6885be45d01bee03b18e58399cf26f09801ff10ff90c86a353803cccc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "3205757c5e149b0a4d15ab357a93e7d48792c4ddc3cb92b236fa37b4acff02ae"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "f93f268fe496808082edcbc4a482d3fa35562c992efd3c5eef1392b3ba7f2537"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "5c53d4cc91e63e7a5f3a88685dac9aad5ab92c844674967d346c59b646bed972"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "068946ab20533361e407e2cff5e31431145351688c40b556e3142a154c41d00f"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "LmdpdGlnbm9yZQ",
+          "rule_sha256": "d2ebc2a2bc3538c6bbb01eac86527dc315f6e2ba4dbf90fe2238c5970a41f912"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "a451b6e6885be45d01bee03b18e58399cf26f09801ff10ff90c86a353803cccc"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "49738782451baa0dd55c0db0dd6a231dcf4341d5052421d2ac727b8d844c65ee"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "6bce2576193958ff1377130d458b6d9b8f99d1c6a19f4b207782ff6c0c6da5ea"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "e9cbb0224c4a3d23a6019ba557e0cd568c1ad5e1582ff1e335fb7d99b7a1055d"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "5960b6ce761187f4a6ebc90b42a140c95cf889e02fd7da248843848fe7fc1a53"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "464f970f377145beda9d16435f22108ee7c6b3ce3eac99b751d277f5a2dead6e"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "8208cd57e8de8d61b00525319f096c9105f6368bc480b3380ba8bc64e82e2017"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "ZGVwbG95Ly5naXRpZ25vcmU",
+          "rule_sha256": "0183487e14e12c3ed34321d5793653710171bcd93b6ee77fe05736c21ad395d7"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "f1a9a09b226cf8e98a4286200c5d9ebd5c28924707ac3317947f8ecf06ab167b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "887f42eeae4276a8ba8ed3e14ec6567107ed2760d18ea7303cc715a38670fbea"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "a216adbe806330de303413b70c839fc82c7d43304149259447a33ebe9e90b7d9"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "e16025f524836ec3c88381d1f06145ae8e694d0ee91f6414b0e24f96fd07be05"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "27dc52c1060dcb2e8385e3280e427395435a55c3dd1041f8e6b86951d9239b92"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "3ae54df3411ab28fcc373e0b09e2f6383209ffa31c07bd07abe0f3b4d4c53a28"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "65bd96a8cb8d024c20276f650108a94cff5cfb529c9f7abbd8d1e6ad2bedd23b"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "224c6c0db9d954fed6e8ed16658d94da187a3281a48464237f4b3bb1142e6f87"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "62fb0e69387015b4a10062f4527cbb9c5f8b122d80731ea36a393f154c1c7b73"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "73adb4991794f3b5ae85b3f6fcf069032144f6814b2b034a5fdba60d6be8041a"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "97cea6ab8e2ab5140a966ea1f2c3c23a1d1512217d0fe3ba395049da415595e4"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "cf15be3c9fe470d5878af54ea7736498e9502c037bfdab801bd05031b8beb37a"
+        },
+        {
+          "source_category": "repository_gitignore",
+          "source_path_base64url": "dG9vbHMvemh1bWVuZy1hZ2VudC9kZXNrdG9wLy5naXRpZ25vcmU",
+          "rule_sha256": "e2eb93a61ffd7877ea5c751abcb3a618e8e2e9a2073a27f66d4114fe10819f86"
+        }
+      ]
+    }
+  },
+  "contract": {
+    "repository_role": "sub2api",
+    "path_category": "sub2api_formal_pool_contract",
+    "repository_relative_path_base64url": "YmFja2VuZC9pbnRlcm5hbC9zZXJ2aWNlL3Rlc3RkYXRhL2NjX2dhdGV3YXlfZm9ybWFsX3Bvb2xfY29udHJhY3QvdmVjdG9ycy5qc29u",
+    "sha256": "70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"
+  },
+  "governance": {
+    "requirement_registry": {
+      "status": "present",
+      "sha256": "d9066d645c896cb1b67e6395a8fc2daf46081715594e8679f3433b8df0eb5c60"
+    },
+    "claim_registry": {
+      "status": "present",
+      "sha256": "b389c3655641f990bd7e31e9a176576f9664b7620ae90c5829a21dc9ff087943"
+    }
+  },
+  "policies": {
+    "network": {
+      "real_upstream_requests": "forbidden",
+      "local_fixture_only": true
+    },
+    "sensitivity": {
+      "persisted_material": "safe_categories_and_sha256_digests_only",
+      "forbidden": [
+        "raw_prompt",
+        "raw_body",
+        "credential",
+        "raw_cch",
+        "raw_client_hello",
+        "account_identifier",
+        "proxy_credential"
+      ]
+    }
+  },
+  "dependencies": {
+    "persona_registry": {
+      "status": "present",
+      "sha256": "40fd2203d34a125ec3fb1284a1c27aeea85697385e876da98228bb56948db6b3"
+    },
+    "persona_resolver": {
+      "status": "present",
+      "sha256": "f7064ed535c7189b403ab3b21ba0c90b4c87e33004bf2faf7752fb7b56bc747b"
+    },
+    "request_policy": {
+      "status": "present",
+      "sha256": "5aba28722e317f2c2e38072b9c1f9ccfa8b545aafffb0a8131362fa2789a0327"
+    },
+    "tls_registry": {
+      "status": "present",
+      "sha256": "0f4cd1daa29b77adec64ad9f9b02acaa151421f9219232dce7c9ff85e6706a25"
+    },
+    "cch_request_construction": {
+      "status": "present",
+      "sha256": "0b009e208d37f3a189c64a3c3aa9093f8b543906a47441e80cbbf73642aa0280"
+    },
+    "sidecar_profile": {
+      "status": "present",
+      "sha256": "d6b1af9556e062d2ce3f04cb2cc69d2a1f9a7bf1cfd1656643c7bf8185ad55e2"
+    },
+    "sidecar_summary": {
+      "status": "present",
+      "sha256": "04e70ec3e3171e675db2f1211a8f71e56d7f1bc2100500a0b9e8b16d1061efc4"
+    },
+    "package_manifest": {
+      "status": "present",
+      "sha256": "cb56d517e064f1796fb178a16c6f5abb1fc2995f18209c640d995d0c927eeed3"
+    },
+    "package_lock": {
+      "status": "present",
+      "sha256": "17275c92743baee979aeefae7c1de78c58f2cc835bc939d136f828ef05114844"
+    },
+    "sidecar_go_manifest": {
+      "status": "present",
+      "sha256": "f06dbbd45605b278759a5ac26d6c5f8ef1d51a396936231567da8044ba8d3bfb"
+    },
+    "sidecar_go_lock": {
+      "status": "present",
+      "sha256": "a22717782bbc47d3fca9f8f92d80bbcd5f5ee45406def02b71e3df5d8259b5ab"
+    },
+    "repository_root_metadata": {
+      "cc_gateway_augmentroot": {
+        "status": "absent",
+        "reason": "path_not_present_at_entry"
+      },
+      "sub2api_augmentroot": {
+        "status": "present",
+        "sha256": "23dacde642d734bc71142401844830b2dabf560f9c74cfecf941d11820939156"
+      }
+    },
+    "tools": [
+      {
+        "path_base64url": "dG9vbHMvY2xhdWRlLWNjaC1vcmFjbGUtcmVncmVzc2lvbi50cw",
+        "sha256": "0eafe9a470b9f19ec7c7465681abceaf186a31ffb319de34ed4976df7bf45321"
+      },
+      {
+        "path_base64url": "dG9vbHMvY2xhdWRlLW5hdGl2ZS1vcmFjbGUtbWF0cml4LnRz",
+        "sha256": "53a519ec396b68c993245fad34bc4795bd0db0e805db4177697123e5dcf2f4c7"
+      }
+    ],
+    "observer_parser_canonicalizer": [],
+    "runtime_toolchain": {
+      "node": "e9adcddb6d8bf4f8ae039a685ffbfbfc43ec9a737ef7f8b021fbd80cb51a547f",
+      "git": "74d9e1a39c1204fdcd5444ef60250735f463db4898a2e813c4fa937720fb6943",
+      "npm": "de2f0aa452a648a7039bfc2984089aafc6847ed84f69ca45d157dcea258c681d",
+      "go": {
+        "status": "present",
+        "sha256": "c266e37e7c412841c14de5c89a6507af96bb5427e0288f2578f940a0aea6577a",
+        "provenance": "go version go1.26.0 darwin/arm64"
+      }
+    }
+  },
+  "codegraph": {
+    "status": "absent",
+    "fallback_reason": ".codegraph directory not present; deterministic git/file discovery used"
+  },
+  "legacy_comparison": {
+    "requirement_id": "OL-LEGACY-001",
+    "version": "2.1.197",
+    "authority": "unverified_legacy",
+    "use": "comparison_only",
+    "promotion_eligible": false,
+    "tuple_digests": {
+      "persona": {
+        "status": "present",
+        "sha256": "40fd2203d34a125ec3fb1284a1c27aeea85697385e876da98228bb56948db6b3"
+      },
+      "request_shape": {
+        "status": "present",
+        "sha256": "5aba28722e317f2c2e38072b9c1f9ccfa8b545aafffb0a8131362fa2789a0327"
+      },
+      "cch": {
+        "status": "present",
+        "sha256": "0b009e208d37f3a189c64a3c3aa9093f8b543906a47441e80cbbf73642aa0280"
+      },
+      "tls": {
+        "status": "present",
+        "sha256": "0f4cd1daa29b77adec64ad9f9b02acaa151421f9219232dce7c9ff85e6706a25"
+      }
+    }
+  },
+  "parent_reference": {
+    "type": "phase_0_entry_evidence",
+    "entry_manifest": {
+      "repository_relative_path_base64url": "ZG9jcy9zdXBlcnBvd2Vycy9ldmlkZW5jZS9waGFzZS0wL3BoYXNlLTAtZW50cnktYmFzZWxpbmUuanNvbg",
+      "sha256": "7faa9447f1767909c81d0183fb206c83741b557c334c26a2e50c0911447bc421"
+    },
+    "entry_receipt": {
+      "repository_relative_path_base64url": "ZG9jcy9zdXBlcnBvd2Vycy9ldmlkZW5jZS9waGFzZS0wL3BoYXNlLTAtZW50cnktYmFzZWxpbmUucmVjZWlwdC5qc29u",
+      "sha256": "db8a07a3cff372173612dcfe228732a60210be962fce6d07b54ec940a15e1ecd"
+    }
+  },
+  "capture_inputs": {
+    "schema": {
+      "repository_relative_path_base64url": "ZG9jcy9zdXBlcnBvd2Vycy9zY2hlbWFzL29yYWNsZS1sYWItcnVuLW1hbmlmZXN0LnNjaGVtYS5qc29u",
+      "sha256": "3dee51b8df1b54fc0199e2e8796e43f86dbf2b075ca6405bd2b10b510d292a7a"
+    },
+    "tool": {
+      "repository_relative_path_base64url": "dG9vbHMvb3JhY2xlLWxhYi9mcmVlemUtYmFzZWxpbmUudHM",
+      "sha256": "fe0bf927bc310cb04ccaf6084d23f9e6b29d9afa20362463bbf86d39ea5d7efc"
+    }
+  }
+}

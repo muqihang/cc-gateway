@@ -1,0 +1,42 @@
+[
+  {
+    "claim_id": "CL-DIRECT-EGRESS-001",
+    "requirement_ids": ["HA-P0-003"],
+    "claim_class": "local_structural",
+    "authority_state": "unverified",
+    "statement": "The gateway direct-egress path is not proven disabled; B4 RED evidence shows the negative capability remains unverified.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "none",
+    "stability_class": "structural",
+    "confidence": 0.98,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "source-and-static-analysis",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-PINNED-OBS-001",
+    "requirement_ids": ["HA-P0-006"],
+    "claim_class": "local_observational",
+    "authority_state": "unverified",
+    "statement": "No persisted local-wire artifact proves the pinned client emitted the recorded request shape; Phase 3 owns that evidence capture.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "none",
+    "stability_class": "observational",
+    "confidence": 0.91,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "pinned-client-run",
+    "authoritative_provider_disclosure": false
+  }
+]

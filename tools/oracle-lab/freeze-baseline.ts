@@ -1,0 +1,881 @@
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+type DigestMarker = { status: 'present'; sha256: string } | { status: 'absent'; reason: string };
+type GovernanceMarker = { status: 'absent_pre_governance_bootstrap' } | { status: 'present'; sha256: string };
+type ToolDigest = { status: 'present'; sha256: string; provenance: string } | { status: 'absent'; reason: 'tool_not_found'; required: boolean };
+
+export type FrozenBindings = {
+  ccGatewayHead: string;
+  ccGatewayBranch: string;
+  sub2apiHead: string;
+  sub2apiBranch: string;
+  contractSha256: string;
+  contractRelativePath: string;
+};
+
+export const PHASE_0_BINDINGS = {
+  ccGatewayHead: 'b9745da781397111a77465a1afb6bbbcb7cfd692',
+  ccGatewayBranch: 'codex/oracle-phase-0-governance',
+  sub2apiHead: 'a0c51e3c674c858fb11b09f21d94d72ec909f554',
+  sub2apiBranch: 'codex/oracle-phase-0-governance',
+  contractSha256: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
+  contractRelativePath: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
+} as const satisfies FrozenBindings;
+
+export type DirtyRecord = {
+  status: string;
+  destination_path_base64url: string;
+  source_path_base64url?: string;
+  object_type: 'regular_file' | 'symlink' | 'directory' | 'submodule' | 'deleted' | 'other';
+  file_mode: string;
+  content_sha256?: string;
+  symlink_target_sha256?: string;
+  deletion_marker?: true;
+  submodule_head?: string;
+  submodule_dirty?: boolean;
+};
+
+export type RepositoryState = {
+  head: string;
+  branch: string;
+  clean: boolean;
+  dirty_digest: string;
+  dirty_records: DirtyRecord[];
+  dirty_record_format: string;
+  ignored_exclusion_rules: Array<{ source_category: string; source_path_base64url?: string; rule_sha256: string }>;
+};
+
+export type BaselineOptions = {
+  ccGatewayRoot: string;
+  sub2apiRoot: string;
+  contractPath: string;
+  approvedToolHead: string;
+  allowCcGatewayDirtyDigest?: string;
+  allowSub2apiDirtyDigest?: string;
+  strictBindings?: boolean;
+  outputPath?: string;
+};
+
+export type ExitBaselineOptions = {
+  ccGatewayRoot: string;
+  sub2apiRoot: string;
+  contractPath: string;
+  parentEntryPath: string;
+  parentEntryReceiptPath: string;
+  expectedCcHead: string;
+  expectedSub2apiHead: string;
+  outputPath: string;
+};
+
+export type BaselineManifest = ReturnType<typeof captureBaseline>;
+
+class BaselineError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+const EMPTY_SHA256 = sha256(Buffer.alloc(0));
+const GOVERNANCE_ABSENCE = 'absent_pre_governance_bootstrap' as const;
+const GATEWAY_COMPROMISE_BOUNDARY = 'protected_gateway' as const;
+const ENTRY_MANIFEST_RELATIVE_PATH = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json';
+const ENTRY_RECEIPT_RELATIVE_PATH = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json';
+const MANIFEST_SCHEMA_RELATIVE_PATH = 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json';
+const FREEZE_TOOL_RELATIVE_PATH = 'tools/oracle-lab/freeze-baseline.ts';
+const REQUIREMENT_REGISTRY_RELATIVE_PATH = 'docs/superpowers/registry/oracle-lab-requirements.json';
+const CLAIM_REGISTRY_RELATIVE_PATH = 'docs/superpowers/registry/oracle-lab-claims.json';
+const RECORD_FORMAT = 'u32be_length_prefixed_fields(status,destination,source,object_type,file_mode,content_sha256,symlink_target_sha256,deletion_marker,submodule_head,submodule_dirty); records sorted by destination bytes then source bytes; sha256(records || git_diff_binary_head)';
+
+function sha256(value: Buffer | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function run(root: string, args: string[], encoding: 'utf8' | 'buffer' = 'utf8'): any {
+  return execFileSync(args[0], args.slice(1), { cwd: root, encoding: encoding === 'buffer' ? 'buffer' : 'utf8' });
+}
+
+function gitBuffer(root: string, ...args: string[]): Buffer {
+  return run(root, ['git', ...args], 'buffer');
+}
+
+function gitText(root: string, ...args: string[]): string {
+  return String(run(root, ['git', ...args], 'utf8')).trim();
+}
+
+function encodePath(value: Buffer): string {
+  return value.toString('base64url');
+}
+
+function encodeRepositoryPath(value: string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
+function field(value: Buffer | string | undefined): Buffer {
+  const bytes = value === undefined ? Buffer.alloc(0) : Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(bytes.length);
+  return Buffer.concat([length, bytes]);
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function bufferPath(root: string, relative: Buffer): Buffer {
+  return Buffer.concat([Buffer.from(root), Buffer.from(path.sep), relative]);
+}
+
+function indexEntries(root: string): Map<string, { mode: string; object: string; path: Buffer }> {
+  const output = gitBuffer(root, 'ls-files', '-s', '-z');
+  const entries = new Map<string, { mode: string; object: string; path: Buffer }>();
+  let start = 0;
+  for (let i = 0; i < output.length; i++) {
+    if (output[i] !== 0) continue;
+    const entry = output.subarray(start, i);
+    start = i + 1;
+    const tab = entry.indexOf(0x09);
+    const metadata = entry.subarray(0, tab).toString('ascii').split(' ');
+    const rawPath = Buffer.from(entry.subarray(tab + 1));
+    entries.set(encodePath(rawPath), { mode: metadata[0], object: metadata[1], path: rawPath });
+  }
+  return entries;
+}
+
+function statRecord(root: string, status: string, destination: Buffer, source: Buffer | undefined, index: Map<string, { mode: string; object: string; path: Buffer }>): DirtyRecord {
+  const target = bufferPath(root, destination);
+  const base = {
+    status,
+    destination_path_base64url: encodePath(destination),
+    ...(source ? { source_path_base64url: encodePath(source) } : {}),
+  };
+  if (!existsSync(target)) {
+    return { ...base, object_type: 'deleted', file_mode: '000000', deletion_marker: true };
+  }
+  const stat = lstatSync(target);
+  const indexMode = index.get(encodePath(destination))?.mode || '';
+  const mode = indexMode || (stat.isSymbolicLink() ? '120000' : stat.isDirectory() ? '040000' : (stat.mode & 0o111) ? '100755' : '100644');
+  if (mode === '160000') {
+    let head = 'unavailable';
+    let dirty = true;
+    try {
+      const targetText = target.toString();
+      head = gitText(targetText, 'rev-parse', 'HEAD');
+      dirty = gitBuffer(targetText, 'status', '--porcelain=v1', '-z', '--untracked-files=all').length > 0;
+    } catch { /* fail-closed state is represented */ }
+    return { ...base, object_type: 'submodule', file_mode: mode, submodule_head: head, submodule_dirty: dirty };
+  }
+  if (stat.isSymbolicLink()) {
+    return { ...base, object_type: 'symlink', file_mode: mode, symlink_target_sha256: sha256(readlinkSync(target, { encoding: 'buffer' })) };
+  }
+  if (stat.isFile()) {
+    return { ...base, object_type: 'regular_file', file_mode: mode, content_sha256: sha256(readFileSync(target)) };
+  }
+  return { ...base, object_type: stat.isDirectory() ? 'directory' : 'other', file_mode: mode };
+}
+
+export function parsePorcelainPathRecords(output: Buffer): Array<{ status: string; destination: Buffer; source?: Buffer }> {
+  const parts: Buffer[] = [];
+  let start = 0;
+  for (let i = 0; i < output.length; i++) {
+    if (output[i] === 0) {
+      parts.push(output.subarray(start, i));
+      start = i + 1;
+    }
+  }
+  const parsed: Array<{ status: string; destination: Buffer; source?: Buffer }> = [];
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (entry.length < 4 || entry[2] !== 0x20) throw new BaselineError('invalid_git_status', 'unexpected porcelain v1 -z record');
+    const status = entry.subarray(0, 2).toString('ascii');
+    const destination = Buffer.from(entry.subarray(3));
+    let source: Buffer | undefined;
+    if (status.includes('R') || status.includes('C')) source = Buffer.from(parts[++i] || Buffer.alloc(0));
+    parsed.push({ status, destination, source });
+  }
+  return parsed.sort((a, b) => Buffer.compare(a.destination, b.destination) || Buffer.compare(a.source || Buffer.alloc(0), b.source || Buffer.alloc(0)));
+}
+
+function parsePorcelain(root: string, output: Buffer, index: Map<string, { mode: string; object: string; path: Buffer }>): Array<{ destination: Buffer; source?: Buffer; record: DirtyRecord }> {
+  return parsePorcelainPathRecords(output).map(({ status, destination, source }) => ({ destination, source, record: statRecord(root, status, destination, source, index) }));
+}
+
+function serializeRecord(record: DirtyRecord, destination: Buffer, source?: Buffer): Buffer {
+  return Buffer.concat([
+    field(record.status), field(destination), field(source), field(record.object_type), field(record.file_mode),
+    field(record.content_sha256), field(record.symlink_target_sha256), field(record.deletion_marker ? '1' : ''),
+    field(record.submodule_head), field(record.submodule_dirty === undefined ? '' : record.submodule_dirty ? '1' : '0'),
+  ]);
+}
+
+function exclusionRules(root: string): RepositoryState['ignored_exclusion_rules'] {
+  const sources: Array<{ category: string; relative?: string; absolute: string }> = [];
+  for (const relative of gitBuffer(root, 'ls-files', '-z', '--', '.gitignore', '**/.gitignore').toString('utf8').split('\0').filter(Boolean)) {
+    sources.push({ category: 'repository_gitignore', relative, absolute: path.join(root, relative) });
+  }
+  const gitDir = gitText(root, 'rev-parse', '--git-dir');
+  const infoExclude = path.resolve(root, gitDir, 'info/exclude');
+  if (existsSync(infoExclude)) sources.push({ category: 'repository_info_exclude', absolute: infoExclude });
+  try {
+    const globalPath = gitText(root, 'config', '--path', '--get', 'core.excludesFile');
+    if (globalPath && existsSync(globalPath)) sources.push({ category: 'global_excludes', absolute: globalPath });
+  } catch { /* no global excludes file */ }
+  return sources.flatMap((source) => readFileSync(source.absolute, 'utf8').split(/\r?\n/)
+    .filter((rule) => rule.length > 0 && !rule.startsWith('#'))
+    .map((rule) => ({
+      source_category: source.category,
+      ...(source.relative ? { source_path_base64url: Buffer.from(source.relative).toString('base64url') } : {}),
+      rule_sha256: sha256(rule),
+    })));
+}
+
+export function computeRepositoryState(rootInput: string, allowedDirtyDigest?: string, inspectOnly = false): RepositoryState {
+  const root = realpathSync(rootInput);
+  const index = indexEntries(root);
+  const status = gitBuffer(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all');
+  const parsed = parsePorcelain(root, status, index);
+  const seen = new Set(parsed.map(({ destination }) => encodePath(destination)));
+  for (const entry of index.values()) {
+    if (entry.mode !== '160000' || seen.has(encodePath(entry.path))) continue;
+    const target = bufferPath(root, entry.path);
+    let head = 'unavailable';
+    let dirty = true;
+    try {
+      head = gitText(target.toString(), 'rev-parse', 'HEAD');
+      dirty = gitBuffer(target.toString(), 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none').length > 0;
+    } catch { /* missing/unreadable submodule is drift */ }
+    if (head !== entry.object || dirty) {
+      parsed.push({ destination: entry.path, record: { status: 'SM', destination_path_base64url: encodePath(entry.path), object_type: 'submodule', file_mode: '160000', submodule_head: head, submodule_dirty: dirty } });
+    }
+  }
+  parsed.sort((a, b) => Buffer.compare(a.destination, b.destination) || Buffer.compare(a.source || Buffer.alloc(0), b.source || Buffer.alloc(0)));
+  const diff = gitBuffer(root, 'diff', '--binary', 'HEAD');
+  const serialized = Buffer.concat(parsed.map(({ record, destination, source }) => serializeRecord(record, destination, source)));
+  const dirtyDigest = sha256(Buffer.concat([serialized, diff]));
+  const clean = parsed.length === 0 && diff.length === 0;
+  if (!clean && !inspectOnly) {
+    if (!allowedDirtyDigest) throw new BaselineError('undeclared_dirty_tree', 'repository has undeclared tracked, untracked, or submodule changes');
+    if (allowedDirtyDigest !== dirtyDigest) throw new BaselineError('dirty_digest_mismatch', 'declared dirty digest does not match complete repository state');
+  }
+  if (clean && allowedDirtyDigest && allowedDirtyDigest !== dirtyDigest) {
+    throw new BaselineError('dirty_digest_mismatch', 'declared dirty digest does not match clean repository state');
+  }
+  return {
+    head: gitText(root, 'rev-parse', 'HEAD'),
+    branch: gitText(root, 'rev-parse', '--abbrev-ref', 'HEAD'),
+    clean,
+    dirty_digest: dirtyDigest,
+    dirty_records: parsed.map((item) => item.record),
+    dirty_record_format: RECORD_FORMAT,
+    ignored_exclusion_rules: exclusionRules(root),
+  };
+}
+
+function digestFile(root: string, relative: string): DigestMarker {
+  const absolute = path.join(root, relative);
+  return existsSync(absolute) ? { status: 'present', sha256: sha256(readFileSync(absolute)) } : { status: 'absent', reason: 'path_not_present_at_entry' };
+}
+
+function digestMatchingFiles(root: string, predicate: (relative: string) => boolean): Array<{ path_base64url: string; sha256: string }> {
+  const files = gitBuffer(root, 'ls-files', '-z').toString('utf8').split('\0').filter(Boolean).filter(predicate).sort();
+  return files.map((relative) => ({ path_base64url: Buffer.from(relative).toString('base64url'), sha256: sha256(readFileSync(path.join(root, relative))) }));
+}
+
+function digestTree(root: string): string {
+  const entries: Buffer[] = [];
+  const walk = (directory: string, prefix = ''): void => {
+    for (const name of readdirSync(directory).sort()) {
+      const absolute = path.join(directory, name);
+      const relative = prefix ? `${prefix}/${name}` : name;
+      const stat = lstatSync(absolute);
+      entries.push(field(relative));
+      entries.push(field(stat.isFile() ? sha256(readFileSync(absolute)) : stat.isSymbolicLink() ? sha256(readlinkSync(absolute)) : 'directory'));
+      if (stat.isDirectory()) walk(absolute, relative);
+    }
+  };
+  walk(root);
+  return sha256(Buffer.concat(entries));
+}
+
+export function validateGovernanceMarkers(governance: Record<string, any>): void {
+  for (const key of ['requirement_registry', 'claim_registry']) {
+    const marker = governance[key];
+    if (!marker || (marker.status !== GOVERNANCE_ABSENCE && !(marker.status === 'present' && /^[0-9a-f]{64}$/.test(marker.sha256)))) {
+      throw new BaselineError('invalid_governance_marker', `${key} must be an explicit bootstrap absence marker or a digest`);
+    }
+  }
+}
+
+function governanceMarker(root: string, relative: string): GovernanceMarker {
+  return existsSync(path.join(root, relative))
+    ? { status: 'present', sha256: sha256(readFileSync(path.join(root, relative))) }
+    : { status: GOVERNANCE_ABSENCE };
+}
+
+function ensureOutputContainment(rootInput: string, candidateInput: string): void {
+  const root = realpathSync(rootInput);
+  const resolved = path.resolve(candidateInput);
+  const parent = path.dirname(resolved);
+  const parentReal = realpathSync(parent);
+  const candidate = path.join(parentReal, path.basename(resolved));
+  if (!pathInside(root, parentReal) || !pathInside(root, candidate)) throw new BaselineError('output_path_escape', 'output parent must resolve inside CC Gateway root');
+}
+
+function exactObject(value: unknown, keys: string[], code: string): asserts value is Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BaselineError(code, 'expected object');
+  const actual = Object.keys(value as object).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, i) => key !== expected[i])) throw new BaselineError(code, `unexpected or missing properties: ${actual.join(',')}`);
+}
+
+function validSha(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value); }
+function validCommit(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value); }
+function validPathBytes(value: unknown): boolean {
+  return typeof value === 'string'
+    && value.length > 0
+    && /^[A-Za-z0-9_-]+$/.test(value)
+    && Buffer.from(value, 'base64url').toString('base64url') === value;
+}
+const DIRTY_STATUSES = new Set(['??', '!!', 'SM', ' M', 'M ', 'MM', ' T', 'T ', 'TT', 'A ', 'AM', 'AT', ' D', 'D ', 'DT', 'R ', 'RM', 'RT', 'C ', 'CM', 'CT', 'DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
+const OBJECT_TYPES = new Set(['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);
+const FILE_MODES = new Set(['000000', '040000', '100644', '100755', '120000', '160000']);
+const ABSENT_REASON = 'path_not_present_at_entry';
+function validateRepositoryArtifact(value: unknown): void {
+  exactObject(value, ['head', 'branch', 'clean', 'dirty_digest', 'dirty_records', 'dirty_record_format', 'ignored_exclusion_rules'], 'manifest_schema_invalid');
+  const repository = value as any;
+  if (typeof repository.branch !== 'string' || repository.branch.length === 0 || typeof repository.clean !== 'boolean' || !validCommit(repository.head) || !validSha(repository.dirty_digest) || repository.dirty_record_format !== RECORD_FORMAT || !Array.isArray(repository.dirty_records) || !Array.isArray(repository.ignored_exclusion_rules)) throw new BaselineError('manifest_schema_invalid', 'invalid repository properties');
+  for (const record of (value as any).dirty_records) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) throw new BaselineError('manifest_schema_invalid', 'invalid dirty record');
+    const keys = ['status', 'destination_path_base64url', 'object_type', 'file_mode', 'source_path_base64url', 'content_sha256', 'symlink_target_sha256', 'deletion_marker', 'submodule_head', 'submodule_dirty'];
+    if (Object.keys(record).some((key) => !keys.includes(key))) throw new BaselineError('manifest_schema_invalid', 'unknown dirty record field');
+    if (typeof record.status !== 'string' || !DIRTY_STATUSES.has(record.status) || !validPathBytes(record.destination_path_base64url) || (record.source_path_base64url !== undefined && !validPathBytes(record.source_path_base64url)) || !OBJECT_TYPES.has(record.object_type) || !FILE_MODES.has(record.file_mode)) throw new BaselineError('manifest_schema_invalid', 'invalid dirty record fields');
+    if (record.content_sha256 !== undefined && !validSha(record.content_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid content digest');
+    if (record.symlink_target_sha256 !== undefined && !validSha(record.symlink_target_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid symlink digest');
+    if (record.deletion_marker !== undefined && record.deletion_marker !== true) throw new BaselineError('manifest_schema_invalid', 'invalid deletion marker');
+    if (record.submodule_head !== undefined && !validCommit(record.submodule_head)) throw new BaselineError('manifest_schema_invalid', 'invalid submodule head');
+    if (record.submodule_dirty !== undefined && typeof record.submodule_dirty !== 'boolean') throw new BaselineError('manifest_schema_invalid', 'invalid submodule dirty state');
+    if (record.object_type === 'regular_file' && !validSha(record.content_sha256)) throw new BaselineError('manifest_schema_invalid', 'regular file requires content digest');
+    if (record.object_type === 'symlink' && !validSha(record.symlink_target_sha256)) throw new BaselineError('manifest_schema_invalid', 'symlink requires target digest');
+    if (record.object_type === 'deleted' && record.deletion_marker !== true) throw new BaselineError('manifest_schema_invalid', 'deleted record requires deletion marker');
+    if (record.object_type === 'submodule' && (!validCommit(record.submodule_head) || typeof record.submodule_dirty !== 'boolean')) throw new BaselineError('manifest_schema_invalid', 'submodule requires provenance');
+    const sourceExpected = record.status[0] === 'R' || record.status[0] === 'C';
+    if (sourceExpected !== (record.source_path_base64url !== undefined)) throw new BaselineError('manifest_schema_invalid', 'rename/copy source field incompatible with status');
+    if (record.object_type !== 'regular_file' && record.content_sha256 !== undefined) throw new BaselineError('manifest_schema_invalid', 'content digest incompatible with object type');
+    if (record.object_type !== 'symlink' && record.symlink_target_sha256 !== undefined) throw new BaselineError('manifest_schema_invalid', 'symlink digest incompatible with object type');
+    if (record.object_type !== 'deleted' && record.deletion_marker !== undefined) throw new BaselineError('manifest_schema_invalid', 'deletion marker incompatible with object type');
+    if (record.object_type !== 'submodule' && (record.submodule_head !== undefined || record.submodule_dirty !== undefined)) throw new BaselineError('manifest_schema_invalid', 'submodule fields incompatible with object type');
+  }
+  for (const rule of repository.ignored_exclusion_rules) {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) throw new BaselineError('manifest_schema_invalid', 'invalid exclusion rule');
+    exactObject(rule, ['source_category', ...(rule.source_path_base64url === undefined ? [] : ['source_path_base64url']), 'rule_sha256'], 'manifest_schema_invalid');
+    if (!['repository_gitignore', 'repository_info_exclude', 'global_excludes'].includes(rule.source_category) || (rule.source_path_base64url !== undefined && !validPathBytes(rule.source_path_base64url)) || !validSha(rule.rule_sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid exclusion rule');
+  }
+}
+
+function validateDigestMarker(value: unknown): void {
+  const marker = value as any;
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
+  if (marker.status === 'present') { exactObject(marker, ['status', 'sha256'], 'manifest_schema_invalid'); if (!validSha(marker.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker'); return; }
+  exactObject(marker, ['status', 'reason'], 'manifest_schema_invalid');
+  if (marker.status !== 'absent' || marker.reason !== ABSENT_REASON) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
+}
+
+function validatePathDigest(value: unknown): void {
+  exactObject(value, ['repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid');
+  const v = value as any;
+  if (!validPathBytes(v.repository_relative_path_base64url) || !validSha(v.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid repository path digest');
+}
+
+function validateParentReference(value: unknown): void {
+  exactObject(value, ['type', 'entry_manifest', 'entry_receipt'], 'manifest_schema_invalid');
+  const v = value as any;
+  if (v.type !== 'phase_0_entry_evidence') throw new BaselineError('manifest_schema_invalid', 'invalid parent reference type');
+  validatePathDigest(v.entry_manifest);
+  validatePathDigest(v.entry_receipt);
+  if (v.entry_manifest.repository_relative_path_base64url !== encodeRepositoryPath(ENTRY_MANIFEST_RELATIVE_PATH)
+    || v.entry_receipt.repository_relative_path_base64url !== encodeRepositoryPath(ENTRY_RECEIPT_RELATIVE_PATH)) {
+    throw new BaselineError('manifest_binding_mismatch', 'exit parent reference paths do not match committed Phase 0 entry evidence');
+  }
+}
+
+function validateCaptureInputs(value: unknown): void {
+  exactObject(value, ['schema', 'tool'], 'manifest_schema_invalid');
+  const v = value as any;
+  validatePathDigest(v.schema);
+  validatePathDigest(v.tool);
+  if (v.schema.repository_relative_path_base64url !== encodeRepositoryPath(MANIFEST_SCHEMA_RELATIVE_PATH)
+    || v.tool.repository_relative_path_base64url !== encodeRepositoryPath(FREEZE_TOOL_RELATIVE_PATH)) {
+    throw new BaselineError('manifest_binding_mismatch', 'exit capture input paths do not match the reviewed schema and tool');
+  }
+}
+
+function validateManifestArtifactAgainstBindings(value: unknown, bindings: FrozenBindings): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BaselineError('manifest_schema_invalid', 'expected object');
+  const phase = (value as any).phase;
+  const commonKeys = ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'gateway_compromise_boundary', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'];
+  exactObject(value, phase === 'phase_0_exit' ? [...commonKeys, 'parent_reference', 'capture_inputs'] : commonKeys, 'manifest_schema_invalid');
+  const v = value as any;
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head) || v.gateway_compromise_boundary !== GATEWAY_COMPROMISE_BOUNDARY) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
+  exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
+  exactObject(v.contract, ['repository_role', 'path_category', 'repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid'); if (v.contract.repository_role !== 'sub2api' || v.contract.path_category !== 'sub2api_formal_pool_contract' || !validPathBytes(v.contract.repository_relative_path_base64url) || !validSha(v.contract.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid contract');
+  exactObject(v.governance, ['requirement_registry', 'claim_registry'], 'manifest_schema_invalid'); validateGovernanceMarkers(v.governance);
+  exactObject(v.policies, ['network', 'sensitivity'], 'manifest_schema_invalid'); exactObject(v.policies.network, ['real_upstream_requests', 'local_fixture_only'], 'manifest_schema_invalid'); if (v.policies.network.real_upstream_requests !== 'forbidden' || v.policies.network.local_fixture_only !== true) throw new BaselineError('manifest_schema_invalid', 'invalid network policy'); exactObject(v.policies.sensitivity, ['persisted_material', 'forbidden'], 'manifest_schema_invalid'); if (v.policies.sensitivity.persisted_material !== 'safe_categories_and_sha256_digests_only' || !Array.isArray(v.policies.sensitivity.forbidden) || JSON.stringify(v.policies.sensitivity.forbidden) !== JSON.stringify(['raw_prompt', 'raw_body', 'credential', 'raw_cch', 'raw_client_hello', 'account_identifier', 'proxy_credential'])) throw new BaselineError('manifest_schema_invalid', 'invalid sensitivity policy');
+  const dependencyKeys = ['persona_registry', 'persona_resolver', 'request_policy', 'tls_registry', 'cch_request_construction', 'sidecar_profile', 'sidecar_summary', 'package_manifest', 'package_lock', 'sidecar_go_manifest', 'sidecar_go_lock', 'repository_root_metadata', 'tools', 'observer_parser_canonicalizer', 'runtime_toolchain'];
+  exactObject(v.dependencies, dependencyKeys, 'manifest_schema_invalid');
+  for (const key of dependencyKeys.slice(0, 11)) validateDigestMarker(v.dependencies[key]);
+  exactObject(v.dependencies.repository_root_metadata, ['cc_gateway_augmentroot', 'sub2api_augmentroot'], 'manifest_schema_invalid'); validateDigestMarker(v.dependencies.repository_root_metadata.cc_gateway_augmentroot); validateDigestMarker(v.dependencies.repository_root_metadata.sub2api_augmentroot);
+  for (const list of [v.dependencies.tools, v.dependencies.observer_parser_canonicalizer]) { if (!Array.isArray(list)) throw new BaselineError('manifest_schema_invalid', 'dependency file list must be an array'); for (const item of list) { exactObject(item, ['path_base64url', 'sha256'], 'manifest_schema_invalid'); if (!validPathBytes(item.path_base64url) || !validSha(item.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid dependency file digest'); } }
+  exactObject(v.dependencies.runtime_toolchain, ['node', 'git', 'npm', 'go'], 'manifest_schema_invalid');
+  if (!validSha(v.dependencies.runtime_toolchain.node) || !validSha(v.dependencies.runtime_toolchain.git) || !validSha(v.dependencies.runtime_toolchain.npm)) throw new BaselineError('manifest_schema_invalid', 'invalid runtime digest');
+  const go = v.dependencies.runtime_toolchain.go; exactObject(go, go?.status === 'present' ? ['status', 'sha256', 'provenance'] : ['status', 'reason', 'required'], 'manifest_schema_invalid');
+  if (go.status === 'present' ? !validSha(go.sha256) || typeof go.provenance !== 'string' || go.provenance.length === 0 : go.status !== 'absent' || go.reason !== 'tool_not_found' || go.required !== true) throw new BaselineError('manifest_schema_invalid', 'invalid Go provenance');
+  exactObject(v.codegraph, v.codegraph?.status === 'present' ? ['status', 'index_sha256'] : ['status', 'fallback_reason'], 'manifest_schema_invalid'); if (v.codegraph.status === 'present' ? !validSha(v.codegraph.index_sha256) : v.codegraph.status !== 'absent' || typeof v.codegraph.fallback_reason !== 'string' || v.codegraph.fallback_reason.length === 0) throw new BaselineError('manifest_schema_invalid', 'invalid CodeGraph provenance');
+  exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
+  if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
+  exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
+  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== bindings.ccGatewayHead || v.repositories.cc_gateway.head !== bindings.ccGatewayHead || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch || v.repositories.sub2api.head !== bindings.sub2apiHead || v.repositories.sub2api.branch !== bindings.sub2apiBranch || v.contract.sha256 !== bindings.contractSha256 || v.contract.repository_relative_path_base64url !== encodeRepositoryPath(bindings.contractRelativePath))) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
+  if (v.phase === 'phase_0_exit') {
+    validateParentReference(v.parent_reference);
+    validateCaptureInputs(v.capture_inputs);
+    if (v.approved_tool_head !== v.repositories.cc_gateway.head
+      || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch
+      || v.repositories.sub2api.branch !== bindings.sub2apiBranch
+      || v.repositories.cc_gateway.clean !== true
+      || v.repositories.sub2api.clean !== true
+      || v.governance.requirement_registry?.status !== 'present'
+      || v.governance.claim_registry?.status !== 'present'
+      || v.contract.sha256 !== bindings.contractSha256
+      || v.contract.repository_relative_path_base64url !== encodeRepositoryPath(bindings.contractRelativePath)) {
+      throw new BaselineError('manifest_binding_mismatch', 'exit artifact does not match reviewed Phase 0 bindings');
+    }
+  }
+}
+
+export function validateManifestArtifact(value: unknown): void {
+  validateManifestArtifactAgainstBindings(value, PHASE_0_BINDINGS);
+}
+
+export function validateReceiptArtifact(value: unknown): void {
+  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'gateway_compromise_boundary', 'manifest_sha256', 'schema_sha256', 'bootstrap_commit'], 'receipt_schema_invalid');
+  const v = value as any;
+  if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || v.gateway_compromise_boundary !== GATEWAY_COMPROMISE_BOUNDARY || !validSha(v.manifest_sha256) || !validSha(v.schema_sha256) || !validCommit(v.bootstrap_commit)) throw new BaselineError('receipt_schema_invalid', 'invalid receipt');
+}
+
+function writeEvidencePairWithBindings(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer, bindings: FrozenBindings): void {
+  validateManifestArtifactAgainstBindings(manifest, bindings);
+  validateReceiptArtifact(receiptValue);
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  const validatedReceipt = receiptValue as any;
+  if (validatedReceipt.manifest_sha256 !== sha256(manifestBytes) || validatedReceipt.schema_sha256 !== sha256(schemaBytes)) throw new BaselineError('receipt_digest_mismatch', 'receipt does not bind supplied manifest and schema');
+  if (validatedReceipt.bootstrap_commit !== (manifest as any).approved_tool_head) throw new BaselineError('receipt_bootstrap_mismatch', 'receipt bootstrap commit does not match manifest approved tool head');
+  writeEvidencePairInternal(out, manifest, receiptPath, receiptValue);
+}
+
+export function writeEvidencePair(out: string, manifest: unknown, receiptPath: string, receiptValue: unknown, schemaBytes: Buffer): void {
+  writeEvidencePairWithBindings(out, manifest, receiptPath, receiptValue, schemaBytes, PHASE_0_BINDINGS);
+}
+
+function validateFrozenBindingsAgainst(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string, bindings: FrozenBindings): void {
+  if (ccState.head !== bindings.ccGatewayHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD is not the frozen Phase 0 bootstrap head');
+  if (ccState.branch !== bindings.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the frozen Phase 0 governance branch');
+  if (subState.head !== bindings.sub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD is not the frozen Phase 0 head');
+  if (subState.branch !== bindings.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the frozen Phase 0 governance branch');
+  if (approvedToolHead !== bindings.ccGatewayHead) throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit does not match frozen bootstrap head');
+  if (contractSha !== bindings.contractSha256) throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest is not the frozen Phase 0 digest');
+}
+
+export function validateFrozenBindings(ccState: Pick<RepositoryState, 'head' | 'branch'>, subState: Pick<RepositoryState, 'head' | 'branch'>, approvedToolHead: string, contractSha: string): void {
+  validateFrozenBindingsAgainst(ccState, subState, approvedToolHead, contractSha, PHASE_0_BINDINGS);
+}
+
+function captureBaselineWithBindings(options: BaselineOptions, bindings: FrozenBindings) {
+  const ccRoot = realpathSync(options.ccGatewayRoot);
+  const subRoot = realpathSync(options.sub2apiRoot);
+  if (!existsSync(options.contractPath)) throw new BaselineError('missing_contract', 'formal-pool contract does not exist');
+  const contractReal = realpathSync(options.contractPath);
+  if (!pathInside(subRoot, contractReal)) throw new BaselineError('contract_symlink_escape', 'formal-pool contract resolves outside the declared Sub2API root');
+  if (path.relative(subRoot, contractReal).split(path.sep).join('/') !== bindings.contractRelativePath) throw new BaselineError('contract_path_mismatch', 'formal-pool contract must use the frozen repository-relative path');
+  if (options.outputPath) ensureOutputContainment(ccRoot, options.outputPath);
+  const ccState = computeRepositoryState(ccRoot, options.allowCcGatewayDirtyDigest);
+  const subState = computeRepositoryState(subRoot, options.allowSub2apiDirtyDigest);
+  const strict = options.strictBindings !== false;
+  if (!/^[0-9a-f]{40,64}$/.test(options.approvedToolHead) || (!strict && options.approvedToolHead !== ccState.head)) {
+    throw new BaselineError('approved_tool_head_mismatch', 'approved tool commit must exactly equal the CC Gateway repository HEAD');
+  }
+  const contractSha = sha256(readFileSync(contractReal));
+  if (strict) validateFrozenBindingsAgainst(ccState, subState, options.approvedToolHead, contractSha, bindings);
+  const governance = {
+    requirement_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-requirements.json'),
+    claim_registry: governanceMarker(ccRoot, 'docs/superpowers/registry/oracle-lab-claims.json'),
+  };
+  validateGovernanceMarkers(governance);
+  const codegraphRoot = path.join(ccRoot, '.codegraph');
+  const codegraph = existsSync(codegraphRoot)
+    ? { status: 'present' as const, index_sha256: digestTree(codegraphRoot) }
+    : { status: 'absent' as const, fallback_reason: '.codegraph directory not present; deterministic git/file discovery used' };
+  const runtimeDigests = {
+    node: sha256(process.version),
+    git: sha256(gitText(ccRoot, '--version')),
+    npm: sha256(String(run(ccRoot, ['npm', '--version'], 'utf8')).trim()),
+    go: (() => { try { const provenance = String(run(ccRoot, ['go', 'version'], 'utf8')).trim(); return { status: 'present' as const, sha256: sha256(provenance), provenance }; } catch { return { status: 'absent' as const, reason: 'tool_not_found' as const, required: true }; } })(),
+  };
+  return {
+    schema_version: '1.0.0',
+    compatibility_policy: 'fail_closed_exact_schema',
+    retention_class: 'phase_evidence_permanent',
+    redaction_policy: 'digests_and_safe_categories_only',
+    destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
+    phase: 'phase_0_entry',
+    entry_kind: 'phase_0_entry',
+    approved_tool_head: options.approvedToolHead,
+    gateway_compromise_boundary: GATEWAY_COMPROMISE_BOUNDARY,
+    repositories: { cc_gateway: ccState, sub2api: subState },
+    contract: {
+      repository_role: 'sub2api',
+      path_category: 'sub2api_formal_pool_contract',
+      repository_relative_path_base64url: Buffer.from(path.relative(subRoot, contractReal)).toString('base64url'),
+      sha256: contractSha,
+    },
+    governance,
+    policies: {
+      network: { real_upstream_requests: 'forbidden', local_fixture_only: true },
+      sensitivity: {
+        persisted_material: 'safe_categories_and_sha256_digests_only',
+        forbidden: ['raw_prompt', 'raw_body', 'credential', 'raw_cch', 'raw_client_hello', 'account_identifier', 'proxy_credential'],
+      },
+    },
+    dependencies: {
+      persona_registry: digestFile(ccRoot, 'src/persona-registry.ts'),
+      persona_resolver: digestFile(ccRoot, 'src/persona-resolver.ts'),
+      request_policy: digestFile(ccRoot, 'src/policy.ts'),
+      tls_registry: digestFile(ccRoot, 'src/egress-tls-profile.ts'),
+      cch_request_construction: digestFile(ccRoot, 'src/proxy.ts'),
+      sidecar_profile: digestFile(ccRoot, 'sidecar/egress-tls-sidecar/internal/profile/profile.go'),
+      sidecar_summary: digestFile(ccRoot, 'sidecar/egress-tls-sidecar/internal/summary/summary.go'),
+      package_manifest: digestFile(ccRoot, 'package.json'),
+      package_lock: digestFile(ccRoot, 'package-lock.json'),
+      sidecar_go_manifest: digestFile(ccRoot, 'sidecar/egress-tls-sidecar/go.mod'),
+      sidecar_go_lock: digestFile(ccRoot, 'sidecar/egress-tls-sidecar/go.sum'),
+      repository_root_metadata: {
+        cc_gateway_augmentroot: digestFile(ccRoot, '.augmentroot'),
+        sub2api_augmentroot: digestFile(subRoot, '.augmentroot'),
+      },
+      tools: digestMatchingFiles(ccRoot, (relative) => relative.startsWith('tools/claude-')),
+      observer_parser_canonicalizer: digestMatchingFiles(ccRoot, (relative) => /(?:observer|parser|canonicaliz)/i.test(relative)),
+      runtime_toolchain: runtimeDigests,
+    },
+    codegraph,
+    legacy_comparison: {
+      requirement_id: 'OL-LEGACY-001',
+      version: '2.1.197',
+      authority: 'unverified_legacy',
+      use: 'comparison_only',
+      promotion_eligible: false,
+      tuple_digests: {
+        persona: digestFile(ccRoot, 'src/persona-registry.ts'),
+        request_shape: digestFile(ccRoot, 'src/policy.ts'),
+        cch: digestFile(ccRoot, 'src/proxy.ts'),
+        tls: digestFile(ccRoot, 'src/egress-tls-profile.ts'),
+      },
+    },
+  } as const;
+}
+
+export function captureBaseline(options: BaselineOptions) {
+  return captureBaselineWithBindings(options, PHASE_0_BINDINGS);
+}
+
+function readRepositoryFile(root: string, relative: string, code: string): Buffer {
+  const absolute = path.join(root, relative);
+  if (!existsSync(absolute)) throw new BaselineError(code, `${relative} is required`);
+  const stat = lstatSync(absolute);
+  if (!stat.isFile() || stat.isSymbolicLink() || !pathInside(root, realpathSync(absolute))) throw new BaselineError(code, `${relative} must be a regular file inside the repository`);
+  return readFileSync(absolute);
+}
+
+function readCommittedFile(root: string, commit: string, relative: string, code: string): Buffer {
+  let committed: Buffer;
+  try { committed = gitBuffer(root, 'show', `${commit}:${relative}`); }
+  catch { throw new BaselineError(code, `${relative} is not a committed file at the reviewed head`); }
+  const working = readRepositoryFile(root, relative, code);
+  if (!working.equals(committed)) throw new BaselineError(code, `${relative} bytes do not match the reviewed commit`);
+  return working;
+}
+
+function parseJsonEvidence(bytes: Buffer, code: string, label: string): unknown {
+  try { return JSON.parse(bytes.toString('utf8')); }
+  catch { throw new BaselineError(code, `${label} is not valid JSON`); }
+}
+
+function validateParentEntryEvidence(ccRoot: string, reviewedHead: string, entryInput: string, receiptInput: string, bindings: FrozenBindings) {
+  if (entryInput !== ENTRY_MANIFEST_RELATIVE_PATH || receiptInput !== ENTRY_RECEIPT_RELATIVE_PATH) {
+    throw new BaselineError('parent_path_mismatch', 'parent entry evidence must use the committed Phase 0 entry paths');
+  }
+  const entryBytes = readCommittedFile(ccRoot, reviewedHead, entryInput, 'parent_entry_not_committed');
+  const receiptBytes = readCommittedFile(ccRoot, reviewedHead, receiptInput, 'parent_receipt_not_committed');
+  const entry = parseJsonEvidence(entryBytes, 'parent_entry_invalid', 'parent entry manifest') as any;
+  const receipt = parseJsonEvidence(receiptBytes, 'parent_receipt_invalid', 'parent entry receipt') as any;
+  try { validateManifestArtifactAgainstBindings(entry, bindings); }
+  catch (error) { throw new BaselineError('parent_entry_invalid', (error as Error).message); }
+  try { validateReceiptArtifact(receipt); }
+  catch (error) { throw new BaselineError('parent_receipt_invalid', (error as Error).message); }
+  if (entry.phase !== 'phase_0_entry' || entry.entry_kind !== 'phase_0_entry') throw new BaselineError('parent_entry_invalid', 'parent manifest is not Phase 0 entry evidence');
+  if (receipt.manifest_sha256 !== sha256(entryBytes)) throw new BaselineError('parent_manifest_digest_mismatch', 'parent receipt does not bind the committed entry manifest bytes');
+  if (receipt.bootstrap_commit !== entry.approved_tool_head || receipt.bootstrap_commit !== entry.repositories.cc_gateway.head) {
+    throw new BaselineError('parent_bootstrap_mismatch', 'parent receipt bootstrap commit does not match the entry manifest');
+  }
+  let evidenceSchema: Buffer;
+  try {
+    if (!validCommit(receipt.bootstrap_commit)) throw new Error('invalid commit');
+    gitText(ccRoot, 'merge-base', '--is-ancestor', receipt.bootstrap_commit, reviewedHead);
+    const evidenceCommit = gitText(ccRoot, 'log', '-1', '--format=%H', reviewedHead, '--', receiptInput);
+    if (!validCommit(evidenceCommit)) throw new Error('missing evidence commit');
+    if (!gitBuffer(ccRoot, 'show', `${evidenceCommit}:${receiptInput}`).equals(receiptBytes)
+      || !gitBuffer(ccRoot, 'show', `${evidenceCommit}:${entryInput}`).equals(entryBytes)) throw new Error('evidence bytes changed after receipt commit');
+    evidenceSchema = gitBuffer(ccRoot, 'show', `${evidenceCommit}:${MANIFEST_SCHEMA_RELATIVE_PATH}`);
+  } catch {
+    throw new BaselineError('parent_bootstrap_mismatch', 'parent evidence and bootstrap commits do not form a valid reviewed ancestry');
+  }
+  if (receipt.schema_sha256 !== sha256(evidenceSchema)) throw new BaselineError('parent_schema_digest_mismatch', 'parent receipt does not bind the schema committed with the parent evidence');
+  return { entry, entryBytes, receiptBytes };
+}
+
+export function captureExitBaseline(options: ExitBaselineOptions, bindings: FrozenBindings = PHASE_0_BINDINGS) {
+  if (!validCommit(options.expectedCcHead) || !validCommit(options.expectedSub2apiHead)) throw new BaselineError('invalid_arguments', 'expected reviewed heads must be full Git object IDs');
+  const ccRoot = realpathSync(options.ccGatewayRoot);
+  const subRoot = realpathSync(options.sub2apiRoot);
+  ensureOutputContainment(ccRoot, options.outputPath);
+  const ccState = computeRepositoryState(ccRoot);
+  const subState = computeRepositoryState(subRoot);
+  if (ccState.head !== options.expectedCcHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD does not match --expected-cc-head');
+  if (subState.head !== options.expectedSub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD does not match --expected-sub2api-head');
+  if (ccState.branch !== bindings.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the Phase 0 governance branch');
+  if (subState.branch !== bindings.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the Phase 0 governance branch');
+
+  const parent = validateParentEntryEvidence(ccRoot, options.expectedCcHead, options.parentEntryPath, options.parentEntryReceiptPath, bindings);
+  const schemaBytes = readCommittedFile(ccRoot, options.expectedCcHead, MANIFEST_SCHEMA_RELATIVE_PATH, 'schema_input_not_committed');
+  const toolBytes = readCommittedFile(ccRoot, options.expectedCcHead, FREEZE_TOOL_RELATIVE_PATH, 'tool_input_not_committed');
+  readCommittedFile(ccRoot, options.expectedCcHead, REQUIREMENT_REGISTRY_RELATIVE_PATH, 'missing_governance_registry');
+  readCommittedFile(ccRoot, options.expectedCcHead, CLAIM_REGISTRY_RELATIVE_PATH, 'missing_claim_registry');
+
+  const entry = captureBaselineWithBindings({
+    ccGatewayRoot: ccRoot,
+    sub2apiRoot: subRoot,
+    contractPath: options.contractPath,
+    approvedToolHead: options.expectedCcHead,
+    strictBindings: false,
+    outputPath: options.outputPath,
+  }, bindings);
+  if (entry.contract.sha256 !== bindings.contractSha256 || entry.contract.sha256 !== parent.entry.contract.sha256) {
+    throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest does not match the frozen entry evidence');
+  }
+  if (entry.governance.requirement_registry.status !== 'present') throw new BaselineError('missing_governance_registry', 'requirement registry is required in exit mode');
+  if (entry.governance.claim_registry.status !== 'present') throw new BaselineError('missing_claim_registry', 'claim registry is required in exit mode');
+
+  const manifest = {
+    ...entry,
+    phase: 'phase_0_exit' as const,
+    entry_kind: 'phase_0_exit' as const,
+    parent_reference: {
+      type: 'phase_0_entry_evidence' as const,
+      entry_manifest: {
+        repository_relative_path_base64url: Buffer.from(ENTRY_MANIFEST_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(parent.entryBytes),
+      },
+      entry_receipt: {
+        repository_relative_path_base64url: Buffer.from(ENTRY_RECEIPT_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(parent.receiptBytes),
+      },
+    },
+    capture_inputs: {
+      schema: {
+        repository_relative_path_base64url: Buffer.from(MANIFEST_SCHEMA_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(schemaBytes),
+      },
+      tool: {
+        repository_relative_path_base64url: Buffer.from(FREEZE_TOOL_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(toolBytes),
+      },
+    },
+  };
+  validateManifestArtifactAgainstBindings(manifest, bindings);
+  return manifest;
+}
+
+function parseArgs(argv: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < argv.length; i += 2) {
+    const key = argv[i];
+    const value = argv[i + 1];
+    if (!key?.startsWith('--') || value === undefined) throw new BaselineError('invalid_arguments', `missing value for ${key || 'argument'}`);
+    const name = key.slice(2);
+    if (out[name] !== undefined) throw new BaselineError('invalid_arguments', `duplicate --${name}`);
+    out[name] = value;
+  }
+  return out;
+}
+
+function writeJsonAtomic(target: string, value: unknown): void {
+  if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new BaselineError('output_path_symlink', 'final output path must not be a symlink');
+  const temporary = `${target}.tmp`;
+  let fd: number | undefined;
+  let created = false;
+  try {
+    try {
+      fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600);
+      created = true;
+    }
+    catch { throw new BaselineError('temporary_path_exists', 'temporary evidence path already exists'); }
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    closeSync(fd); fd = undefined;
+    renameSync(temporary, target);
+  } catch (error) {
+    if (fd !== undefined) { try { closeSync(fd); } catch {} }
+    if (created) { try { unlinkSync(temporary); } catch {} }
+    throw error;
+  }
+}
+
+function canonicalOutputPath(candidate: string): string {
+  const absolute = path.resolve(candidate);
+  if (existsSync(absolute)) return realpathSync(absolute);
+  const parent = path.dirname(absolute);
+  const parentReal = realpathSync(parent);
+  return path.join(parentReal, path.basename(absolute));
+}
+
+function writeEvidencePairInternal(out: string, manifest: unknown, receipt: string, receiptValue: unknown): void {
+  const outCanonical = canonicalOutputPath(out);
+  const receiptCanonical = canonicalOutputPath(receipt);
+  if (outCanonical === receiptCanonical) throw new BaselineError('output_paths_alias', 'manifest and receipt paths must be distinct');
+  for (const target of [out, receipt]) {
+    if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new BaselineError('output_path_symlink', 'final output path must not be a symlink');
+  }
+  const temps = [`${out}.tmp`, `${receipt}.tmp`];
+  const fds: Array<{ path: string; fd: number }> = [];
+  try {
+    for (const temporary of temps) {
+      if (!pathInside(realpathSync(path.dirname(temporary)), canonicalOutputPath(temporary))) throw new BaselineError('output_path_escape', 'temporary path escapes output root');
+      let fd: number;
+      try { fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600); }
+      catch { throw new BaselineError('temporary_path_exists', 'temporary evidence path already exists'); }
+      fds.push({ path: temporary, fd });
+    }
+    writeFileSync(fds[0].fd, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(fds[1].fd, `${JSON.stringify(receiptValue, null, 2)}\n`);
+    for (const item of fds) closeSync(item.fd);
+    renameSync(fds[0].path, out);
+    renameSync(fds[1].path, receipt);
+  } catch (error) {
+    for (const item of fds) { try { closeSync(item.fd); } catch {} try { unlinkSync(item.path); } catch {} }
+    throw error;
+  }
+}
+
+type CliRuntime = {
+  bindings?: FrozenBindings;
+  receiptTransform?: (receipt: Record<string, unknown>) => unknown;
+  stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
+};
+
+function executeFreezeBaseline(argv: string[], runtime: CliRuntime): void {
+  const args = parseArgs(argv);
+  const bindings = runtime.bindings ?? PHASE_0_BINDINGS;
+  const common = ['cc-gateway-root', 'sub2api-root', 'contract-path', 'out'];
+  const entryOnly = ['approved-tool-head', 'receipt', 'allow-dirty-digest'];
+  const exitOnly = ['parent-entry', 'parent-entry-receipt', 'expected-cc-head', 'expected-sub2api-head'];
+  const known = new Set([...common, ...entryOnly, ...exitOnly]);
+  const unknown = Object.keys(args).find((name) => !known.has(name));
+  if (unknown) throw new BaselineError('invalid_arguments', `unknown argument --${unknown}`);
+  const hasEntry = entryOnly.some((name) => args[name] !== undefined);
+  const hasExit = exitOnly.some((name) => args[name] !== undefined);
+  if (hasEntry && hasExit) throw new BaselineError('mixed_mode_arguments', 'entry and exit arguments cannot be combined');
+  if (!hasEntry && !hasExit) throw new BaselineError('invalid_arguments', 'a complete entry or exit argument set is required');
+  for (const required of common) {
+    if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
+  }
+  const out = path.resolve(args['cc-gateway-root'], args.out);
+  ensureOutputContainment(args['cc-gateway-root'], out);
+  if (hasExit) {
+    for (const required of exitOnly) if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
+    const manifest = captureExitBaseline({
+      ccGatewayRoot: args['cc-gateway-root'],
+      sub2apiRoot: args['sub2api-root'],
+      contractPath: args['contract-path'],
+      parentEntryPath: args['parent-entry'],
+      parentEntryReceiptPath: args['parent-entry-receipt'],
+      expectedCcHead: args['expected-cc-head'],
+      expectedSub2apiHead: args['expected-sub2api-head'],
+      outputPath: out,
+    }, bindings);
+    writeJsonAtomic(out, manifest);
+    (runtime.stdout ?? console.log)(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: false }));
+    return;
+  }
+
+  for (const required of ['approved-tool-head', 'receipt']) if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
+  const manifest = captureBaselineWithBindings({
+    ccGatewayRoot: args['cc-gateway-root'],
+    sub2apiRoot: args['sub2api-root'],
+    contractPath: args['contract-path'],
+    approvedToolHead: args['approved-tool-head'],
+    allowCcGatewayDirtyDigest: args['allow-dirty-digest'],
+    outputPath: out,
+  }, bindings);
+  const receipt = path.resolve(args['cc-gateway-root'], args.receipt);
+  ensureOutputContainment(args['cc-gateway-root'], receipt);
+  const schemaPath = path.join(realpathSync(args['cc-gateway-root']), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  const constructedReceipt = {
+    schema_version: '1.0.0',
+    compatibility_policy: 'fail_closed_exact_schema',
+    retention_class: 'phase_evidence_permanent',
+    redaction_policy: 'digests_only',
+    destruction_procedure: 'git_revert_artifact_commit_after_security_approval',
+    gateway_compromise_boundary: manifest.gateway_compromise_boundary,
+    manifest_sha256: sha256(manifestBytes),
+    schema_sha256: sha256(readFileSync(schemaPath)),
+    bootstrap_commit: args['approved-tool-head'],
+  };
+  const receiptValue = runtime.receiptTransform?.(constructedReceipt) ?? constructedReceipt;
+  validateManifestArtifactAgainstBindings(manifest, bindings);
+  validateReceiptArtifact(receiptValue);
+  writeEvidencePairWithBindings(out, manifest, receipt, receiptValue, readFileSync(schemaPath), bindings);
+  (runtime.stdout ?? console.log)(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: true }));
+}
+
+export function runFreezeBaselineCli(argv: string[], runtime: CliRuntime = {}): number {
+  try {
+    executeFreezeBaseline(argv, runtime);
+    return 0;
+  } catch (error) {
+    const typed = error as Error & { code?: string };
+    (runtime.stderr ?? console.error)(JSON.stringify({ code: typed.code || 'baseline_capture_failed', message: typed.message }));
+    return 1;
+  }
+}
+
+const invoked = process.argv[1] ? realpathSync(process.argv[1]) : '';
+if (invoked === fileURLToPath(import.meta.url)) {
+  process.exitCode = runFreezeBaselineCli(process.argv.slice(2));
+}

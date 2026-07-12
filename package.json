@@ -11,7 +11,14 @@
     "dev": "tsx watch src/index.ts",
     "generate-token": "tsx src/scripts/generate-token.ts",
     "generate-identity": "tsx src/scripts/generate-identity.ts",
-    "test": "tsx tests/run-all.ts"
+    "test": "tsx tests/run-all.ts",
+    "oracle:validate": "tsx tools/oracle-lab/validate-run-manifest.ts",
+    "oracle:context": "tsx tools/oracle-lab/build-context-pack.ts",
+    "oracle:commands": "tsx tools/oracle-lab/run-command-catalog.ts",
+    "oracle:merge-results": "tsx tools/oracle-lab/merge-command-results.ts",
+    "oracle:handoff": "tsx tools/oracle-lab/build-handoff-bundle.ts",
+    "oracle:exit-report": "tsx tools/oracle-lab/build-exit-report.ts",
+    "oracle:receipt": "tsx tools/oracle-lab/build-exit-receipt.ts"
   },
   "dependencies": {
     "https-proxy-agent": "^9.0.0",

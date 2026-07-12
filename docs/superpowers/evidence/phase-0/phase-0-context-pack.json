@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-12T10:21:04.313Z",
+  "expires_at": "2026-07-13T10:21:04.313Z",
+  "registry_digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5",
+  "claims_digest": "sha256:b389c3655641f990bd7e31e9a176576f9664b7620ae90c5829a21dc9ff087943",
+  "manifest_digest": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6",
+  "requirement_ids": [
+    "AV-B1-001",
+    "AV-B2-001",
+    "AV-B3-001",
+    "AV-B4-001",
+    "AV-B5-001",
+    "AV-B6-001",
+    "HA-P0-001",
+    "HA-P0-002",
+    "HA-P0-009"
+  ],
+  "repositories": [
+    {
+      "name": "cc_gateway",
+      "commit": "0ce2ca09e19b48b24a903cd47fde4dda708d026a",
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "sub2api",
+      "commit": "d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f",
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "sources": [
+    {
+      "path": "backend/internal/handler/admin/formal_pool_onboarding_handler.go",
+      "repository": "sub2api",
+      "digest": "sha256:abf7cd2ac2ebbe600264a97982a46188fb0b66896fd9ab354db0c9a3a700509a"
+    },
+    {
+      "path": "backend/internal/server/routes/admin.go",
+      "repository": "sub2api",
+      "digest": "sha256:6e82d0741f0d98f33f3f3c66fb322b127d315e30422ccb7e3531752127d182ba"
+    },
+    {
+      "path": "backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go",
+      "repository": "sub2api",
+      "digest": "sha256:2d50183afd9c24d97c11faa0fc6e865d4b9cfa6e49ae71086db691812482434c"
+    },
+    {
+      "path": "backend/internal/service/formal_pool_onboarding_phase0_red_test.go",
+      "repository": "sub2api",
+      "digest": "sha256:867be6c11fc85e91ba192a2defe342f64b6702d225fb95b9b81d33a5a420ad99"
+    },
+    {
+      "path": "backend/internal/service/formal_pool_onboarding_service.go",
+      "repository": "sub2api",
+      "digest": "sha256:a5fb65e214d687d0f2ac4e3ba325147b315c30ad15df51d813fad98185309823"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B1-001",
+      "line": 150,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B2-001",
+      "line": 156,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B3-001",
+      "line": 162,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B4-001",
+      "line": 168,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B5-001",
+      "line": 174,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "AV-B6-001",
+      "line": 180,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "HA-P0-001",
+      "line": 24,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "HA-P0-002",
+      "line": 43,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/registry/oracle-lab-requirements.json",
+      "symbol": "HA-P0-009",
+      "line": 128,
+      "digest": "sha256:2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5"
+    },
+    {
+      "path": "docs/superpowers/schemas/oracle-lab-requirement.schema.json",
+      "digest": "sha256:6b73869e11aae1bcfbeaaa4694e6f96372414db3109ba26beee622a661894a7b"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md",
+      "line": 504,
+      "digest": "sha256:f4dcb86bfcf597c42e0bd02439471a66aadfa4545522ecf75d9049e4cb52c2b5"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md",
+      "digest": "sha256:e61cbeb9d9a8522d921d1db6b88467f136d697743993d52be3c0bc6a415c4d1f"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+      "digest": "sha256:a366246eb23d57fc02203c8453c4a094ccc7bb9f288ddfb50ea6a0a48de98041"
+    },
+    {
+      "path": "sidecar/egress-tls-sidecar/internal/control/control.go",
+      "digest": "sha256:23a0cb81f0a90cb1789d8bce98134f146e63995a3657a9c23a92401fda97f269"
+    },
+    {
+      "path": "sidecar/egress-tls-sidecar/internal/control/phase0_red_test.go",
+      "digest": "sha256:66c7c27c7cacdb8482986f82e4ce88a59211eefd79da3aa49903705f3a57fdd2"
+    },
+    {
+      "path": "sidecar/egress-tls-sidecar/internal/server/phase0_red_test.go",
+      "digest": "sha256:7fe8da674837687a461e0ea90ed92cf487f1376b51b2ccceffb173552b570f29"
+    },
+    {
+      "path": "sidecar/egress-tls-sidecar/internal/server/server.go",
+      "digest": "sha256:285eafb115a04c22c7a6d924e711c749aa01e1b9c6ed9783128026664ba90f2c"
+    },
+    {
+      "path": "src/egress-sidecar-client.ts",
+      "digest": "sha256:3e58d9f3ceb83205c2967a48b8900f6b92d029c18ba64679b680385d4227a4b5"
+    },
+    {
+      "path": "src/policy.ts",
+      "digest": "sha256:5aba28722e317f2c2e38072b9c1f9ccfa8b545aafffb0a8131362fa2789a0327"
+    },
+    {
+      "path": "src/proxy.ts",
+      "digest": "sha256:0b009e208d37f3a189c64a3c3aa9093f8b543906a47441e80cbbf73642aa0280"
+    },
+    {
+      "path": "tests/oracle-lab-traceability.test.ts",
+      "digest": "sha256:132448f7b8f3c3a0d3586660296155a004ca8b8a27dca18292a26d84febeb9d4"
+    },
+    {
+      "path": "tests/red/phase0-boundary.red.test.ts",
+      "digest": "sha256:cfb885182b633074191f2fd88b0b173f67aa7cf521bb99e638bc6fd5bcc73135"
+    },
+    {
+      "path": "tools/oracle-lab/validate-requirements.ts",
+      "digest": "sha256:79c64ece1ba5f9b9b681dfbfbb71daa2e3a7ce540e5c59bff7bf0d49f1ca9607"
+    }
+  ],
+  "tests": [
+    {
+      "command_id": "cc-b4-b6-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d"
+    },
+    {
+      "command_id": "cc-test",
+      "status": "pass",
+      "result_digest": "sha256:ee8f3c8868bd80fd8145ddc3c462297d01d14d759e291c8a39dca5e1a1838bef"
+    },
+    {
+      "command_id": "sidecar-b4-b6-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7"
+    },
+    {
+      "command_id": "sidecar-test",
+      "status": "pass",
+      "result_digest": "sha256:d7acccb7813d4ad62ce8a95373f771e5ee0fc7a4f8ca1219311ef6dfe2218238"
+    },
+    {
+      "command_id": "sub2api-b1-b3-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f"
+    }
+  ],
+  "known_unknowns": [
+    "Phase 0 fixture drives complete local HTTP requests through startProxy/handleRequest and proves missing, unknown, contradictory, unsupported, and incoherent compatibility declarations reach the upstream observer instead of failing closed",
+    "URL-only checks accept unsafe ranges and directive confusion; the real Handler does not consume its injected resolver/dial seam, so the rebinding test observes zero policy-owned resolutions instead of one pinned public dial; redirect, nested-proxy, and alternate-target cases remain explicit",
+    "arbitrary, wrong, expired, cross-session, and post-proxy-change proofs remain accepted; replay is rejected only after the current state transition",
+    "configured public origin remains authoritative; without configured origin or trusted ingress, Host, X-Forwarded-Host, and X-Forwarded-Proto each currently control the browser URL authority; the RED assertion accepts rejection, a relative result, or any fixed non-hostile authority",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b1_revalidation remain mandatory",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b2_revalidation remain mandatory",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b3_revalidation remain mandatory",
+    "final exit receipt binds the handoff commit after artifact generation",
+    "first replay completion succeeds and is recorded before same-instance rejection; restart restores an explicit ledger snapshot into a new handler harness, while a distinct replica receives the same shared ledger; all three remain RED because the production handler has no replay enforcement",
+    "implementation and enforcement are deferred to Phase 2",
+    "missing context, proxy generation, manifest authority, and direct-fallback prohibition reach transport; missing account identity is independently tested while proxy identity remains valid; disabled profile already denies before transport",
+    "owner-positive fixtures reach every named operation; authenticated principal, administrator, tenant, group, creator/owner, role, and expected version are varied independently; valid-owner wrong-state is rejected distinctly; AccountHealthcheck uses an owner-bound real account reader fixture",
+    "promotion is prohibited before all compatibility gates and rollback review pass",
+    "roadmap evidence-to-decision matrix binds P0 baseline/contract, B1-B6, and HA-P0-009 rows with evidence digest, scope, compatibility verdict, negative capabilities, target change, owner, and promotion gate",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; an independently isolated policy-broker capability remains mandatory against gateway-process compromise",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; network-level resolution pinning and sidecar enforcement remain mandatory before production authority",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; production and real-canary authority remain disabled pending the policy broker",
+    "symbol FormalPoolOnboardingService.AttestBrowserEgress; test TestFormalPoolBrowserEgressAttestationRejectsUntrustedProofs; expected RED exit 1 with five stable leaf failures; failure-name digest sha256:9d2491b62a39ff5913751c818ba31b21bd3e0200698926824864ab76d7c1a26b reproducible from the committed evidence artifact",
+    "symbols FormalPoolOnboardingHandler.withAbsoluteBrowserEgressURL and formalPoolRequestPublicBaseURL; test TestFormalPoolOnboardingPublicOriginAuthority; expected RED exit 1 with three stable leaf failures; failure-name digest sha256:97d0ee5906218981fbdea0ab0aaa00cc25f12f7ba22c0286024a645a786b3aa8 reproducible from the committed evidence artifact",
+    "symbols prepareEgressSidecarRequest, computeProxyBinding, control.Validate, Handler.ServeHTTP, and verifyProxyBinding; complete TS and Go mutation matrices plus successful local-forward replay cases produce sixty-nine stable leaf failures; failure-name digest sha256:4bf2becea973c187234196218b64fa0b4e07a944e465516ce0c2f3a87aa2eee2 reproducible from the committed evidence artifact",
+    "symbols registerFormalPoolOnboardingAdminRoutes and FormalPoolOnboardingHandler session/account operations; tests TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations and TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent; expected RED exit 1 with twenty-five stable leaf failures; failure-name digest sha256:6212e1d46e14e3f184709fd847ae2381d3f7ff46cb7946f2556ccec9179ca3f3 reproducible from the committed evidence artifact",
+    "symbols resolveEgressBucket, isSafeProxyUrl, safeProxyURLHeader, Handler.ServeHTTP, and the sidecar dial path; URL destination cases plus an injected public-then-unsafe resolver and pinned-dial observer produce thirty-six stable leaf failures; failure-name digest sha256:765866c3772e802a90779967dfa21ccd5abbbb623fc7cd13f6e3a70edb43c7b2 reproducible from the committed evidence artifact",
+    "symbols startProxy, handleRequest, prepareEgressSidecarRequest, and the ordinary Node proxy path; real gateway requests use deterministic DNS, proxy-dial, and sidecar-socket observers; expected RED exit 1 with seven stable leaf failures; failure-name digest sha256:33bc5b4d516ab1f717f98180fe396e0f861ed8fd4537caf3eddec440bb34ece5 reproducible from the committed evidence artifact",
+    "the deterministic Go complete-envelope fixture first passes the production control schema and actual HMAC verification, then independently mutates target authority/path/route/method, proxy/account/context/generation/profile/manifest, freshness, final hashes, encoding/deadline/response policy, and envelope metadata at the authentication boundary; reordered JSON with an equivalent Unicode escape also passes control validation and actual verification"
+  ]
+}

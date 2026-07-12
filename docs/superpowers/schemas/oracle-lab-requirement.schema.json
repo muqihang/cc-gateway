@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json",
+  "title": "Oracle Lab Requirement",
+  "schema_version": "1.0.0",
+  "compatibility_policy": "fail_closed_exact_schema",
+  "retention_class": "phase_governance_permanent",
+  "redaction_policy": "references_and_safe_categories_only",
+  "destruction_procedure": "git_revert_after_security_review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requirement_id", "source_document", "source_section", "precedence", "priority",
+    "depends_on", "acceptance_gate", "implementation_status", "owner", "repository",
+    "implementation_files", "test_files", "verification_command", "evidence_artifact",
+    "last_verified_commit", "last_verified_at", "expiry", "known_gaps",
+    "canary_evidence_ids", "production_gate_ids", "rollback_evidence_ids",
+    "deployed_artifacts", "contradiction_ids"
+  ],
+  "properties": {
+    "requirement_id": { "type": "string", "pattern": "^(OL|AV|HA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
+    "source_document": { "type": "string", "minLength": 1 },
+    "source_section": { "type": "string", "minLength": 1 },
+    "precedence": { "enum": ["oracle_lab_design", "adversarial_validation_v2", "hardening_amendments"] },
+    "priority": { "enum": ["P0", "P1", "P2"] },
+    "depends_on": { "$ref": "#/$defs/stringArray" },
+    "acceptance_gate": { "type": "string", "minLength": 1 },
+    "implementation_status": {
+      "enum": [
+        "design_only", "deferred", "failing_test_added", "locally_verified",
+        "upstream_canary_observed", "production_verified", "blocked_by_baseline"
+      ]
+    },
+    "owner": { "type": "string" },
+    "repository": { "$ref": "#/$defs/repository" },
+    "implementation_files": { "$ref": "#/$defs/stringArray" },
+    "test_files": { "$ref": "#/$defs/stringArray" },
+    "verification_command": { "type": "string" },
+    "evidence_artifact": { "type": "string" },
+    "last_verified_commit": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        { "type": "null" }
+      ]
+    },
+    "last_verified_at": {
+      "oneOf": [
+        { "$ref": "#/$defs/rfc3339Timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "expiry": {
+      "oneOf": [
+        { "$ref": "#/$defs/rfc3339Timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "known_gaps": { "$ref": "#/$defs/stringArray" },
+    "canary_evidence_ids": { "$ref": "#/$defs/stringArray" },
+    "production_gate_ids": { "$ref": "#/$defs/stringArray" },
+    "rollback_evidence_ids": { "$ref": "#/$defs/stringArray" },
+    "deployed_artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/deployedArtifact" }
+    },
+    "contradiction_ids": { "$ref": "#/$defs/stringArray" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "implementation_status": { "const": "production_verified" } },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": {
+          "last_verified_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "last_verified_at": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "expiry": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "canary_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "production_gate_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "rollback_evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "deployed_artifacts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/deployedArtifact" } },
+          "contradiction_ids": { "type": "array", "maxItems": 0 }
+        }
+      },
+      "else": {
+        "properties": {
+          "expiry": { "type": "null" },
+          "canary_evidence_ids": { "type": "array", "maxItems": 0 },
+          "production_gate_ids": { "type": "array", "maxItems": 0 },
+          "rollback_evidence_ids": { "type": "array", "maxItems": 0 },
+          "deployed_artifacts": { "type": "array", "maxItems": 0 },
+          "contradiction_ids": { "type": "array", "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "implementation_status": {
+            "enum": ["locally_verified", "upstream_canary_observed", "production_verified"]
+          }
+        },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": {
+          "last_verified_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "last_verified_at": { "$ref": "#/$defs/rfc3339Timestamp" },
+          "implementation_files": { "$ref": "#/$defs/nonEmptyStringArray" },
+          "test_files": { "$ref": "#/$defs/nonEmptyStringArray" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "implementation_status": { "const": "failing_test_added" } },
+        "required": ["implementation_status"]
+      },
+      "then": {
+        "properties": { "test_files": { "$ref": "#/$defs/nonEmptyStringArray" } }
+      }
+    }
+  ],
+  "$defs": {
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^(?!.*(?:\\.\\.|//))(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"
+    },
+    "rfc3339Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "deployedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "config_digest", "manifest_digest", "deployed_at"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "config_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "deployed_at": { "$ref": "#/$defs/rfc3339Timestamp" }
+      }
+    }
+  }
+}

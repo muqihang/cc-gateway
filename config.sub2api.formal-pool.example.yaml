@@ -79,6 +79,12 @@ process:
 # missing account identity or missing/disabled/unknown egress bucket fails closed.
 shared_pool:
   max_body_bytes: 16777216
+  # Phase 0 selects protected_gateway for local capture/preflight only. There is
+  # no implicit default. Production or real-canary fails closed with
+  # protected_gateway_authority_unavailable until the Phase 4 policy broker is
+  # locally verified. trusted_gateway is Phase 0 production-compatible only
+  # when operators accept that a compromised Gateway is outside prevention.
+  gateway_compromise_boundary: protected_gateway
   context_attestation_secret_ref: opaque:attestation-ref:v1:formal-pool
   # Default is strip. sign remains disabled until manually approved evidence gates pass.
   billing_cch_mode: strip
