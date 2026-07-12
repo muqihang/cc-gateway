@@ -159,8 +159,8 @@ test('rejects invalid status transitions and unowned P0/P1 records', async () =>
   const record = (await registry()).find((entry) => entry.requirement_id === 'HA-P0-001')
   assert(record)
   expectError(
-    await validateFixture(await mutateRecord('HA-P0-001', { implementation_status: 'upstream_canary_observed' })),
-    'invalid_status_transition',
+    await validateFixture(await mutateRecord('HA-P0-001', { implementation_status: 'production_verified' })),
+    'invalid_production_evidence',
   )
   expectError(await validateFixture(await mutateRecord('HA-P0-001', { owner: '' })), 'missing_owner')
   expectError(

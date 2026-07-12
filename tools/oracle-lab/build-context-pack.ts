@@ -40,18 +40,22 @@ export function buildContextPack(options: { registry: string; claims: string; ma
     const record = evidence.get(entry.id)
     if (!record || (record.status !== 'pass' && record.status !== 'expected_fail')) throw Object.assign(new Error(`${entry.id} has no matching accepted result`), { code: 'missing_requirement_evidence' })
   }
-  const sources = new Map<string, { path: string; symbol?: string; line?: number; digest: string }>()
+  const sources = new Map<string, { path: string; repository?: 'cc_gateway' | 'sub2api'; symbol?: string; line?: number; digest: string }>()
   for (const id of options.requirementIds) {
     const requirement = requirements.get(id)!
     const registryLine = sourceLine(options.registry, `"requirement_id": "${id}"`)
     sources.set(`${options.registry}\0${id}`, { path: options.registry, symbol: id, ...(registryLine ? { line: registryLine } : {}), digest: digestFile(options.registry) })
+    const repository = requirement.repository === 'Sub2API' ? 'sub2api' as const : 'cc_gateway' as const
+    const sourceRoot = repository === 'sub2api' ? (process.env.SUB2API_ROOT ?? '') : process.cwd()
     const files = [...(Array.isArray(requirement.implementation_files) ? requirement.implementation_files : []), ...(Array.isArray(requirement.test_files) ? requirement.test_files : [])]
     const sourceDocument = typeof requirement.source_document === 'string' ? path.join('docs/superpowers/specs', requirement.source_document) : ''
     if (sourceDocument) files.push(sourceDocument)
     for (const file of files.filter((entry): entry is string => typeof entry === 'string')) {
       try {
-        const line = file === sourceDocument && typeof requirement.source_section === 'string' ? sourceLine(file, requirement.source_section) : undefined
-        sources.set(file, { path: file, ...(line ? { line } : {}), digest: digestFile(file) })
+        const sourceRepository = file === sourceDocument ? 'cc_gateway' as const : repository
+        const sourcePath = sourceRepository === 'sub2api' ? path.resolve(sourceRoot, file) : file
+        const line = file === sourceDocument && typeof requirement.source_section === 'string' ? sourceLine(sourcePath, requirement.source_section) : undefined
+        sources.set(`${sourceRepository}\0${file}`, { path: file, ...(sourceRepository === 'sub2api' ? { repository: sourceRepository } : {}), ...(line ? { line } : {}), digest: digestFile(sourcePath) })
       } catch { throw Object.assign(new Error(`required source is missing: ${file}`), { code: 'missing_source' }) }
     }
   }

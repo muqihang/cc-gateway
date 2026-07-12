@@ -64,6 +64,22 @@ test('committed catalog is complete, immutable-shaped, and validates against the
   assert.deepEqual(ccRed.requirement_ids, ['AV-B4-001', 'AV-B6-001', 'HA-P0-009'])
 })
 
+test('context source validation resolves Sub2API paths against the declared repository root', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-sub2api-source-'))
+  await mkdir(path.join(root, 'backend'), { recursive: true })
+  await writeFile(path.join(root, 'backend/source.go'), 'package source\n')
+  const previous = process.env.SUB2API_ROOT
+  process.env.SUB2API_ROOT = root
+  try {
+    const pack = contextPack({ sources: [{ repository: 'sub2api', path: 'backend/source.go', digest: digestFile(path.join(root, 'backend/source.go')) }] })
+    assert.deepEqual(validateContextPackValue(pack), { ok: true, errors: [] })
+    pack.sources[0].digest = otherDigest
+    assert.equal(validateContextPackValue(pack).errors[0]?.code, 'source_digest_mismatch')
+  } finally {
+    if (previous === undefined) delete process.env.SUB2API_ROOT; else process.env.SUB2API_ROOT = previous
+  }
+})
+
 test('catalog rejects duplicate IDs, shell commands, undeclared expansion, invalid exits, unknown fields and versions', async () => {
   const value = await catalog()
   const cases: unknown[] = [

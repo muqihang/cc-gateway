@@ -14,7 +14,7 @@ export type ContextPack = {
   manifest_digest: string
   requirement_ids: string[]
   repositories: Array<{ name: string; commit: string; dirty_digest: string }>
-  sources: Array<{ path: string; symbol?: string; line?: number; digest: string }>
+  sources: Array<{ path: string; repository?: 'cc_gateway' | 'sub2api'; symbol?: string; line?: number; digest: string }>
   tests: Array<{ command_id: string; status: 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass'; result_digest: string }>
   known_unknowns: string[]
 }
@@ -66,10 +66,10 @@ export function validateContextPackValue(value: unknown, now = Date.now(), verif
   } }
   if (!Array.isArray(value.sources) || value.sources.length === 0) errors.push({ code: 'invalid_sources', path: '$.sources', message: 'sources are required' })
   else for (const [index, source] of value.sources.entries()) {
-    const sourceFields = ['path', 'digest', ...isObject(source) && 'symbol' in source ? ['symbol'] : [], ...isObject(source) && 'line' in source ? ['line'] : []]
+    const sourceFields = ['path', ...isObject(source) && 'repository' in source ? ['repository'] : [], 'digest', ...isObject(source) && 'symbol' in source ? ['symbol'] : [], ...isObject(source) && 'line' in source ? ['line'] : []]
     if (!exactKeys(source, sourceFields, `$.sources[${index}]`, errors)) continue
     if (typeof source.path !== 'string' || path.isAbsolute(source.path) || source.path.split('/').includes('..') || !DIGEST_RE.test(String(source.digest))) errors.push({ code: 'invalid_source', path: `$.sources[${index}]`, message: 'source reference is invalid' })
-    else if (verifySources) { try { if (digestFile(source.path) !== source.digest) errors.push({ code: 'source_digest_mismatch', path: `$.sources[${index}].digest`, message: 'source digest mismatch' }) } catch { errors.push({ code: 'missing_source', path: `$.sources[${index}].path`, message: 'source is missing' }) } }
+    else if (verifySources) { try { const root = source.repository === 'sub2api' ? process.env.SUB2API_ROOT : process.cwd(); const absolute = path.resolve(root ?? '', source.path); if (digestFile(absolute) !== source.digest) errors.push({ code: 'source_digest_mismatch', path: `$.sources[${index}].digest`, message: 'source digest mismatch' }) } catch { errors.push({ code: 'missing_source', path: `$.sources[${index}].path`, message: 'source is missing' }) } }
     if ('symbol' in source && (typeof source.symbol !== 'string' || source.symbol === '')) errors.push({ code: 'invalid_source', path: `$.sources[${index}].symbol`, message: 'symbol is invalid' })
     if ('line' in source && (!Number.isInteger(source.line) || Number(source.line) < 1)) errors.push({ code: 'invalid_source', path: `$.sources[${index}].line`, message: 'line is invalid' })
   }
