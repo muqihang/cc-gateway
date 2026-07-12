@@ -25,7 +25,8 @@ function gitOutput(root: string, args: string[]): string {
 type WorktreeRecord = { path: string; status: string; content_digest: string }
 
 function worktreeSnapshot(root: string): WorktreeRecord[] {
-  return gitOutput(root, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']).split('\0').filter(Boolean).map((line) => {
+  const status = execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'], { encoding: 'utf8' })
+  return status.split('\0').filter(Boolean).map((line) => {
     const relative = line.slice(3); const file = path.join(root, relative)
     let contentDigest = sha256('missing')
     try { const metadata = lstatSync(file); contentDigest = metadata.isSymbolicLink() ? sha256(`symlink:${readlinkSync(file)}`) : metadata.isFile() ? sha256(readFileSync(file)) : sha256(`other:${metadata.mode}`) } catch { /* deletion marker remains */ }

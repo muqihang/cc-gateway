@@ -493,6 +493,22 @@ test('runner executes argv without a shell, records real exits, environment dige
   const red = await runCommandCatalog(runnerCatalogPath, 'phase0-red', roots); assert.deepEqual(red.records.map((entry) => entry.status), ['expected_fail', 'expected_fail']); assert.deepEqual(red.records.map((entry) => entry.exit_code), [3, 4]); assert(red.records.every((entry) => entry.environment_digest.startsWith('sha256:')))
 })
 
+test('runner recognizes a tracked modified exit baseline as the declared delta', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-tracked-baseline-'))
+  execFileSync('git', ['init', '-q', root]); execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.invalid']); execFileSync('git', ['-C', root, 'config', 'user.name', 'H0 Test'])
+  const manifestPath = path.join(root, 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json')
+  await mkdir(path.dirname(manifestPath), { recursive: true })
+  await writeFile(manifestPath, JSON.stringify({ repositories: { cc_gateway: { head: 'pending' } } }))
+  execFileSync('git', ['-C', root, 'add', '.']); execFileSync('git', ['-C', root, 'commit', '-qm', 'fixture'])
+  const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  await writeFile(manifestPath, JSON.stringify({ repositories: { cc_gateway: { head } } }))
+  const catalogDirectory = await mkdtemp(path.join(tmpdir(), 'oracle-h0-tracked-catalog-'))
+  const catalogPath = path.join(catalogDirectory, 'catalog.json')
+  await writeFile(catalogPath, JSON.stringify([{ id: 'tracked-baseline', schema_version: 1, group: 'phase0-green', owner: 'test', requirement_ids: ['HA-P0-007'], repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: [process.execPath, '-e', 'process.exit(0)'], env: {}, inherit_env: ['PATH'], manifest_binding: { manifest_path: '${EXIT_MANIFEST}', repository_head_field: 'repositories.cc_gateway.head' }, allowed_worktree_delta: ['docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'], timeout_ms: 10_000, expected_exit: 0, output_policy: 'digest_only', rollback: 'none' }]))
+  const result = await runCommandCatalog(catalogPath, 'phase0-green', { CC_GATEWAY_ROOT: root, SUB2API_ROOT: root, EXIT_MANIFEST: manifestPath })
+  assert.equal(result.records[0].status, 'pass')
+})
+
 test('runner rejects every undeclared pre/post command worktree delta and removes no symlink bypass', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-delta-'))
   execFileSync('git', ['init', '-q', root]); execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.invalid']); execFileSync('git', ['-C', root, 'config', 'user.name', 'H0 Test'])
