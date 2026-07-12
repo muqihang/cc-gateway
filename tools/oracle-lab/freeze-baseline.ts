@@ -5,7 +5,6 @@ import {
   constants as fsConstants,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -74,6 +73,17 @@ export type BaselineOptions = {
   outputPath?: string;
 };
 
+export type ExitBaselineOptions = {
+  ccGatewayRoot: string;
+  sub2apiRoot: string;
+  contractPath: string;
+  parentEntryPath: string;
+  parentEntryReceiptPath: string;
+  expectedCcHead: string;
+  expectedSub2apiHead: string;
+  outputPath: string;
+};
+
 export type BaselineManifest = ReturnType<typeof captureBaseline>;
 
 class BaselineError extends Error {
@@ -87,6 +97,12 @@ class BaselineError extends Error {
 const EMPTY_SHA256 = sha256(Buffer.alloc(0));
 const GOVERNANCE_ABSENCE = 'absent_pre_governance_bootstrap' as const;
 const GATEWAY_COMPROMISE_BOUNDARY = 'protected_gateway' as const;
+const ENTRY_MANIFEST_RELATIVE_PATH = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json';
+const ENTRY_RECEIPT_RELATIVE_PATH = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json';
+const MANIFEST_SCHEMA_RELATIVE_PATH = 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json';
+const FREEZE_TOOL_RELATIVE_PATH = 'tools/oracle-lab/freeze-baseline.ts';
+const REQUIREMENT_REGISTRY_RELATIVE_PATH = 'docs/superpowers/registry/oracle-lab-requirements.json';
+const CLAIM_REGISTRY_RELATIVE_PATH = 'docs/superpowers/registry/oracle-lab-claims.json';
 const RECORD_FORMAT = 'u32be_length_prefixed_fields(status,destination,source,object_type,file_mode,content_sha256,symlink_target_sha256,deletion_marker,submodule_head,submodule_dirty); records sorted by destination bytes then source bytes; sha256(records || git_diff_binary_head)';
 
 function sha256(value: Buffer | string): string {
@@ -374,8 +390,40 @@ function validateDigestMarker(value: unknown): void {
   if (marker.status !== 'absent' || marker.reason !== ABSENT_REASON) throw new BaselineError('manifest_schema_invalid', 'invalid dependency digest marker');
 }
 
+function validatePathDigest(value: unknown): void {
+  exactObject(value, ['repository_relative_path_base64url', 'sha256'], 'manifest_schema_invalid');
+  const v = value as any;
+  if (!validPathBytes(v.repository_relative_path_base64url) || !validSha(v.sha256)) throw new BaselineError('manifest_schema_invalid', 'invalid repository path digest');
+}
+
+function validateParentReference(value: unknown): void {
+  exactObject(value, ['type', 'entry_manifest', 'entry_receipt'], 'manifest_schema_invalid');
+  const v = value as any;
+  if (v.type !== 'phase_0_entry_evidence') throw new BaselineError('manifest_schema_invalid', 'invalid parent reference type');
+  validatePathDigest(v.entry_manifest);
+  validatePathDigest(v.entry_receipt);
+  if (Buffer.from(v.entry_manifest.repository_relative_path_base64url, 'base64url').toString() !== ENTRY_MANIFEST_RELATIVE_PATH
+    || Buffer.from(v.entry_receipt.repository_relative_path_base64url, 'base64url').toString() !== ENTRY_RECEIPT_RELATIVE_PATH) {
+    throw new BaselineError('manifest_binding_mismatch', 'exit parent reference paths do not match committed Phase 0 entry evidence');
+  }
+}
+
+function validateCaptureInputs(value: unknown): void {
+  exactObject(value, ['schema', 'tool'], 'manifest_schema_invalid');
+  const v = value as any;
+  validatePathDigest(v.schema);
+  validatePathDigest(v.tool);
+  if (Buffer.from(v.schema.repository_relative_path_base64url, 'base64url').toString() !== MANIFEST_SCHEMA_RELATIVE_PATH
+    || Buffer.from(v.tool.repository_relative_path_base64url, 'base64url').toString() !== FREEZE_TOOL_RELATIVE_PATH) {
+    throw new BaselineError('manifest_binding_mismatch', 'exit capture input paths do not match the reviewed schema and tool');
+  }
+}
+
 function validateManifestArtifactAgainstBindings(value: unknown, bindings: FrozenBindings): void {
-  exactObject(value, ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'gateway_compromise_boundary', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'], 'manifest_schema_invalid');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new BaselineError('manifest_schema_invalid', 'expected object');
+  const phase = (value as any).phase;
+  const commonKeys = ['schema_version', 'compatibility_policy', 'retention_class', 'redaction_policy', 'destruction_procedure', 'phase', 'entry_kind', 'approved_tool_head', 'gateway_compromise_boundary', 'repositories', 'contract', 'governance', 'policies', 'dependencies', 'codegraph', 'legacy_comparison'];
+  exactObject(value, phase === 'phase_0_exit' ? [...commonKeys, 'parent_reference', 'capture_inputs'] : commonKeys, 'manifest_schema_invalid');
   const v = value as any;
   if (v.schema_version !== '1.0.0' || v.compatibility_policy !== 'fail_closed_exact_schema' || v.retention_class !== 'phase_evidence_permanent' || v.redaction_policy !== 'digests_and_safe_categories_only' || v.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval' || !['phase_0_entry', 'phase_0_exit'].includes(v.phase) || v.entry_kind !== v.phase || !validCommit(v.approved_tool_head) || v.gateway_compromise_boundary !== GATEWAY_COMPROMISE_BOUNDARY) throw new BaselineError('manifest_schema_invalid', 'invalid manifest header');
   exactObject(v.repositories, ['cc_gateway', 'sub2api'], 'manifest_schema_invalid'); validateRepositoryArtifact(v.repositories.cc_gateway); validateRepositoryArtifact(v.repositories.sub2api);
@@ -396,6 +444,21 @@ function validateManifestArtifactAgainstBindings(value: unknown, bindings: Froze
   if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
   exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
   if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== bindings.ccGatewayHead || v.repositories.cc_gateway.head !== bindings.ccGatewayHead || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch || v.repositories.sub2api.head !== bindings.sub2apiHead || v.repositories.sub2api.branch !== bindings.sub2apiBranch || v.contract.sha256 !== bindings.contractSha256 || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== bindings.contractRelativePath)) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
+  if (v.phase === 'phase_0_exit') {
+    validateParentReference(v.parent_reference);
+    validateCaptureInputs(v.capture_inputs);
+    if (v.approved_tool_head !== v.repositories.cc_gateway.head
+      || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch
+      || v.repositories.sub2api.branch !== bindings.sub2apiBranch
+      || v.repositories.cc_gateway.clean !== true
+      || v.repositories.sub2api.clean !== true
+      || v.governance.requirement_registry?.status !== 'present'
+      || v.governance.claim_registry?.status !== 'present'
+      || v.contract.sha256 !== bindings.contractSha256
+      || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== bindings.contractRelativePath) {
+      throw new BaselineError('manifest_binding_mismatch', 'exit artifact does not match reviewed Phase 0 bindings');
+    }
+  }
 }
 
 export function validateManifestArtifact(value: unknown): void {
@@ -532,27 +595,155 @@ export function captureBaseline(options: BaselineOptions) {
   return captureBaselineWithBindings(options, PHASE_0_BINDINGS);
 }
 
+function readRepositoryFile(root: string, relative: string, code: string): Buffer {
+  const absolute = path.join(root, relative);
+  if (!existsSync(absolute)) throw new BaselineError(code, `${relative} is required`);
+  const stat = lstatSync(absolute);
+  if (!stat.isFile() || stat.isSymbolicLink() || !pathInside(root, realpathSync(absolute))) throw new BaselineError(code, `${relative} must be a regular file inside the repository`);
+  return readFileSync(absolute);
+}
+
+function readCommittedFile(root: string, commit: string, relative: string, code: string): Buffer {
+  let committed: Buffer;
+  try { committed = gitBuffer(root, 'show', `${commit}:${relative}`); }
+  catch { throw new BaselineError(code, `${relative} is not a committed file at the reviewed head`); }
+  const working = readRepositoryFile(root, relative, code);
+  if (!working.equals(committed)) throw new BaselineError(code, `${relative} bytes do not match the reviewed commit`);
+  return working;
+}
+
+function parseJsonEvidence(bytes: Buffer, code: string, label: string): unknown {
+  try { return JSON.parse(bytes.toString('utf8')); }
+  catch { throw new BaselineError(code, `${label} is not valid JSON`); }
+}
+
+function validateParentEntryEvidence(ccRoot: string, reviewedHead: string, entryInput: string, receiptInput: string, bindings: FrozenBindings) {
+  if (entryInput !== ENTRY_MANIFEST_RELATIVE_PATH || receiptInput !== ENTRY_RECEIPT_RELATIVE_PATH) {
+    throw new BaselineError('parent_path_mismatch', 'parent entry evidence must use the committed Phase 0 entry paths');
+  }
+  const entryBytes = readCommittedFile(ccRoot, reviewedHead, entryInput, 'parent_entry_not_committed');
+  const receiptBytes = readCommittedFile(ccRoot, reviewedHead, receiptInput, 'parent_receipt_not_committed');
+  const entry = parseJsonEvidence(entryBytes, 'parent_entry_invalid', 'parent entry manifest') as any;
+  const receipt = parseJsonEvidence(receiptBytes, 'parent_receipt_invalid', 'parent entry receipt') as any;
+  try { validateManifestArtifactAgainstBindings(entry, bindings); }
+  catch (error) { throw new BaselineError('parent_entry_invalid', (error as Error).message); }
+  try { validateReceiptArtifact(receipt); }
+  catch (error) { throw new BaselineError('parent_receipt_invalid', (error as Error).message); }
+  if (entry.phase !== 'phase_0_entry' || entry.entry_kind !== 'phase_0_entry') throw new BaselineError('parent_entry_invalid', 'parent manifest is not Phase 0 entry evidence');
+  if (receipt.manifest_sha256 !== sha256(entryBytes)) throw new BaselineError('parent_manifest_digest_mismatch', 'parent receipt does not bind the committed entry manifest bytes');
+  if (receipt.bootstrap_commit !== entry.approved_tool_head || receipt.bootstrap_commit !== entry.repositories.cc_gateway.head) {
+    throw new BaselineError('parent_bootstrap_mismatch', 'parent receipt bootstrap commit does not match the entry manifest');
+  }
+  let evidenceSchema: Buffer;
+  try {
+    if (!validCommit(receipt.bootstrap_commit)) throw new Error('invalid commit');
+    gitText(ccRoot, 'merge-base', '--is-ancestor', receipt.bootstrap_commit, reviewedHead);
+    const evidenceCommit = gitText(ccRoot, 'log', '-1', '--format=%H', reviewedHead, '--', receiptInput);
+    if (!validCommit(evidenceCommit)) throw new Error('missing evidence commit');
+    if (!gitBuffer(ccRoot, 'show', `${evidenceCommit}:${receiptInput}`).equals(receiptBytes)
+      || !gitBuffer(ccRoot, 'show', `${evidenceCommit}:${entryInput}`).equals(entryBytes)) throw new Error('evidence bytes changed after receipt commit');
+    evidenceSchema = gitBuffer(ccRoot, 'show', `${evidenceCommit}:${MANIFEST_SCHEMA_RELATIVE_PATH}`);
+  } catch {
+    throw new BaselineError('parent_bootstrap_mismatch', 'parent evidence and bootstrap commits do not form a valid reviewed ancestry');
+  }
+  if (receipt.schema_sha256 !== sha256(evidenceSchema)) throw new BaselineError('parent_schema_digest_mismatch', 'parent receipt does not bind the schema committed with the parent evidence');
+  return { entry, entryBytes, receiptBytes };
+}
+
+export function captureExitBaseline(options: ExitBaselineOptions, bindings: FrozenBindings = PHASE_0_BINDINGS) {
+  if (!validCommit(options.expectedCcHead) || !validCommit(options.expectedSub2apiHead)) throw new BaselineError('invalid_arguments', 'expected reviewed heads must be full Git object IDs');
+  const ccRoot = realpathSync(options.ccGatewayRoot);
+  const subRoot = realpathSync(options.sub2apiRoot);
+  ensureOutputContainment(ccRoot, options.outputPath);
+  const ccState = computeRepositoryState(ccRoot);
+  const subState = computeRepositoryState(subRoot);
+  if (ccState.head !== options.expectedCcHead) throw new BaselineError('cc_gateway_head_mismatch', 'CC Gateway HEAD does not match --expected-cc-head');
+  if (subState.head !== options.expectedSub2apiHead) throw new BaselineError('sub2api_head_mismatch', 'Sub2API HEAD does not match --expected-sub2api-head');
+  if (ccState.branch !== bindings.ccGatewayBranch) throw new BaselineError('cc_gateway_branch_mismatch', 'CC Gateway branch is not the Phase 0 governance branch');
+  if (subState.branch !== bindings.sub2apiBranch) throw new BaselineError('sub2api_branch_mismatch', 'Sub2API branch is not the Phase 0 governance branch');
+
+  const parent = validateParentEntryEvidence(ccRoot, options.expectedCcHead, options.parentEntryPath, options.parentEntryReceiptPath, bindings);
+  const schemaBytes = readCommittedFile(ccRoot, options.expectedCcHead, MANIFEST_SCHEMA_RELATIVE_PATH, 'schema_input_not_committed');
+  const toolBytes = readCommittedFile(ccRoot, options.expectedCcHead, FREEZE_TOOL_RELATIVE_PATH, 'tool_input_not_committed');
+  readCommittedFile(ccRoot, options.expectedCcHead, REQUIREMENT_REGISTRY_RELATIVE_PATH, 'missing_governance_registry');
+  readCommittedFile(ccRoot, options.expectedCcHead, CLAIM_REGISTRY_RELATIVE_PATH, 'missing_claim_registry');
+
+  const entry = captureBaselineWithBindings({
+    ccGatewayRoot: ccRoot,
+    sub2apiRoot: subRoot,
+    contractPath: options.contractPath,
+    approvedToolHead: options.expectedCcHead,
+    strictBindings: false,
+    outputPath: options.outputPath,
+  }, bindings);
+  if (entry.contract.sha256 !== bindings.contractSha256 || entry.contract.sha256 !== parent.entry.contract.sha256) {
+    throw new BaselineError('contract_digest_mismatch', 'formal-pool contract digest does not match the frozen entry evidence');
+  }
+  if (entry.governance.requirement_registry.status !== 'present') throw new BaselineError('missing_governance_registry', 'requirement registry is required in exit mode');
+  if (entry.governance.claim_registry.status !== 'present') throw new BaselineError('missing_claim_registry', 'claim registry is required in exit mode');
+
+  const manifest = {
+    ...entry,
+    phase: 'phase_0_exit' as const,
+    entry_kind: 'phase_0_exit' as const,
+    parent_reference: {
+      type: 'phase_0_entry_evidence' as const,
+      entry_manifest: {
+        repository_relative_path_base64url: Buffer.from(ENTRY_MANIFEST_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(parent.entryBytes),
+      },
+      entry_receipt: {
+        repository_relative_path_base64url: Buffer.from(ENTRY_RECEIPT_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(parent.receiptBytes),
+      },
+    },
+    capture_inputs: {
+      schema: {
+        repository_relative_path_base64url: Buffer.from(MANIFEST_SCHEMA_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(schemaBytes),
+      },
+      tool: {
+        repository_relative_path_base64url: Buffer.from(FREEZE_TOOL_RELATIVE_PATH).toString('base64url'),
+        sha256: sha256(toolBytes),
+      },
+    },
+  };
+  validateManifestArtifactAgainstBindings(manifest, bindings);
+  return manifest;
+}
+
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
     const value = argv[i + 1];
     if (!key?.startsWith('--') || value === undefined) throw new BaselineError('invalid_arguments', `missing value for ${key || 'argument'}`);
-    out[key.slice(2)] = value;
+    const name = key.slice(2);
+    if (out[name] !== undefined) throw new BaselineError('invalid_arguments', `duplicate --${name}`);
+    out[name] = value;
   }
   return out;
 }
 
 function writeJsonAtomic(target: string, value: unknown): void {
-  mkdirSync(path.dirname(target), { recursive: true });
+  if (existsSync(target) && lstatSync(target).isSymbolicLink()) throw new BaselineError('output_path_symlink', 'final output path must not be a symlink');
   const temporary = `${target}.tmp`;
   let fd: number | undefined;
+  let created = false;
   try {
-    fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600);
+    try {
+      fd = openSync(temporary, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW || 0), 0o600);
+      created = true;
+    }
+    catch { throw new BaselineError('temporary_path_exists', 'temporary evidence path already exists'); }
     writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
     closeSync(fd); fd = undefined;
     renameSync(temporary, target);
-  } finally { if (fd !== undefined) closeSync(fd); }
+  } catch (error) {
+    if (fd !== undefined) { try { closeSync(fd); } catch {} }
+    if (created) { try { unlinkSync(temporary); } catch {} }
+    throw error;
+  }
 }
 
 function canonicalOutputPath(candidate: string): string {
@@ -601,20 +792,48 @@ type CliRuntime = {
 function executeFreezeBaseline(argv: string[], runtime: CliRuntime): void {
   const args = parseArgs(argv);
   const bindings = runtime.bindings ?? PHASE_0_BINDINGS;
-  for (const required of ['cc-gateway-root', 'sub2api-root', 'contract-path', 'approved-tool-head', 'out', 'receipt']) {
+  const common = ['cc-gateway-root', 'sub2api-root', 'contract-path', 'out'];
+  const entryOnly = ['approved-tool-head', 'receipt', 'allow-dirty-digest'];
+  const exitOnly = ['parent-entry', 'parent-entry-receipt', 'expected-cc-head', 'expected-sub2api-head'];
+  const known = new Set([...common, ...entryOnly, ...exitOnly]);
+  const unknown = Object.keys(args).find((name) => !known.has(name));
+  if (unknown) throw new BaselineError('invalid_arguments', `unknown argument --${unknown}`);
+  const hasEntry = entryOnly.some((name) => args[name] !== undefined);
+  const hasExit = exitOnly.some((name) => args[name] !== undefined);
+  if (hasEntry && hasExit) throw new BaselineError('mixed_mode_arguments', 'entry and exit arguments cannot be combined');
+  if (!hasEntry && !hasExit) throw new BaselineError('invalid_arguments', 'a complete entry or exit argument set is required');
+  for (const required of common) {
     if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
   }
+  const out = path.resolve(args['cc-gateway-root'], args.out);
+  ensureOutputContainment(args['cc-gateway-root'], out);
+  if (hasExit) {
+    for (const required of exitOnly) if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
+    const manifest = captureExitBaseline({
+      ccGatewayRoot: args['cc-gateway-root'],
+      sub2apiRoot: args['sub2api-root'],
+      contractPath: args['contract-path'],
+      parentEntryPath: args['parent-entry'],
+      parentEntryReceiptPath: args['parent-entry-receipt'],
+      expectedCcHead: args['expected-cc-head'],
+      expectedSub2apiHead: args['expected-sub2api-head'],
+      outputPath: out,
+    }, bindings);
+    writeJsonAtomic(out, manifest);
+    (runtime.stdout ?? console.log)(JSON.stringify({ manifest_sha256: sha256(readFileSync(out)), receipt_written: false }));
+    return;
+  }
+
+  for (const required of ['approved-tool-head', 'receipt']) if (!args[required]) throw new BaselineError('invalid_arguments', `--${required} is required`);
   const manifest = captureBaselineWithBindings({
     ccGatewayRoot: args['cc-gateway-root'],
     sub2apiRoot: args['sub2api-root'],
     contractPath: args['contract-path'],
     approvedToolHead: args['approved-tool-head'],
     allowCcGatewayDirtyDigest: args['allow-dirty-digest'],
-    outputPath: path.resolve(args['cc-gateway-root'], args.out),
+    outputPath: out,
   }, bindings);
-  const out = path.resolve(args['cc-gateway-root'], args.out);
   const receipt = path.resolve(args['cc-gateway-root'], args.receipt);
-  ensureOutputContainment(args['cc-gateway-root'], out);
   ensureOutputContainment(args['cc-gateway-root'], receipt);
   const schemaPath = path.join(realpathSync(args['cc-gateway-root']), 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json');
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);

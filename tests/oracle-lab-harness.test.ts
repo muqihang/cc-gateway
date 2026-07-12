@@ -225,15 +225,18 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
   const reportPath = 'docs/superpowers/evidence/phase-0/phase-0-exit-report.md'
   const evidenceContext = 'docs/superpowers/evidence/phase-0/phase-0-context-pack.json'
   const fixtureFiles = [
+    'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json',
     'docs/superpowers/registry/oracle-lab-requirements.json',
     'docs/superpowers/registry/oracle-lab-claims.json',
     'docs/superpowers/registry/oracle-lab-command-catalog.json',
     'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
     'docs/superpowers/schemas/oracle-lab-requirement.schema.json',
+    'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json',
     'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md',
     'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md',
     'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
     'tools/oracle-lab/validate-requirements.ts',
+    'tools/oracle-lab/freeze-baseline.ts',
     'tests/oracle-lab-traceability.test.ts',
   ]
   for (const file of fixtureFiles) {
@@ -249,6 +252,27 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
   exitManifest.governance = {
     requirement_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-requirements.json')).slice(7) },
     claim_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-claims.json')).slice(7) },
+  }
+  exitManifest.parent_reference = {
+    type: 'phase_0_entry_evidence',
+    entry_manifest: {
+      repository_relative_path_base64url: Buffer.from(entryManifest).toString('base64url'),
+      sha256: digestFile(path.join(root, entryManifest)).slice(7),
+    },
+    entry_receipt: {
+      repository_relative_path_base64url: Buffer.from('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json').toString('base64url'),
+      sha256: digestFile(path.join(root, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json')).slice(7),
+    },
+  }
+  exitManifest.capture_inputs = {
+    schema: {
+      repository_relative_path_base64url: Buffer.from('docs/superpowers/schemas/oracle-lab-run-manifest.schema.json').toString('base64url'),
+      sha256: digestFile(path.join(root, 'docs/superpowers/schemas/oracle-lab-run-manifest.schema.json')).slice(7),
+    },
+    tool: {
+      repository_relative_path_base64url: Buffer.from('tools/oracle-lab/freeze-baseline.ts').toString('base64url'),
+      sha256: digestFile(path.join(root, 'tools/oracle-lab/freeze-baseline.ts')).slice(7),
+    },
   }
   await writeFile(path.join(root, baseline), `${JSON.stringify(exitManifest, null, 2)}\n`)
 

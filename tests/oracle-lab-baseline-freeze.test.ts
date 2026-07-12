@@ -139,9 +139,10 @@ const cliArgs = [
   '--sub2api-root', cliSub2api,
   '--contract-path', cliContract,
   '--approved-tool-head', cliBindings.ccGatewayHead,
-  '--out', 'docs/entry.json',
-  '--receipt', 'docs/entry.receipt.json',
+  '--out', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json',
+  '--receipt', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json',
 ];
+mkdirSync(path.join(cliGateway, 'docs/superpowers/evidence/phase-0'), { recursive: true });
 const cliEnvironment = { ...process.env, ORACLE_TEST_BINDINGS: JSON.stringify(cliBindings) };
 const tamperedCli = spawnSync('tsx', cliArgs, {
   cwd: mkdtempSync(path.join(tmpdir(), 'oracle-cli-cwd-')),
@@ -151,8 +152,8 @@ const tamperedCli = spawnSync('tsx', cliArgs, {
 assert.equal(tamperedCli.status, 1);
 assert.match(tamperedCli.stderr, /"code":"receipt_bootstrap_mismatch"/);
 assert.match(tamperedCli.stderr, /receipt bootstrap commit does not match manifest approved tool head/);
-assert.equal(existsSync(path.join(cliGateway, 'docs/entry.json')), false);
-assert.equal(existsSync(path.join(cliGateway, 'docs/entry.receipt.json')), false);
+assert.equal(existsSync(path.join(cliGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json')), false);
+assert.equal(existsSync(path.join(cliGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json')), false);
 
 const successfulCli = spawnSync('tsx', cliArgs, {
   cwd: mkdtempSync(path.join(tmpdir(), 'oracle-cli-cwd-')),
@@ -161,8 +162,8 @@ const successfulCli = spawnSync('tsx', cliArgs, {
 });
 assert.equal(successfulCli.status, 0, successfulCli.stderr);
 assert.equal(successfulCli.stderr, '');
-const cliManifestPath = path.join(cliGateway, 'docs/entry.json');
-const cliReceiptPath = path.join(cliGateway, 'docs/entry.receipt.json');
+const cliManifestPath = path.join(cliGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json');
+const cliReceiptPath = path.join(cliGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
 const cliManifestBytes = readFileSync(cliManifestPath);
 const cliManifest = JSON.parse(cliManifestBytes.toString('utf8'));
 const cliReceipt = JSON.parse(readFileSync(cliReceiptPath, 'utf8'));
@@ -174,6 +175,281 @@ assert.deepEqual(JSON.parse(successfulCli.stdout), {
   manifest_sha256: sha256(cliManifestBytes),
   receipt_written: true,
 });
+
+// RED: the exact Task 9 interface creates one exit manifest from committed parent evidence.
+mkdirSync(path.join(cliGateway, 'docs/superpowers/registry'), { recursive: true });
+mkdirSync(path.join(cliGateway, 'tools/oracle-lab'), { recursive: true });
+git(cliGateway, 'add', '.');
+git(cliGateway, 'commit', '-qm', 'commit parent evidence');
+const exitArgsForHead = (head: string) => [
+  cliHarness,
+  '--cc-gateway-root', cliGateway,
+  '--sub2api-root', cliSub2api,
+  '--contract-path', cliContract,
+  '--parent-entry', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json',
+  '--parent-entry-receipt', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json',
+  '--expected-cc-head', head,
+  '--expected-sub2api-head', git(cliSub2api, 'rev-parse', 'HEAD'),
+  '--out', 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json',
+];
+const missingToolCli = spawnSync('tsx', exitArgsForHead(git(cliGateway, 'rev-parse', 'HEAD')), {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-missing-tool-cwd-')), encoding: 'utf8', env: cliEnvironment,
+});
+assert.equal(missingToolCli.status, 1);
+assert.match(missingToolCli.stderr, /"code":"tool_input_not_committed"/);
+
+writeFileSync(
+  path.join(cliGateway, 'tools/oracle-lab/freeze-baseline.ts'),
+  readFileSync(path.join(process.cwd(), 'tools/oracle-lab/freeze-baseline.ts')),
+);
+git(cliGateway, 'add', '.');
+git(cliGateway, 'commit', '-qm', 'add reviewed capture tool');
+const missingRegistryCli = spawnSync('tsx', exitArgsForHead(git(cliGateway, 'rev-parse', 'HEAD')), {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-missing-registry-cwd-')), encoding: 'utf8', env: cliEnvironment,
+});
+assert.equal(missingRegistryCli.status, 1);
+assert.match(missingRegistryCli.stderr, /"code":"missing_governance_registry"/);
+
+writeFileSync(path.join(cliGateway, 'docs/superpowers/registry/oracle-lab-requirements.json'), '[]\n');
+git(cliGateway, 'add', '.');
+git(cliGateway, 'commit', '-qm', 'add requirement registry');
+const missingClaimsCli = spawnSync('tsx', exitArgsForHead(git(cliGateway, 'rev-parse', 'HEAD')), {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-missing-claims-cwd-')), encoding: 'utf8', env: cliEnvironment,
+});
+assert.equal(missingClaimsCli.status, 1);
+assert.match(missingClaimsCli.stderr, /"code":"missing_claim_registry"/);
+
+writeFileSync(path.join(cliGateway, 'docs/superpowers/registry/oracle-lab-claims.json'), '[]\n');
+git(cliGateway, 'add', '.');
+git(cliGateway, 'commit', '-qm', 'add claims registry');
+const reviewedCcHead = git(cliGateway, 'rev-parse', 'HEAD');
+const reviewedSub2apiHead = git(cliSub2api, 'rev-parse', 'HEAD');
+const exitManifestRelative = 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json';
+const exitManifestPath = path.join(cliGateway, exitManifestRelative);
+const exitArgs = exitArgsForHead(reviewedCcHead);
+const successfulExitCli = spawnSync('tsx', exitArgs, {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-exit-cli-cwd-')),
+  encoding: 'utf8',
+  env: cliEnvironment,
+});
+assert.equal(successfulExitCli.status, 0, successfulExitCli.stderr);
+assert.equal(successfulExitCli.stderr, '');
+assert.equal(existsSync(`${exitManifestPath}.receipt.json`), false);
+const exitManifestBytes = readFileSync(exitManifestPath);
+const exitManifest = JSON.parse(exitManifestBytes.toString('utf8'));
+assert.equal(exitManifest.phase, 'phase_0_exit');
+assert.equal(exitManifest.entry_kind, 'phase_0_exit');
+assert.equal(exitManifest.approved_tool_head, reviewedCcHead);
+assert.equal(exitManifest.repositories.cc_gateway.head, reviewedCcHead);
+assert.equal(exitManifest.repositories.sub2api.head, reviewedSub2apiHead);
+assert.equal(exitManifest.repositories.cc_gateway.clean, true);
+assert.equal(exitManifest.repositories.sub2api.clean, true);
+assert.deepEqual(exitManifest.parent_reference, {
+  type: 'phase_0_entry_evidence',
+  entry_manifest: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json').toString('base64url'),
+    sha256: sha256(cliManifestBytes),
+  },
+  entry_receipt: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json').toString('base64url'),
+    sha256: sha256(readFileSync(cliReceiptPath)),
+  },
+});
+assert.deepEqual(exitManifest.governance, {
+  requirement_registry: { status: 'present', sha256: sha256(readFileSync(path.join(cliGateway, 'docs/superpowers/registry/oracle-lab-requirements.json'))) },
+  claim_registry: { status: 'present', sha256: sha256(readFileSync(path.join(cliGateway, 'docs/superpowers/registry/oracle-lab-claims.json'))) },
+});
+assert.deepEqual(exitManifest.capture_inputs, {
+  schema: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/schemas/oracle-lab-run-manifest.schema.json').toString('base64url'),
+    sha256: sha256(readFileSync(fixtureSchemaPath)),
+  },
+  tool: {
+    repository_relative_path_base64url: Buffer.from('tools/oracle-lab/freeze-baseline.ts').toString('base64url'),
+    sha256: sha256(readFileSync(path.join(cliGateway, 'tools/oracle-lab/freeze-baseline.ts'))),
+  },
+});
+assert.deepEqual(JSON.parse(successfulExitCli.stdout), {
+  manifest_sha256: sha256(exitManifestBytes),
+  receipt_written: false,
+});
+
+const mixedCli = spawnSync('tsx', [
+  ...cliArgs.slice(0, -4),
+  '--out', 'docs/mixed-entry.json',
+  '--receipt', 'docs/mixed-entry.receipt.json',
+  ...exitArgs.slice(7, -2),
+], { cwd: mkdtempSync(path.join(tmpdir(), 'oracle-mixed-cli-cwd-')), encoding: 'utf8', env: cliEnvironment });
+assert.equal(mixedCli.status, 1);
+assert.match(mixedCli.stderr, /"code":"mixed_mode_arguments"/);
+
+const partialExitCli = spawnSync('tsx', exitArgs.slice(0, -4), { cwd: mkdtempSync(path.join(tmpdir(), 'oracle-partial-cli-cwd-')), encoding: 'utf8', env: cliEnvironment });
+assert.equal(partialExitCli.status, 1);
+assert.match(partialExitCli.stderr, /"code":"invalid_arguments"/);
+
+const wrongHeadGateway = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-wrong-head-')), 'gateway');
+execFileSync('git', ['clone', '-q', cliGateway, wrongHeadGateway]);
+const wrongHeadArgs = exitArgs.map((value, index) => {
+  if (exitArgs[index - 1] === '--cc-gateway-root') return wrongHeadGateway;
+  if (exitArgs[index - 1] === '--expected-cc-head') return '0'.repeat(40);
+  return value;
+});
+const wrongHeadCli = spawnSync('tsx', wrongHeadArgs, {
+  cwd: mkdtempSync(path.join(tmpdir(), 'oracle-head-cli-cwd-')), encoding: 'utf8', env: cliEnvironment,
+});
+assert.equal(wrongHeadCli.status, 1);
+assert.match(wrongHeadCli.stderr, /"code":"cc_gateway_head_mismatch"/);
+
+function cloneExitGateway(name: string): string {
+  const target = path.join(mkdtempSync(path.join(tmpdir(), `oracle-exit-${name}-`)), 'gateway');
+  execFileSync('git', ['clone', '-q', cliGateway, target]);
+  git(target, 'config', 'user.email', 'oracle@example.invalid');
+  git(target, 'config', 'user.name', 'Oracle Test');
+  return target;
+}
+
+function exitArgsForGateway(root: string): string[] {
+  return exitArgs.map((value, index) => {
+    if (exitArgs[index - 1] === '--cc-gateway-root') return root;
+    if (exitArgs[index - 1] === '--expected-cc-head') return git(root, 'rev-parse', 'HEAD');
+    return value;
+  });
+}
+
+function runExitFailure(args: string[], code: string): void {
+  const result = spawnSync('tsx', args, {
+    cwd: mkdtempSync(path.join(tmpdir(), 'oracle-exit-failure-cwd-')), encoding: 'utf8', env: cliEnvironment,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, new RegExp(`"code":"${code}"`));
+}
+
+const dirtyExitGateway = cloneExitGateway('dirty');
+writeFileSync(path.join(dirtyExitGateway, 'untracked-drift.txt'), 'drift\n');
+runExitFailure(exitArgsForGateway(dirtyExitGateway), 'undeclared_dirty_tree');
+
+const wrongBranchGateway = cloneExitGateway('branch');
+git(wrongBranchGateway, 'switch', '-q', '-c', 'wrong-phase-branch');
+runExitFailure(exitArgsForGateway(wrongBranchGateway), 'cc_gateway_branch_mismatch');
+
+const wrongSubHeadGateway = cloneExitGateway('wrong-sub-head');
+const wrongSubHeadArgs = exitArgsForGateway(wrongSubHeadGateway).map((value, index) => exitArgs[index - 1] === '--expected-sub2api-head' ? '0'.repeat(40) : value);
+runExitFailure(wrongSubHeadArgs, 'sub2api_head_mismatch');
+
+const wrongBranchSub2api = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-exit-sub-branch-')), 'sub2api');
+execFileSync('git', ['clone', '-q', cliSub2api, wrongBranchSub2api]);
+git(wrongBranchSub2api, 'switch', '-q', '-c', 'wrong-phase-branch');
+const wrongSubBranchGateway = cloneExitGateway('wrong-sub-branch');
+const wrongSubBranchArgs = exitArgsForGateway(wrongSubBranchGateway).map((value, index) => {
+  if (exitArgs[index - 1] === '--sub2api-root') return wrongBranchSub2api;
+  if (exitArgs[index - 1] === '--contract-path') return path.join(wrongBranchSub2api, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json');
+  return value;
+});
+runExitFailure(wrongSubBranchArgs, 'sub2api_branch_mismatch');
+
+const dirtySub2api = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-exit-sub-dirty-')), 'sub2api');
+execFileSync('git', ['clone', '-q', cliSub2api, dirtySub2api]);
+writeFileSync(path.join(dirtySub2api, 'untracked-drift.txt'), 'drift\n');
+const dirtySubGateway = cloneExitGateway('dirty-sub');
+const dirtySubArgs = exitArgsForGateway(dirtySubGateway).map((value, index) => {
+  if (exitArgs[index - 1] === '--sub2api-root') return dirtySub2api;
+  if (exitArgs[index - 1] === '--contract-path') return path.join(dirtySub2api, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json');
+  return value;
+});
+runExitFailure(dirtySubArgs, 'undeclared_dirty_tree');
+
+const staleParentGateway = cloneExitGateway('stale-parent-path');
+const staleParentArgs = exitArgsForGateway(staleParentGateway).map((value, index) => exitArgs[index - 1] === '--parent-entry' ? 'docs/superpowers/evidence/phase-0/stale-entry.json' : value);
+runExitFailure(staleParentArgs, 'parent_path_mismatch');
+
+const digestMismatchGateway = cloneExitGateway('parent-digest');
+const digestMismatchReceiptPath = path.join(digestMismatchGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
+const digestMismatchReceipt = JSON.parse(readFileSync(digestMismatchReceiptPath, 'utf8'));
+digestMismatchReceipt.manifest_sha256 = '0'.repeat(64);
+writeFileSync(digestMismatchReceiptPath, `${JSON.stringify(digestMismatchReceipt, null, 2)}\n`);
+git(digestMismatchGateway, 'add', '.');
+git(digestMismatchGateway, 'commit', '-qm', 'tamper parent digest');
+runExitFailure(exitArgsForGateway(digestMismatchGateway), 'parent_manifest_digest_mismatch');
+
+const bootstrapMismatchGateway = cloneExitGateway('parent-bootstrap');
+const bootstrapReceiptPath = path.join(bootstrapMismatchGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
+const bootstrapReceipt = JSON.parse(readFileSync(bootstrapReceiptPath, 'utf8'));
+bootstrapReceipt.bootstrap_commit = '0'.repeat(40);
+writeFileSync(bootstrapReceiptPath, `${JSON.stringify(bootstrapReceipt, null, 2)}\n`);
+git(bootstrapMismatchGateway, 'add', '.');
+git(bootstrapMismatchGateway, 'commit', '-qm', 'tamper parent bootstrap');
+runExitFailure(exitArgsForGateway(bootstrapMismatchGateway), 'parent_bootstrap_mismatch');
+
+const schemaMismatchGateway = cloneExitGateway('parent-schema');
+const schemaReceiptPath = path.join(schemaMismatchGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
+const schemaReceipt = JSON.parse(readFileSync(schemaReceiptPath, 'utf8'));
+schemaReceipt.schema_sha256 = '0'.repeat(64);
+writeFileSync(schemaReceiptPath, `${JSON.stringify(schemaReceipt, null, 2)}\n`);
+git(schemaMismatchGateway, 'add', '.');
+git(schemaMismatchGateway, 'commit', '-qm', 'tamper parent schema digest');
+runExitFailure(exitArgsForGateway(schemaMismatchGateway), 'parent_schema_digest_mismatch');
+
+const semanticMismatchGateway = cloneExitGateway('parent-semantic');
+const semanticEntryPath = path.join(semanticMismatchGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json');
+const semanticReceiptPath = path.join(semanticMismatchGateway, 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
+const semanticEntry = JSON.parse(readFileSync(semanticEntryPath, 'utf8'));
+semanticEntry.contract.sha256 = '0'.repeat(64);
+writeFileSync(semanticEntryPath, `${JSON.stringify(semanticEntry, null, 2)}\n`);
+const semanticReceipt = JSON.parse(readFileSync(semanticReceiptPath, 'utf8'));
+semanticReceipt.manifest_sha256 = sha256(readFileSync(semanticEntryPath));
+writeFileSync(semanticReceiptPath, `${JSON.stringify(semanticReceipt, null, 2)}\n`);
+git(semanticMismatchGateway, 'add', '.');
+git(semanticMismatchGateway, 'commit', '-qm', 'tamper parent semantics');
+runExitFailure(exitArgsForGateway(semanticMismatchGateway), 'parent_entry_invalid');
+
+const contractPathGateway = cloneExitGateway('contract-path');
+const wrongContractArgs = exitArgsForGateway(contractPathGateway).map((value, index, values) => values[index - 1] === '--contract-path' ? path.join(cliSub2api, 'tracked.txt') : value);
+runExitFailure(wrongContractArgs, 'contract_path_mismatch');
+
+const driftedSub2api = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-exit-contract-digest-')), 'sub2api');
+execFileSync('git', ['clone', '-q', cliSub2api, driftedSub2api]);
+git(driftedSub2api, 'config', 'user.email', 'oracle@example.invalid');
+git(driftedSub2api, 'config', 'user.name', 'Oracle Test');
+const driftedContract = path.join(driftedSub2api, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json');
+writeFileSync(driftedContract, '{"fixture":"drifted"}\n');
+git(driftedSub2api, 'add', '.');
+git(driftedSub2api, 'commit', '-qm', 'drift contract digest');
+const contractDigestGateway = cloneExitGateway('contract-digest');
+const wrongContractDigestArgs = exitArgsForGateway(contractDigestGateway).map((value, index) => {
+  if (exitArgs[index - 1] === '--sub2api-root') return driftedSub2api;
+  if (exitArgs[index - 1] === '--contract-path') return driftedContract;
+  if (exitArgs[index - 1] === '--expected-sub2api-head') return git(driftedSub2api, 'rev-parse', 'HEAD');
+  return value;
+});
+runExitFailure(wrongContractDigestArgs, 'contract_digest_mismatch');
+
+const escapedOutputGateway = cloneExitGateway('output-escape');
+const escapedOutputArgs = exitArgsForGateway(escapedOutputGateway).map((value, index, values) => values[index - 1] === '--out' ? '../escaped-exit.json' : value);
+runExitFailure(escapedOutputArgs, 'output_path_escape');
+
+const symlinkOutputGateway = cloneExitGateway('output-symlink');
+const symlinkOutputPath = path.join(symlinkOutputGateway, exitManifestRelative);
+const symlinkExternalTarget = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-exit-symlink-target-')), 'target.json');
+writeFileSync(symlinkExternalTarget, 'unchanged\n');
+symlinkSync(symlinkExternalTarget, symlinkOutputPath);
+const infoExcludePath = git(symlinkOutputGateway, 'rev-parse', '--git-path', 'info/exclude');
+writeFileSync(path.resolve(symlinkOutputGateway, infoExcludePath), `${readFileSync(path.resolve(symlinkOutputGateway, infoExcludePath), 'utf8')}\n${exitManifestRelative}\n`);
+runExitFailure(exitArgsForGateway(symlinkOutputGateway), 'output_path_symlink');
+assert.equal(readFileSync(symlinkExternalTarget, 'utf8'), 'unchanged\n');
+
+const tempSymlinkGateway = cloneExitGateway('temp-symlink');
+const tempSymlinkPath = path.join(tempSymlinkGateway, `${exitManifestRelative}.tmp`);
+const tempSymlinkExternalTarget = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-exit-temp-symlink-target-')), 'target.json');
+writeFileSync(tempSymlinkExternalTarget, 'temp target unchanged\n');
+symlinkSync(tempSymlinkExternalTarget, tempSymlinkPath);
+const tempInfoExcludePath = path.resolve(tempSymlinkGateway, git(tempSymlinkGateway, 'rev-parse', '--git-path', 'info/exclude'));
+writeFileSync(tempInfoExcludePath, `${readFileSync(tempInfoExcludePath, 'utf8')}\n${exitManifestRelative}.tmp\n`);
+runExitFailure(exitArgsForGateway(tempSymlinkGateway), 'temporary_path_exists');
+assert.equal(existsSync(tempSymlinkPath), true);
+assert.equal(readFileSync(tempSymlinkExternalTarget, 'utf8'), 'temp target unchanged\n');
+
+const unknownArgumentGateway = cloneExitGateway('unknown-argument');
+runExitFailure([...exitArgsForGateway(unknownArgumentGateway), '--unknown-field', 'value'], 'invalid_arguments');
 expectCode(() => captureBaseline({ ...common, contractPath: path.join(sub2api, 'missing.json') }), 'missing_contract');
 const outside = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-outside-')), 'vectors.json');
 writeFileSync(outside, '{}\n');
@@ -198,7 +474,7 @@ Object.assign(manifest as any, {
 (manifest as any).repositories.sub2api.branch = PHASE_0_BINDINGS.sub2apiBranch;
 (manifest as any).contract.sha256 = PHASE_0_BINDINGS.contractSha256;
 (manifest as any).contract.repository_relative_path_base64url = Buffer.from(PHASE_0_BINDINGS.contractRelativePath).toString('base64url');
-validateManifestArtifact({ ...manifest, phase: 'phase_0_exit', entry_kind: 'phase_0_exit' });
+expectCode(() => validateManifestArtifact({ ...manifest, phase: 'phase_0_exit', entry_kind: 'phase_0_exit' }), 'manifest_schema_invalid');
 assert.equal(manifest.repositories.cc_gateway.clean, true);
 assert.equal(manifest.repositories.sub2api.clean, true);
 assert.equal(manifest.governance.requirement_registry.status, 'absent_pre_governance_bootstrap');
@@ -317,6 +593,14 @@ assert.ok(publishedSchema.$defs.repository.required.includes('dirty_record_forma
 assert.deepEqual(publishedSchema.properties.dependencies.properties.runtime_toolchain.properties.node, { $ref: '#/$defs/sha256' });
 assert.deepEqual(publishedSchema.$defs.dirtyRecord.properties.object_type.enum, ['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);
 assert.ok(Array.isArray(publishedSchema.properties.codegraph.oneOf));
+assert.deepEqual(publishedSchema.properties.parent_reference, { $ref: '#/$defs/parentReference' });
+assert.deepEqual(publishedSchema.properties.capture_inputs, { $ref: '#/$defs/captureInputs' });
+const entrySchemaRule = publishedSchema.allOf.find((rule: any) => rule.if?.properties?.phase?.const === 'phase_0_entry');
+const exitSchemaRule = publishedSchema.allOf.find((rule: any) => rule.if?.properties?.phase?.const === 'phase_0_exit');
+assert.deepEqual(entrySchemaRule.then.not.anyOf, [{ required: ['parent_reference'] }, { required: ['capture_inputs'] }]);
+assert.ok(exitSchemaRule.then.required.includes('parent_reference'));
+assert.ok(exitSchemaRule.then.required.includes('capture_inputs'));
+assert.deepEqual(exitSchemaRule.then.properties.governance.properties.requirement_registry, { $ref: '#/$defs/presentDigestMarker' });
 
 // Output parent realpath containment rejects a symlinked parent.
 const outputRoot = mkdtempSync(path.join(tmpdir(), 'oracle-output-'));
@@ -380,6 +664,8 @@ validateReceiptArtifact(checkedReceipt);
 assert.equal(checkedManifest.contract.repository_role, 'sub2api');
 assert.equal(checkedReceipt.bootstrap_commit, checkedManifest.approved_tool_head);
 assert.equal(checkedReceipt.manifest_sha256, sha256(readFileSync(path.join(process.cwd(), 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'))));
-assert.equal(checkedReceipt.schema_sha256, sha256(schemaBytes));
+const checkedEvidenceCommit = git(process.cwd(), 'log', '-1', '--format=%H', 'HEAD', '--', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json');
+const checkedEvidenceSchema = execFileSync('git', ['show', `${checkedEvidenceCommit}:docs/superpowers/schemas/oracle-lab-run-manifest.schema.json`]);
+assert.equal(checkedReceipt.schema_sha256, sha256(checkedEvidenceSchema));
 
 console.log('oracle lab baseline freeze tests passed');
