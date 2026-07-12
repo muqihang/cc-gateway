@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "phase": "phase-0",
-  "generated_at": "2026-07-12T09:11:18.654Z",
-  "expires_at": "2026-07-13T09:11:18.654Z",
-  "baseline_digest": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170",
-  "command_results_digest": "sha256:cc0f09c68a38bffea3997022285a710fc78575d8b3c8753ea2eb41f7f393f53c",
-  "context_pack_digest": "sha256:3444735a03b2a5d800c9ea3943d218623d3e80664f105e66af81c822f0e9ef11",
+  "generated_at": "2026-07-12T09:32:38.683Z",
+  "expires_at": "2026-07-13T09:32:38.683Z",
+  "baseline_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
+  "command_results_digest": "sha256:342daec47a5929b6d2cef0ca9a8bb2e244863e196058dc3ef4a506efcde7da99",
+  "context_pack_digest": "sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92",
   "repositories": [
     {
       "name": "cc_gateway",
-      "commit": "128fdf8cd6e3ec97da8eaeffbd6a6b2b4af9267d",
+      "commit": "a94462b372b9397d914868450e12f2cc1f6dc002",
       "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
@@ -22,47 +22,47 @@
     {
       "command_id": "cc-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:ca914d243dd5e99e15fe78647f093b894cf23a8bd66300124dae88e25af8bd70"
+      "result_digest": "sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da"
     },
     {
       "command_id": "cc-build",
       "status": "pass",
-      "result_digest": "sha256:90d2a7b71710d63cfcbff88ec1b31ba47da939385467339e3b11b038ad7c03e7"
+      "result_digest": "sha256:edbabc11a3752c71cfa7e7a9d924e5db2b40eafae1dd62645421e0928f2cd1bb"
     },
     {
       "command_id": "cc-test",
       "status": "pass",
-      "result_digest": "sha256:9440a5c643011c9604a89ba4be7b09aeb6716060bdaab85d07519dab32efdfbe"
+      "result_digest": "sha256:bba3427750b1bae8b8918ed80f9bf6305153db2f45e95b864037b26372c2b6b9"
     },
     {
       "command_id": "sidecar-b4-b6-red",
       "status": "expected_fail",
-      "result_digest": "sha256:c40860fcd79368a6465dcd8c1e688c49208d383180eca5a66e9fc2ce72f09fe1"
+      "result_digest": "sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669"
     },
     {
       "command_id": "sidecar-test",
       "status": "pass",
-      "result_digest": "sha256:9b67f5c3a34d3d974e34167faf150108bad396c77aa4e52ea90465f57db666a7"
+      "result_digest": "sha256:b17f5dcfd3c11378773f3fae785dcfeac1f13c7b3b4fe52e806c92b42722808f"
     },
     {
       "command_id": "sub2api-b1-b3-red",
       "status": "expected_fail",
-      "result_digest": "sha256:cf772c374f731aeea2b80e3c8c4c5f72b380ec4432281824683905c4788475d0"
+      "result_digest": "sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e"
     },
     {
       "command_id": "sub2api-test",
       "status": "pass",
-      "result_digest": "sha256:025b3ac1410c95e30a35eb4430fcf735c0545129625daa82367aae1c773f73f0"
+      "result_digest": "sha256:928ac7ec3b17e2bb94df59d318886585a94aa13c80a2d8d2d6053dfcdb5a6bba"
     }
   ],
   "artifacts": [
     {
       "path": "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json",
-      "digest": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170"
+      "digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f"
     },
     {
       "path": "docs/superpowers/evidence/phase-0/phase-0-context-pack.json",
-      "digest": "sha256:3444735a03b2a5d800c9ea3943d218623d3e80664f105e66af81c822f0e9ef11"
+      "digest": "sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92"
     }
   ],
   "known_unknowns": [
@@ -79,6 +79,7 @@
     "missing context, proxy generation, manifest authority, and direct-fallback prohibition reach transport; missing account identity is independently tested while proxy identity remains valid; disabled profile already denies before transport",
     "owner-positive fixtures reach every named operation; authenticated principal, administrator, tenant, group, creator/owner, role, and expected version are varied independently; valid-owner wrong-state is rejected distinctly; AccountHealthcheck uses an owner-bound real account reader fixture",
     "promotion is prohibited before all compatibility gates and rollback review pass",
+    "roadmap evidence-to-decision matrix binds P0 baseline/contract, B1-B6, and HA-P0-009 rows with evidence digest, scope, compatibility verdict, negative capabilities, target change, owner, and promotion gate",
     "selected compromise-boundary dependency HA-P0-005 is protected_gateway; an independently isolated policy-broker capability remains mandatory against gateway-process compromise",
     "selected compromise-boundary dependency HA-P0-005 is protected_gateway; network-level resolution pinning and sidecar enforcement remain mandatory before production authority",
     "selected compromise-boundary dependency HA-P0-005 is protected_gateway; production and real-canary authority remain disabled pending the policy broker",

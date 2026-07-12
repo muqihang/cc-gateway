@@ -34,6 +34,18 @@ test('documented Task 8 final evidence chain binds context to the exit manifest 
   assert.equal(contextCommand?.includes('phase-0-entry-baseline.json'), false)
 })
 
+test('roadmap makes the approved DAG and evidence-to-decision contract normative', async () => {
+  const roadmap = await readFile('docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', 'utf8')
+  assert.equal(roadmap.includes('each phase receives its own implementation plan only after the previous phase'), false)
+  assert.equal(roadmap.includes("previous phase's handoff bundle"), false)
+  assert.match(roadmap, /Phase 1 and Phase 2 may start independently after Phase 0/)
+  assert.match(roadmap, /Phase 3 depends on Phase 2/)
+  assert.match(roadmap, /Phase 4 depends on both Phase 1 and Phase 3/)
+  const columns = ['evidence digest', 'scope', 'compatibility verdict', 'negative capabilities', 'target change', 'owner', 'promotion gate']
+  for (const column of columns) assert.match(roadmap.toLowerCase(), new RegExp(column))
+  for (const row of ['P0 baseline/contract', 'B1-B6', 'HA-P0-009']) assert.match(roadmap, new RegExp(row.replace('-', '\\-')))
+})
+
 function record(commandId: string, repository: CommandResultRecord['repository'] = 'cc-gateway'): CommandResultRecord {
   const unsigned = { command_id: commandId, repository, repository_commit: commit, manifest_digest: digest, environment_digest: otherDigest, exit_code: 0, expected_exit: 0 as const, status: 'pass' as const, output_digest: digest }
   return { ...unsigned, duration_ms: 17, result_digest: commandRecordDigest(unsigned) }

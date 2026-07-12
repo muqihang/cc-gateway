@@ -14,9 +14,9 @@
 ## Purpose
 
 This roadmap turns the three design documents into seven independently reviewable delivery
-phases. It is the durable navigation document for context handoff. Each phase receives its own
-implementation plan only after the previous phase has passed its exit gate and produced a fresh
-baseline and handoff bundle.
+phases. It is the durable navigation document for context handoff. A phase may start only when
+all of its declared predecessor gates in the authoritative dependency DAG have passed and its
+entry baseline and handoff bundle are fresh; independent branches may proceed concurrently.
 
 The roadmap is not a substitute for a phase implementation plan. It defines order, dependencies,
 hard gates, artifacts, and non-goals. The phase plan defines exact files, interfaces, tests,
@@ -40,8 +40,10 @@ its original source references.
 1. P0/P1 findings are not a separate pre-roadmap activity. They are Phase 0 hard gates and
    Phase 1/2 implementation inputs.
 2. No single implementation plan spans all seven phases. One plan is written per phase.
-3. No phase starts from prose alone. It starts from the previous phase's handoff bundle and a
-   newly frozen repository and dependency baseline.
+3. No phase starts from prose alone. It starts from every applicable predecessor handoff bundle
+   and a newly frozen repository and dependency baseline. Phase 1 and Phase 2 branch from Phase 0;
+   Phase 3 follows Phase 2; Phase 4 joins Phase 1 and Phase 3; Phase 5 follows Phase 4; Phase 6
+   follows the Phase 4 and Phase 5 gates plus all other applicable prior gates.
 4. No phase may silently broaden scope because a later design section is convenient to implement.
 5. Unknown, contradictory, expired, or missing evidence disables the affected capability.
 6. Real upstream requests are prohibited until Phase 6 and require a separate approved canary
@@ -67,10 +69,12 @@ Phase 0  Governance, baseline, and harness foundation
                                                    +--> Phase 6  Staging and controlled canary
 ```
 
-Phase 1 may begin after the Phase 0 governance gates pass. Phase 2 defines contracts required by
-later runtime work. Phase 3 can build evidence tooling in parallel with generic Phase 1 boundary
-repairs, but version-specific profile promotion remains blocked until Phase 3 exits. Phase 4 and
-Phase 5 depend on the schemas, evidence states, and transport contracts from earlier phases.
+Phase 1 and Phase 2 may begin independently after the Phase 0 governance gates pass. Phase 3
+depends on Phase 2 and is the primary owner for reverse/static/dynamic/protocol/TLS/HTTP2/
+unknown-transport evidence capture. Phase 4 depends on both Phase 1 and Phase 3. Phase 5 depends
+on Phase 4. Phase 6 depends on the Phase 4 and Phase 5 exit gates and all other applicable prior
+gates. Version-specific profile promotion remains blocked until the required predecessor gates
+and evidence decisions pass.
 
 ## Phase 0: Governance, Baseline, and Harness Foundation
 
@@ -370,7 +374,7 @@ Every implementation task handed to an agent includes:
 - Missing or stale context blocks implementation and produces a re-baseline request.
 - Every failed command, skipped test, degraded cell, and unresolved contradiction is recorded.
 - Context compaction is handled by the handoff bundle, not by memory or prose reconstruction.
-- The next phase begins by verifying the previous phase's exit digest and repository state.
+- Every phase begins by verifying all applicable predecessor exit digests and repository states.
 
 ### Phase Handoff Bundle
 
@@ -401,8 +405,10 @@ After this roadmap is accepted:
    artifact update, and commit checkpoint.
 4. Map every plan task to requirement IDs and one phase exit gate.
 5. Review and execute Phase 0.
-6. Generate a fresh handoff bundle and re-plan Phase 1 from the resulting code, not from stale
-   assumptions in the roadmap.
+6. Generate a fresh handoff bundle and re-plan Phase 1 and Phase 2 from the resulting code, not
+   from stale assumptions in the roadmap; plan Phase 3 only after the Phase 2 gate, Phase 4 only
+   after both Phase 1 and Phase 3, Phase 5 only after Phase 4, and Phase 6 only after its joined
+   predecessor gates.
 
 Recommended plan files:
 
@@ -424,3 +430,114 @@ This roadmap is ready to drive phase planning when:
 - no phase implies that local evidence proves provider-internal behavior;
 - the first detailed plan is limited to Phase 0 and names exact files only after repository
   reconnaissance.
+
+## Phase 0 AMEND: Cross-Document Coverage and Ownership
+
+This amendment records the operator-approved dependency DAG:
+
+```text
+Phase 0 -> Phase 1 --------------------+
+       \-> Phase 2 -> Phase 3 ---------+-> Phase 4 -> Phase 5 -> Phase 6A -> approval -> Phase 6B
+```
+
+Phase 1 and Phase 2 may start independently after Phase 0. Phase 3 depends on Phase 2 and owns
+reverse/static/dynamic/protocol/TLS/HTTP2/unknown-transport evidence capture. Phase 4 depends on
+both Phase 1 and Phase 3; Phase 5 depends on Phase 4; Phase 6 depends on the Phase 4 and Phase 5
+exit gates plus all applicable prior gates. Runtime integration and promotion remain blocked until
+the relevant predecessor gates pass.
+
+### Design-to-Roadmap Mapping
+
+| Design phase | Roadmap owner |
+| --- | --- |
+| Design 0 restore baselines | Phase 0 |
+| Design 1 oracle core | Phase 0 foundation, Phase 2 contracts, Phase 3 evidence tooling |
+| Design 2 static/runtime matrices | Phase 3 |
+| Design 3 TLS/proxy evidence | Phase 3 |
+| Design 4 CCH/profile decisions | Phase 3 decision output constrained by Phase 2 |
+| Design 5 gateway/Sub2API integration | Phases 1, 2, 4, 5 |
+| Design 6 staging without accounts | Phase 6A |
+| Design 7 approved canary | Phase 6B |
+
+### Coverage Matrix
+
+| Source | Primary phase | Gate/role |
+| --- | --- | --- |
+| Adversarial A evidence acquisition | P3 | P0 freeze, P2 contracts, P6 integrated rerun |
+| Adversarial B immediate findings | P1/P2 | P0 failing fixtures, P4 enforcement, P6 proof |
+| Adversarial C campaign | P3/P4/P5 | P6 complete chain |
+| Adversarial C2 advanced campaigns | P2/P3/P4/P5 | P6 integrated execution |
+| Adversarial D blue-team | P5 | P6 timeline validation |
+| WP0 baseline/contract discovery | P0 | entry and exit baseline |
+| WP0.5 normative compatibility | P0 defines RED fixture; P2 implements | absence is not permission |
+| WP1 evidence factory | P3 | evidence artifacts and decision matrix |
+| WP2 manifest authority | P2 | P3 candidate evidence, P6 canary evidence |
+| WP3 onboarding/replay | P1 | P6 replay acceptance |
+| WP4 sidecar authentication | P2 contract, P4 implementation | P4 mutation/restart campaign |
+| WP5 behavior budget/scheduler | P5 | operational maturity |
+| WP6 correlation/fault/state | P3/P4/P5 | P6 integrated acceptance |
+| WP7 staging/canary | P6A/P6B | separate approval boundaries |
+| Hardening Priority 0 | P0/P1/P2 | definitions, boundary repair, enforcement |
+| Hardening Priority 1 | P1/P3/P4/P5 | reliable evidence and safe operation |
+| Hardening Priority 2 | P5/P6 | scheduler, canary, production maturity |
+| Sections 5-6 | P3 (P0/P2 schemas) | evidence factory and safety |
+| Sections 7-8 | P2/P4/P1 | transport and control plane |
+| Sections 9-11 | P5/P6 | scheduler, canary, incident response |
+| Sections 12-14 | cross-phase, P0 reconciliation | tests, gates, parent map |
+| Sections 15-18 | cross-phase, P0 acceptance | priority, deliverables, prohibited claims, acceptance |
+
+### Contract, Implementation, Campaign Ownership
+
+Phase 2 owns shared contract/specification schemas, authority, compatibility gates, negative
+capabilities, replay/envelope, transport and scheduler interfaces. Phase 1 owns control-plane
+implementation; Phase 3 owns observation/evidence tooling and the evidence-to-decision artifact;
+Phase 4 owns runtime isolation and enforcement; Phase 5 owns scheduler/operations; Phase 6 owns
+staging/canary execution. Campaign ownership follows the implementation phase, with Phase 6 as the
+integrated acceptance owner. Phase 3 never promotes a profile from local evidence alone.
+
+### Evidence-to-Decision Matrix Contract
+
+The Phase 0 handoff records the following decision rows as the minimum concrete matrix contract.
+Every later row uses immutable `sha256:` evidence digests, exact scope, separate wire/semantic/
+state/failure compatibility verdicts, explicit negative capabilities, a target change from
+`no_change|strip|disable|add|replace`, a named owner and reviewer, and a promotion gate. The
+Phase 0 values below are decision inputs, not permission to enable runtime behavior.
+
+| Decision row | Evidence digest | Scope | Compatibility verdict | Negative capabilities | Target change | Owner | Promotion gate |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| P0 baseline/contract | Exit baseline digest plus Sub2API formal-pool contract digest | Frozen CC Gateway and Sub2API heads, branch, manifest, contract, entry parent | Structural binding verified; wire/semantic/state/failure remain unclaimed | Real upstream, profile promotion, deployment, canary | `no_change` | cc-gateway-oracle-owner; security-reviewer | Phase 0 receipt, then Phase 2 contract gate |
+| B1-B6 | Command-result and stable failure-name digests for `AV-B1-001` through `AV-B6-001` | Local deterministic RED fixtures only | `incompatible` at each named boundary until its failing fixture turns GREEN | Direct egress, unsafe proxy destination, weak attestation, untrusted origin, incomplete envelope, missing authorization | `disable` | Per-registry implementation owners; security-reviewer | Phase 1 boundary gate and applicable Phase 4 runtime gate |
+| HA-P0-009 | `ha-p0-009-negative-capability.failure-names.json` digest plus CC RED result digest | Local gateway HTTP path through `startProxy` and `handleRequest` | Missing/unknown/contradictory/unsupported/incoherent declarations are `incompatible` | All absent, unknown, contradictory, expired, unsupported, or incoherent capabilities | `disable` | cc-gateway-oracle-owner; security-reviewer | Phase 2 negative-capability enforcement |
+
+Unknown, contradictory, expired, parser-disagreeing, or unexplained-transport rows remain disabled
+and cannot become acceptable in Phase 4. Each Phase 3 matrix artifact must also bind maximum
+authority, blocking contradictions/expiry, rollback reference, retention, redaction, destruction,
+requirement IDs, and the verifying command digest.
+
+### Artifact-Level Exit Gates
+
+Phase 3 exits only with schema/version/digest/scope/owner/sensitivity/retention/verification/
+expiry/requirement bindings for its execution graph, package inventory, static/dynamic evidence,
+HTTP/SSE/TLS/HTTP2/unknown-transport inventory, parser agreement, matrices, diffs, convergence,
+negative evidence, classifier leak report, decision matrix, negative-capability manifest, and
+destruction record.
+
+Phase 4 exits only with code/config/contract/manifest-bound transport-cell, proxy identity,
+complete-message, replay, policy-broker, rotation/restart, isolation, resource, retry,
+split-brain, kill-switch, and rollback artifacts proving fail-closed behavior before egress.
+
+Phase 5 exits only with machine-readable behavior budget, deterministic scheduler replay,
+counterfactual/shadow non-mutation, cost/fairness/oscillation, metric-to-action, workload,
+blue-team, privileged-action, capacity, incident, rollback, and expiry artifacts.
+
+Phase 6A exits only with a frozen local full-chain manifest, signed bundle, zero-external-socket
+proof, campaign index, leak scan, convergence/compatibility reports, rollback propagation, and
+every capability bound to a Phase 3 decision row. Phase 6B additionally requires one approved
+hypothesis, fixed manifest/contract/account/proxy/credential/transport digests, bounded timeline,
+stop rules, cleanup/destruction, conclusion-boundary validation, and an `upstream_canary_observed`
+result with no automatic promotion.
+
+Priority 0 semantics are explicit: Phase 0 defines and registers `HA-P0-009` and keeps its
+cross-language/schema fixture failing; Phase 2 implements and enforces the negative-capability
+manifest, denying absent, unknown, contradictory, expired, or unsupported capabilities before
+request construction, DNS, or socket creation.
