@@ -125,6 +125,10 @@ function encodePath(value: Buffer): string {
   return value.toString('base64url');
 }
 
+function encodeRepositoryPath(value: string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
 function field(value: Buffer | string | undefined): Buffer {
   const bytes = value === undefined ? Buffer.alloc(0) : Buffer.isBuffer(value) ? value : Buffer.from(value);
   const length = Buffer.alloc(4);
@@ -345,7 +349,12 @@ function exactObject(value: unknown, keys: string[], code: string): asserts valu
 
 function validSha(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value); }
 function validCommit(value: unknown): boolean { return typeof value === 'string' && /^[0-9a-f]{40,64}$/.test(value); }
-function validPathBytes(value: unknown): boolean { return typeof value === 'string' && value.length > 0 && /^[A-Za-z0-9_-]+$/.test(value); }
+function validPathBytes(value: unknown): boolean {
+  return typeof value === 'string'
+    && value.length > 0
+    && /^[A-Za-z0-9_-]+$/.test(value)
+    && Buffer.from(value, 'base64url').toString('base64url') === value;
+}
 const DIRTY_STATUSES = new Set(['??', '!!', 'SM', ' M', 'M ', 'MM', ' T', 'T ', 'TT', 'A ', 'AM', 'AT', ' D', 'D ', 'DT', 'R ', 'RM', 'RT', 'C ', 'CM', 'CT', 'DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const OBJECT_TYPES = new Set(['regular_file', 'symlink', 'directory', 'submodule', 'deleted', 'other']);
 const FILE_MODES = new Set(['000000', '040000', '100644', '100755', '120000', '160000']);
@@ -402,8 +411,8 @@ function validateParentReference(value: unknown): void {
   if (v.type !== 'phase_0_entry_evidence') throw new BaselineError('manifest_schema_invalid', 'invalid parent reference type');
   validatePathDigest(v.entry_manifest);
   validatePathDigest(v.entry_receipt);
-  if (Buffer.from(v.entry_manifest.repository_relative_path_base64url, 'base64url').toString() !== ENTRY_MANIFEST_RELATIVE_PATH
-    || Buffer.from(v.entry_receipt.repository_relative_path_base64url, 'base64url').toString() !== ENTRY_RECEIPT_RELATIVE_PATH) {
+  if (v.entry_manifest.repository_relative_path_base64url !== encodeRepositoryPath(ENTRY_MANIFEST_RELATIVE_PATH)
+    || v.entry_receipt.repository_relative_path_base64url !== encodeRepositoryPath(ENTRY_RECEIPT_RELATIVE_PATH)) {
     throw new BaselineError('manifest_binding_mismatch', 'exit parent reference paths do not match committed Phase 0 entry evidence');
   }
 }
@@ -413,8 +422,8 @@ function validateCaptureInputs(value: unknown): void {
   const v = value as any;
   validatePathDigest(v.schema);
   validatePathDigest(v.tool);
-  if (Buffer.from(v.schema.repository_relative_path_base64url, 'base64url').toString() !== MANIFEST_SCHEMA_RELATIVE_PATH
-    || Buffer.from(v.tool.repository_relative_path_base64url, 'base64url').toString() !== FREEZE_TOOL_RELATIVE_PATH) {
+  if (v.schema.repository_relative_path_base64url !== encodeRepositoryPath(MANIFEST_SCHEMA_RELATIVE_PATH)
+    || v.tool.repository_relative_path_base64url !== encodeRepositoryPath(FREEZE_TOOL_RELATIVE_PATH)) {
     throw new BaselineError('manifest_binding_mismatch', 'exit capture input paths do not match the reviewed schema and tool');
   }
 }
@@ -443,7 +452,7 @@ function validateManifestArtifactAgainstBindings(value: unknown, bindings: Froze
   exactObject(v.legacy_comparison, ['requirement_id', 'version', 'authority', 'use', 'promotion_eligible', 'tuple_digests'], 'manifest_schema_invalid');
   if (v.legacy_comparison.requirement_id !== 'OL-LEGACY-001' || v.legacy_comparison.version !== '2.1.197' || v.legacy_comparison.authority !== 'unverified_legacy' || v.legacy_comparison.use !== 'comparison_only' || v.legacy_comparison.promotion_eligible !== false) throw new BaselineError('manifest_schema_invalid', 'invalid legacy comparison controls');
   exactObject(v.legacy_comparison.tuple_digests, ['persona', 'request_shape', 'cch', 'tls'], 'manifest_schema_invalid'); for (const tuple of Object.values(v.legacy_comparison.tuple_digests)) validateDigestMarker(tuple);
-  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== bindings.ccGatewayHead || v.repositories.cc_gateway.head !== bindings.ccGatewayHead || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch || v.repositories.sub2api.head !== bindings.sub2apiHead || v.repositories.sub2api.branch !== bindings.sub2apiBranch || v.contract.sha256 !== bindings.contractSha256 || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== bindings.contractRelativePath)) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
+  if (v.phase === 'phase_0_entry' && (v.approved_tool_head !== bindings.ccGatewayHead || v.repositories.cc_gateway.head !== bindings.ccGatewayHead || v.repositories.cc_gateway.branch !== bindings.ccGatewayBranch || v.repositories.sub2api.head !== bindings.sub2apiHead || v.repositories.sub2api.branch !== bindings.sub2apiBranch || v.contract.sha256 !== bindings.contractSha256 || v.contract.repository_relative_path_base64url !== encodeRepositoryPath(bindings.contractRelativePath))) throw new BaselineError('manifest_binding_mismatch', 'entry artifact does not match frozen Phase 0 bindings');
   if (v.phase === 'phase_0_exit') {
     validateParentReference(v.parent_reference);
     validateCaptureInputs(v.capture_inputs);
@@ -455,7 +464,7 @@ function validateManifestArtifactAgainstBindings(value: unknown, bindings: Froze
       || v.governance.requirement_registry?.status !== 'present'
       || v.governance.claim_registry?.status !== 'present'
       || v.contract.sha256 !== bindings.contractSha256
-      || Buffer.from(v.contract.repository_relative_path_base64url, 'base64url').toString() !== bindings.contractRelativePath) {
+      || v.contract.repository_relative_path_base64url !== encodeRepositoryPath(bindings.contractRelativePath)) {
       throw new BaselineError('manifest_binding_mismatch', 'exit artifact does not match reviewed Phase 0 bindings');
     }
   }

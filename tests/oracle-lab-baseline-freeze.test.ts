@@ -47,6 +47,20 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function nonCanonicalBase64url(value: string): string {
+  const decoded = Buffer.from(value, 'base64url');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const candidates = [
+    ...alphabet.split('').map((suffix) => `${value.slice(0, -1)}${suffix}`),
+    ...alphabet.split('').map((suffix) => `${value}${suffix}`),
+  ];
+  const alternate = candidates.find((candidate) => candidate !== value
+    && /^[A-Za-z0-9_-]+$/.test(candidate)
+    && Buffer.from(candidate, 'base64url').equals(decoded));
+  assert.ok(alternate, `expected a non-canonical Base64URL spelling for ${value}`);
+  return alternate;
+}
+
 const tracked = fixture('tracked');
 writeFileSync(path.join(tracked, 'tracked.txt'), 'changed\n');
 expectCode(() => computeRepositoryState(tracked), 'undeclared_dirty_tree');
@@ -273,6 +287,56 @@ assert.deepEqual(JSON.parse(successfulExitCli.stdout), {
   manifest_sha256: sha256(exitManifestBytes),
   receipt_written: false,
 });
+
+// The production entrypoint must work through npm argument forwarding in clean reviewed-head clones.
+const reviewedSub2apiSource = path.resolve(process.cwd(), '../sub2api-zhumeng-main');
+function reviewedCliClone(name: string): { gateway: string; sub2api: string } {
+  const root = mkdtempSync(path.join(tmpdir(), `oracle-reviewed-cli-${name}-`));
+  const gatewayClone = path.join(root, 'gateway');
+  const sub2apiClone = path.join(root, 'sub2api');
+  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.ccGatewayBranch, process.cwd(), gatewayClone]);
+  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.sub2apiBranch, reviewedSub2apiSource, sub2apiClone]);
+  symlinkSync(path.join(process.cwd(), 'node_modules'), path.join(gatewayClone, 'node_modules'));
+  const exclude = path.resolve(gatewayClone, git(gatewayClone, 'rev-parse', '--git-path', 'info/exclude'));
+  writeFileSync(exclude, `${readFileSync(exclude, 'utf8')}\nnode_modules\n`);
+  assert.equal(git(gatewayClone, 'status', '--porcelain'), '');
+  assert.equal(git(sub2apiClone, 'status', '--porcelain'), '');
+  return { gateway: gatewayClone, sub2api: sub2apiClone };
+}
+
+function reviewedExitCommand(fixture: { gateway: string; sub2api: string }, expectedCcHead: string): string[] {
+  return [
+    'exec', 'tsx', 'tools/oracle-lab/freeze-baseline.ts', '--',
+    '--cc-gateway-root', fixture.gateway,
+    '--sub2api-root', fixture.sub2api,
+    '--contract-path', path.join(fixture.sub2api, PHASE_0_BINDINGS.contractRelativePath),
+    '--parent-entry', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json',
+    '--parent-entry-receipt', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json',
+    '--expected-cc-head', expectedCcHead,
+    '--expected-sub2api-head', git(fixture.sub2api, 'rev-parse', 'HEAD'),
+    '--out', 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json',
+  ];
+}
+
+const reviewedCliSuccessFixture = reviewedCliClone('success');
+const reviewedCliSuccess = spawnSync('npm', reviewedExitCommand(reviewedCliSuccessFixture, git(reviewedCliSuccessFixture.gateway, 'rev-parse', 'HEAD')), {
+  cwd: reviewedCliSuccessFixture.gateway,
+  encoding: 'utf8',
+});
+assert.equal(reviewedCliSuccess.status, 0, reviewedCliSuccess.stderr);
+const reviewedCliOutput = path.join(reviewedCliSuccessFixture.gateway, 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json');
+assert.equal(existsSync(reviewedCliOutput), true);
+assert.equal(existsSync(`${reviewedCliOutput}.receipt.json`), false);
+assert.equal(JSON.parse(readFileSync(reviewedCliOutput, 'utf8')).approved_tool_head, git(reviewedCliSuccessFixture.gateway, 'rev-parse', 'HEAD'));
+
+const reviewedCliMismatchFixture = reviewedCliClone('mismatch');
+const reviewedCliMismatch = spawnSync('npm', reviewedExitCommand(reviewedCliMismatchFixture, '0'.repeat(40)), {
+  cwd: reviewedCliMismatchFixture.gateway,
+  encoding: 'utf8',
+});
+assert.equal(reviewedCliMismatch.status, 1, reviewedCliMismatch.stderr);
+assert.match(reviewedCliMismatch.stderr, /"code":"cc_gateway_head_mismatch"/);
+assert.equal(existsSync(path.join(reviewedCliMismatchFixture.gateway, 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json')), false);
 
 const mixedCli = spawnSync('tsx', [
   ...cliArgs.slice(0, -4),
@@ -630,6 +694,48 @@ frozenLike.repositories.sub2api.branch = PHASE_0_BINDINGS.sub2apiBranch;
 frozenLike.contract.sha256 = PHASE_0_BINDINGS.contractSha256;
 frozenLike.contract.repository_relative_path_base64url = Buffer.from(PHASE_0_BINDINGS.contractRelativePath).toString('base64url');
 assert.equal(frozenLike.contract.repository_role, 'sub2api');
+
+const canonicalExit = clone(frozenLike) as any;
+canonicalExit.phase = 'phase_0_exit';
+canonicalExit.entry_kind = 'phase_0_exit';
+canonicalExit.governance = {
+  requirement_registry: { status: 'present', sha256: '0'.repeat(64) },
+  claim_registry: { status: 'present', sha256: '1'.repeat(64) },
+};
+canonicalExit.parent_reference = {
+  type: 'phase_0_entry_evidence',
+  entry_manifest: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json').toString('base64url'),
+    sha256: '2'.repeat(64),
+  },
+  entry_receipt: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json').toString('base64url'),
+    sha256: '3'.repeat(64),
+  },
+};
+canonicalExit.capture_inputs = {
+  schema: {
+    repository_relative_path_base64url: Buffer.from('docs/superpowers/schemas/oracle-lab-run-manifest.schema.json').toString('base64url'),
+    sha256: '4'.repeat(64),
+  },
+  tool: {
+    repository_relative_path_base64url: Buffer.from('tools/oracle-lab/freeze-baseline.ts').toString('base64url'),
+    sha256: '5'.repeat(64),
+  },
+};
+validateManifestArtifact(canonicalExit);
+for (const selectPath of [
+  (candidate: any) => candidate.parent_reference.entry_manifest,
+  (candidate: any) => candidate.parent_reference.entry_receipt,
+  (candidate: any) => candidate.capture_inputs.schema,
+  (candidate: any) => candidate.capture_inputs.tool,
+]) {
+  const candidate = clone(canonicalExit);
+  const pathDigest = selectPath(candidate);
+  pathDigest.repository_relative_path_base64url = nonCanonicalBase64url(pathDigest.repository_relative_path_base64url);
+  expectCode(() => validateManifestArtifact(candidate), 'manifest_schema_invalid');
+}
+
 const missingContractRole = clone(frozenLike);
 delete missingContractRole.contract.repository_role;
 expectCode(() => validateManifestArtifact(missingContractRole), 'manifest_schema_invalid');
