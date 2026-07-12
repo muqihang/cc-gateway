@@ -11,9 +11,12 @@ const ENTRY_FILES = {
   context_schema: 'docs/superpowers/schemas/oracle-lab-post-integration-context.schema.json',
   results_schema: 'docs/superpowers/schemas/oracle-lab-post-integration-command-results.schema.json',
   catalog_schema: 'docs/superpowers/schemas/oracle-lab-post-integration-command-catalog.schema.json',
+  handoff_schema: 'docs/superpowers/schemas/oracle-lab-post-integration-handoff.schema.json',
+  receipt_schema: 'docs/superpowers/schemas/oracle-lab-post-integration-receipt.schema.json',
   capture_tool: 'tools/oracle-lab/post-integration-entry.ts',
   context_tool: 'tools/oracle-lab/post-integration-context.ts',
   catalog_tool: 'tools/oracle-lab/post-integration-command-catalog.ts',
+  binder_tool: 'tools/oracle-lab/post-integration-handoff.ts',
   command_catalog: 'docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json',
 } as const
 

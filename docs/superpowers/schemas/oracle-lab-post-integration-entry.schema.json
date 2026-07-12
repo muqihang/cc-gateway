@@ -27,8 +27,8 @@
     },
     "capture_inputs": {
       "type": "object", "additionalProperties": false,
-      "required": ["reviewed_tool_head", "manifest_schema", "context_schema", "results_schema", "catalog_schema", "capture_tool", "context_tool", "catalog_tool", "command_catalog"],
-      "properties": {"reviewed_tool_head": {"$ref": "#/$defs/commit"}, "manifest_schema": {"$ref": "#/$defs/path_digest"}, "context_schema": {"$ref": "#/$defs/path_digest"}, "results_schema": {"$ref": "#/$defs/path_digest"}, "catalog_schema": {"$ref": "#/$defs/path_digest"}, "capture_tool": {"$ref": "#/$defs/path_digest"}, "context_tool": {"$ref": "#/$defs/path_digest"}, "catalog_tool": {"$ref": "#/$defs/path_digest"}, "command_catalog": {"$ref": "#/$defs/path_digest"}}
+      "required": ["reviewed_tool_head", "manifest_schema", "context_schema", "results_schema", "catalog_schema", "handoff_schema", "receipt_schema", "capture_tool", "context_tool", "catalog_tool", "binder_tool", "command_catalog"],
+      "properties": {"reviewed_tool_head": {"$ref": "#/$defs/commit"}, "manifest_schema": {"$ref": "#/$defs/path_digest"}, "context_schema": {"$ref": "#/$defs/path_digest"}, "results_schema": {"$ref": "#/$defs/path_digest"}, "catalog_schema": {"$ref": "#/$defs/path_digest"}, "handoff_schema": {"$ref": "#/$defs/path_digest"}, "receipt_schema": {"$ref": "#/$defs/path_digest"}, "capture_tool": {"$ref": "#/$defs/path_digest"}, "context_tool": {"$ref": "#/$defs/path_digest"}, "catalog_tool": {"$ref": "#/$defs/path_digest"}, "binder_tool": {"$ref": "#/$defs/path_digest"}, "command_catalog": {"$ref": "#/$defs/path_digest"}}
     },
     "runtime": {
       "type": "object", "additionalProperties": false, "required": ["node", "npm", "git", "go", "environment"],

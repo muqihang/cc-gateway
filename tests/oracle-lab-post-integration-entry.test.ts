@@ -71,9 +71,12 @@ function validManifest(): PostIntegrationEntryManifest {
       context_schema: { path: 'docs/superpowers/schemas/oracle-lab-post-integration-context.schema.json', digest: d('5') },
       results_schema: { path: 'docs/superpowers/schemas/oracle-lab-post-integration-command-results.schema.json', digest: d('6') },
       catalog_schema: { path: 'docs/superpowers/schemas/oracle-lab-post-integration-command-catalog.schema.json', digest: d('7') },
+      handoff_schema: { path: 'docs/superpowers/schemas/oracle-lab-post-integration-handoff.schema.json', digest: d('1') },
+      receipt_schema: { path: 'docs/superpowers/schemas/oracle-lab-post-integration-receipt.schema.json', digest: d('2') },
       capture_tool: { path: 'tools/oracle-lab/post-integration-entry.ts', digest: d('8') },
       context_tool: { path: 'tools/oracle-lab/post-integration-context.ts', digest: d('9') },
       catalog_tool: { path: 'tools/oracle-lab/post-integration-command-catalog.ts', digest: d('a') },
+      binder_tool: { path: 'tools/oracle-lab/post-integration-handoff.ts', digest: d('3') },
       command_catalog: { path: 'docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', digest: d('b') },
     },
     runtime: { node: d('c'), npm: d('d'), git: d('e'), go: d('f'), environment: d('0') },
@@ -105,6 +108,8 @@ test('post-integration schemas use a distinct fail-closed namespace', () => {
     'docs/superpowers/schemas/oracle-lab-post-integration-context.schema.json',
     'docs/superpowers/schemas/oracle-lab-post-integration-command-catalog.schema.json',
     'docs/superpowers/schemas/oracle-lab-post-integration-command-results.schema.json',
+    'docs/superpowers/schemas/oracle-lab-post-integration-handoff.schema.json',
+    'docs/superpowers/schemas/oracle-lab-post-integration-receipt.schema.json',
   ]) {
     const schema = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
     assert.equal(schema.additionalProperties, false)
@@ -267,10 +272,17 @@ test('context validator requires the exact integrated repository set and commits
 test('capture input validation re-derives every digest from the reviewed tool commit', async () => {
   const manifest = validManifest()
   const toolRoot = process.cwd()
-  const reviewedHead = git(toolRoot, 'rev-parse', 'HEAD')
+  const temporaryIndexRoot = await mkdtemp(path.join(tmpdir(), 'oracle-reviewed-tool-index-'))
+  const env = { ...process.env, GIT_INDEX_FILE: path.join(temporaryIndexRoot, 'index'), GIT_AUTHOR_NAME: 'Oracle Test', GIT_AUTHOR_EMAIL: 'oracle@example.invalid', GIT_COMMITTER_NAME: 'Oracle Test', GIT_COMMITTER_EMAIL: 'oracle@example.invalid' }
+  execFileSync('git', ['-C', toolRoot, 'read-tree', 'HEAD'], { env })
   for (const binding of Object.values(manifest.capture_inputs).filter((value): value is { path: string; digest: string } => typeof value === 'object')) {
-    binding.digest = sha256(execFileSync('git', ['-C', toolRoot, 'show', `${reviewedHead}:${binding.path}`], { encoding: 'buffer' }))
+    const blob = execFileSync('git', ['-C', toolRoot, 'hash-object', '-w', binding.path], { encoding: 'utf8', env }).trim()
+    execFileSync('git', ['-C', toolRoot, 'update-index', '--add', '--cacheinfo', `100644,${blob},${binding.path}`], { env })
+    binding.digest = digestFile(binding.path)
   }
+  const tree = execFileSync('git', ['-C', toolRoot, 'write-tree'], { encoding: 'utf8', env }).trim()
+  const parent = git(toolRoot, 'rev-parse', 'HEAD')
+  const reviewedHead = execFileSync('git', ['-C', toolRoot, 'commit-tree', tree, '-p', parent, '-m', 'reviewed input fixture'], { encoding: 'utf8', env }).trim()
   manifest.capture_inputs.reviewed_tool_head = reviewedHead
   validatePostIntegrationCaptureInputsAtToolRoot(manifest, toolRoot)
   manifest.capture_inputs.capture_tool.digest = d('f')
