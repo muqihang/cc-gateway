@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -246,9 +247,14 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
   }
   await mkdir(path.dirname(path.join(root, baseline)), { recursive: true })
   await writeFile(path.join(root, entryManifest), await readFile(path.join(originalCwd, entryBaseline)))
+  execFileSync('git', ['init', '-q'], { cwd: root }); execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root }); execFileSync('git', ['config', 'user.name', 'Oracle Test'], { cwd: root })
+  execFileSync('git', ['add', 'docs'], { cwd: root }); execFileSync('git', ['commit', '-qm', 'test: seed reviewed governance snapshot'], { cwd: root })
+  const reviewedHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
   const exitManifest = JSON.parse(await readFile(path.join(root, entryManifest), 'utf8')) as Record<string, any>
   exitManifest.phase = 'phase_0_exit'
   exitManifest.entry_kind = 'phase_0_exit'
+  exitManifest.approved_tool_head = reviewedHead
+  exitManifest.repositories.cc_gateway.head = reviewedHead
   exitManifest.governance = {
     requirement_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-requirements.json')).slice(7) },
     claim_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-claims.json')).slice(7) },
@@ -275,6 +281,13 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
     },
   }
   await writeFile(path.join(root, baseline), `${JSON.stringify(exitManifest, null, 2)}\n`)
+  const pendingRegistryPath = path.join(root, 'docs/superpowers/registry/oracle-lab-requirements.json')
+  const pendingRegistry = JSON.parse(await readFile(pendingRegistryPath, 'utf8')) as Array<Record<string, unknown>>
+  const pendingRequirement = pendingRegistry.find((record) => record.requirement_id === 'HA-P0-001')!
+  pendingRequirement.implementation_status = 'locally_verified'
+  pendingRequirement.last_verified_commit = reviewedHead
+  pendingRequirement.last_verified_at = '2026-07-12T00:00:00-07:00'
+  await writeFile(pendingRegistryPath, `${JSON.stringify(pendingRegistry, null, 2)}\n`)
 
   process.chdir(root)
   try {
@@ -282,7 +295,7 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
     const runTool = (tool: string, args: string[]) => execFileSync(tsx, [path.join(originalCwd, 'tools/oracle-lab', tool), '--', ...args], { cwd: root, encoding: 'utf8' })
     const catalogValue = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-command-catalog.json', 'utf8')) as CommandCatalogEntry[]
     const resultSetFor = (manifestPath: string): CommandResultSet => {
-      const manifest = JSON.parse(execFileSync('git', ['show', `HEAD:${manifestPath}`], { encoding: 'utf8' })) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
       const records = catalogValue.map((entry): CommandResultRecord => {
       const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
         const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(manifestPath), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
@@ -291,8 +304,6 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
       const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile('docs/superpowers/registry/oracle-lab-command-catalog.json'), manifest_digest: digestFile(manifestPath), records }
       return { ...unsigned, result_set_digest: commandSetDigest(unsigned) }
     }
-    execFileSync('git', ['init', '-q']); execFileSync('git', ['config', 'user.email', 'test@example.invalid']); execFileSync('git', ['config', 'user.name', 'Oracle Test'])
-    execFileSync('git', ['add', 'docs']); execFileSync('git', ['commit', '-qm', 'test: seed distinct entry and exit manifests'])
     writeJson(entryResults, resultSetFor(entryManifest))
     writeJson(transientResults, resultSetFor(baseline))
     runTool('build-context-pack.ts', ['--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--manifest', entryManifest, '--command-results', entryResults, '--requirement', 'HA-P0-001', '--requirement', 'HA-P0-002', '--out', entryContext])
@@ -317,6 +328,8 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
     assert.deepEqual(handoff.artifacts.map((artifact) => artifact.path).sort(), [baseline, evidenceContext].sort())
     assert.equal(handoff.context_pack_digest, digestFile(evidenceContext))
     assert.equal(context.manifest_digest, digestFile(baseline))
+    assert.equal(context.registry_digest, digestFile('docs/superpowers/registry/oracle-lab-requirements.json'))
+    assert.notEqual(context.registry_digest.slice(7), exitManifest.governance.requirement_registry.sha256)
     const manifestOnlyForgery = path.join(root, 'manifest-only-forgery.json')
     writeJson(manifestOnlyForgery, { ...context, manifest_digest: digestFile(entryManifest) })
     assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: manifestOnlyForgery, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_manifest_context')
@@ -325,7 +338,9 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
     const handoffCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
     const receiptPath = 'docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json'
     runTool('build-exit-receipt.ts', ['--baseline', baseline, '--handoff', handoffPath, '--handoff-commit', handoffCommit, '--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--catalog', 'docs/superpowers/registry/oracle-lab-command-catalog.json', '--out', receiptPath])
-    assert.deepEqual(validateExitReceiptValue(JSON.parse(await readFile(receiptPath, 'utf8'))), { ok: true, errors: [] })
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8'))
+    assert.deepEqual(validateExitReceiptValue(receipt), { ok: true, errors: [] })
+    assert.equal(receipt.artifact_digests['docs/superpowers/registry/oracle-lab-requirements.json'], context.registry_digest)
 
     const unmappedContext = { ...context, requirement_ids: ['HA-P0-000'] }
     await writeFile(evidenceContext, `${canonicalJson(unmappedContext)}\n`)
