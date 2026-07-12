@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "phase": "phase-0",
+  "generated_at": "2026-07-12T09:11:18.654Z",
+  "expires_at": "2026-07-13T09:11:18.654Z",
+  "baseline_digest": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170",
+  "command_results_digest": "sha256:cc0f09c68a38bffea3997022285a710fc78575d8b3c8753ea2eb41f7f393f53c",
+  "context_pack_digest": "sha256:3444735a03b2a5d800c9ea3943d218623d3e80664f105e66af81c822f0e9ef11",
+  "repositories": [
+    {
+      "name": "cc_gateway",
+      "commit": "128fdf8cd6e3ec97da8eaeffbd6a6b2b4af9267d",
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "sub2api",
+      "commit": "d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f",
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "cc-b4-b6-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:ca914d243dd5e99e15fe78647f093b894cf23a8bd66300124dae88e25af8bd70"
+    },
+    {
+      "command_id": "cc-build",
+      "status": "pass",
+      "result_digest": "sha256:90d2a7b71710d63cfcbff88ec1b31ba47da939385467339e3b11b038ad7c03e7"
+    },
+    {
+      "command_id": "cc-test",
+      "status": "pass",
+      "result_digest": "sha256:9440a5c643011c9604a89ba4be7b09aeb6716060bdaab85d07519dab32efdfbe"
+    },
+    {
+      "command_id": "sidecar-b4-b6-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:c40860fcd79368a6465dcd8c1e688c49208d383180eca5a66e9fc2ce72f09fe1"
+    },
+    {
+      "command_id": "sidecar-test",
+      "status": "pass",
+      "result_digest": "sha256:9b67f5c3a34d3d974e34167faf150108bad396c77aa4e52ea90465f57db666a7"
+    },
+    {
+      "command_id": "sub2api-b1-b3-red",
+      "status": "expected_fail",
+      "result_digest": "sha256:cf772c374f731aeea2b80e3c8c4c5f72b380ec4432281824683905c4788475d0"
+    },
+    {
+      "command_id": "sub2api-test",
+      "status": "pass",
+      "result_digest": "sha256:025b3ac1410c95e30a35eb4430fcf735c0545129625daa82367aae1c773f73f0"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json",
+      "digest": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170"
+    },
+    {
+      "path": "docs/superpowers/evidence/phase-0/phase-0-context-pack.json",
+      "digest": "sha256:3444735a03b2a5d800c9ea3943d218623d3e80664f105e66af81c822f0e9ef11"
+    }
+  ],
+  "known_unknowns": [
+    "Phase 0 fixture drives complete local HTTP requests through startProxy/handleRequest and proves missing, unknown, contradictory, unsupported, and incoherent compatibility declarations reach the upstream observer instead of failing closed",
+    "URL-only checks accept unsafe ranges and directive confusion; the real Handler does not consume its injected resolver/dial seam, so the rebinding test observes zero policy-owned resolutions instead of one pinned public dial; redirect, nested-proxy, and alternate-target cases remain explicit",
+    "arbitrary, wrong, expired, cross-session, and post-proxy-change proofs remain accepted; replay is rejected only after the current state transition",
+    "configured public origin remains authoritative; without configured origin or trusted ingress, Host, X-Forwarded-Host, and X-Forwarded-Proto each currently control the browser URL authority; the RED assertion accepts rejection, a relative result, or any fixed non-hostile authority",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b1_revalidation remain mandatory",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b2_revalidation remain mandatory",
+    "dependency gates HA-P0-000 and HA-P0-001 plus acceptance gate phase_0_b3_revalidation remain mandatory",
+    "final exit receipt binds the handoff commit after artifact generation",
+    "first replay completion succeeds and is recorded before same-instance rejection; restart restores an explicit ledger snapshot into a new handler harness, while a distinct replica receives the same shared ledger; all three remain RED because the production handler has no replay enforcement",
+    "implementation and enforcement are deferred to Phase 2",
+    "missing context, proxy generation, manifest authority, and direct-fallback prohibition reach transport; missing account identity is independently tested while proxy identity remains valid; disabled profile already denies before transport",
+    "owner-positive fixtures reach every named operation; authenticated principal, administrator, tenant, group, creator/owner, role, and expected version are varied independently; valid-owner wrong-state is rejected distinctly; AccountHealthcheck uses an owner-bound real account reader fixture",
+    "promotion is prohibited before all compatibility gates and rollback review pass",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; an independently isolated policy-broker capability remains mandatory against gateway-process compromise",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; network-level resolution pinning and sidecar enforcement remain mandatory before production authority",
+    "selected compromise-boundary dependency HA-P0-005 is protected_gateway; production and real-canary authority remain disabled pending the policy broker",
+    "symbol FormalPoolOnboardingService.AttestBrowserEgress; test TestFormalPoolBrowserEgressAttestationRejectsUntrustedProofs; expected RED exit 1 with five stable leaf failures; failure-name digest sha256:9d2491b62a39ff5913751c818ba31b21bd3e0200698926824864ab76d7c1a26b reproducible from the committed evidence artifact",
+    "symbols FormalPoolOnboardingHandler.withAbsoluteBrowserEgressURL and formalPoolRequestPublicBaseURL; test TestFormalPoolOnboardingPublicOriginAuthority; expected RED exit 1 with three stable leaf failures; failure-name digest sha256:97d0ee5906218981fbdea0ab0aaa00cc25f12f7ba22c0286024a645a786b3aa8 reproducible from the committed evidence artifact",
+    "symbols prepareEgressSidecarRequest, computeProxyBinding, control.Validate, Handler.ServeHTTP, and verifyProxyBinding; complete TS and Go mutation matrices plus successful local-forward replay cases produce sixty-nine stable leaf failures; failure-name digest sha256:4bf2becea973c187234196218b64fa0b4e07a944e465516ce0c2f3a87aa2eee2 reproducible from the committed evidence artifact",
+    "symbols registerFormalPoolOnboardingAdminRoutes and FormalPoolOnboardingHandler session/account operations; tests TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations and TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent; expected RED exit 1 with twenty-five stable leaf failures; failure-name digest sha256:6212e1d46e14e3f184709fd847ae2381d3f7ff46cb7946f2556ccec9179ca3f3 reproducible from the committed evidence artifact",
+    "symbols resolveEgressBucket, isSafeProxyUrl, safeProxyURLHeader, Handler.ServeHTTP, and the sidecar dial path; URL destination cases plus an injected public-then-unsafe resolver and pinned-dial observer produce thirty-six stable leaf failures; failure-name digest sha256:765866c3772e802a90779967dfa21ccd5abbbb623fc7cd13f6e3a70edb43c7b2 reproducible from the committed evidence artifact",
+    "symbols startProxy, handleRequest, prepareEgressSidecarRequest, and the ordinary Node proxy path; real gateway requests use deterministic DNS, proxy-dial, and sidecar-socket observers; expected RED exit 1 with seven stable leaf failures; failure-name digest sha256:33bc5b4d516ab1f717f98180fe396e0f861ed8fd4537caf3eddec440bb34ece5 reproducible from the committed evidence artifact",
+    "the deterministic Go complete-envelope fixture first passes the production control schema and actual HMAC verification, then independently mutates target authority/path/route/method, proxy/account/context/generation/profile/manifest, freshness, final hashes, encoding/deadline/response policy, and envelope metadata at the authentication boundary; reordered JSON with an equivalent Unicode escape also passes control validation and actual verification"
+  ],
+  "retention_policy": {
+    "digest_only": "phase_evidence_permanent",
+    "redacted_excerpt": "7_days"
+  },
+  "redaction_policy": "digests_and_safe_redacted_excerpts_only",
+  "destruction_procedure": "git_revert_artifact_commit_after_security_approval"
+}
