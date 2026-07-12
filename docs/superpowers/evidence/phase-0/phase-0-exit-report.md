@@ -3,8 +3,8 @@
 - Phase: phase-0
 - Baseline digest: sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f
 - Command results digest: sha256:342daec47a5929b6d2cef0ca9a8bb2e244863e196058dc3ef4a506efcde7da99
-- Generated: 2026-07-12T09:32:38.683Z
-- Expires: 2026-07-13T09:32:38.683Z
+- Generated: 2026-07-12T09:46:31.684Z
+- Expires: 2026-07-13T09:46:31.684Z
 
 ## Observed Command Results
 
@@ -53,6 +53,6 @@
 ## Safe Artifact References
 
 - docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json (sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f)
-- docs/superpowers/evidence/phase-0/phase-0-context-pack.json (sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92)
+- docs/superpowers/evidence/phase-0/phase-0-context-pack.json (sha256:19af668c3eca4af0ba2758b9b88ab3e03f1d072874df8ff8040dfa474301849b)
 
 Raw stdout/stderr, credentials, prompts, request bodies, and unrestricted logs are intentionally excluded.

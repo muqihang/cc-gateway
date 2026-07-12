@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-12T09:32:23.195Z",
-  "expires_at": "2026-07-13T09:32:23.195Z",
+  "generated_at": "2026-07-12T09:46:31.346Z",
+  "expires_at": "2026-07-13T09:46:31.346Z",
   "registry_digest": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5",
   "claims_digest": "sha256:54b617abb2af90f0587182e5808f5c89647dad0818735c8bd92feca220a5c01c",
   "manifest_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",

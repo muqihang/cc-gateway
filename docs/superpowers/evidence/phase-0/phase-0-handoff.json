@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "phase": "phase-0",
-  "generated_at": "2026-07-12T09:32:38.683Z",
-  "expires_at": "2026-07-13T09:32:38.683Z",
+  "generated_at": "2026-07-12T09:46:31.684Z",
+  "expires_at": "2026-07-13T09:46:31.684Z",
   "baseline_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
   "command_results_digest": "sha256:342daec47a5929b6d2cef0ca9a8bb2e244863e196058dc3ef4a506efcde7da99",
-  "context_pack_digest": "sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92",
+  "context_pack_digest": "sha256:19af668c3eca4af0ba2758b9b88ab3e03f1d072874df8ff8040dfa474301849b",
   "repositories": [
     {
       "name": "cc_gateway",
@@ -62,7 +62,7 @@
     },
     {
       "path": "docs/superpowers/evidence/phase-0/phase-0-context-pack.json",
-      "digest": "sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92"
+      "digest": "sha256:19af668c3eca4af0ba2758b9b88ab3e03f1d072874df8ff8040dfa474301849b"
     }
   ],
   "known_unknowns": [
