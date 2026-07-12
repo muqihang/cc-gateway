@@ -80,6 +80,131 @@ function requestInput(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+const supportedCapability = {
+  model: "claude-sonnet-4-6",
+  transport_mode: "sidecar_https",
+  entrypoint: "messages",
+  beta_tokens: [] as string[],
+};
+
+function negativeCapabilityInput(
+  overrides: Record<string, unknown> = {},
+) {
+  return requestInput({
+    requested_capability: supportedCapability,
+    compatibility_contract: {
+      schema_version: 1,
+      supported_capabilities: [supportedCapability],
+      negative_capabilities: {
+        unsupported_models: [],
+        unsupported_beta_tokens: [],
+        unsupported_transport_modes: [],
+        unsupported_entrypoints: [],
+        unsupported_fallbacks: [],
+        unsupported_feature_combinations: [],
+        unsupported_authority_states: [],
+      },
+    },
+    ...overrides,
+  });
+}
+
+const negativeCapabilityCases: Array<[string, Record<string, unknown>]> = [
+  [
+    "HA-P0-009 rejects missing negative-capability declaration",
+    {
+      compatibility_contract: {
+        schema_version: 1,
+        supported_capabilities: [supportedCapability],
+      },
+    },
+  ],
+  [
+    "HA-P0-009 rejects unknown negative-capability declaration",
+    {
+      compatibility_contract: {
+        schema_version: 1,
+        supported_capabilities: [supportedCapability],
+        negative_capabilities: {
+          unsupported_models: [],
+          unsupported_beta_tokens: [],
+          unsupported_transport_modes: [],
+          unsupported_entrypoints: [],
+          unsupported_fallbacks: [],
+          unsupported_feature_combinations: [],
+          unsupported_authority_states: [],
+          unknown_capability_class: ["opaque-capability:v1:unknown"],
+        },
+      },
+    },
+  ],
+  [
+    "HA-P0-009 rejects contradictory positive and negative capability",
+    {
+      compatibility_contract: {
+        schema_version: 1,
+        supported_capabilities: [supportedCapability],
+        negative_capabilities: {
+          unsupported_models: [supportedCapability.model],
+          unsupported_beta_tokens: [],
+          unsupported_transport_modes: [],
+          unsupported_entrypoints: [],
+          unsupported_fallbacks: [],
+          unsupported_feature_combinations: [],
+          unsupported_authority_states: [],
+        },
+      },
+    },
+  ],
+  [
+    "HA-P0-009 rejects requested capability declared unsupported",
+    {
+      compatibility_contract: {
+        schema_version: 1,
+        supported_capabilities: [],
+        negative_capabilities: {
+          unsupported_models: [supportedCapability.model],
+          unsupported_beta_tokens: [],
+          unsupported_transport_modes: [],
+          unsupported_entrypoints: [],
+          unsupported_fallbacks: [],
+          unsupported_feature_combinations: [],
+          unsupported_authority_states: [],
+        },
+      },
+    },
+  ],
+  [
+    "HA-P0-009 rejects incoherent negative-capability tuple",
+    {
+      compatibility_contract: {
+        schema_version: 1,
+        supported_capabilities: [supportedCapability],
+        negative_capabilities: {
+          unsupported_models: [],
+          unsupported_beta_tokens: [],
+          unsupported_transport_modes: [],
+          unsupported_entrypoints: [],
+          unsupported_fallbacks: [],
+          unsupported_feature_combinations: [supportedCapability],
+          unsupported_authority_states: [],
+        },
+      },
+    },
+  ],
+];
+
+for (const [name, overrides] of negativeCapabilityCases) {
+  test(name, () => {
+    const result = prepareEgressSidecarRequest(negativeCapabilityInput(overrides));
+    assert.equal(
+      result.ok,
+      false,
+      `${name} was accepted because Phase 2 compatibility enforcement is absent`,
+    );
+  });
+}
+
 const fixture = resolveFormalPoolContract({
   gatewayRoot: new URL("../..", import.meta.url).pathname,
   sub2apiRoot: process.env.SUB2API_ROOT,

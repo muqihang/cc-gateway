@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -197,6 +198,42 @@ test('Phase 0 structurally prohibits promotion of deferred compatibility and P1 
     })),
     'phase_0_promotion_prohibited',
   )
+})
+
+test('HA-P0-009 records the Phase 0 RED fixture while deferring enforcement to Phase 2', async () => {
+  const record = (await registry()).find((entry) => entry.requirement_id === 'HA-P0-009')
+  assert(record)
+  assert.equal(record.implementation_status, 'deferred')
+  assert.equal(record.acceptance_gate, 'phase_2_negative_capability_enforcement')
+  assert.deepEqual(record.implementation_files, [])
+  assert.deepEqual(record.test_files, ['tests/red/phase0-boundary.red.test.ts'])
+  assert.equal(record.verification_command, 'npm exec tsx tests/red/phase0-boundary.red.test.ts')
+  assert.equal(record.evidence_artifact, 'docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json')
+  assert.deepEqual(record.known_gaps, [
+    'Phase 0 fixture proves missing, unknown, contradictory, unsupported, and incoherent negative capabilities are not enforced fail-closed',
+    'implementation and enforcement are deferred to Phase 2',
+    'promotion is prohibited before all compatibility gates and rollback review pass',
+  ])
+})
+
+test('HA-P0-009 evidence contains only stable failure names with a reproducible digest', async () => {
+  const evidence = JSON.parse(await readFile(
+    path.resolve('docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json'),
+    'utf8',
+  )) as Record<string, unknown>
+  const names = evidence.failure_names as string[]
+  assert.equal(evidence.requirement_id, 'HA-P0-009')
+  assert.equal(evidence.content, 'stable_leaf_failure_test_names_only')
+  assert.deepEqual(names, [...new Set(names)].sort())
+  const digest = createHash('sha256').update(`${names.join('\n')}\n`).digest('hex')
+  assert.equal(evidence.failure_name_digest, `sha256:${digest}`)
+  assert.deepEqual(names, [
+    'HA-P0-009 rejects contradictory positive and negative capability',
+    'HA-P0-009 rejects incoherent negative-capability tuple',
+    'HA-P0-009 rejects missing negative-capability declaration',
+    'HA-P0-009 rejects requested capability declared unsupported',
+    'HA-P0-009 rejects unknown negative-capability declaration',
+  ])
 })
 
 test('rejects omitted and populated production-only fields on non-production records', async () => {

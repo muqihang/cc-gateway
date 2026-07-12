@@ -58,6 +58,9 @@ test('committed catalog is complete, immutable-shaped, and validates against the
   assert.deepEqual(value.map((entry) => entry.id).sort(), ['cc-b4-b6-red', 'cc-build', 'cc-test', 'sidecar-b4-b6-red', 'sidecar-test', 'sub2api-b1-b3-red', 'sub2api-test'])
   assert.deepEqual(validateCommandCatalogValue(value), { ok: true, errors: [] })
   assert(value.every((entry) => Array.isArray(entry.argv) && entry.argv.length > 0))
+  const ccRed = value.find((entry) => entry.id === 'cc-b4-b6-red')
+  assert(ccRed)
+  assert.deepEqual(ccRed.requirement_ids, ['AV-B4-001', 'AV-B6-001', 'HA-P0-009'])
 })
 
 test('catalog rejects duplicate IDs, shell commands, undeclared expansion, invalid exits, unknown fields and versions', async () => {

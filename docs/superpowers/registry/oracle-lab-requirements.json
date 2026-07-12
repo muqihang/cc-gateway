@@ -129,10 +129,10 @@
     "source_document": "2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
     "source_section": "15. Priority 0 item 4 plus Design Normative Compatibility Contract plus Adversarial Validation WP0.5",
     "precedence": "hardening_amendments", "priority": "P0", "depends_on": ["HA-P0-001", "HA-P0-002", "HA-P0-006"],
-    "acceptance_gate": "phase_1_compatibility_contract", "implementation_status": "deferred",
-    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": [],
-    "verification_command": "npm exec tsx tests/oracle-lab-compatibility-contract.test.ts", "evidence_artifact": "phase-1/compatibility-contract.json",
-    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["deferred to compatibility-contract phase", "negative capabilities remain disabled by default", "promotion is prohibited before all compatibility gates and rollback review pass"],
+    "acceptance_gate": "phase_2_negative_capability_enforcement", "implementation_status": "deferred",
+    "owner": "cc-gateway-oracle-owner", "repository": "cc-gateway", "implementation_files": [], "test_files": ["tests/red/phase0-boundary.red.test.ts"],
+    "verification_command": "npm exec tsx tests/red/phase0-boundary.red.test.ts", "evidence_artifact": "docs/superpowers/evidence/phase-0/ha-p0-009-negative-capability.failure-names.json",
+    "last_verified_commit": null, "last_verified_at": null, "expiry": null, "known_gaps": ["Phase 0 fixture proves missing, unknown, contradictory, unsupported, and incoherent negative capabilities are not enforced fail-closed", "implementation and enforcement are deferred to Phase 2", "promotion is prohibited before all compatibility gates and rollback review pass"],
     "canary_evidence_ids": [], "production_gate_ids": [], "rollback_evidence_ids": [], "deployed_artifacts": [], "contradiction_ids": []
   },
   {

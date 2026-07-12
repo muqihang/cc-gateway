@@ -55,7 +55,7 @@ const canonicalSections = new Map<string, string>([
 ])
 
 const phase0DeferredPolicy = new Map<string, { acceptanceGate: string; negativeCapabilitiesDisabled: boolean }>([
-  ['HA-P0-009', { acceptanceGate: 'phase_1_compatibility_contract', negativeCapabilitiesDisabled: true }],
+  ['HA-P0-009', { acceptanceGate: 'phase_2_negative_capability_enforcement', negativeCapabilitiesDisabled: true }],
   ['HA-P1-001', { acceptanceGate: 'phase_1_control_flow_evidence', negativeCapabilitiesDisabled: true }],
   ['HA-P1-002', { acceptanceGate: 'phase_2_stability_convergence', negativeCapabilitiesDisabled: true }],
   ['HA-P1-003', { acceptanceGate: 'phase_1_safe_error_classifier', negativeCapabilitiesDisabled: true }],
