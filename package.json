@@ -23,7 +23,8 @@
     "oracle:post-integration:commands": "tsx tools/oracle-lab/post-integration-command-catalog.ts",
     "oracle:post-integration:context": "tsx tools/oracle-lab/post-integration-context.ts",
     "oracle:post-integration:handoff": "tsx tools/oracle-lab/post-integration-handoff.ts handoff",
-    "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt"
+    "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt",
+    "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt"
   },
   "dependencies": {
     "https-proxy-agent": "^9.0.0",
