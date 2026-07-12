@@ -19,7 +19,13 @@
     "oracle:merge-results": "tsx tools/oracle-lab/merge-command-results.ts",
     "oracle:handoff": "tsx tools/oracle-lab/build-handoff-bundle.ts",
     "oracle:exit-report": "tsx tools/oracle-lab/build-exit-report.ts",
-    "oracle:receipt": "tsx tools/oracle-lab/build-exit-receipt.ts"
+    "oracle:receipt": "tsx tools/oracle-lab/build-exit-receipt.ts",
+    "oracle:post-integration:capture": "tsx tools/oracle-lab/post-integration-entry.ts",
+    "oracle:post-integration:commands": "tsx tools/oracle-lab/post-integration-command-catalog.ts",
+    "oracle:post-integration:context": "tsx tools/oracle-lab/post-integration-context.ts",
+    "oracle:post-integration:handoff": "tsx tools/oracle-lab/post-integration-handoff.ts handoff",
+    "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt",
+    "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt"
   },
   "dependencies": {
     "https-proxy-agent": "^9.0.0",
