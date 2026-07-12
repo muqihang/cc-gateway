@@ -61,6 +61,29 @@ function nonCanonicalBase64url(value: string): string {
   return alternate;
 }
 
+let ajvRoot: string | undefined;
+
+function ajvValidity(schema: unknown, values: unknown[]): boolean[] {
+  if (!ajvRoot) {
+    ajvRoot = mkdtempSync(path.join(tmpdir(), 'oracle-ajv-'));
+    execFileSync('npm', ['install', '--prefix', ajvRoot, '--no-save', '--no-package-lock', '--ignore-scripts', 'ajv@8.20.0'], {
+      stdio: 'ignore',
+    });
+  }
+  const payload = JSON.stringify({ schema, values });
+  const script = `
+    const Ajv2020 = require('ajv/dist/2020');
+    const input = JSON.parse(process.env.AJV_INPUT);
+    const ajv = new Ajv2020({ strict: false });
+    const validate = ajv.compile(input.schema);
+    process.stdout.write(JSON.stringify(input.values.map((value) => validate(value))));
+  `;
+  return JSON.parse(execFileSync('node', ['-e', script], {
+    encoding: 'utf8',
+    env: { ...process.env, AJV_INPUT: payload, NODE_PATH: path.join(ajvRoot, 'node_modules') },
+  }));
+}
+
 const tracked = fixture('tracked');
 writeFileSync(path.join(tracked, 'tracked.txt'), 'changed\n');
 expectCode(() => computeRepositoryState(tracked), 'undeclared_dirty_tree');
@@ -735,6 +758,52 @@ for (const selectPath of [
   pathDigest.repository_relative_path_base64url = nonCanonicalBase64url(pathDigest.repository_relative_path_base64url);
   expectCode(() => validateManifestArtifact(candidate), 'manifest_schema_invalid');
 }
+
+// Every typed path field must have schema/runtime parity, including variable paths.
+const variablePathManifest = clone(canonicalExit) as any;
+const arbitraryPaths = [
+  Buffer.from([0xff]).toString('base64url'),
+  Buffer.from([0xff, 0xee]).toString('base64url'),
+  Buffer.from([0x76, 0x61, 0x72]).toString('base64url'),
+  Buffer.from([0x76, 0x61, 0x72, 0xff]).toString('base64url'),
+  Buffer.from([0x76, 0x61, 0x72, 0xff, 0x00]).toString('base64url'),
+];
+variablePathManifest.repositories.cc_gateway.dirty_records = [{
+  status: 'R ',
+  destination_path_base64url: arbitraryPaths[0],
+  source_path_base64url: arbitraryPaths[1],
+  object_type: 'regular_file',
+  file_mode: '100644',
+  content_sha256: '0'.repeat(64),
+}];
+variablePathManifest.repositories.cc_gateway.ignored_exclusion_rules = [{
+  source_category: 'repository_gitignore',
+  source_path_base64url: arbitraryPaths[2],
+  rule_sha256: '1'.repeat(64),
+}];
+variablePathManifest.dependencies.tools = [{ path_base64url: arbitraryPaths[3], sha256: '2'.repeat(64) }];
+variablePathManifest.dependencies.observer_parser_canonicalizer = [{ path_base64url: arbitraryPaths[4], sha256: '3'.repeat(64) }];
+validateManifestArtifact(variablePathManifest);
+assert.deepEqual(arbitraryPaths.map((encoded) => Buffer.from(encoded, 'base64url').toString('base64url')), arbitraryPaths);
+const variablePathSelectors: Array<[(candidate: any) => any, string]> = [
+  [(candidate) => candidate.repositories.cc_gateway.dirty_records[0], 'destination_path_base64url'],
+  [(candidate) => candidate.repositories.cc_gateway.dirty_records[0], 'source_path_base64url'],
+  [(candidate) => candidate.repositories.cc_gateway.ignored_exclusion_rules[0], 'source_path_base64url'],
+  [(candidate) => candidate.dependencies.tools[0], 'path_base64url'],
+  [(candidate) => candidate.dependencies.observer_parser_canonicalizer[0], 'path_base64url'],
+];
+const nonCanonicalVariableManifests = [];
+for (const [selectPath, field] of variablePathSelectors) {
+  const candidate = clone(variablePathManifest);
+  const pathValue = selectPath(candidate);
+  pathValue[field] = nonCanonicalBase64url(pathValue[field]);
+  expectCode(() => validateManifestArtifact(candidate), 'manifest_schema_invalid');
+  nonCanonicalVariableManifests.push(candidate);
+}
+assert.deepEqual(
+  ajvValidity(publishedSchema, [variablePathManifest, ...nonCanonicalVariableManifests]),
+  [true, false, false, false, false, false],
+);
 
 const missingContractRole = clone(frozenLike);
 delete missingContractRole.contract.repository_role;

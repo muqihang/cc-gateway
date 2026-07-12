@@ -92,7 +92,7 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "gitCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
-    "base64url": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$" },
+    "base64url": { "type": "string", "minLength": 2, "pattern": "^(?:(?:[A-Za-z0-9_-]{4})+|(?:[A-Za-z0-9_-]{4})*[A-Za-z0-9_-][AQgw]|(?:[A-Za-z0-9_-]{4})*[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])$" },
     "repository": {
       "type": "object",
       "additionalProperties": false,
