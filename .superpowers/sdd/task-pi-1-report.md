@@ -126,3 +126,20 @@ worktree-local `node_modules/.bin/tsx`. Full `npm test`/`npm run build` remain
 environment-blocked in this dependency-free worktree by pre-existing missing
 `https-proxy-agent` and `socks-proxy-agent`; the prior integrated-main gates
 remain the authoritative full-suite result.
+
+### Re-review Fix Wave 2
+
+Status: `DONE`
+
+- Manifest binding now uses the exact serialization emitted by
+  `writeExclusiveJson`: canonical JSON plus the persisted trailing newline.
+  Context CLI and catalog runner therefore agree on the real file-bytes
+  digest, while an in-memory helper models those exact persisted bytes.
+- Context construction now validates manifest and command-result expiry with
+  an independent `validationNow`, defaulting to `Date.now()`. Artifact
+  timestamps can no longer validate their own freshness.
+
+Both defects were reproduced before implementation: the persisted manifest
+round trip failed with `cross_manifest_context`, while an expired result set
+minted a context successfully. Follow-up GREEN is `13 passed, 0 failed`;
+strict TypeScript and `git diff --check` pass.

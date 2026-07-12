@@ -162,7 +162,7 @@ export function validatePostIntegrationEntryValue(value: unknown, now = Date.now
   return result(errors)
 }
 
-export function postIntegrationManifestDigest(value: PostIntegrationEntryManifest): string { return sha256(canonicalJson(value)) }
+export function postIntegrationManifestDigest(value: PostIntegrationEntryManifest): string { return sha256(`${canonicalJson(value)}\n`) }
 
 function versionDigest(command: string, args: string[]): string {
   try { return sha256(execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()) }

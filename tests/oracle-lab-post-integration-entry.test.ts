@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { digestFile, digestValue, sha256 } from '../tools/oracle-lab/harness-core.js'
+import { canonicalJson, digestFile, digestValue, readJson, sha256 } from '../tools/oracle-lab/harness-core.js'
 import {
   POST_INTEGRATION_BINDINGS,
   assertContractBinding,
@@ -223,7 +223,7 @@ test('context binds the new manifest and results, rejects cross-binding and expi
   manifest.capture_inputs.command_catalog.digest = catalogDigest
   const manifestDigest = postIntegrationManifestDigest(manifest)
   const set = completeResults(manifestDigest, entries)
-  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt })
+  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt, validationNow: now })
   assert.equal(context.context_kind, 'post_integration_context')
   assert.equal(context.manifest_digest, manifestDigest)
   assert.equal(validatePostIntegrationContextValue(context, { manifestDigest, resultsDigest: set.result_set_digest }, now).ok, true)
@@ -239,12 +239,12 @@ test('context builder requires the exact catalog and the complete four GREEN plu
   manifest.capture_inputs.command_catalog.digest = catalogDigest
   const manifestDigest = postIntegrationManifestDigest(manifest)
   assert.throws(
-    () => buildPostIntegrationContext({ manifest, manifestDigest, results: results(manifestDigest), catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt }),
+    () => buildPostIntegrationContext({ manifest, manifestDigest, results: results(manifestDigest), catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt, validationNow: now }),
     (error: Error & { code?: string }) => error.code === 'incomplete_result_set',
   )
   const complete = completeResults(manifestDigest, entries)
   assert.throws(
-    () => buildPostIntegrationContext({ manifest, manifestDigest, results: complete, catalog: entries, catalogDigest: d('f'), registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt }),
+    () => buildPostIntegrationContext({ manifest, manifestDigest, results: complete, catalog: entries, catalogDigest: d('f'), registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt, validationNow: now }),
     (error: Error & { code?: string }) => error.code === 'cross_catalog_results',
   )
 })
@@ -255,7 +255,7 @@ test('context validator requires the exact integrated repository set and commits
   manifest.capture_inputs.command_catalog.digest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
   const manifestDigest = postIntegrationManifestDigest(manifest)
   const set = completeResults(manifestDigest, entries)
-  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest: set.catalog_digest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt })
+  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest: set.catalog_digest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt, validationNow: now })
   const duplicate = structuredClone(context)
   duplicate.repositories[1] = structuredClone(duplicate.repositories[0])
   assert(validatePostIntegrationContextValue(duplicate, { manifestDigest, resultsDigest: set.result_set_digest }, now).errors.some((error) => error.code === 'invalid_repository_binding'))
@@ -298,4 +298,39 @@ test('catalog runner validates the complete manifest before spawning any command
     (error: Error & { code?: string }) => error.code === 'wrong_repository_head',
   )
   assert.equal(existsSync(marker), false)
+})
+
+test('context uses the persisted manifest file bytes digest including the canonical newline', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-file-digest-'))
+  const manifest = validManifest()
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const catalogDigest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
+  manifest.capture_inputs.command_catalog.digest = catalogDigest
+  const manifestPath = path.join(root, 'manifest.json')
+  await writeFile(manifestPath, `${canonicalJson(manifest)}\n`)
+  const persistedManifest = readJson(manifestPath) as PostIntegrationEntryManifest
+  const persistedDigest = digestFile(manifestPath)
+  assert.notEqual(persistedDigest, digestValue(persistedManifest))
+  const set = completeResults(persistedDigest, entries)
+  const context = buildPostIntegrationContext({ manifest: persistedManifest, manifestDigest: persistedDigest, results: set, catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt, validationNow: now })
+  assert.equal(context.manifest_digest, persistedDigest)
+})
+
+test('expired results cannot mint a fresh context using their own generated timestamp', () => {
+  const manifest = validManifest()
+  manifest.generated_at = '2026-07-20T12:00:00.000Z'
+  manifest.expires_at = '2026-07-21T12:00:00.000Z'
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const catalogDigest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
+  manifest.capture_inputs.command_catalog.digest = catalogDigest
+  const manifestDigest = postIntegrationManifestDigest(manifest)
+  const expired = completeResults(manifestDigest, entries)
+  expired.generated_at = '2026-07-01T12:00:00.000Z'
+  expired.expires_at = '2026-07-08T12:00:00.000Z'
+  const { result_set_digest: _oldDigest, ...unsignedExpired } = expired
+  expired.result_set_digest = postIntegrationCommandSetDigest(unsignedExpired)
+  assert.throws(
+    () => buildPostIntegrationContext({ manifest, manifestDigest, results: expired, catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, validationNow: Date.parse('2026-07-20T12:30:00.000Z') }),
+    (error: Error & { code?: string }) => error.code === 'expired_results',
+  )
 })

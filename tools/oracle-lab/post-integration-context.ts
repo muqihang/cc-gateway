@@ -23,14 +23,15 @@ export type PostIntegrationContext = {
 const fields = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'manifest_digest', 'command_results_digest', 'registry_digest', 'claims_digest', 'repositories', 'command_evidence', 'disabled_capabilities', 'next_phase_gates'] as const
 const expectedCommandIds = new Set(['cc-build', 'cc-test', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'])
 
-export function buildPostIntegrationContext(options: { manifest: PostIntegrationEntryManifest; manifestDigest: string; results: PostIntegrationCommandResultSet; catalog: PostIntegrationCommandCatalogEntry[]; catalogDigest: string; registryDigest: string; claimsDigest: string; generatedAt?: string }): PostIntegrationContext {
+export function buildPostIntegrationContext(options: { manifest: PostIntegrationEntryManifest; manifestDigest: string; results: PostIntegrationCommandResultSet; catalog: PostIntegrationCommandCatalogEntry[]; catalogDigest: string; registryDigest: string; claimsDigest: string; generatedAt?: string; validationNow?: number }): PostIntegrationContext {
   if (options.manifestDigest !== postIntegrationManifestDigest(options.manifest)) throw Object.assign(new Error('manifest digest differs from supplied manifest bytes'), { code: 'cross_manifest_context' })
-  const manifestValidation = validatePostIntegrationEntryValue(options.manifest, Date.parse(options.generatedAt ?? options.manifest.generated_at))
+  const validationNow = options.validationNow ?? Date.now()
+  const manifestValidation = validatePostIntegrationEntryValue(options.manifest, validationNow)
   if (!manifestValidation.ok) throw Object.assign(new Error(JSON.stringify(manifestValidation.errors)), { code: manifestValidation.errors[0].code })
   const catalogValidation = validatePostIntegrationCommandCatalogValue(options.catalog)
   if (!catalogValidation.ok) throw Object.assign(new Error(JSON.stringify(catalogValidation.errors)), { code: catalogValidation.errors[0].code })
   if (options.catalogDigest !== options.manifest.capture_inputs.command_catalog.digest) throw Object.assign(new Error('catalog differs from the reviewed manifest input'), { code: 'cross_catalog_results' })
-  const resultValidation = validatePostIntegrationResultsBindings(options.results, options.catalog, options.manifest, { catalogDigest: options.catalogDigest, manifestDigest: options.manifestDigest, requireGroups: ['post-integration-green', 'post-integration-red'] }, Date.parse(options.generatedAt ?? options.results.generated_at))
+  const resultValidation = validatePostIntegrationResultsBindings(options.results, options.catalog, options.manifest, { catalogDigest: options.catalogDigest, manifestDigest: options.manifestDigest, requireGroups: ['post-integration-green', 'post-integration-red'] }, validationNow)
   if (!resultValidation.ok) {
     const error = resultValidation.errors.find((candidate) => candidate.code === 'incomplete_result_set') ?? resultValidation.errors[0]
     throw Object.assign(new Error(JSON.stringify(resultValidation.errors)), { code: error.code })
