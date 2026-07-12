@@ -145,7 +145,7 @@ test('receipt proves exact committed bytes and rejects changed, missing, uncommi
     binding.digest = digestFile(destination)
     git(root, 'add', binding.path)
   }
-  git(root, 'commit', '-m', 'tool')
+  git(root, 'commit', '--allow-empty', '-m', 'tool')
   const reviewedToolHead = git(root, 'rev-parse', 'HEAD')
   inputs.manifest.capture_inputs.reviewed_tool_head = reviewedToolHead
   await writeFile(inputs.manifestPath, `${canonicalJson(inputs.manifest)}\n`)
