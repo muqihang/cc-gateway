@@ -112,3 +112,29 @@ verification:
 | `env -u SUB2API_ROOT npm test` | 37 files; `354 passed, 0 failed`; Node harness `82 passed, 0 failed` |
 | `npm run build` | pass |
 | `git diff --check` | pass |
+
+### Contract Postcondition Remediation
+
+Status: `DONE`
+
+- Implementation commit: `1f10b6f`
+- A touched Sub2API formal-pool contract is now hashed both before command
+  execution and after all touched repository bindings are revalidated.
+- The postcondition compares the real contract bytes to the exact manifest
+  digest before constructing or returning a command result record.
+- A real Git fixture marks the tracked contract `skip-worktree`, changes its
+  bytes, and confirms `git status` remains clean. The runner still rejects the
+  command as `worktree_delta_mismatch`, with the contract-drift error retained
+  as its cause, and returns no accepted evidence.
+
+TDD RED was `Missing expected rejection`: the pre-fix runner returned a record
+for the hidden contract mutation. Final verification:
+
+| Command | Result |
+|---|---|
+| focused post-integration entry tests | `17 passed, 0 failed` |
+| strict TypeScript over changed tools/test | pass |
+| Phase 0 baseline plus H0 harness | `26 passed, 0 failed` |
+| `env -u SUB2API_ROOT npm test` | 37 files; `354 passed, 0 failed`; Node harness `83 passed, 0 failed` |
+| `npm run build` | pass |
+| `git diff --check` | pass |
