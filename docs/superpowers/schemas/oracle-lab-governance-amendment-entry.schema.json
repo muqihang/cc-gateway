@@ -110,10 +110,20 @@
       }
     },
     "disabled_capabilities": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1 }
+      "const": [
+        "real_upstream_access",
+        "real_credentials",
+        "provider_internal_authority",
+        "profile_promotion",
+        "production_deployment",
+        "real_canary",
+        "direct_egress_trust",
+        "unverified_pinned_wire_claims",
+        "unsupported_negative_capabilities",
+        "expired_or_missing_negative_capabilities",
+        "unrestricted_capture",
+        "external_network_requests"
+      ]
     },
     "p0_1_scope": {
       "type": "object",
@@ -123,16 +133,36 @@
         "release": { "const": "P0.1" },
         "work_package": { "const": "WP-R0" },
         "requirement_ids": {
-          "type": "array",
-          "prefixItems": [
-            { "const": "HA-P0-004" },
-            { "const": "HA-P0-007" },
-            { "const": "RA-P0-001" }
-          ],
-          "items": false
+          "const": ["HA-P0-004", "HA-P0-007", "RA-P0-001"]
         },
-        "in_scope": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-        "out_of_scope": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+        "in_scope": {
+          "const": [
+            "adopt_and_correct_review_amendment",
+            "overlay_prior_specifications",
+            "preserve_seven_phases_with_mandatory_3b_3_5",
+            "wp_r0_through_wp_r9_traceability_umbrellas",
+            "requirement_registry_v2_and_v1_migration",
+            "register_18_ra_requirements_as_deferred",
+            "claim_matrix_prohibited_conclusions",
+            "ra_current_observation_ledger",
+            "bounded_ra_current_009_four_local_test_yaml_repairs",
+            "two_joint_tests_in_successor_cross_repository_green_inventory",
+            "successor_p0_1_evidence_chain",
+            "exact_p1_entry_conditions"
+          ]
+        },
+        "out_of_scope": {
+          "const": [
+            "b1_through_b3_implementation",
+            "b4_through_b6_implementation",
+            "shared_readiness_handshake_or_contract_redesign",
+            "profile_compiler_profile_or_evidence_factory_implementation",
+            "account_policy_replay_response_scheduler_or_replica_runtime_work",
+            "large_scale_proxy_refactor",
+            "production_credentials_external_network_canary_or_promotion",
+            "historical_phase_zero_or_post_integration_evidence_mutation"
+          ]
+        }
       }
     },
     "artifacts": {
@@ -148,7 +178,7 @@
   "$defs": {
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$" },
+    "timestamp": { "type": "string", "pattern": "^(?:[0-9]{4}-(?:(?:01|03|05|07|08|10|12)-(?:0[1-9]|[12][0-9]|3[01])|(?:04|06|09|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26]))|(?:(?:0[48]|[2468][048]|[13579][26])00)|0000)-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{3})?Z$" },
     "relative_path": {
       "type": "string",
       "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"

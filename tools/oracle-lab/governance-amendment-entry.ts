@@ -34,7 +34,7 @@ import {
 } from './harness-core.js'
 
 const CLEAN_DIGEST = sha256(Buffer.alloc(0))
-const RFC3339_UTC_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/
+const RFC3339_UTC_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{3}))?Z$/
 const CAPTURE_INPUT_PATHS = {
   capture_tool: 'tools/oracle-lab/governance-amendment-entry.ts',
   entry_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-entry.schema.json',
@@ -216,8 +216,17 @@ function add(errors: HarnessErrorRecord[], code: string, pathName: string, messa
   errors.push({ code, path: pathName, message })
 }
 
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
 function exact(value: unknown, fields: readonly string[], where: string, errors: HarnessErrorRecord[]): value is Record<string, unknown> {
-  return exactKeys(value, fields, where, errors)
+  const exactShape = exactKeys(value, fields, where, errors)
+  if (!isObject(value)) return false
+  for (const field of fields) {
+    if (!hasOwn(value, field) && field in value) add(errors, 'missing_field', `${where}.${field}`, `${field} must be an own property`)
+  }
+  return exactShape
 }
 
 function metadataValid(value: Record<string, unknown>): boolean {
@@ -225,6 +234,22 @@ function metadataValid(value: Record<string, unknown>): boolean {
     && value.retention_class === ARTIFACT_METADATA.retention_class
     && value.redaction_policy === ARTIFACT_METADATA.redaction_policy
     && value.destruction_procedure === ARTIFACT_METADATA.destruction_procedure
+}
+
+function isValidUtcTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = RFC3339_UTC_RE.exec(value)
+  if (!match) return false
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return false
+  const [, year, month, day, hour, minute, second, millisecond = '000'] = match
+  return date.getUTCFullYear() === Number(year)
+    && date.getUTCMonth() + 1 === Number(month)
+    && date.getUTCDate() === Number(day)
+    && date.getUTCHours() === Number(hour)
+    && date.getUTCMinutes() === Number(minute)
+    && date.getUTCSeconds() === Number(second)
+    && date.getUTCMilliseconds() === Number(millisecond)
 }
 
 function isRelativeArtifactPath(value: unknown): value is string {
@@ -273,7 +298,7 @@ export function validateGovernanceAmendmentEntryValue(
   if (!exact(value, entryFields, '$', errors)) return result(errors)
   if (!metadataValid(value)) add(errors, 'invalid_metadata', '$', 'artifact lifecycle metadata is invalid')
   if (value.schema_version !== 1 || value.entry_kind !== 'governance_amendment_entry') add(errors, 'invalid_entry', '$.entry_kind', 'entry header is invalid')
-  if (typeof value.generated_at !== 'string' || !RFC3339_UTC_RE.test(value.generated_at) || !Number.isFinite(Date.parse(value.generated_at))) add(errors, 'invalid_timestamp', '$.generated_at', 'generated_at must be UTC RFC 3339')
+  if (!isValidUtcTimestamp(value.generated_at)) add(errors, 'invalid_timestamp', '$.generated_at', 'generated_at must be a real UTC RFC 3339 instant')
   if (!COMMIT_RE.test(String(value.reviewed_tool_head))) add(errors, 'invalid_tool_head', '$.reviewed_tool_head', 'reviewed tool head is invalid')
 
   const expectedBases = { cc_gateway: bindings.ccGatewayBaseMainHead, sub2api: bindings.sub2apiBaseMainHead }
@@ -356,7 +381,7 @@ export function validateGovernanceAmendmentEntryReceiptValue(
   if (!exact(value, receiptFields, '$', errors)) return result(errors)
   if (!metadataValid(value)) add(errors, 'invalid_metadata', '$', 'artifact lifecycle metadata is invalid')
   if (value.schema_version !== 1 || value.receipt_kind !== 'governance_amendment_entry_receipt') add(errors, 'invalid_receipt', '$.receipt_kind', 'receipt header is invalid')
-  if (typeof value.generated_at !== 'string' || !RFC3339_UTC_RE.test(value.generated_at) || !Number.isFinite(Date.parse(value.generated_at))) add(errors, 'invalid_timestamp', '$.generated_at', 'generated_at must be UTC RFC 3339')
+  if (!isValidUtcTimestamp(value.generated_at)) add(errors, 'invalid_timestamp', '$.generated_at', 'generated_at must be a real UTC RFC 3339 instant')
   if (!COMMIT_RE.test(String(value.reviewed_tool_head))) add(errors, 'invalid_tool_head', '$.reviewed_tool_head', 'reviewed tool head is invalid')
   const expectedBases = { cc_gateway: bindings.ccGatewayBaseMainHead, sub2api: bindings.sub2apiBaseMainHead }
   if (exact(value.base_main_heads, ['cc_gateway', 'sub2api'], '$.base_main_heads', errors) && !same(value.base_main_heads, expectedBases)) add(errors, 'wrong_base_main_head', '$.base_main_heads', 'receipt base-main heads drifted')
@@ -470,41 +495,57 @@ export function inspectGovernanceRepository(options: {
   }
 }
 
-type CodeGraphStatusJson = {
-  initialized?: boolean
-  version?: string
-  fileCount?: number
-  nodeCount?: number
-  edgeCount?: number
-  pendingChanges?: { added?: number; modified?: number; removed?: number }
-  worktreeMismatch?: unknown
-  index?: { reindexRecommended?: boolean }
+export function parseCodeGraphStatus(value: unknown, indexDigest: string): CodeGraphBinding {
+  if (!isObject(value)) fail('invalid_codegraph_status', 'CodeGraph status must be an object')
+  for (const field of ['initialized', 'version', 'fileCount', 'nodeCount', 'edgeCount', 'pendingChanges', 'worktreeMismatch', 'index']) {
+    if (!hasOwn(value, field)) fail('invalid_codegraph_status', `CodeGraph status is missing ${field}`)
+  }
+  if (value.initialized !== true) fail('missing_codegraph_index', 'CodeGraph index is not initialized')
+  if (typeof value.version !== 'string' || value.version.length === 0) fail('invalid_codegraph_status', 'CodeGraph version is invalid')
+  for (const field of ['fileCount', 'nodeCount', 'edgeCount'] as const) {
+    if (!Number.isInteger(value[field]) || Number(value[field]) < 1) fail('invalid_codegraph_status', `CodeGraph ${field} is invalid`)
+  }
+  if (!DIGEST_RE.test(indexDigest)) fail('invalid_codegraph_status', 'CodeGraph index digest is invalid')
+  if (!isObject(value.pendingChanges)) fail('invalid_codegraph_status', 'CodeGraph pendingChanges must be an object')
+  for (const field of ['added', 'modified', 'removed'] as const) {
+    if (!hasOwn(value.pendingChanges, field) || !Number.isInteger(value.pendingChanges[field]) || Number(value.pendingChanges[field]) < 0) {
+      fail('invalid_codegraph_status', `CodeGraph pendingChanges is missing valid ${field}`)
+    }
+  }
+  if (!hasOwn(value, 'worktreeMismatch') || (value.worktreeMismatch !== null && !isObject(value.worktreeMismatch))) {
+    fail('invalid_codegraph_status', 'CodeGraph worktreeMismatch is missing or invalid')
+  }
+  if (!isObject(value.index) || !hasOwn(value.index, 'reindexRecommended') || typeof value.index.reindexRecommended !== 'boolean') {
+    fail('invalid_codegraph_status', 'CodeGraph index.reindexRecommended is missing or invalid')
+  }
+  const upToDate = value.pendingChanges.added === 0
+    && value.pendingChanges.modified === 0
+    && value.pendingChanges.removed === 0
+    && value.worktreeMismatch === null
+    && value.index.reindexRecommended === false
+  return {
+    version: value.version,
+    up_to_date: upToDate,
+    index_digest: indexDigest,
+    file_count: Number(value.fileCount),
+    node_count: Number(value.nodeCount),
+    edge_count: Number(value.edgeCount),
+  }
 }
 
 export function inspectCodeGraphIndex(rootInput: string): CodeGraphBinding {
   const root = realpathSync(rootInput)
-  let status: CodeGraphStatusJson
+  let status: unknown
   try {
-    status = JSON.parse(execFileSync('codegraph', ['status', '--json'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) as CodeGraphStatusJson
+    status = JSON.parse(execFileSync('codegraph', ['status', '--json'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) as unknown
   } catch {
     fail('missing_codegraph_index', 'CodeGraph status is unavailable')
   }
-  if (status.initialized !== true) fail('missing_codegraph_index', 'CodeGraph index is not initialized')
-  const pending = status.pendingChanges ?? {}
-  const upToDate = (pending.added ?? 0) === 0 && (pending.modified ?? 0) === 0 && (pending.removed ?? 0) === 0
-    && status.worktreeMismatch == null && status.index?.reindexRecommended !== true
   const dbPath = path.join(root, '.codegraph/codegraph.db')
   let dbStat
   try { dbStat = lstatSync(dbPath) } catch { fail('missing_codegraph_index', 'CodeGraph database is missing') }
   if (!dbStat.isFile() || dbStat.isSymbolicLink()) fail('missing_codegraph_index', 'CodeGraph database must be a regular non-symlink file')
-  return {
-    version: String(status.version ?? ''),
-    up_to_date: upToDate,
-    index_digest: sha256(readFileSync(dbPath)),
-    file_count: Number(status.fileCount),
-    node_count: Number(status.nodeCount),
-    edge_count: Number(status.edgeCount),
-  }
+  return parseCodeGraphStatus(status, sha256(readFileSync(dbPath)))
 }
 
 function reviewedCaptureInputs(root: string, head: string): Record<keyof typeof CAPTURE_INPUT_PATHS, PathDigest> {

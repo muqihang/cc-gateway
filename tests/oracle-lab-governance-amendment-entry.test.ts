@@ -238,6 +238,38 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value)
 }
 
+const completeCodeGraphStatus = {
+  initialized: true,
+  version: '1.1.6',
+  fileCount: 105,
+  nodeCount: 3369,
+  edgeCount: 12799,
+  pendingChanges: { added: 0, modified: 0, removed: 0 },
+  worktreeMismatch: null,
+  index: { reindexRecommended: false },
+}
+for (const mutate of [
+  (status: any) => { delete status.pendingChanges },
+  (status: any) => { delete status.pendingChanges.added },
+  (status: any) => { delete status.pendingChanges.modified },
+  (status: any) => { delete status.pendingChanges.removed },
+  (status: any) => { delete status.worktreeMismatch },
+  (status: any) => { delete status.index },
+  (status: any) => { delete status.index.reindexRecommended },
+]) {
+  const incomplete = clone(completeCodeGraphStatus)
+  mutate(incomplete)
+  expectCode(() => entryTool.parseCodeGraphStatus(incomplete, sha256('index')), 'invalid_codegraph_status')
+}
+assert.deepEqual(entryTool.parseCodeGraphStatus(completeCodeGraphStatus, sha256('index')), {
+  version: '1.1.6',
+  up_to_date: true,
+  index_digest: sha256('index'),
+  file_count: 105,
+  node_count: 3369,
+  edge_count: 12799,
+})
+
 const validFixture = fixture()
 const validPair = capture(validFixture)
 assert.equal(validPair.entry.reviewed_tool_head, validFixture.reviewedToolHead)
@@ -254,6 +286,45 @@ const validateEntrySchema = ajv.compile(entrySchema)
 const validateReceiptSchema = ajv.compile(receiptSchema)
 assert.equal(validateEntrySchema(validPair.entry), true, JSON.stringify(validateEntrySchema.errors))
 assert.equal(validateReceiptSchema(validPair.receipt), true, JSON.stringify(validateReceiptSchema.errors))
+for (const target of [
+  {
+    label: 'requirement_ids',
+    values: EXPECTED_IN_SCOPE.slice(0, 0).concat(['HA-P0-004', 'HA-P0-007', 'RA-P0-001']),
+    set: (entry: any, values: string[]) => { entry.p0_1_scope.requirement_ids = values },
+  },
+  {
+    label: 'in_scope',
+    values: EXPECTED_IN_SCOPE,
+    set: (entry: any, values: string[]) => { entry.p0_1_scope.in_scope = values },
+  },
+  {
+    label: 'out_of_scope',
+    values: EXPECTED_OUT_OF_SCOPE,
+    set: (entry: any, values: string[]) => { entry.p0_1_scope.out_of_scope = values },
+  },
+  {
+    label: 'disabled_capabilities',
+    values: EXPECTED_DISABLED_CAPABILITIES,
+    set: (entry: any, values: string[]) => { entry.disabled_capabilities = values },
+  },
+]) {
+  const reordered = [...target.values]
+  ;[reordered[0], reordered[1]] = [reordered[1], reordered[0]]
+  const replaced = [...target.values]
+  replaced[0] = 'unexpected_replacement'
+  for (const mutation of [
+    [],
+    target.values.slice(0, -1),
+    reordered,
+    replaced,
+    [...target.values, 'unexpected_addition'],
+  ]) {
+    const candidate = clone(validPair.entry) as any
+    target.set(candidate, mutation)
+    assert.equal(validateEntrySchema(candidate), false, `${target.label} schema accepted ${JSON.stringify(mutation)}`)
+    assert.equal(entryTool.validateGovernanceAmendmentEntryValue(candidate, validFixture.bindings).ok, false, `${target.label} runtime accepted ${JSON.stringify(mutation)}`)
+  }
+}
 const schemaUnknown = { ...clone(validPair.entry), surprise: true }
 assert.equal(validateEntrySchema(schemaUnknown), false)
 const schemaAbsolute = clone(validPair.entry) as any
@@ -264,6 +335,27 @@ nonRfc3339Pair.entry.generated_at = '2026-07-12'
 nonRfc3339Pair.receipt.generated_at = '2026-07-12'
 nonRfc3339Pair.receipt.entry.digest = sha256(`${canonicalJson(nonRfc3339Pair.entry)}\n`)
 expectCode(() => entryTool.validateGovernanceAmendmentEntryPair(nonRfc3339Pair.entry, nonRfc3339Pair.receipt, { bindings: validFixture.bindings }), 'invalid_timestamp')
+const impossibleCalendarPair = clone(validPair) as any
+impossibleCalendarPair.entry.generated_at = '2026-02-31T20:00:00.000Z'
+impossibleCalendarPair.receipt.generated_at = impossibleCalendarPair.entry.generated_at
+impossibleCalendarPair.receipt.entry.digest = sha256(`${canonicalJson(impossibleCalendarPair.entry)}\n`)
+assert.equal(validateEntrySchema(impossibleCalendarPair.entry), false, 'entry schema accepted an impossible calendar date')
+assert.equal(validateReceiptSchema(impossibleCalendarPair.receipt), false, 'receipt schema accepted an impossible calendar date')
+expectCode(() => entryTool.validateGovernanceAmendmentEntryPair(impossibleCalendarPair.entry, impossibleCalendarPair.receipt, { bindings: validFixture.bindings }), 'invalid_timestamp')
+const nonLeapDayPair = clone(validPair) as any
+nonLeapDayPair.entry.generated_at = '2025-02-29T20:00:00.000Z'
+nonLeapDayPair.receipt.generated_at = nonLeapDayPair.entry.generated_at
+nonLeapDayPair.receipt.entry.digest = sha256(`${canonicalJson(nonLeapDayPair.entry)}\n`)
+assert.equal(validateEntrySchema(nonLeapDayPair.entry), false, 'entry schema accepted February 29 in a non-leap year')
+assert.equal(validateReceiptSchema(nonLeapDayPair.receipt), false, 'receipt schema accepted February 29 in a non-leap year')
+expectCode(() => entryTool.validateGovernanceAmendmentEntryPair(nonLeapDayPair.entry, nonLeapDayPair.receipt, { bindings: validFixture.bindings }), 'invalid_timestamp')
+const leapDayPair = clone(validPair) as any
+leapDayPair.entry.generated_at = '2024-02-29T20:00:00.000Z'
+leapDayPair.receipt.generated_at = leapDayPair.entry.generated_at
+leapDayPair.receipt.entry.digest = sha256(`${canonicalJson(leapDayPair.entry)}\n`)
+assert.equal(validateEntrySchema(leapDayPair.entry), true, JSON.stringify(validateEntrySchema.errors))
+assert.equal(validateReceiptSchema(leapDayPair.receipt), true, JSON.stringify(validateReceiptSchema.errors))
+entryTool.validateGovernanceAmendmentEntryPair(leapDayPair.entry, leapDayPair.receipt, { bindings: validFixture.bindings })
 
 const wrongCcBase = fixture()
 git(wrongCcBase.cc, 'update-ref', 'refs/remotes/muqihang/main', wrongCcBase.reviewedToolHead)
@@ -341,6 +433,16 @@ const secretReceipt = clone(validPair.receipt) as any
 secretReceipt.raw_secret = 'sk-secret-canary-value'
 const secretResult = entryTool.validateGovernanceAmendmentEntryReceiptValue(secretReceipt, validFixture.bindings)
 assert.ok(secretResult.errors.some((error: { code: string }) => error.code === 'unsafe_artifact'))
+for (const inheritedField of ['path', 'digest'] as const) {
+  const inheritedPair = clone(validPair) as any
+  const original = inheritedPair.entry.capture_inputs.capture_tool
+  const forged = Object.create({ [inheritedField]: original[inheritedField] })
+  const ownField = inheritedField === 'path' ? 'digest' : 'path'
+  forged[ownField] = original[ownField]
+  inheritedPair.entry.capture_inputs.capture_tool = forged
+  inheritedPair.receipt.entry.digest = sha256(`${canonicalJson(inheritedPair.entry)}\n`)
+  expectCode(() => entryTool.validateGovernanceAmendmentEntryPair(inheritedPair.entry, inheritedPair.receipt, { bindings: validFixture.bindings }), 'missing_field')
+}
 expectCode(() => entryTool.validateGovernanceAmendmentEntryPair(validPair.entry, undefined, { bindings: validFixture.bindings }), 'missing_entry_pair')
 
 function commitPair(current: Fixture, pair: typeof validPair, extraPath?: string): string {
@@ -376,6 +478,25 @@ const symlinkEntryPath = path.join(symlinkDestination.cc, symlinkDestination.bin
 mkdirSync(path.dirname(symlinkEntryPath), { recursive: true })
 symlinkSync(symlinkDestination.reviewSource, symlinkEntryPath)
 expectCode(() => entryTool.writeGovernanceAmendmentEntryPair(symlinkDestination.cc, symlinkDestinationPair.entry, symlinkDestinationPair.receipt, { bindings: symlinkDestination.bindings }), 'artifact_symlink')
+
+const symlinkDestinationDirectory = fixture()
+const symlinkDirectoryPair = capture(symlinkDestinationDirectory)
+const externalEvidenceDirectory = mkdtempSync(path.join(tmpdir(), 'oracle-external-evidence-'))
+const pairDirectory = path.dirname(path.join(symlinkDestinationDirectory.cc, symlinkDestinationDirectory.bindings.entryPath as string))
+mkdirSync(path.dirname(pairDirectory), { recursive: true })
+symlinkSync(externalEvidenceDirectory, pairDirectory, 'dir')
+expectCode(() => entryTool.writeGovernanceAmendmentEntryPair(symlinkDestinationDirectory.cc, symlinkDirectoryPair.entry, symlinkDirectoryPair.receipt, { bindings: symlinkDestinationDirectory.bindings }), 'artifact_symlink')
+
+const escapedContractParent = fixture()
+const externalContractDirectory = mkdtempSync(path.join(tmpdir(), 'oracle-external-contract-'))
+writeFileSync(path.join(externalContractDirectory, 'vectors.json'), '{"outside":true}\n')
+symlinkSync(externalContractDirectory, path.join(escapedContractParent.sub, 'linked-contract'), 'dir')
+escapedContractParent.bindings = {
+  ...escapedContractParent.bindings,
+  sharedContractPath: 'linked-contract/vectors.json',
+  sharedContractDigest: sha256(readFileSync(path.join(externalContractDirectory, 'vectors.json'))),
+}
+expectCode(() => capture(escapedContractParent), 'capture_input_escape')
 
 const committed = fixture()
 const committedPair = capture(committed)
