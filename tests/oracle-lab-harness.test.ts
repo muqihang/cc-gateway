@@ -22,6 +22,14 @@ const digest = `sha256:${'a'.repeat(64)}`
 const otherDigest = `sha256:${'b'.repeat(64)}`
 const commit = '1'.repeat(40)
 
+const expectedPhase1EntryConditions = [
+  'phase_0_exit_receipt_valid',
+  'fresh_baseline_and_context_required',
+  'b1_b6_and_ha_p0_009_remain_non_promotable',
+  'real_upstream_credentials_promotion_and_deploy_disabled',
+  'named_owner_and_gate_approval_required',
+]
+
 async function catalog(): Promise<CommandCatalogEntry[]> {
   return JSON.parse(await readFile(catalogPath, 'utf8')) as CommandCatalogEntry[]
 }
@@ -51,14 +59,14 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
       .map((cells) => [cells[1], cells]),
   )
   const expectedEvidence = new Map([
-    ['P0 governance/exit', ['sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f', 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1']],
-    ['HA-P0-009', ['sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da', 'sha256:4e13136e25eb6a1990be46334c83270847230effad58a7742fb67a1cfccf5b4d']],
-    ['AV-B1-001', ['sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e', 'sha256:9a8e8243d5433ad61c73e0f0ea58a18c4be5e0a8afd70a1152de3413e2b81339']],
-    ['AV-B2-001', ['sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e', 'sha256:3e05b74f37ec8e16f720bc4409b8a10aa930464f961076b211c1299daa4cb6da']],
-    ['AV-B3-001', ['sha256:6b3f1fedc831037bf0eb59db942fb9b62cf78e79f6568060aec4cff64715745e', 'sha256:302effcdb78c69f0fb128ef0415667d207300ed030a4605d5f56d7552e7598be']],
-    ['AV-B4-001', ['sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da', 'sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669', 'sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
-    ['AV-B5-001', ['sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669', 'sha256:29fd4e3bf4432003fcf6a560c0a5cf69b05b902e637f82dfdfbeef98460745cf']],
-    ['AV-B6-001', ['sha256:66aa23c0303d60d04ce7b29d743f3eb3450262fc03133111117f4e3665fed4da', 'sha256:0a130c9825f0bf7dc7dc93a4d020369b64a575b58c0ade33b6613c73bcefb669', 'sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4']],
+    ['P0 governance/exit', ['sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1']],
+    ['HA-P0-009', ['sha256:4e13136e25eb6a1990be46334c83270847230effad58a7742fb67a1cfccf5b4d']],
+    ['AV-B1-001', ['sha256:9a8e8243d5433ad61c73e0f0ea58a18c4be5e0a8afd70a1152de3413e2b81339']],
+    ['AV-B2-001', ['sha256:3e05b74f37ec8e16f720bc4409b8a10aa930464f961076b211c1299daa4cb6da']],
+    ['AV-B3-001', ['sha256:302effcdb78c69f0fb128ef0415667d207300ed030a4605d5f56d7552e7598be']],
+    ['AV-B4-001', ['sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
+    ['AV-B5-001', ['sha256:29fd4e3bf4432003fcf6a560c0a5cf69b05b902e637f82dfdfbeef98460745cf']],
+    ['AV-B6-001', ['sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4']],
   ])
   for (const [decision, digests] of expectedEvidence) {
     const row = decisionRows.get(decision)
@@ -66,9 +74,9 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
     assert.equal(row.length, 10, `${decision} must populate every decision column`)
     for (const digest of digests) assert.match(row[2], new RegExp(digest))
   }
-  assert.match(roadmap, /Delivery state: Phase 0 complete/)
-  assert.match(roadmap, /phase-0-exit-baseline\.json.*sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f/)
-  assert.match(roadmap, /phase-0-exit-receipt\.json.*binds the final roadmap bytes/)
+  for (const decision of expectedEvidence.keys()) assert.match(String(decisionRows.get(decision)?.[2]), /pending Task 9 (?:freeze|catalog rerun)/)
+  assert.match(roadmap, /Delivery state: Phase 0 exit evidence pending/)
+  assert.match(roadmap, /Phase 1 remains blocked/)
 })
 
 function record(commandId: string, repository: CommandResultRecord['repository'] = 'cc-gateway'): CommandResultRecord {
@@ -505,8 +513,9 @@ test('context packs round-trip, have stable nonvolatile digests, and fail closed
 
 test('command results and handoffs reject unknown fields, incomplete provenance, escaped artifacts, and secret canaries', () => {
   assert.equal(validateCommandResultsValue({ ...resultSet([record('a')]), extra: true }).ok, false)
-  const handoff = { schema_version: 1, phase: 'phase-0', generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 86_460_000).toISOString(), baseline_digest: digest, command_results_digest: otherDigest, repositories: [{ name: 'cc_gateway', commit, dirty_digest: digest }, { name: 'sub2api', commit: '2'.repeat(40), dirty_digest: otherDigest }], commands: [{ command_id: 'a', status: 'pass', result_digest: digest }], artifacts: [{ path: entryBaseline, digest: digestFile(entryBaseline) }], known_unknowns: [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
+  const handoff = { schema_version: 1, phase: 'phase-0', generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 86_460_000).toISOString(), baseline_digest: digest, command_results_digest: otherDigest, repositories: [{ name: 'cc_gateway', commit, dirty_digest: digest }, { name: 'sub2api', commit: '2'.repeat(40), dirty_digest: otherDigest }], commands: [{ command_id: 'a', status: 'pass', result_digest: digest }], artifacts: [{ path: entryBaseline, digest: digestFile(entryBaseline) }], known_unknowns: [], next_entry_conditions: expectedPhase1EntryConditions, retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
   assert.deepEqual(validateHandoffValue(handoff), { ok: true, errors: [] })
+  assert.equal(validateHandoffValue({ ...handoff, next_entry_conditions: handoff.next_entry_conditions.slice(1) }).ok, false)
   assert.equal(validateHandoffValue({ ...handoff, artifacts: [{ path: '/tmp/raw.log', digest }] }, Date.now(), false).ok, false)
   assert.equal(validateHandoffValue({ ...handoff, known_unknowns: ['Bearer secret-token-value'] }).ok, false)
   assert.equal(validateExitReceiptValue({ schema_version: 1 }).ok, false)

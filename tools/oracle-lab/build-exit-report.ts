@@ -21,6 +21,8 @@ export function buildExitReport(handoff: HandoffBundle): string {
     ...handoff.repositories.map((repository) => `- ${repository.name}: commit ${repository.commit}, dirty digest ${repository.dirty_digest}`), '',
     '## Known Unknowns', '',
     ...(handoff.known_unknowns.length ? handoff.known_unknowns.map((entry) => `- ${entry}`) : ['- None recorded']), '',
+    '## Phase 1 Entry Conditions', '',
+    ...handoff.next_entry_conditions.map((entry) => `- ${entry}`), '',
     '## Safe Artifact References', '',
     ...handoff.artifacts.map((artifact) => `- ${artifact.path} (${artifact.digest})`), '',
     'Raw stdout/stderr, credentials, prompts, request bodies, and unrestricted logs are intentionally excluded.',

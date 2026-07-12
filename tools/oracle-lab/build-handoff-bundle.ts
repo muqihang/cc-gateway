@@ -22,12 +22,20 @@ export type HandoffBundle = {
   commands: Array<{ command_id: string; status: string; result_digest: string }>
   artifacts: Array<{ path: string; digest: string }>
   known_unknowns: string[]
+  next_entry_conditions: string[]
   retention_policy: { digest_only: string; redacted_excerpt: string }
   redaction_policy: string
   destruction_procedure: string
 }
 
-const fields = ['schema_version', 'phase', 'generated_at', 'expires_at', 'baseline_digest', 'command_results_digest', 'context_pack_digest', 'repositories', 'commands', 'artifacts', 'known_unknowns', 'retention_policy', 'redaction_policy', 'destruction_procedure'] as const
+export const PHASE1_ENTRY_CONDITIONS = [
+  'phase_0_exit_receipt_valid',
+  'fresh_baseline_and_context_required',
+  'b1_b6_and_ha_p0_009_remain_non_promotable',
+  'real_upstream_credentials_promotion_and_deploy_disabled',
+  'named_owner_and_gate_approval_required',
+] as const
+const fields = ['schema_version', 'phase', 'generated_at', 'expires_at', 'baseline_digest', 'command_results_digest', 'context_pack_digest', 'repositories', 'commands', 'artifacts', 'known_unknowns', 'next_entry_conditions', 'retention_policy', 'redaction_policy', 'destruction_procedure'] as const
 const DOCUMENTED_TRANSIENT_CONTEXT = '/tmp/oracle-lab-context-pack.json'
 
 function baselineShape(value: unknown): boolean {
@@ -50,6 +58,7 @@ export function validateHandoffValue(value: unknown, now = Date.now(), verifyArt
   if (!Array.isArray(value.artifacts) || value.artifacts.length === 0) errors.push({ code: 'missing_artifacts', path: '$.artifacts', message: 'artifacts are required' })
   else for (const [index, artifact] of value.artifacts.entries()) { if (!exactKeys(artifact, ['path', 'digest'], `$.artifacts[${index}]`, errors)) continue; if (typeof artifact.path !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(String(artifact.digest))) errors.push({ code: 'invalid_artifact', path: `$.artifacts[${index}]`, message: 'invalid artifact reference' }); else { try { assertEvidencePath(artifact.path); if (verifyArtifacts && digestFile(artifact.path) !== artifact.digest) errors.push({ code: 'artifact_digest_mismatch', path: `$.artifacts[${index}]`, message: 'artifact digest mismatch' }) } catch (error) { errors.push({ code: (error as Error & { code?: string }).code ?? 'missing_artifact', path: `$.artifacts[${index}]`, message: (error as Error).message }) } } }
   if (!Array.isArray(value.known_unknowns) || value.known_unknowns.some((entry) => typeof entry !== 'string')) errors.push({ code: 'invalid_known_unknowns', path: '$.known_unknowns', message: 'known_unknowns must be strings' })
+  if (value.next_entry_conditions !== undefined && (!Array.isArray(value.next_entry_conditions) || JSON.stringify(value.next_entry_conditions) !== JSON.stringify(PHASE1_ENTRY_CONDITIONS))) errors.push({ code: 'invalid_next_entry_conditions', path: '$.next_entry_conditions', message: 'Phase 1 entry conditions must be the exact receipt-bound set' })
   if (!exactKeys(value.retention_policy, ['digest_only', 'redacted_excerpt'], '$.retention_policy', errors) || value.retention_policy.digest_only !== 'phase_evidence_permanent' || value.retention_policy.redacted_excerpt !== '7_days') errors.push({ code: 'invalid_retention_policy', path: '$.retention_policy', message: 'invalid retention policy' })
   if (value.redaction_policy !== 'digests_and_safe_redacted_excerpts_only' || value.destruction_procedure !== 'git_revert_artifact_commit_after_security_approval') errors.push({ code: 'invalid_metadata', path: '$', message: 'redaction and destruction policy are invalid' })
   return result(errors)
@@ -87,7 +96,7 @@ export function buildHandoff(options: { phase: string; baseline: string; command
   for (const artifact of artifacts) assertEvidencePath(artifact.path)
   if (!isObject(baseline) || !isObject(baseline.repositories)) throw Object.assign(new Error('baseline repositories are missing'), { code: 'missing_repository_digests' })
   const repositories = Object.entries(baseline.repositories).map(([name, value]) => ({ name, commit: String((value as Record<string, unknown>).head), dirty_digest: `sha256:${String((value as Record<string, unknown>).dirty_digest)}` })).sort((a, b) => a.name.localeCompare(b.name))
-  const handoff: HandoffBundle = { schema_version: 1, phase: options.phase, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(), baseline_digest: digestFile(options.baseline), command_results_digest: typedResults.result_set_digest, ...(contextPath ? { context_pack_digest: digestFile(contextPath) } : {}), repositories, commands: typedResults.records.map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)), artifacts, known_unknowns: context?.known_unknowns ?? [], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
+  const handoff: HandoffBundle = { schema_version: 1, phase: options.phase, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(), baseline_digest: digestFile(options.baseline), command_results_digest: typedResults.result_set_digest, ...(contextPath ? { context_pack_digest: digestFile(contextPath) } : {}), repositories, commands: typedResults.records.map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)), artifacts, known_unknowns: context?.known_unknowns ?? [], next_entry_conditions: [...PHASE1_ENTRY_CONDITIONS], retention_policy: { digest_only: 'phase_evidence_permanent', redacted_excerpt: '7_days' }, redaction_policy: 'digests_and_safe_redacted_excerpts_only', destruction_procedure: 'git_revert_artifact_commit_after_security_approval' }
   requireValid(validateHandoffValue(handoff)); return handoff
 }
 

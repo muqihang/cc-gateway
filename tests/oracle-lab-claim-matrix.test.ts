@@ -129,6 +129,24 @@ test('accepts valid direct-egress structural and pinned-client observation claim
   assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation]), { ok: true, errors: [] })
 })
 
+test('seed claims state only the Phase 0 negative capabilities actually supported by evidence', async () => {
+  const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
+  const directEgress = seeded.find((claim) => claim.claim_id === 'CL-DIRECT-EGRESS-001')
+  const pinnedWire = seeded.find((claim) => claim.claim_id === 'CL-PINNED-OBS-001')
+  assert(directEgress)
+  assert.equal(directEgress.authority_state, 'unverified')
+  assert.equal(directEgress.observation_scope, 'local')
+  assert.deepEqual(directEgress.evidence_ids, [])
+  assert.match(String(directEgress.statement), /not proven disabled/i)
+  assert.match(String(directEgress.statement), /B4 RED/i)
+  assert(pinnedWire)
+  assert.equal(pinnedWire.authority_state, 'unverified')
+  assert.equal(pinnedWire.observation_scope, 'local')
+  assert.deepEqual(pinnedWire.evidence_ids, [])
+  assert.match(String(pinnedWire.statement), /no persisted local-wire artifact/i)
+  assert.match(String(pinnedWire.statement), /Phase 3/i)
+})
+
 test('seeded claim matrix and strict schema expose runtime-equivalent authority rules', async () => {
   assert.deepEqual(validateClaims(claimsPath, await requirements()), { ok: true, errors: [] })
   const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as RecordValue
