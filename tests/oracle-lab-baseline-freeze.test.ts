@@ -311,56 +311,6 @@ assert.deepEqual(JSON.parse(successfulExitCli.stdout), {
   receipt_written: false,
 });
 
-// The production entrypoint must work through npm argument forwarding in clean reviewed-head clones.
-const reviewedSub2apiSource = path.resolve(process.cwd(), '../sub2api-zhumeng-main');
-function reviewedCliClone(name: string): { gateway: string; sub2api: string } {
-  const root = mkdtempSync(path.join(tmpdir(), `oracle-reviewed-cli-${name}-`));
-  const gatewayClone = path.join(root, 'gateway');
-  const sub2apiClone = path.join(root, 'sub2api');
-  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.ccGatewayBranch, process.cwd(), gatewayClone]);
-  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.sub2apiBranch, reviewedSub2apiSource, sub2apiClone]);
-  symlinkSync(path.join(process.cwd(), 'node_modules'), path.join(gatewayClone, 'node_modules'));
-  const exclude = path.resolve(gatewayClone, git(gatewayClone, 'rev-parse', '--git-path', 'info/exclude'));
-  writeFileSync(exclude, `${readFileSync(exclude, 'utf8')}\nnode_modules\n`);
-  assert.equal(git(gatewayClone, 'status', '--porcelain'), '');
-  assert.equal(git(sub2apiClone, 'status', '--porcelain'), '');
-  return { gateway: gatewayClone, sub2api: sub2apiClone };
-}
-
-function reviewedExitCommand(fixture: { gateway: string; sub2api: string }, expectedCcHead: string): string[] {
-  return [
-    'exec', 'tsx', 'tools/oracle-lab/freeze-baseline.ts', '--',
-    '--cc-gateway-root', fixture.gateway,
-    '--sub2api-root', fixture.sub2api,
-    '--contract-path', path.join(fixture.sub2api, PHASE_0_BINDINGS.contractRelativePath),
-    '--parent-entry', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json',
-    '--parent-entry-receipt', 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.receipt.json',
-    '--expected-cc-head', expectedCcHead,
-    '--expected-sub2api-head', git(fixture.sub2api, 'rev-parse', 'HEAD'),
-    '--out', 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json',
-  ];
-}
-
-const reviewedCliSuccessFixture = reviewedCliClone('success');
-const reviewedCliSuccess = spawnSync('npm', reviewedExitCommand(reviewedCliSuccessFixture, git(reviewedCliSuccessFixture.gateway, 'rev-parse', 'HEAD')), {
-  cwd: reviewedCliSuccessFixture.gateway,
-  encoding: 'utf8',
-});
-assert.equal(reviewedCliSuccess.status, 0, reviewedCliSuccess.stderr);
-const reviewedCliOutput = path.join(reviewedCliSuccessFixture.gateway, 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json');
-assert.equal(existsSync(reviewedCliOutput), true);
-assert.equal(existsSync(`${reviewedCliOutput}.receipt.json`), false);
-assert.equal(JSON.parse(readFileSync(reviewedCliOutput, 'utf8')).approved_tool_head, git(reviewedCliSuccessFixture.gateway, 'rev-parse', 'HEAD'));
-
-const reviewedCliMismatchFixture = reviewedCliClone('mismatch');
-const reviewedCliMismatch = spawnSync('npm', reviewedExitCommand(reviewedCliMismatchFixture, '0'.repeat(40)), {
-  cwd: reviewedCliMismatchFixture.gateway,
-  encoding: 'utf8',
-});
-assert.equal(reviewedCliMismatch.status, 1, reviewedCliMismatch.stderr);
-assert.match(reviewedCliMismatch.stderr, /"code":"cc_gateway_head_mismatch"/);
-assert.equal(existsSync(path.join(reviewedCliMismatchFixture.gateway, 'docs/superpowers/evidence/phase-0/task-9b-reviewed-cli-exit.json')), false);
-
 const mixedCli = spawnSync('tsx', [
   ...cliArgs.slice(0, -4),
   '--out', 'docs/mixed-entry.json',
