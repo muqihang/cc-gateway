@@ -2,7 +2,8 @@
 
 ## Verdict
 
-Phase 0 satisfies its exit contract subject to the final independent whole-branch re-review. No
+Phase 0 satisfies its exit contract. The final independent whole-branch re-review is APPROVED
+with no Critical or Important findings. No
 real upstream request, real credential test, profile promotion, production deployment, real
 canary, or Phase 1 implementation was enabled.
 
@@ -19,7 +20,7 @@ canary, or Phase 1 implementation was enabled.
 | 6 | complete | `0811954` | `d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f` | approved |
 | 7 | complete | `2f92243` | n/a | approved |
 | 8 | complete | `2ad9d4c` | n/a | approved |
-| 9 | complete | reviewed input `0ce2ca09e19b48b24a903cd47fde4dda708d026a`; handoff and receipt commits follow | `d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f` | final re-review required |
+| 9 | complete | reviewed input `0ce2ca09e19b48b24a903cd47fde4dda708d026a`; handoff and receipt commits follow | `d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f` | final whole-branch re-review approved |
 
 ## Repository Commits
 
@@ -80,7 +81,9 @@ as exit authority.
 
 Every task received an independent implementation review. Critical and Important findings were
 fixed and re-reviewed. Whole-branch review identified two unsupported claim-authority elevations
-and missing explicit Phase 1 entry conditions; `0ce2ca0` fixes both with TDD. Remaining Minor items:
+and missing explicit Phase 1 entry conditions; `0ce2ca0` fixes both with TDD. The final independent
+whole-branch re-review approved the corrected branch with no Critical or Important findings.
+Remaining Minor items:
 
 - entry evidence staging retains a two-rename filesystem power-loss window;
 - the wrong-repository snapshot regression exercises an unavailable object rather than two
