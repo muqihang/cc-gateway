@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-12T10:24:25.413Z",
+  "generated_at": "2026-07-12T10:39:29.644Z",
   "baseline_digest": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6",
   "handoff_digest": "sha256:7ed4fc0e76790b3291754f0a0c5e29a7351d492ec0a9601c70eec47ae4f5af49",
-  "handoff_commit": "662fa1c6c88efbb1a22ff050c330ae4b4f228035",
+  "handoff_commit": "a5c800ed31990caba610953eb8e989afcdd8b62e",
   "artifact_digests": {
     "docs/superpowers/evidence/phase-0/phase-0-context-pack.json": "sha256:ac32f372ad6037c1213c245ad42c2f30c31074e495a60a91fea5806b97cd70dc",
     "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json": "sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6",
