@@ -25,7 +25,7 @@ export type PostIntegrationHandoff = {
   generated_at: string
   expires_at: string
   entry_manifest: ArtifactBinding
-  command_results: ArtifactBinding & { result_set_digest: string; record_count: 7 }
+  command_results: ArtifactBinding & { result_set_digest: string; record_count: 8 }
   context: ArtifactBinding & { manifest_digest: string; command_results_digest: string }
   phase_zero_exit: { receipt_path: string; receipt_digest: string; handoff_commit: string }
   reviewed_tool_head: string
@@ -93,7 +93,7 @@ export function validatePostIntegrationHandoffValue(value: unknown, now = Date.n
   else if (expires <= now) errors.push({ code: 'expired_post_integration_handoff', path: '$.expires_at', message: 'post-integration handoff is expired' })
   validateArtifact(value.entry_manifest, '$.entry_manifest', errors)
   if (exact(value.command_results, ['path', 'digest', 'result_set_digest', 'record_count'], '$.command_results', errors)) {
-    if (!validArtifactPath(value.command_results.path) || !DIGEST_RE.test(String(value.command_results.digest)) || !DIGEST_RE.test(String(value.command_results.result_set_digest)) || value.command_results.record_count !== 7) errors.push({ code: 'invalid_command_results', path: '$.command_results', message: 'complete command results binding is required' })
+    if (!validArtifactPath(value.command_results.path) || !DIGEST_RE.test(String(value.command_results.digest)) || !DIGEST_RE.test(String(value.command_results.result_set_digest)) || value.command_results.record_count !== 8) errors.push({ code: 'invalid_command_results', path: '$.command_results', message: 'complete command results binding is required' })
   }
   if (exact(value.context, ['path', 'digest', 'manifest_digest', 'command_results_digest'], '$.context', errors)) {
     if (!validArtifactPath(value.context.path) || !DIGEST_RE.test(String(value.context.digest)) || !DIGEST_RE.test(String(value.context.manifest_digest)) || !DIGEST_RE.test(String(value.context.command_results_digest))) errors.push({ code: 'invalid_context', path: '$.context', message: 'context binding is invalid' })
@@ -150,7 +150,7 @@ export function buildPostIntegrationHandoff(options: HandoffBuildOptions): PostI
   const handoff: PostIntegrationHandoff = {
     schema_version: 1, compatibility_policy: COMPATIBILITY_POLICY, retention_class: RETENTION_CLASS, redaction_policy: REDACTION_POLICY, destruction_procedure: DESTRUCTION_PROCEDURE,
     handoff_kind: 'post_integration_handoff', generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(),
-    entry_manifest: { path: artifactPaths.entry_manifest, digest: manifestDigest }, command_results: { path: artifactPaths.command_results, digest: resultsDigest, result_set_digest: results.result_set_digest, record_count: 7 },
+    entry_manifest: { path: artifactPaths.entry_manifest, digest: manifestDigest }, command_results: { path: artifactPaths.command_results, digest: resultsDigest, result_set_digest: results.result_set_digest, record_count: 8 },
     context: { path: artifactPaths.context, digest: contextDigest, manifest_digest: context.manifest_digest, command_results_digest: context.command_results_digest },
     phase_zero_exit: { receipt_path: manifest.phase_zero_exit.receipt_path, receipt_digest: manifest.phase_zero_exit.receipt_digest, handoff_commit: manifest.phase_zero_exit.handoff_commit },
     reviewed_tool_head: manifest.capture_inputs.reviewed_tool_head, repositories: expectedRepositories(), disabled_capabilities: [...manifest.disabled_capabilities], next_phase_gates: [...manifest.next_phase_gates],

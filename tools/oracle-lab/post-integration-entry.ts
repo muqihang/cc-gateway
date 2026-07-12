@@ -21,7 +21,7 @@ const ENTRY_FILES = {
 } as const
 
 export const POST_INTEGRATION_BINDINGS = {
-  ccGatewayHead: '414c520f1e06120275c0b4a2f9c6879ba640604e',
+  ccGatewayHead: 'b38198763ab7e337321e3a0d9e545375d3fb3ad0',
   sub2apiHead: 'd5a42bbd24d15af2ce7646d050a5ae5c77911d4f',
   branch: 'main',
   remoteName: 'muqihang',

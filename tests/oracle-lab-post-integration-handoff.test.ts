@@ -55,7 +55,7 @@ function validManifest(): PostIntegrationEntryManifest {
 }
 
 function validResults(manifestDigest: string, catalogDigest = d('b')): PostIntegrationCommandResultSet {
-  const records = ['cc-build', 'cc-test', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'].map((command_id, index) => {
+  const records = ['cc-build', 'cc-test', 'cc-cross-repo-baseline', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'].map((command_id, index) => {
     const unsigned = { command_id, repository: command_id.startsWith('sub2api') ? 'sub2api' as const : command_id.startsWith('sidecar') ? 'egress-tls-sidecar' as const : 'cc-gateway' as const,
     repository_commit: command_id.startsWith('sub2api') ? POST_INTEGRATION_BINDINGS.sub2apiHead : POST_INTEGRATION_BINDINGS.ccGatewayHead,
     ...(command_id.startsWith('sub2api') ? { contract_digest: `sha256:${POST_INTEGRATION_BINDINGS.contractSha256}` } : {}),

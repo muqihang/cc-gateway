@@ -28,6 +28,16 @@ const fields = ['id', 'schema_version', 'group', 'owner', 'requirement_ids', 're
 const resultSetFields = ['schema_version', 'generated_at', 'expires_at', 'catalog_digest', 'manifest_digest', 'records', 'result_set_digest'] as const
 const resultRecordFields = ['command_id', 'repository', 'repository_commit', 'contract_digest', 'manifest_digest', 'environment_digest', 'exit_code', 'expected_exit', 'status', 'duration_ms', 'output_digest', 'output_excerpt', 'result_digest'] as const
 const cwdByRepository: Record<string, string> = { 'cc-gateway': '${CC_GATEWAY_ROOT}', sub2api: '${SUB2API_ROOT}/backend', 'egress-tls-sidecar': '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar' }
+const expectedCommandGroups = new Map<string, PostIntegrationCommandCatalogEntry['group']>([
+  ['cc-build', 'post-integration-green'],
+  ['cc-test', 'post-integration-green'],
+  ['cc-cross-repo-baseline', 'post-integration-green'],
+  ['sidecar-test', 'post-integration-green'],
+  ['sub2api-test', 'post-integration-green'],
+  ['cc-b4-b6-red', 'post-integration-red'],
+  ['sidecar-b4-b6-red', 'post-integration-red'],
+  ['sub2api-b1-b3-red', 'post-integration-red'],
+])
 
 function expectedStatus(exitCode: number, expectedExit: 0 | 'nonzero'): CommandStatus { return expectedExit === 0 ? (exitCode === 0 ? 'pass' : 'unexpected_fail') : (exitCode === 0 ? 'unexpected_pass' : 'expected_fail') }
 export function postIntegrationCommandRecordDigest(record: Omit<PostIntegrationCommandResultRecord, 'duration_ms' | 'result_digest'> & { duration_ms?: number }): string { const { duration_ms: _duration, ...stable } = record; return digestValue(stable) }
@@ -50,6 +60,11 @@ export function validatePostIntegrationCommandCatalogValue(value: unknown): Harn
     if (!(String(entry.repository) in cwdByRepository) || entry.cwd !== cwdByRepository[String(entry.repository)]) errors.push({ code: 'invalid_cwd', path: `${base}.cwd`, message: 'cwd does not match repository' })
     if (!Array.isArray(entry.argv) || entry.argv.length === 0 || entry.argv.some((item) => typeof item !== 'string') || ['sh', 'bash', 'zsh'].includes(String(entry.argv[0])) || entry.argv.includes('-c')) errors.push({ code: 'shell_string_command', path: `${base}.argv`, message: 'argv must not use a shell' })
     if (!isObject(entry.env) || entry.env.POST_INTEGRATION_MANIFEST !== '${POST_INTEGRATION_MANIFEST}') errors.push({ code: 'invalid_env', path: `${base}.env`, message: 'manifest environment binding is required' })
+    if (entry.id === 'cc-cross-repo-baseline' && (
+      canonicalJson(entry.argv) !== canonicalJson(['npm', 'run', 'test:oracle:cross-repo'])
+      || !isObject(entry.env)
+      || entry.env.SUB2API_ROOT !== '${SUB2API_ROOT}'
+    )) errors.push({ code: 'invalid_cross_repo_command', path: base, message: 'cross-repository command and explicit Sub2API capture root are required' })
     if (!Array.isArray(entry.inherit_env) || entry.inherit_env.some((name) => !['PATH', 'HOME', 'TMPDIR'].includes(String(name)))) errors.push({ code: 'invalid_inherit_env', path: `${base}.inherit_env`, message: 'unsafe environment inheritance' })
     if (!Array.isArray(entry.allowed_worktree_delta) || entry.allowed_worktree_delta.length !== 0) errors.push({ code: 'invalid_worktree_delta', path: `${base}.allowed_worktree_delta`, message: 'integrated main worktrees must remain unchanged' })
     if (!Number.isInteger(entry.timeout_ms) || Number(entry.timeout_ms) < 1 || Number(entry.timeout_ms) > 3_600_000) errors.push({ code: 'invalid_timeout', path: `${base}.timeout_ms`, message: 'invalid timeout' })
@@ -57,6 +72,11 @@ export function validatePostIntegrationCommandCatalogValue(value: unknown): Harn
     if (!['digest_only', 'redacted_excerpt'].includes(String(entry.output_policy))) errors.push({ code: 'invalid_output_policy', path: `${base}.output_policy`, message: 'invalid output policy' })
     if (typeof entry.owner !== 'string' || !Array.isArray(entry.requirement_ids) || entry.requirement_ids.length === 0 || typeof entry.rollback !== 'string') errors.push({ code: 'invalid_catalog_metadata', path: base, message: 'owner, requirements, and rollback are required' })
   }
+  for (const [id, group] of expectedCommandGroups) {
+    const entry = value.find((candidate) => isObject(candidate) && candidate.id === id)
+    if (!entry || entry.group !== group) errors.push({ code: 'incomplete_command_catalog', path: '$', message: `${group} requires ${id}` })
+  }
+  if (value.length !== expectedCommandGroups.size || ids.size !== expectedCommandGroups.size) errors.push({ code: 'invalid_command_inventory', path: '$', message: 'exactly five GREEN and three RED commands are required' })
   return result(errors)
 }
 
@@ -109,6 +129,7 @@ export function validatePostIntegrationResultsBindings(results: PostIntegrationC
     if (entry.repository === 'sub2api' && record.contract_digest !== manifest.contract.sha256) errors.push({ code: 'contract_digest_mismatch', path: `$.records[${index}].contract_digest`, message: 'contract differs from manifest' })
   }
   for (const group of expected.requireGroups ?? []) for (const entry of catalog.filter((candidate) => candidate.group === group)) if (!seen.has(entry.id)) errors.push({ code: 'incomplete_result_set', path: '$.records', message: `${group} is missing ${entry.id}` })
+  if ((expected.requireGroups ?? []).length === 2 && (results.records.length !== expectedCommandGroups.size || seen.size !== expectedCommandGroups.size)) errors.push({ code: 'invalid_command_inventory', path: '$.records', message: 'exactly five GREEN and three RED command results are required' })
   return result(errors)
 }
 
@@ -117,6 +138,11 @@ function expand(value: string, roots: Record<string, string>): string {
     if (!roots[name]) throw Object.assign(new Error(`${name} is undeclared`), { code: 'undeclared_expansion' })
     return roots[name]
   })
+}
+export function postIntegrationCommandEnvironment(entry: PostIntegrationCommandCatalogEntry, roots: Record<string, string>, sourceEnvironment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const inherited = Object.fromEntries(entry.inherit_env.map((name) => [name, sourceEnvironment[name] ?? '']))
+  const declared = Object.fromEntries(Object.entries(entry.env).map(([key, value]) => [key, expand(value, roots)]))
+  return { ...inherited, ...declared }
 }
 function git(root: string, ...args: string[]): string { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim() }
 function status(root: string): Buffer { return execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'buffer' }) }
@@ -149,7 +175,7 @@ export async function runPostIntegrationCommandCatalog(catalogPath: string, grou
       contractDigest = String(getField(manifest, 'contract.sha256')); const relative = String(getField(manifest, 'contract.repository_relative_path'))
       if (contractDigest !== digestFile(path.join(root, relative))) throw Object.assign(new Error('contract drift'), { code: 'contract_digest_mismatch' })
     }
-    const inherited = Object.fromEntries(entry.inherit_env.map((name) => [name, process.env[name] ?? ''])); const declared = Object.fromEntries(Object.entries(entry.env).map(([key, value]) => [key, expand(value, roots)])); const env = { ...inherited, ...declared }
+    const env = postIntegrationCommandEnvironment(entry, roots)
     const observed = await execute(entry.argv.map((value) => expand(value, roots)), expand(entry.cwd, roots), env, entry.timeout_ms)
     if (status(root).length !== 0) throw Object.assign(new Error(`${entry.id} changed integrated main`), { code: 'worktree_delta_mismatch' })
     const classification = expectedStatus(observed.exitCode, entry.expected_exit); const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: commit, ...(contractDigest ? { contract_digest: contractDigest } : {}), manifest_digest: manifestDigest, environment_digest: sha256(canonicalJson(env)), exit_code: observed.exitCode, expected_exit: entry.expected_exit, status: classification, output_digest: sha256(observed.output), ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: redact(observed.output.toString('utf8')) } : {}) }

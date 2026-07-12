@@ -23,6 +23,7 @@ import {
 } from '../tools/oracle-lab/post-integration-context.js'
 import {
   postIntegrationCommandRecordDigest,
+  postIntegrationCommandEnvironment,
   postIntegrationCommandSetDigest,
   runPostIntegrationCommandCatalog,
   validatePostIntegrationCommandCatalogValue,
@@ -122,9 +123,31 @@ test('post-integration schemas use a distinct fail-closed namespace', () => {
 test('dedicated command catalog binds all GREEN and RED commands to the new manifest', () => {
   const value = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
   assert.deepEqual(validatePostIntegrationCommandCatalogValue(value), { ok: true, errors: [] })
-  assert.equal(value.filter((entry) => entry.group === 'post-integration-green').length, 4)
+  assert.equal(POST_INTEGRATION_BINDINGS.ccGatewayHead, 'b38198763ab7e337321e3a0d9e545375d3fb3ad0')
+  assert.equal(value.filter((entry) => entry.group === 'post-integration-green').length, 5)
   assert.equal(value.filter((entry) => entry.group === 'post-integration-red').length, 3)
+  assert.equal(new Set(value.map((entry) => entry.id)).size, 8)
+  const crossRepo = value.find((entry) => entry.id === 'cc-cross-repo-baseline')
+  assert.deepEqual(crossRepo?.argv, ['npm', 'run', 'test:oracle:cross-repo'])
+  assert.equal(crossRepo?.env.SUB2API_ROOT, '${SUB2API_ROOT}')
   assert(value.every((entry) => entry.manifest_binding.manifest_path === '${POST_INTEGRATION_MANIFEST}'))
+
+  const missingRoot = structuredClone(value)
+  delete missingRoot.find((entry) => entry.id === 'cc-cross-repo-baseline')!.env.SUB2API_ROOT
+  assert(validatePostIntegrationCommandCatalogValue(missingRoot).errors.some((error) => error.code === 'invalid_cross_repo_command'))
+  const wrongArgv = structuredClone(value)
+  wrongArgv.find((entry) => entry.id === 'cc-cross-repo-baseline')!.argv = ['npm', 'test']
+  assert(validatePostIntegrationCommandCatalogValue(wrongArgv).errors.some((error) => error.code === 'invalid_cross_repo_command'))
+})
+
+test('cross-repository command environment digest binds the explicit Sub2API capture root', () => {
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const crossRepo = entries.find((entry) => entry.id === 'cc-cross-repo-baseline')!
+  const baseRoots = { CC_GATEWAY_ROOT: '/capture/cc', TOOL_ROOT: '/capture/tool', POST_INTEGRATION_MANIFEST: '/capture/manifest.json' }
+  const first = postIntegrationCommandEnvironment(crossRepo, { ...baseRoots, SUB2API_ROOT: '/capture/sub-a' }, {})
+  const second = postIntegrationCommandEnvironment(crossRepo, { ...baseRoots, SUB2API_ROOT: '/capture/sub-b' }, {})
+  assert.notEqual(sha256(canonicalJson(first)), sha256(canonicalJson(second)))
+  assert.equal(first.SUB2API_ROOT, '/capture/sub-a')
 })
 
 test('repository binding rejects wrong head, branch, remote ref, and dirty tree', async () => {
@@ -237,7 +260,7 @@ test('context binds the new manifest and results, rejects cross-binding and expi
   assert.equal(digestValue(context).startsWith('sha256:'), true)
 })
 
-test('context builder requires the exact catalog and the complete four GREEN plus three RED results', () => {
+test('context builder requires the exact catalog and the complete five GREEN plus three RED results', () => {
   const manifest = validManifest()
   const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
   const catalogDigest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
@@ -302,9 +325,9 @@ test('catalog runner validates the complete manifest before spawning any command
   const manifestPath = path.join(root, 'manifest.json')
   const catalogPath = path.join(root, 'catalog.json')
   await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`)
-  const entry = catalog()[0]
-  entry.argv = ['/usr/bin/touch', marker]
-  await writeFile(catalogPath, `${JSON.stringify([entry])}\n`)
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  entries.find((entry) => entry.id === 'cc-build')!.argv = ['/usr/bin/touch', marker]
+  await writeFile(catalogPath, `${JSON.stringify(entries)}\n`)
   await assert.rejects(
     runPostIntegrationCommandCatalog(catalogPath, 'post-integration-green', { CC_GATEWAY_ROOT: cc.root, SUB2API_ROOT: sub.root, TOOL_ROOT: process.cwd(), POST_INTEGRATION_MANIFEST: manifestPath }),
     (error: Error & { code?: string }) => error.code === 'wrong_repository_head',

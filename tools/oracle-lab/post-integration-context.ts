@@ -21,7 +21,7 @@ export type PostIntegrationContext = {
 }
 
 const fields = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'manifest_digest', 'command_results_digest', 'registry_digest', 'claims_digest', 'repositories', 'command_evidence', 'disabled_capabilities', 'next_phase_gates'] as const
-const expectedCommandIds = new Set(['cc-build', 'cc-test', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'])
+const expectedCommandIds = new Set(['cc-build', 'cc-test', 'cc-cross-repo-baseline', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'])
 
 export function buildPostIntegrationContext(options: { manifest: PostIntegrationEntryManifest; manifestDigest: string; results: PostIntegrationCommandResultSet; catalog: PostIntegrationCommandCatalogEntry[]; catalogDigest: string; registryDigest: string; claimsDigest: string; generatedAt?: string; validationNow?: number }): PostIntegrationContext {
   if (options.manifestDigest !== postIntegrationManifestDigest(options.manifest)) throw Object.assign(new Error('manifest digest differs from supplied manifest bytes'), { code: 'cross_manifest_context' })
@@ -71,7 +71,7 @@ export function validatePostIntegrationContextValue(value: unknown, expected: { 
     const expected = index === 0 ? { name: 'cc_gateway', commit: POST_INTEGRATION_BINDINGS.ccGatewayHead } : { name: 'sub2api', commit: POST_INTEGRATION_BINDINGS.sub2apiHead }
     if (repository.name !== expected.name || repository.commit !== expected.commit || repository.remote_ref !== 'refs/remotes/muqihang/main') errors.push({ code: 'invalid_repository_binding', path: `$.repositories[${index}]`, message: 'repository set must exactly bind both integrated main commits' })
   }
-  if (!Array.isArray(value.command_evidence) || value.command_evidence.length !== expectedCommandIds.size) errors.push({ code: 'invalid_command_evidence', path: '$.command_evidence', message: 'all four GREEN and three RED command results are required' })
+  if (!Array.isArray(value.command_evidence) || value.command_evidence.length !== expectedCommandIds.size) errors.push({ code: 'invalid_command_evidence', path: '$.command_evidence', message: 'all five GREEN and three RED command results are required' })
   else {
     const seenCommandIds = new Set<string>()
     for (const [index, evidence] of value.command_evidence.entries()) {
