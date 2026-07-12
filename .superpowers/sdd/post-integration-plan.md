@@ -20,8 +20,12 @@ Using TDD, add a dedicated post-integration entry manifest/context schema, captu
 
 The catalog must run the existing local GREEN and expected RED suites while binding every result to the new manifest. Add focused RED/GREEN tests for wrong head/branch/remote ref, dirty tree, receipt drift, missing ancestry, contract drift, unknown fields, result cross-binding, unsafe material, and expiry. Commit tooling, schemas, catalog, plan, and tests in CC Gateway only. Write `.superpowers/sdd/task-pi-1-report.md`.
 
+## Task 1.5: Add post-integration handoff and receipt binding tooling
+
+Before PI-2, use TDD to add dedicated post-integration handoff and receipt schemas and a binder/validator CLI. The handoff must bind the fresh baseline, complete command results, context, Phase 0 exit receipt, reviewed tool head, both integrated repository heads/remote refs, disabled capabilities, and next-phase gates. The receipt must bind the artifact commit containing exact baseline/results/context/handoff bytes and reject missing, changed, uncommitted, cross-manifest, expired, unsafe, unknown-field, or non-ancestor inputs. Add the binder tool/schema digests to the baseline capture inputs. Do not reuse or modify the Phase 0 handoff/receipt schema or tool. Commit tooling and tests before PI-2 artifact generation.
+
 ## Task 2: Generate and bind post-integration entry artifacts (PI-2)
 
-At the reviewed clean PI-1 tool HEAD, capture the fresh post-integration baseline. Run each dedicated catalog command independently and classify real exit codes as `pass` or `expected_fail`. Generate a fresh context pack and handoff bound only to the new baseline and results. Validate all artifact digests and forbidden-material scans.
+At the reviewed clean PI-1/PI-1.5 tool HEAD, capture the fresh post-integration baseline. Run each dedicated catalog command independently and classify real exit codes as `pass` or `expected_fail`. Generate a fresh context pack and handoff bound only to the new baseline and results. Validate all artifact digests and forbidden-material scans.
 
 Use two commits: first the baseline/results/context/handoff artifact commit, then a receipt-only commit binding the artifact commit and exact bytes. Record both repository heads and user-fork remote refs. Do not change tooling in this task. Write `.superpowers/sdd/task-pi-2-report.md` and update `.superpowers/sdd/post-integration-progress.md`.
