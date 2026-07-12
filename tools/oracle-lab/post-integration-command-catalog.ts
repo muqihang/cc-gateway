@@ -5,7 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { assertSafeArtifact, canonicalJson, cli, COMMIT_RE, DIGEST_RE, digestFile, digestValue, exactKeys, getField, isObject, parseArgs, readJson, result, sha256, writeExclusiveJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
-import type { PostIntegrationEntryManifest } from './post-integration-entry.js'
+import { validatePostIntegrationEntryArtifact, type PostIntegrationEntryManifest } from './post-integration-entry.js'
 
 export type PostIntegrationCommandCatalogEntry = {
   id: string; schema_version: 1; group: 'post-integration-green' | 'post-integration-red'; owner: string; requirement_ids: string[]
@@ -130,13 +130,15 @@ function execute(argv: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: n
 }
 function redact(output: string): string { return output.replace(/(?:Cookie|Set-Cookie|Authorization)\s*:.*$/gim, '[REDACTED]').replace(/(?:\/Users\/|\/home\/|\/tmp\/)[^\s"']+/g, '[REDACTED_PATH]').replace(/[\r\n]+/g, ' ').slice(0, 2048) }
 
-export async function runPostIntegrationCommandCatalog(catalogPath: string, group: 'post-integration-green' | 'post-integration-red', rootsInput: { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string; POST_INTEGRATION_MANIFEST: string }, generatedAt = new Date().toISOString()): Promise<PostIntegrationCommandResultSet> {
+export async function runPostIntegrationCommandCatalog(catalogPath: string, group: 'post-integration-green' | 'post-integration-red', rootsInput: { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string; TOOL_ROOT: string; POST_INTEGRATION_MANIFEST: string }, generatedAt = new Date().toISOString()): Promise<PostIntegrationCommandResultSet> {
   const catalog = readJson(catalogPath); const validation = validatePostIntegrationCommandCatalogValue(catalog)
   if (!validation.ok) throw Object.assign(new Error(JSON.stringify(validation.errors)), { code: validation.errors[0].code })
   const entries = (catalog as PostIntegrationCommandCatalogEntry[]).filter((entry) => entry.group === group)
   if (entries.length === 0) throw Object.assign(new Error(`${group} is empty`), { code: 'empty_command_group' })
   const roots = Object.fromEntries(Object.entries(rootsInput).map(([key, value]) => [key, path.resolve(value)])); const manifest = readJson(roots.POST_INTEGRATION_MANIFEST)
   if (!isObject(manifest)) throw Object.assign(new Error('manifest is invalid'), { code: 'invalid_manifest_binding' })
+  validatePostIntegrationEntryArtifact(manifest as PostIntegrationEntryManifest, { ccGatewayRoot: roots.CC_GATEWAY_ROOT, sub2apiRoot: roots.SUB2API_ROOT, toolRoot: roots.TOOL_ROOT })
+  if (digestFile(catalogPath) !== (manifest as PostIntegrationEntryManifest).capture_inputs.command_catalog.digest) throw Object.assign(new Error('catalog differs from the reviewed manifest input'), { code: 'cross_catalog_results' })
   const manifestDigest = digestFile(roots.POST_INTEGRATION_MANIFEST); const records: PostIntegrationCommandResultRecord[] = []
   for (const entry of entries) {
     const root = entry.repository === 'sub2api' ? roots.SUB2API_ROOT : roots.CC_GATEWAY_ROOT
@@ -158,7 +160,7 @@ export async function runPostIntegrationCommandCatalog(catalogPath: string, grou
 }
 
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {
-  const args = parseArgs(process.argv.slice(2)); const catalog = args.values.catalog?.[0]; const group = args.values.group?.[0] as 'post-integration-green' | 'post-integration-red'; const cc = args.values['cc-gateway-root']?.[0]; const sub = args.values['sub2api-root']?.[0]; const manifest = args.values.manifest?.[0]; const out = args.values.out?.[0]
-  if (!catalog || !['post-integration-green', 'post-integration-red'].includes(group) || !cc || !sub || !manifest || !out) throw Object.assign(new Error('--catalog, --group, --cc-gateway-root, --sub2api-root, --manifest, and --out are required'), { code: 'invalid_arguments' })
-  void runPostIntegrationCommandCatalog(catalog, group, { CC_GATEWAY_ROOT: cc, SUB2API_ROOT: sub, POST_INTEGRATION_MANIFEST: manifest }).then((output) => { writeExclusiveJson(out, output); if (output.records.some((record) => record.status.startsWith('unexpected'))) process.exitCode = 1 }).catch((error: Error & { code?: string }) => { console.error(JSON.stringify({ code: error.code ?? 'post_integration_runner_failed', message: error.message })); process.exitCode = 1 })
+  const args = parseArgs(process.argv.slice(2)); const catalog = args.values.catalog?.[0]; const group = args.values.group?.[0] as 'post-integration-green' | 'post-integration-red'; const cc = args.values['cc-gateway-root']?.[0]; const sub = args.values['sub2api-root']?.[0]; const tool = args.values['tool-root']?.[0]; const manifest = args.values.manifest?.[0]; const out = args.values.out?.[0]
+  if (!catalog || !['post-integration-green', 'post-integration-red'].includes(group) || !cc || !sub || !tool || !manifest || !out) throw Object.assign(new Error('--catalog, --group, --cc-gateway-root, --sub2api-root, --tool-root, --manifest, and --out are required'), { code: 'invalid_arguments' })
+  void runPostIntegrationCommandCatalog(catalog, group, { CC_GATEWAY_ROOT: cc, SUB2API_ROOT: sub, TOOL_ROOT: tool, POST_INTEGRATION_MANIFEST: manifest }).then((output) => { writeExclusiveJson(out, output); if (output.records.some((record) => record.status.startsWith('unexpected'))) process.exitCode = 1 }).catch((error: Error & { code?: string }) => { console.error(JSON.stringify({ code: error.code ?? 'post_integration_runner_failed', message: error.message })); process.exitCode = 1 })
 })

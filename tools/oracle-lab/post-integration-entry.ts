@@ -182,6 +182,48 @@ function assertReviewedToolSnapshot(root: string): string {
   return head
 }
 
+export function validatePostIntegrationCaptureInputsAtToolRoot(manifest: PostIntegrationEntryManifest, toolRootInput: string): void {
+  const toolRoot = realpathSync(toolRootInput)
+  const reviewedHead = manifest.capture_inputs.reviewed_tool_head
+  try { git(toolRoot, 'cat-file', '-e', `${reviewedHead}^{commit}`) }
+  catch { fail('missing_reviewed_tool_commit', 'reviewed tool commit is unavailable in the supplied tool repository') }
+  try { execFileSync('git', ['-C', toolRoot, 'merge-base', '--is-ancestor', POST_INTEGRATION_BINDINGS.ccGatewayHead, reviewedHead], { stdio: 'ignore' }) }
+  catch { fail('invalid_reviewed_tool_ancestry', 'reviewed tool commit does not descend from integrated CC Gateway main') }
+  for (const [field, expectedPath] of Object.entries(ENTRY_FILES) as Array<[keyof typeof ENTRY_FILES, string]>) {
+    const binding = manifest.capture_inputs[field]
+    if (binding.path !== expectedPath) fail('capture_input_drift', `${field} path differs from the reviewed binding`)
+    let reviewed: Buffer
+    try { reviewed = execFileSync('git', ['-C', toolRoot, 'show', `${reviewedHead}:${expectedPath}`], { encoding: 'buffer' }) }
+    catch { fail('missing_reviewed_capture_input', `${expectedPath} is absent from reviewed tool commit`) }
+    if (sha256(reviewed) !== binding.digest) fail('capture_input_drift', `${expectedPath} digest differs from reviewed tool commit`)
+  }
+}
+
+export function validatePostIntegrationEntryArtifact(manifest: PostIntegrationEntryManifest, options: { ccGatewayRoot: string; sub2apiRoot: string; toolRoot: string; now?: number }): void {
+  const validation = validatePostIntegrationEntryValue(manifest, options.now ?? Date.now())
+  if (!validation.ok) fail(validation.errors[0].code, JSON.stringify(validation.errors))
+  validatePostIntegrationCaptureInputsAtToolRoot(manifest, options.toolRoot)
+
+  const cc = inspectIntegratedRepository(options.ccGatewayRoot, { head: POST_INTEGRATION_BINDINGS.ccGatewayHead, branch: 'main', remoteName: POST_INTEGRATION_BINDINGS.remoteName, remoteRef: POST_INTEGRATION_BINDINGS.remoteRef, remoteUrl: POST_INTEGRATION_BINDINGS.ccGatewayRemoteUrl })
+  const sub = inspectIntegratedRepository(options.sub2apiRoot, { head: POST_INTEGRATION_BINDINGS.sub2apiHead, branch: 'main', remoteName: POST_INTEGRATION_BINDINGS.remoteName, remoteRef: POST_INTEGRATION_BINDINGS.remoteRef, remoteUrl: POST_INTEGRATION_BINDINGS.sub2apiRemoteUrl })
+  if (canonicalJson(manifest.repositories) !== canonicalJson({ cc_gateway: cc, sub2api: sub })) fail('repository_binding_drift', 'manifest repository bindings differ from the integrated repositories')
+
+  assertContractBinding(path.join(options.sub2apiRoot, manifest.contract.repository_relative_path), manifest.contract.sha256)
+  const governancePaths = {
+    requirement_registry: 'docs/superpowers/registry/oracle-lab-requirements.json',
+    claim_registry: 'docs/superpowers/registry/oracle-lab-claims.json',
+    roadmap: 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
+  } as const
+  for (const [field, relative] of Object.entries(governancePaths) as Array<[keyof typeof governancePaths, string]>) {
+    if (digestFile(path.join(options.ccGatewayRoot, relative)) !== manifest.governance[field]) fail('governance_drift', `${field} bytes differ from the manifest`)
+  }
+  const receiptPath = path.join(options.ccGatewayRoot, manifest.phase_zero_exit.receipt_path)
+  if (!existsSync(receiptPath) || digestFile(receiptPath) !== manifest.phase_zero_exit.receipt_digest) fail('exit_receipt_drift', 'Phase 0 exit receipt bytes differ from the manifest')
+  const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as Record<string, unknown>
+  if (receipt.handoff_commit !== manifest.phase_zero_exit.handoff_commit) fail('exit_receipt_drift', 'Phase 0 exit receipt handoff commit differs from the manifest')
+  assertHandoffAncestry(options.ccGatewayRoot, manifest.phase_zero_exit.handoff_commit, manifest.repositories.cc_gateway.head)
+}
+
 export function capturePostIntegrationEntry(options: { ccGatewayRoot: string; sub2apiRoot: string; toolRoot: string; generatedAt?: string }): PostIntegrationEntryManifest {
   const toolRoot = realpathSync(options.toolRoot)
   const reviewedToolHead = assertReviewedToolSnapshot(toolRoot)

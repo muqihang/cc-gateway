@@ -4,8 +4,11 @@
   "properties": {
     "schema_version": {"const": 1}, "context_kind": {"const": "post_integration_context"}, "generated_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"},
     "manifest_digest": {"$ref": "#/$defs/digest"}, "command_results_digest": {"$ref": "#/$defs/digest"}, "registry_digest": {"$ref": "#/$defs/digest"}, "claims_digest": {"$ref": "#/$defs/digest"},
-    "repositories": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "object", "additionalProperties": false, "required": ["name", "commit", "remote_ref"], "properties": {"name": {"enum": ["cc_gateway", "sub2api"]}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}, "remote_ref": {"const": "refs/remotes/muqihang/main"}}}},
-    "command_evidence": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["command_id", "status", "result_digest"], "properties": {"command_id": {"type": "string", "minLength": 1}, "status": {"enum": ["pass", "expected_fail"]}, "result_digest": {"$ref": "#/$defs/digest"}}}},
+    "repositories": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [
+      {"type": "object", "additionalProperties": false, "required": ["name", "commit", "remote_ref"], "properties": {"name": {"const": "cc_gateway"}, "commit": {"const": "414c520f1e06120275c0b4a2f9c6879ba640604e"}, "remote_ref": {"const": "refs/remotes/muqihang/main"}}},
+      {"type": "object", "additionalProperties": false, "required": ["name", "commit", "remote_ref"], "properties": {"name": {"const": "sub2api"}, "commit": {"const": "d5a42bbd24d15af2ce7646d050a5ae5c77911d4f"}, "remote_ref": {"const": "refs/remotes/muqihang/main"}}}
+    ], "items": false},
+    "command_evidence": {"type": "array", "minItems": 7, "maxItems": 7, "items": {"type": "object", "additionalProperties": false, "required": ["command_id", "status", "result_digest"], "properties": {"command_id": {"enum": ["cc-build", "cc-test", "sidecar-test", "sub2api-test", "cc-b4-b6-red", "sidecar-b4-b6-red", "sub2api-b1-b3-red"]}, "status": {"enum": ["pass", "expected_fail"]}, "result_digest": {"$ref": "#/$defs/digest"}}}},
     "disabled_capabilities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}, "next_phase_gates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
   }, "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
 }

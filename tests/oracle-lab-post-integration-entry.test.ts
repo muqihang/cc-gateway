@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { digestValue, sha256 } from '../tools/oracle-lab/harness-core.js'
+import { digestFile, digestValue, sha256 } from '../tools/oracle-lab/harness-core.js'
 import {
   POST_INTEGRATION_BINDINGS,
   assertContractBinding,
   assertHandoffAncestry,
   inspectIntegratedRepository,
   postIntegrationManifestDigest,
+  validatePostIntegrationCaptureInputsAtToolRoot,
   validatePostIntegrationEntryValue,
   type PostIntegrationEntryManifest,
 } from '../tools/oracle-lab/post-integration-entry.js'
@@ -23,6 +24,7 @@ import {
 import {
   postIntegrationCommandRecordDigest,
   postIntegrationCommandSetDigest,
+  runPostIntegrationCommandCatalog,
   validatePostIntegrationCommandCatalogValue,
   validatePostIntegrationResultsBindings,
   type PostIntegrationCommandCatalogEntry,
@@ -178,6 +180,34 @@ function results(manifestDigest: string): PostIntegrationCommandResultSet {
   return { ...unsigned, result_set_digest: postIntegrationCommandSetDigest(unsigned) }
 }
 
+function completeResults(manifestDigest: string, entries: PostIntegrationCommandCatalogEntry[]): PostIntegrationCommandResultSet {
+  const records = entries.map((entry, index) => {
+    const expectedFail = entry.expected_exit === 'nonzero'
+    const unsignedRecord = {
+      command_id: entry.id,
+      repository: entry.repository,
+      repository_commit: entry.repository === 'sub2api' ? POST_INTEGRATION_BINDINGS.sub2apiHead : POST_INTEGRATION_BINDINGS.ccGatewayHead,
+      ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${POST_INTEGRATION_BINDINGS.contractSha256}` } : {}),
+      manifest_digest: manifestDigest,
+      environment_digest: d(String((index + 1) % 10)),
+      exit_code: expectedFail ? 1 : 0,
+      expected_exit: entry.expected_exit,
+      status: expectedFail ? 'expected_fail' as const : 'pass' as const,
+      output_digest: d(String((index + 2) % 10)),
+    }
+    return { ...unsignedRecord, duration_ms: 1, result_digest: postIntegrationCommandRecordDigest(unsignedRecord) }
+  })
+  const unsigned = {
+    schema_version: 1 as const,
+    generated_at: generatedAt,
+    expires_at: '2026-07-19T12:00:00.000Z',
+    catalog_digest: digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json'),
+    manifest_digest: manifestDigest,
+    records,
+  }
+  return { ...unsigned, result_set_digest: postIntegrationCommandSetDigest(unsigned) }
+}
+
 test('command results cannot cross-bind manifests', () => {
   const manifest = validManifest()
   const manifestDigest = postIntegrationManifestDigest(manifest)
@@ -188,13 +218,84 @@ test('command results cannot cross-bind manifests', () => {
 
 test('context binds the new manifest and results, rejects cross-binding and expiry', () => {
   const manifest = validManifest()
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const catalogDigest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
+  manifest.capture_inputs.command_catalog.digest = catalogDigest
   const manifestDigest = postIntegrationManifestDigest(manifest)
-  const set = results(manifestDigest)
-  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt })
+  const set = completeResults(manifestDigest, entries)
+  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt })
   assert.equal(context.context_kind, 'post_integration_context')
   assert.equal(context.manifest_digest, manifestDigest)
   assert.equal(validatePostIntegrationContextValue(context, { manifestDigest, resultsDigest: set.result_set_digest }, now).ok, true)
   assert(validatePostIntegrationContextValue(context, { manifestDigest: d('f'), resultsDigest: set.result_set_digest }, now).errors.some((error) => error.code === 'cross_manifest_context'))
   assert(validatePostIntegrationContextValue(context, { manifestDigest, resultsDigest: set.result_set_digest }, Date.parse(context.expires_at) + 1).errors.some((error) => error.code === 'expired_post_integration_context'))
   assert.equal(digestValue(context).startsWith('sha256:'), true)
+})
+
+test('context builder requires the exact catalog and the complete four GREEN plus three RED results', () => {
+  const manifest = validManifest()
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  const catalogDigest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
+  manifest.capture_inputs.command_catalog.digest = catalogDigest
+  const manifestDigest = postIntegrationManifestDigest(manifest)
+  assert.throws(
+    () => buildPostIntegrationContext({ manifest, manifestDigest, results: results(manifestDigest), catalog: entries, catalogDigest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt }),
+    (error: Error & { code?: string }) => error.code === 'incomplete_result_set',
+  )
+  const complete = completeResults(manifestDigest, entries)
+  assert.throws(
+    () => buildPostIntegrationContext({ manifest, manifestDigest, results: complete, catalog: entries, catalogDigest: d('f'), registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt }),
+    (error: Error & { code?: string }) => error.code === 'cross_catalog_results',
+  )
+})
+
+test('context validator requires the exact integrated repository set and commits', () => {
+  const manifest = validManifest()
+  const entries = JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json', 'utf8')) as PostIntegrationCommandCatalogEntry[]
+  manifest.capture_inputs.command_catalog.digest = digestFile('docs/superpowers/registry/oracle-lab-post-integration-command-catalog.json')
+  const manifestDigest = postIntegrationManifestDigest(manifest)
+  const set = completeResults(manifestDigest, entries)
+  const context = buildPostIntegrationContext({ manifest, manifestDigest, results: set, catalog: entries, catalogDigest: set.catalog_digest, registryDigest: manifest.governance.requirement_registry, claimsDigest: manifest.governance.claim_registry, generatedAt })
+  const duplicate = structuredClone(context)
+  duplicate.repositories[1] = structuredClone(duplicate.repositories[0])
+  assert(validatePostIntegrationContextValue(duplicate, { manifestDigest, resultsDigest: set.result_set_digest }, now).errors.some((error) => error.code === 'invalid_repository_binding'))
+  const drift = structuredClone(context)
+  drift.repositories[0].commit = h('f')
+  assert(validatePostIntegrationContextValue(drift, { manifestDigest, resultsDigest: set.result_set_digest }, now).errors.some((error) => error.code === 'invalid_repository_binding'))
+})
+
+test('capture input validation re-derives every digest from the reviewed tool commit', async () => {
+  const manifest = validManifest()
+  const toolRoot = process.cwd()
+  const reviewedHead = git(toolRoot, 'rev-parse', 'HEAD')
+  for (const binding of Object.values(manifest.capture_inputs).filter((value): value is { path: string; digest: string } => typeof value === 'object')) {
+    binding.digest = sha256(execFileSync('git', ['-C', toolRoot, 'show', `${reviewedHead}:${binding.path}`], { encoding: 'buffer' }))
+  }
+  manifest.capture_inputs.reviewed_tool_head = reviewedHead
+  validatePostIntegrationCaptureInputsAtToolRoot(manifest, toolRoot)
+  manifest.capture_inputs.capture_tool.digest = d('f')
+  assert.throws(() => validatePostIntegrationCaptureInputsAtToolRoot(manifest, toolRoot), (error: Error & { code?: string }) => error.code === 'capture_input_drift')
+})
+
+test('catalog runner validates the complete manifest before spawning any command', async () => {
+  const cc = await repositoryFixture()
+  const sub = await repositoryFixture()
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-runner-'))
+  const marker = path.join(root, 'executed')
+  const manifest = validManifest()
+  manifest.repositories.cc_gateway.head = cc.head
+  manifest.repositories.cc_gateway.remote.commit = cc.head
+  manifest.repositories.sub2api.head = sub.head
+  manifest.repositories.sub2api.remote.commit = sub.head
+  const manifestPath = path.join(root, 'manifest.json')
+  const catalogPath = path.join(root, 'catalog.json')
+  await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`)
+  const entry = catalog()[0]
+  entry.argv = ['/usr/bin/touch', marker]
+  await writeFile(catalogPath, `${JSON.stringify([entry])}\n`)
+  await assert.rejects(
+    runPostIntegrationCommandCatalog(catalogPath, 'post-integration-green', { CC_GATEWAY_ROOT: cc.root, SUB2API_ROOT: sub.root, TOOL_ROOT: process.cwd(), POST_INTEGRATION_MANIFEST: manifestPath }),
+    (error: Error & { code?: string }) => error.code === 'wrong_repository_head',
+  )
+  assert.equal(existsSync(marker), false)
 })

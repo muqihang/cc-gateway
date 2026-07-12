@@ -1,9 +1,9 @@
 import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { assertSafeArtifact, cli, COMMIT_RE, DIGEST_RE, digestFile, exactKeys, isObject, parseArgs, readJson, result, writeExclusiveJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
-import { POST_INTEGRATION_BINDINGS, validatePostIntegrationEntryValue, type PostIntegrationEntryManifest } from './post-integration-entry.js'
-import { validatePostIntegrationCommandResultsValue, type PostIntegrationCommandResultSet } from './post-integration-command-catalog.js'
+import { assertSafeArtifact, cli, DIGEST_RE, digestFile, exactKeys, parseArgs, readJson, result, writeExclusiveJson, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import { POST_INTEGRATION_BINDINGS, postIntegrationManifestDigest, validatePostIntegrationEntryArtifact, validatePostIntegrationEntryValue, type PostIntegrationEntryManifest } from './post-integration-entry.js'
+import { validatePostIntegrationCommandCatalogValue, validatePostIntegrationResultsBindings, type PostIntegrationCommandCatalogEntry, type PostIntegrationCommandResultSet } from './post-integration-command-catalog.js'
 
 export type PostIntegrationContext = {
   schema_version: 1
@@ -21,13 +21,20 @@ export type PostIntegrationContext = {
 }
 
 const fields = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'manifest_digest', 'command_results_digest', 'registry_digest', 'claims_digest', 'repositories', 'command_evidence', 'disabled_capabilities', 'next_phase_gates'] as const
+const expectedCommandIds = new Set(['cc-build', 'cc-test', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'])
 
-export function buildPostIntegrationContext(options: { manifest: PostIntegrationEntryManifest; manifestDigest: string; results: PostIntegrationCommandResultSet; registryDigest: string; claimsDigest: string; generatedAt?: string }): PostIntegrationContext {
+export function buildPostIntegrationContext(options: { manifest: PostIntegrationEntryManifest; manifestDigest: string; results: PostIntegrationCommandResultSet; catalog: PostIntegrationCommandCatalogEntry[]; catalogDigest: string; registryDigest: string; claimsDigest: string; generatedAt?: string }): PostIntegrationContext {
+  if (options.manifestDigest !== postIntegrationManifestDigest(options.manifest)) throw Object.assign(new Error('manifest digest differs from supplied manifest bytes'), { code: 'cross_manifest_context' })
   const manifestValidation = validatePostIntegrationEntryValue(options.manifest, Date.parse(options.generatedAt ?? options.manifest.generated_at))
   if (!manifestValidation.ok) throw Object.assign(new Error(JSON.stringify(manifestValidation.errors)), { code: manifestValidation.errors[0].code })
-  const resultValidation = validatePostIntegrationCommandResultsValue(options.results, Date.parse(options.generatedAt ?? options.results.generated_at), true)
-  if (!resultValidation.ok) throw Object.assign(new Error(JSON.stringify(resultValidation.errors)), { code: resultValidation.errors[0].code })
-  if (options.results.manifest_digest !== options.manifestDigest) throw Object.assign(new Error('results do not bind the post-integration manifest'), { code: 'cross_manifest_context' })
+  const catalogValidation = validatePostIntegrationCommandCatalogValue(options.catalog)
+  if (!catalogValidation.ok) throw Object.assign(new Error(JSON.stringify(catalogValidation.errors)), { code: catalogValidation.errors[0].code })
+  if (options.catalogDigest !== options.manifest.capture_inputs.command_catalog.digest) throw Object.assign(new Error('catalog differs from the reviewed manifest input'), { code: 'cross_catalog_results' })
+  const resultValidation = validatePostIntegrationResultsBindings(options.results, options.catalog, options.manifest, { catalogDigest: options.catalogDigest, manifestDigest: options.manifestDigest, requireGroups: ['post-integration-green', 'post-integration-red'] }, Date.parse(options.generatedAt ?? options.results.generated_at))
+  if (!resultValidation.ok) {
+    const error = resultValidation.errors.find((candidate) => candidate.code === 'incomplete_result_set') ?? resultValidation.errors[0]
+    throw Object.assign(new Error(JSON.stringify(resultValidation.errors)), { code: error.code })
+  }
   if (!DIGEST_RE.test(options.registryDigest) || !DIGEST_RE.test(options.claimsDigest)) throw Object.assign(new Error('governance digests are invalid'), { code: 'invalid_governance_digest' })
   if (options.registryDigest !== options.manifest.governance.requirement_registry || options.claimsDigest !== options.manifest.governance.claim_registry) throw Object.assign(new Error('context governance differs from manifest'), { code: 'governance_drift' })
   if (options.results.records.some((record) => record.status !== 'pass' && record.status !== 'expected_fail')) throw Object.assign(new Error('context may contain only accepted command classifications'), { code: 'unaccepted_command_result' })
@@ -60,12 +67,17 @@ export function validatePostIntegrationContextValue(value: unknown, expected: { 
   if (!Array.isArray(value.repositories) || value.repositories.length !== 2) errors.push({ code: 'invalid_repositories', path: '$.repositories', message: 'both integrated repositories are required' })
   else for (const [index, repository] of value.repositories.entries()) {
     if (!exactKeys(repository, ['name', 'commit', 'remote_ref'], `$.repositories[${index}]`, errors)) continue
-    if (!['cc_gateway', 'sub2api'].includes(String(repository.name)) || !COMMIT_RE.test(String(repository.commit)) || repository.remote_ref !== 'refs/remotes/muqihang/main') errors.push({ code: 'invalid_repository_binding', path: `$.repositories[${index}]`, message: 'invalid repository binding' })
+    const expected = index === 0 ? { name: 'cc_gateway', commit: POST_INTEGRATION_BINDINGS.ccGatewayHead } : { name: 'sub2api', commit: POST_INTEGRATION_BINDINGS.sub2apiHead }
+    if (repository.name !== expected.name || repository.commit !== expected.commit || repository.remote_ref !== 'refs/remotes/muqihang/main') errors.push({ code: 'invalid_repository_binding', path: `$.repositories[${index}]`, message: 'repository set must exactly bind both integrated main commits' })
   }
-  if (!Array.isArray(value.command_evidence) || value.command_evidence.length === 0) errors.push({ code: 'invalid_command_evidence', path: '$.command_evidence', message: 'command evidence is required' })
-  else for (const [index, evidence] of value.command_evidence.entries()) {
+  if (!Array.isArray(value.command_evidence) || value.command_evidence.length !== expectedCommandIds.size) errors.push({ code: 'invalid_command_evidence', path: '$.command_evidence', message: 'all four GREEN and three RED command results are required' })
+  else {
+    const seenCommandIds = new Set<string>()
+    for (const [index, evidence] of value.command_evidence.entries()) {
     if (!exactKeys(evidence, ['command_id', 'status', 'result_digest'], `$.command_evidence[${index}]`, errors)) continue
-    if (typeof evidence.command_id !== 'string' || !['pass', 'expected_fail'].includes(String(evidence.status)) || !DIGEST_RE.test(String(evidence.result_digest))) errors.push({ code: 'invalid_command_evidence', path: `$.command_evidence[${index}]`, message: 'invalid command evidence' })
+      if (typeof evidence.command_id !== 'string' || !expectedCommandIds.has(evidence.command_id) || seenCommandIds.has(evidence.command_id) || !['pass', 'expected_fail'].includes(String(evidence.status)) || !DIGEST_RE.test(String(evidence.result_digest))) errors.push({ code: 'invalid_command_evidence', path: `$.command_evidence[${index}]`, message: 'invalid, duplicate, or unknown command evidence' })
+      if (typeof evidence.command_id === 'string') seenCommandIds.add(evidence.command_id)
+    }
   }
   if (JSON.stringify(value.disabled_capabilities) !== JSON.stringify(POST_INTEGRATION_BINDINGS.disabledCapabilities)) errors.push({ code: 'invalid_disabled_capabilities', path: '$.disabled_capabilities', message: 'disabled capabilities must remain exact' })
   if (JSON.stringify(value.next_phase_gates) !== JSON.stringify(POST_INTEGRATION_BINDINGS.nextPhaseGates)) errors.push({ code: 'invalid_next_phase_gates', path: '$.next_phase_gates', message: 'next phase gates must remain exact' })
@@ -73,9 +85,10 @@ export function validatePostIntegrationContextValue(value: unknown, expected: { 
 }
 
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {
-  const args = parseArgs(process.argv.slice(2)); const manifestPath = args.values.manifest?.[0]; const resultsPath = args.values.results?.[0]; const registryPath = args.values.registry?.[0]; const claimsPath = args.values.claims?.[0]; const out = args.values.out?.[0]
-  if (!manifestPath || !resultsPath || !registryPath || !claimsPath || !out) throw Object.assign(new Error('--manifest, --results, --registry, --claims, and --out are required'), { code: 'invalid_arguments' })
-  const manifest = readJson(manifestPath) as PostIntegrationEntryManifest; const results = readJson(resultsPath) as PostIntegrationCommandResultSet
-  const context = buildPostIntegrationContext({ manifest, manifestDigest: digestFile(manifestPath), results, registryDigest: digestFile(registryPath), claimsDigest: digestFile(claimsPath) })
+  const args = parseArgs(process.argv.slice(2)); const manifestPath = args.values.manifest?.[0]; const resultsPath = args.values.results?.[0]; const catalogPath = args.values.catalog?.[0]; const registryPath = args.values.registry?.[0]; const claimsPath = args.values.claims?.[0]; const cc = args.values['cc-gateway-root']?.[0]; const sub = args.values['sub2api-root']?.[0]; const tool = args.values['tool-root']?.[0]; const out = args.values.out?.[0]
+  if (!manifestPath || !resultsPath || !catalogPath || !registryPath || !claimsPath || !cc || !sub || !tool || !out) throw Object.assign(new Error('--manifest, --results, --catalog, --registry, --claims, --cc-gateway-root, --sub2api-root, --tool-root, and --out are required'), { code: 'invalid_arguments' })
+  const manifest = readJson(manifestPath) as PostIntegrationEntryManifest; const results = readJson(resultsPath) as PostIntegrationCommandResultSet; const catalog = readJson(catalogPath) as PostIntegrationCommandCatalogEntry[]
+  validatePostIntegrationEntryArtifact(manifest, { ccGatewayRoot: cc, sub2apiRoot: sub, toolRoot: tool })
+  const context = buildPostIntegrationContext({ manifest, manifestDigest: digestFile(manifestPath), results, catalog, catalogDigest: digestFile(catalogPath), registryDigest: digestFile(registryPath), claimsDigest: digestFile(claimsPath) })
   writeExclusiveJson(out, context)
 })

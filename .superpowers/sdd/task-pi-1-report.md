@@ -95,3 +95,34 @@ fresh timestamped artifacts from the independently reviewed PI-1 tool HEAD.
   blocks one old regression's hardcoded worktree-local `tsx` subprocess and
   ordinary source build dependency resolution there; the identical integrated
   main test/build gates are green, and the new tooling strict compile is green.
+
+## Fix Review
+
+Status: `DONE`
+
+The follow-up review findings were addressed without changing any Phase 0
+schema or evidence chain:
+
+- Context construction now requires the reviewed catalog digest, invokes the
+  catalog/results binding validator, and requires exactly all four GREEN and
+  three expected RED command IDs.
+- Catalog execution now validates the complete post-integration artifact,
+  including fixed heads, branches, user-fork refs, receipt/ancestry,
+  governance, contract, expiry, disabled capabilities, and committed capture
+  inputs before spawning the first command. The catalog path itself must also
+  match the reviewed manifest digest.
+- Context validation now rejects duplicate, missing, unknown, or arbitrarily
+  committed repositories and command evidence.
+- `validatePostIntegrationCaptureInputsAtToolRoot` re-derives every input
+  digest from the reviewed commit object and checks reviewed ancestry. Both
+  consuming CLIs require `--tool-root`; no old Phase 0 chain is modified.
+
+Follow-up RED was observed before implementation as an ESM missing-export
+failure for the new committed-input validator. Focused follow-up GREEN is
+`11 passed, 0 failed`; strict TypeScript, JSON parsing, and `git diff --check`
+also pass. Related old baseline/harness regression is `29 passed, 1
+environment failure`; the sole failure is the already documented missing
+worktree-local `node_modules/.bin/tsx`. Full `npm test`/`npm run build` remain
+environment-blocked in this dependency-free worktree by pre-existing missing
+`https-proxy-agent` and `socks-proxy-agent`; the prior integrated-main gates
+remain the authoritative full-suite result.
