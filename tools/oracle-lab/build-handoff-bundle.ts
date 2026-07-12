@@ -7,7 +7,7 @@ import { assertEvidencePath, assertSafeArtifact, canonicalJson, cli, digestFile,
 import { validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
 import { validateCommandResultsBindings } from './merge-command-results.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
-import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
+import { assertContextCommandEvidence, validateContextPackValue, type ContextPack } from './validate-context-pack.js'
 import { validateRunInputs } from './validate-run-manifest.js'
 
 export type HandoffBundle = {
@@ -78,13 +78,9 @@ export function buildHandoff(options: { phase: string; baseline: string; command
   const registryValue = readJson(registryPath)
   const knownRequirements = new Set(Array.isArray(registryValue) ? registryValue.map((entry) => isObject(entry) ? entry.requirement_id : undefined).filter((id): id is string => typeof id === 'string') : [])
   if (context.requirement_ids.some((id) => !knownRequirements.has(id))) throw Object.assign(new Error('context contains an unknown requirement'), { code: 'unknown_requirement' })
-  const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => context.requirement_ids.includes(id))).map((entry) => entry.id).sort()
-  const contextCommands = context.tests.map((entry) => entry.command_id).sort()
-  if (JSON.stringify(selectedCommands) !== JSON.stringify(contextCommands)) throw Object.assign(new Error('context does not contain the exact catalog command evidence for its requirements'), { code: 'context_command_evidence_mismatch' })
+  assertContextCommandEvidence(context, catalog, typedResults.records)
   if (context.manifest_digest !== digestFile(options.baseline)) throw Object.assign(new Error('context does not match baseline'), { code: 'cross_manifest_context' })
   if (canonicalJson(context.repositories) !== canonicalJson(Object.entries((baseline as { repositories: Record<string, { head: string; dirty_digest: string }> }).repositories).map(([name, repository]) => ({ name, commit: repository.head, dirty_digest: `sha256:${repository.dirty_digest}` })).sort((a, b) => a.name.localeCompare(b.name)))) throw Object.assign(new Error('context repositories do not match baseline'), { code: 'cross_repository_context' })
-  const resultDigests = new Map(typedResults.records.map((record) => [record.command_id, record.result_digest]))
-  if (context.tests.some((test) => resultDigests.get(test.command_id) !== test.result_digest)) throw Object.assign(new Error('context tests do not match command results'), { code: 'cross_result_context' })
   if (!options.context) writeExclusiveJson(contextPath, context)
   const generated = new Date(options.generatedAt ?? new Date().toISOString())
   const artifacts = [{ path: options.baseline, digest: digestFile(options.baseline) }, ...(contextPath ? [{ path: contextPath, digest: digestFile(contextPath) }] : [])]

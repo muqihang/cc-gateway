@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { cli, digestFile, isObject, parseArgs, readJson, requireValid, writeJson } from './harness-core.js'
 import { validateCommandResultsBindings, validateCommandResultsValue, type CommandResultSet } from './merge-command-results.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
-import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
+import { assertContextCommandEvidence, validateContextPackValue, type ContextPack } from './validate-context-pack.js'
 import { validateRunInputs } from './validate-run-manifest.js'
 
 function sourceLine(file: string, needle: string): number | undefined {
@@ -26,7 +26,7 @@ export function buildContextPack(options: { registry: string; claims: string; ma
   const catalogValue = readJson(catalogPath); requireValid(validateCommandCatalogValue(catalogValue, new Set(requirements.keys() as Iterable<string>)))
   const catalog = catalogValue as CommandCatalogEntry[]; const selected = new Set(options.requirementIds)
   const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => selected.has(id)))
-  for (const id of options.requirementIds) if (!selectedCommands.some((entry) => entry.requirement_ids.includes(id))) throw Object.assign(new Error(`${id} has no catalog command evidence`), { code: 'missing_requirement_evidence' })
+  for (const id of options.requirementIds) if (!selectedCommands.some((entry) => entry.requirement_ids.includes(id))) throw Object.assign(new Error(`${id} has no catalog command evidence`), { code: 'missing_requirement_command_evidence' })
   const commandIds = new Set(selectedCommands.map((entry) => entry.id))
   const manifest = readJson(options.manifest)
   if (!isObject(manifest) || !isObject(manifest.repositories)) throw Object.assign(new Error('manifest repositories are missing'), { code: 'missing_repository_digests' })
@@ -63,7 +63,7 @@ export function buildContextPack(options: { registry: string; claims: string; ma
     tests: results.records.filter((record) => commandIds.has(record.command_id)).map((record) => ({ command_id: record.command_id, status: record.status, result_digest: record.result_digest })).sort((a, b) => a.command_id.localeCompare(b.command_id)),
     known_unknowns: [...new Set(options.requirementIds.flatMap((id) => { const gaps = requirements.get(id)?.known_gaps; return Array.isArray(gaps) ? gaps.filter((gap): gap is string => typeof gap === 'string') : [] }))].sort(),
   }
-  requireValid(validateContextPackValue(pack)); return pack
+  requireValid(validateContextPackValue(pack)); assertContextCommandEvidence(pack, catalog, results.records); return pack
 }
 
 if (realpathSync(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) cli(() => {

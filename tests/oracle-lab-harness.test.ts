@@ -113,11 +113,57 @@ test('context and handoff builders reject cross-input evidence and missing selec
   const resultPath = path.join(await mkdtemp(path.join(tmpdir(), 'oracle-h0-bound-')), 'results.json'); await writeFile(resultPath, JSON.stringify(bound))
   const missing = { ...unsigned, records: all.filter((entry) => entry.command_id !== 'cc-test') }; const missingSet = { ...missing, result_set_digest: commandSetDigest(missing) }; const missingPath = path.join(path.dirname(resultPath), 'missing.json'); await writeFile(missingPath, JSON.stringify(missingSet))
   assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: missingPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'missing_requirement_evidence')
-  assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-000'] }), (error: Error & { code?: string }) => error.code === 'missing_requirement_evidence')
+  assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-000'] }), (error: Error & { code?: string }) => error.code === 'missing_requirement_command_evidence')
   assert.throws(() => buildHandoff({ phase: 'phase-0', baseline: entryBaseline, commandResults: missingPath }), (error: Error & { code?: string }) => error.code === 'incomplete_result_set')
   const cross = { ...bound, manifest_digest: otherDigest, records: bound.records.map((entry) => ({ ...entry, manifest_digest: otherDigest })) }; cross.records = cross.records.map((entry) => { const { result_digest: _old, duration_ms: _duration, ...recordUnsigned } = entry; return { ...entry, result_digest: commandRecordDigest(recordUnsigned) } }); cross.result_set_digest = commandSetDigest((({ result_set_digest: _old, ...rest }) => rest)(cross)); const crossPath = path.join(path.dirname(resultPath), 'cross.json'); await writeFile(crossPath, JSON.stringify(cross))
   assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: crossPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'cross_manifest_results')
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
+})
+
+test('handoff rejects a known context requirement with no catalog command mapping', async () => {
+  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-unmapped-requirement-'))
+  const results = path.join(root, 'results.json')
+  const contextPath = path.join(root, 'context.json')
+  const catalogValue = await catalog()
+  const manifest = JSON.parse(await readFile(entryBaseline, 'utf8')) as any
+  const records = catalogValue.map((entry): CommandResultRecord => {
+    const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+    const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(entryBaseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+    return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+  })
+  const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: digestFile(entryBaseline), records }
+  writeJson(results, { ...unsigned, result_set_digest: commandSetDigest(unsigned) })
+  const context = buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: results, requirementIds: ['HA-P0-001'] })
+  writeJson(contextPath, { ...context, requirement_ids: ['HA-P0-000'] })
+  assert.throws(
+    () => buildHandoff({ phase: 'phase-0', baseline: entryBaseline, commandResults: results, context: contextPath, registry, claims }),
+    (error: Error & { code?: string }) => error.code === 'missing_requirement_command_evidence',
+  )
+})
+
+test('handoff rejects context test status forged without changing command id or result digest', async () => {
+  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
+  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-forged-status-'))
+  const results = path.join(root, 'results.json')
+  const contextPath = path.join(root, 'context.json')
+  const catalogValue = await catalog()
+  const manifest = JSON.parse(await readFile(entryBaseline, 'utf8')) as any
+  const records = catalogValue.map((entry): CommandResultRecord => {
+    const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
+    const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(entryBaseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+    return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
+  })
+  const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile(catalogPath), manifest_digest: digestFile(entryBaseline), records }
+  writeJson(results, { ...unsigned, result_set_digest: commandSetDigest(unsigned) })
+  const context = buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: results, requirementIds: ['HA-P0-001'] })
+  writeJson(contextPath, { ...context, tests: context.tests.map((entry) => ({ ...entry, status: entry.status === 'pass' ? 'expected_fail' : 'pass' })) })
+  assert.throws(
+    () => buildHandoff({ phase: 'phase-0', baseline: entryBaseline, commandResults: results, context: contextPath, registry, claims }),
+    (error: Error & { code?: string }) => error.code === 'cross_result_context',
+  )
 })
 
 test('handoff rejects a transient context pack whose registry claims or required command evidence is unrelated', async () => {
@@ -198,6 +244,15 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
     await writeFile(transientContext, `${JSON.stringify({ ...context, manifest_digest: otherDigest }, null, 2)}\n`)
     assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_manifest_context')
     await assert.rejects(readFile(evidenceContext), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
+    const externalTarget = path.join(root, 'external-context-target.json')
+    const symlinkContext = 'docs/superpowers/evidence/phase-0/symlink-context-pack.json'
+    await writeFile(externalTarget, 'external target remains unchanged\n')
+    await symlink(externalTarget, symlinkContext)
+    assert.throws(
+      () => buildHandoff({ phase: 'symlink', baseline, commandResults: transientResults, out: handoffPath }),
+      /symlink|containment|escape/i,
+    )
+    assert.equal(await readFile(externalTarget, 'utf8'), 'external target remains unchanged\n')
     await writeFile(transientContext, `${JSON.stringify(context, null, 4)}\n`)
 
     const handoff = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath })
@@ -216,6 +271,38 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
     execFileSync('git', ['add', 'docs']); execFileSync('git', ['commit', '-qm', 'test: bind documented pipeline evidence'])
     const handoffCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
     assert.deepEqual(validateExitReceiptValue(buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit })), { ok: true, errors: [] })
+
+    const unmappedContext = { ...context, requirement_ids: ['HA-P0-000'] }
+    await writeFile(evidenceContext, `${canonicalJson(unmappedContext)}\n`)
+    const unmappedHandoff = {
+      ...handoff,
+      context_pack_digest: digestFile(evidenceContext),
+      artifacts: handoff.artifacts.map((artifact) => artifact.path === evidenceContext ? { ...artifact, digest: digestFile(evidenceContext) } : artifact),
+    }
+    writeJson(handoffPath, unmappedHandoff)
+    await writeFile(reportPath, buildExitReport(unmappedHandoff))
+    assert.throws(
+      () => buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit }),
+      (error: Error & { code?: string }) => error.code === 'missing_requirement_command_evidence',
+    )
+
+    const forgedStatusContext = { ...context, tests: context.tests.map((entry) => ({ ...entry, status: entry.status === 'pass' ? 'expected_fail' as const : 'pass' as const })) }
+    await writeFile(evidenceContext, `${canonicalJson(forgedStatusContext)}\n`)
+    const forgedStatusHandoff = {
+      ...handoff,
+      context_pack_digest: digestFile(evidenceContext),
+      artifacts: handoff.artifacts.map((artifact) => artifact.path === evidenceContext ? { ...artifact, digest: digestFile(evidenceContext) } : artifact),
+    }
+    writeJson(handoffPath, forgedStatusHandoff)
+    await writeFile(reportPath, buildExitReport(forgedStatusHandoff))
+    assert.throws(
+      () => buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit }),
+      (error: Error & { code?: string }) => error.code === 'cross_result_context',
+    )
+
+    await writeFile(evidenceContext, `${canonicalJson(context)}\n`)
+    writeJson(handoffPath, handoff)
+    await writeFile(reportPath, buildExitReport(handoff))
 
     const explicitContext = 'docs/superpowers/evidence/phase-0/task-9-context-pack.json'
     await writeFile(explicitContext, `${canonicalJson(context)}\n`)

@@ -7,7 +7,7 @@ import { cli, assertEvidencePath, digestFile, exactKeys, isObject, parseArgs, re
 import { validateHandoffValue, type HandoffBundle } from './build-handoff-bundle.js'
 import { buildExitReport } from './build-exit-report.js'
 import { validateManifestArtifact } from './freeze-baseline.js'
-import { validateContextPackValue, type ContextPack } from './validate-context-pack.js'
+import { assertContextCommandEvidence, validateContextPackValue, type ContextPack } from './validate-context-pack.js'
 import { validateRequirements } from './validate-requirements.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from './validate-command-catalog.js'
 import { validateRunInputs } from './validate-run-manifest.js'
@@ -64,8 +64,7 @@ export function buildExitReceipt(options: { baseline: string; handoff: string; h
   const knownRequirements = new Set(Array.isArray(registryValue) ? registryValue.map((entry) => isObject(entry) ? entry.requirement_id : undefined).filter((id): id is string => typeof id === 'string') : [])
   if (context.requirement_ids.some((id) => !knownRequirements.has(id))) throw Object.assign(new Error('context contains an unknown requirement'), { code: 'unknown_requirement' })
   const catalog = readJson(catalogPath) as CommandCatalogEntry[]; requireValid(validateCommandCatalogValue(catalog))
-  const selectedCommands = catalog.filter((entry) => entry.requirement_ids.some((id) => context.requirement_ids.includes(id))).map((entry) => entry.id).sort()
-  if (JSON.stringify(selectedCommands) !== JSON.stringify(context.tests.map((entry) => entry.command_id).sort())) throw Object.assign(new Error('context command evidence is not exact'), { code: 'context_command_evidence_mismatch' })
+  assertContextCommandEvidence(context, catalog, typedHandoff.commands)
   const artifacts = requiredReceiptArtifacts(typedHandoff.phase, options.baseline, contextPath, options.handoff)
   if (options.artifacts && (options.artifacts.length !== artifacts.length || [...options.artifacts].sort().some((file, index) => file !== artifacts[index]))) throw Object.assign(new Error('explicit artifact inventory is not exact'), { code: 'artifact_inventory_mismatch' })
   const handoffArtifactPaths = typedHandoff.artifacts.map((artifact) => artifact.path).sort()

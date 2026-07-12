@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { assertSafeArtifact, cli, COMMIT_RE, DIGEST_RE, digestFile, digestValue, exactKeys, isObject, parseArgs, readJson, requireValid, result, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
+import type { CommandCatalogEntry } from './validate-command-catalog.js'
 
 export type ContextPack = {
   schema_version: 1
@@ -19,6 +20,28 @@ export type ContextPack = {
 }
 
 const fields = ['schema_version', 'generated_at', 'expires_at', 'registry_digest', 'claims_digest', 'manifest_digest', 'requirement_ids', 'repositories', 'sources', 'tests', 'known_unknowns'] as const
+
+type BoundCommandEvidence = { command_id: string; status: string; result_digest: string }
+
+export function assertContextCommandEvidence(context: Pick<ContextPack, 'requirement_ids' | 'tests'>, catalog: CommandCatalogEntry[], boundCommands: BoundCommandEvidence[]): void {
+  for (const requirementId of context.requirement_ids) {
+    if (!catalog.some((entry) => entry.requirement_ids.includes(requirementId))) {
+      throw Object.assign(new Error(`${requirementId} has no catalog command evidence`), { code: 'missing_requirement_command_evidence' })
+    }
+  }
+  const selectedCommandIds = catalog.filter((entry) => entry.requirement_ids.some((id) => context.requirement_ids.includes(id))).map((entry) => entry.id).sort()
+  const contextCommandIds = context.tests.map((entry) => entry.command_id).sort()
+  if (JSON.stringify(selectedCommandIds) !== JSON.stringify(contextCommandIds)) {
+    throw Object.assign(new Error('context does not contain the exact catalog command evidence for its requirements'), { code: 'context_command_evidence_mismatch' })
+  }
+  const boundById = new Map(boundCommands.map((command) => [command.command_id, command]))
+  if (context.tests.some((test) => {
+    const bound = boundById.get(test.command_id)
+    return !bound || bound.result_digest !== test.result_digest || bound.status !== test.status
+  })) {
+    throw Object.assign(new Error('context tests do not match bound command results'), { code: 'cross_result_context' })
+  }
+}
 
 export function contextPackDigest(pack: ContextPack): string {
   const { generated_at: _generated, expires_at: _expires, ...stable } = pack
