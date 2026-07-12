@@ -311,14 +311,39 @@ assert.deepEqual(JSON.parse(successfulExitCli.stdout), {
   receipt_written: false,
 });
 
-// The production entrypoint must work through npm argument forwarding in clean reviewed-head clones.
-const reviewedSub2apiSource = path.resolve(process.cwd(), '../sub2api-zhumeng-main');
+// The production entrypoint must work through npm argument forwarding when the only
+// declared source refs are the integrated main branches.
+const configuredSub2apiRoot = process.env.SUB2API_ROOT;
+assert.ok(configuredSub2apiRoot, 'SUB2API_ROOT must explicitly identify the clean Sub2API source repository');
+
+function mainOnlySource(name: string, source: string): string {
+  const root = path.join(mkdtempSync(path.join(tmpdir(), `oracle-main-only-${name}-`)), name);
+  execFileSync('git', ['clone', '-q', '--single-branch', '--branch', 'main', source, root]);
+  assert.equal(git(root, 'branch', '--show-current'), 'main');
+  assert.equal(git(root, 'status', '--porcelain'), '');
+  assert.doesNotMatch(git(root, 'branch', '-a'), /codex\/oracle-phase-0-governance/);
+  return root;
+}
+
+const reviewedGatewaySource = mainOnlySource('gateway-source', process.cwd());
+const reviewedSub2apiSource = mainOnlySource('sub2api-source', path.resolve(configuredSub2apiRoot));
+const reviewedPhase0CcHead = 'a54a44d107164d11428da06cc3eea979f488d350';
+const reviewedPhase0Sub2apiHead = 'd596bb461b1cbb4f0ca8b299333f621ed8d4fd4f';
+
+function cloneReviewedHead(source: string, destination: string, branch: string, head: string): void {
+  execFileSync('git', ['clone', '-q', '--single-branch', '--branch', 'main', source, destination]);
+  git(destination, 'switch', '-q', '-c', branch, head);
+  assert.equal(git(destination, 'branch', '--show-current'), branch);
+  assert.equal(git(destination, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(destination, 'status', '--porcelain'), '');
+}
+
 function reviewedCliClone(name: string): { gateway: string; sub2api: string } {
   const root = mkdtempSync(path.join(tmpdir(), `oracle-reviewed-cli-${name}-`));
   const gatewayClone = path.join(root, 'gateway');
   const sub2apiClone = path.join(root, 'sub2api');
-  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.ccGatewayBranch, process.cwd(), gatewayClone]);
-  execFileSync('git', ['clone', '-q', '--branch', PHASE_0_BINDINGS.sub2apiBranch, reviewedSub2apiSource, sub2apiClone]);
+  cloneReviewedHead(reviewedGatewaySource, gatewayClone, PHASE_0_BINDINGS.ccGatewayBranch, reviewedPhase0CcHead);
+  cloneReviewedHead(reviewedSub2apiSource, sub2apiClone, PHASE_0_BINDINGS.sub2apiBranch, reviewedPhase0Sub2apiHead);
   symlinkSync(path.join(process.cwd(), 'node_modules'), path.join(gatewayClone, 'node_modules'));
   const exclude = path.resolve(gatewayClone, git(gatewayClone, 'rev-parse', '--git-path', 'info/exclude'));
   writeFileSync(exclude, `${readFileSync(exclude, 'utf8')}\nnode_modules\n`);
