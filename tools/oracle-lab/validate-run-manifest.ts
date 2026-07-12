@@ -24,8 +24,11 @@ export function validateRunInputs(registry: string, claims: string, manifestFile
   if (isObject(manifest)) {
     for (const [name, file] of [['requirement_registry', registry], ['claim_registry', claims]] as const) {
       const marker = getField(manifest, `governance.${name}`)
-      if (isObject(marker) && marker.status === 'present' && marker.sha256 !== digestFile(file).slice(7)) errors.push({ code: 'referenced_digest_mismatch', path: `$.governance.${name}.sha256`, message: `${name} digest does not match` })
-      else if (!isObject(marker) || marker.status !== 'absent_pre_governance_bootstrap') errors.push({ code: 'missing_referenced_digest', path: `$.governance.${name}`, message: `${name} marker is missing` })
+      if (isObject(marker) && marker.status === 'present') {
+        if (marker.sha256 !== digestFile(file).slice(7)) errors.push({ code: 'referenced_digest_mismatch', path: `$.governance.${name}.sha256`, message: `${name} digest does not match` })
+      } else if (!isObject(marker) || marker.status !== 'absent_pre_governance_bootstrap') {
+        errors.push({ code: 'missing_referenced_digest', path: `$.governance.${name}`, message: `${name} marker is missing` })
+      }
     }
     const repositoryValues = getField(manifest, 'repositories')
     if (!isObject(repositoryValues)) errors.push({ code: 'missing_repository_digests', path: '$.repositories', message: 'repositories are missing' })

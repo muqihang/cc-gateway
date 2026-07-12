@@ -16,6 +16,7 @@ import { contextPackDigest, validateContextPackValue, type ContextPack } from '.
 
 const catalogPath = path.resolve('docs/superpowers/registry/oracle-lab-command-catalog.json')
 const entryBaseline = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'
+const approvedPlan = 'docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-0-governance-baseline.md'
 const digest = `sha256:${'a'.repeat(64)}`
 const otherDigest = `sha256:${'b'.repeat(64)}`
 const commit = '1'.repeat(40)
@@ -23,6 +24,14 @@ const commit = '1'.repeat(40)
 async function catalog(): Promise<CommandCatalogEntry[]> {
   return JSON.parse(await readFile(catalogPath, 'utf8')) as CommandCatalogEntry[]
 }
+
+test('documented Task 8 final evidence chain binds context to the exit manifest only', async () => {
+  const plan = await readFile(approvedPlan, 'utf8')
+  const task8 = plan.slice(plan.indexOf('## Task 8:'), plan.indexOf('## Task 9:'))
+  const contextCommand = task8.split('\n').find((line) => line.includes('npm run oracle:context'))
+  assert(contextCommand?.includes('--manifest docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'))
+  assert.equal(contextCommand?.includes('phase-0-entry-baseline.json'), false)
+})
 
 function record(commandId: string, repository: CommandResultRecord['repository'] = 'cc-gateway'): CommandResultRecord {
   const unsigned = { command_id: commandId, repository, repository_commit: commit, manifest_digest: digest, environment_digest: otherDigest, exit_code: 0, expected_exit: 0 as const, status: 'pass' as const, output_digest: digest }
@@ -200,11 +209,14 @@ test('evidence containment rejects symlink parents and destinations without touc
   assert.equal(await readFile(target, 'utf8'), 'untouched')
 })
 
-test('documented Task 8 pipeline canonicalizes the exact transient context into commit-bound evidence', async () => {
+test('documented Task 8 exit pipeline rejects entry context and completes explicit exit context through receipt', async () => {
   const originalCwd = process.cwd()
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-documented-pipeline-'))
   const transientContext = '/tmp/oracle-lab-context-pack.json'
   const transientResults = '/tmp/oracle-lab-phase-0-command-results.json'
+  const entryResults = '/tmp/oracle-lab-phase-0-entry-command-results.json'
+  const entryContext = '/tmp/oracle-lab-phase-0-entry-context-pack.json'
+  const entryManifest = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'
   const baseline = 'docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json'
   const handoffPath = 'docs/superpowers/evidence/phase-0/phase-0-handoff.json'
   const reportPath = 'docs/superpowers/evidence/phase-0/phase-0-exit-report.md'
@@ -227,22 +239,40 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
     await writeFile(destination, await readFile(path.join(originalCwd, file)))
   }
   await mkdir(path.dirname(path.join(root, baseline)), { recursive: true })
-  await writeFile(path.join(root, baseline), await readFile(path.join(originalCwd, entryBaseline)))
+  await writeFile(path.join(root, entryManifest), await readFile(path.join(originalCwd, entryBaseline)))
+  const exitManifest = JSON.parse(await readFile(path.join(root, entryManifest), 'utf8')) as Record<string, any>
+  exitManifest.phase = 'phase_0_exit'
+  exitManifest.entry_kind = 'phase_0_exit'
+  exitManifest.governance = {
+    requirement_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-requirements.json')).slice(7) },
+    claim_registry: { status: 'present', sha256: digestFile(path.join(root, 'docs/superpowers/registry/oracle-lab-claims.json')).slice(7) },
+  }
+  await writeFile(path.join(root, baseline), `${JSON.stringify(exitManifest, null, 2)}\n`)
 
   process.chdir(root)
   try {
+    const tsx = path.join(originalCwd, 'node_modules/.bin/tsx')
+    const runTool = (tool: string, args: string[]) => execFileSync(tsx, [path.join(originalCwd, 'tools/oracle-lab', tool), '--', ...args], { cwd: root, encoding: 'utf8' })
     const catalogValue = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-command-catalog.json', 'utf8')) as CommandCatalogEntry[]
-    const manifest = JSON.parse(await readFile(baseline, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
-    const records = catalogValue.map((entry): CommandResultRecord => {
+    const resultSetFor = (manifestPath: string): CommandResultSet => {
+      const manifest = JSON.parse(execFileSync('git', ['show', `HEAD:${manifestPath}`], { encoding: 'utf8' })) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
+      const records = catalogValue.map((entry): CommandResultRecord => {
       const repositoryName = entry.repository === 'sub2api' ? 'sub2api' : 'cc_gateway'
-      const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(baseline), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
+        const unsigned = { command_id: entry.id, repository: entry.repository, repository_commit: manifest.repositories[repositoryName].head, ...(entry.repository === 'sub2api' ? { contract_digest: `sha256:${manifest.contract.sha256}` } : {}), manifest_digest: digestFile(manifestPath), environment_digest: digest, exit_code: entry.expected_exit === 0 ? 0 : 1, expected_exit: entry.expected_exit, status: entry.expected_exit === 0 ? 'pass' as const : 'expected_fail' as const, output_digest: otherDigest, ...(entry.output_policy === 'redacted_excerpt' ? { output_excerpt: '[REDACTED]' } : {}) }
       return { ...unsigned, duration_ms: 1, result_digest: commandRecordDigest(unsigned) }
-    })
-    const unsignedResults = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile('docs/superpowers/registry/oracle-lab-command-catalog.json'), manifest_digest: digestFile(baseline), records }
-    writeJson(transientResults, { ...unsignedResults, result_set_digest: commandSetDigest(unsignedResults) })
-    const context = buildContextPack({ registry: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', manifest: baseline, commandResults: transientResults, requirementIds: ['HA-P0-001', 'HA-P0-002'] })
-    await writeFile(transientContext, `${JSON.stringify({ ...context, manifest_digest: otherDigest }, null, 2)}\n`)
-    assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_manifest_context')
+      })
+      const unsigned = { schema_version: 1 as const, generated_at: new Date(Date.now() + 60_000).toISOString(), expires_at: new Date(Date.now() + 7 * 86_400_000 + 60_000).toISOString(), catalog_digest: digestFile('docs/superpowers/registry/oracle-lab-command-catalog.json'), manifest_digest: digestFile(manifestPath), records }
+      return { ...unsigned, result_set_digest: commandSetDigest(unsigned) }
+    }
+    execFileSync('git', ['init', '-q']); execFileSync('git', ['config', 'user.email', 'test@example.invalid']); execFileSync('git', ['config', 'user.name', 'Oracle Test'])
+    execFileSync('git', ['add', 'docs']); execFileSync('git', ['commit', '-qm', 'test: seed distinct entry and exit manifests'])
+    writeJson(entryResults, resultSetFor(entryManifest))
+    writeJson(transientResults, resultSetFor(baseline))
+    runTool('build-context-pack.ts', ['--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--manifest', entryManifest, '--command-results', entryResults, '--requirement', 'HA-P0-001', '--requirement', 'HA-P0-002', '--out', entryContext])
+    assert.notEqual(digestFile(entryManifest), digestFile(baseline))
+    assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: entryContext, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_result_context')
+    await writeFile(transientContext, await readFile(entryContext))
+    assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_result_context')
     await assert.rejects(readFile(evidenceContext), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
     const externalTarget = path.join(root, 'external-context-target.json')
     const symlinkContext = 'docs/superpowers/evidence/phase-0/symlink-context-pack.json'
@@ -253,24 +283,22 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
       /symlink|containment|escape/i,
     )
     assert.equal(await readFile(externalTarget, 'utf8'), 'external target remains unchanged\n')
-    await writeFile(transientContext, `${JSON.stringify(context, null, 4)}\n`)
-
-    const handoff = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath })
+    runTool('build-context-pack.ts', ['--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--manifest', baseline, '--command-results', transientResults, '--requirement', 'HA-P0-001', '--requirement', 'HA-P0-002', '--out', evidenceContext])
+    runTool('build-handoff-bundle.ts', ['--phase', 'phase-0', '--baseline', baseline, '--command-results', transientResults, '--context', evidenceContext, '--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--catalog', 'docs/superpowers/registry/oracle-lab-command-catalog.json', '--out', handoffPath])
+    const context = JSON.parse(await readFile(evidenceContext, 'utf8')) as ContextPack
+    const handoff = JSON.parse(await readFile(handoffPath, 'utf8')) as ReturnType<typeof buildHandoff>
     assert.deepEqual(handoff.artifacts.map((artifact) => artifact.path).sort(), [baseline, evidenceContext].sort())
     assert.equal(handoff.context_pack_digest, digestFile(evidenceContext))
-    assert.equal(await readFile(evidenceContext, 'utf8'), `${canonicalJson(context)}\n`)
-    const firstDigest = digestFile(evidenceContext)
-    await writeFile(transientContext, `${JSON.stringify(context, null, 2)}\n`)
-    buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, out: handoffPath })
-    assert.equal(digestFile(evidenceContext), firstDigest)
-
-    writeJson(handoffPath, handoff)
-    const { buildExitReport } = await import('../tools/oracle-lab/build-exit-report.js')
-    await writeFile(reportPath, buildExitReport(handoff))
-    execFileSync('git', ['init', '-q']); execFileSync('git', ['config', 'user.email', 'test@example.invalid']); execFileSync('git', ['config', 'user.name', 'Oracle Test'])
+    assert.equal(context.manifest_digest, digestFile(baseline))
+    const manifestOnlyForgery = path.join(root, 'manifest-only-forgery.json')
+    writeJson(manifestOnlyForgery, { ...context, manifest_digest: digestFile(entryManifest) })
+    assert.throws(() => buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: manifestOnlyForgery, out: handoffPath }), (error: Error & { code?: string }) => error.code === 'cross_manifest_context')
+    runTool('build-exit-report.ts', ['--handoff', handoffPath, '--out', reportPath])
     execFileSync('git', ['add', 'docs']); execFileSync('git', ['commit', '-qm', 'test: bind documented pipeline evidence'])
     const handoffCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-    assert.deepEqual(validateExitReceiptValue(buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit })), { ok: true, errors: [] })
+    const receiptPath = 'docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json'
+    runTool('build-exit-receipt.ts', ['--baseline', baseline, '--handoff', handoffPath, '--handoff-commit', handoffCommit, '--registry', 'docs/superpowers/registry/oracle-lab-requirements.json', '--claims', 'docs/superpowers/registry/oracle-lab-claims.json', '--catalog', 'docs/superpowers/registry/oracle-lab-command-catalog.json', '--out', receiptPath])
+    assert.deepEqual(validateExitReceiptValue(JSON.parse(await readFile(receiptPath, 'utf8'))), { ok: true, errors: [] })
 
     const unmappedContext = { ...context, requirement_ids: ['HA-P0-000'] }
     await writeFile(evidenceContext, `${canonicalJson(unmappedContext)}\n`)
@@ -280,6 +308,7 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
       artifacts: handoff.artifacts.map((artifact) => artifact.path === evidenceContext ? { ...artifact, digest: digestFile(evidenceContext) } : artifact),
     }
     writeJson(handoffPath, unmappedHandoff)
+    const { buildExitReport } = await import('../tools/oracle-lab/build-exit-report.js')
     await writeFile(reportPath, buildExitReport(unmappedHandoff))
     assert.throws(
       () => buildExitReceipt({ baseline, handoff: handoffPath, handoffCommit }),
@@ -304,11 +333,9 @@ test('documented Task 8 pipeline canonicalizes the exact transient context into 
     writeJson(handoffPath, handoff)
     await writeFile(reportPath, buildExitReport(handoff))
 
-    const explicitContext = 'docs/superpowers/evidence/phase-0/task-9-context-pack.json'
-    await writeFile(explicitContext, `${canonicalJson(context)}\n`)
-    const explicit = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: explicitContext, out: handoffPath })
-    assert(explicit.artifacts.some((artifact) => artifact.path === explicitContext))
-    assert(!explicit.artifacts.some((artifact) => artifact.path === evidenceContext))
+    const explicit = buildHandoff({ phase: 'phase-0', baseline, commandResults: transientResults, context: evidenceContext, out: handoffPath })
+    assert(explicit.artifacts.some((artifact) => artifact.path === evidenceContext))
+    assert.equal(explicit.context_pack_digest, digestFile(evidenceContext))
   } finally {
     process.chdir(originalCwd)
   }

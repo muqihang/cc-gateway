@@ -492,7 +492,7 @@ Run: `git add tests/red/phase0-boundary.red.test.ts sidecar/egress-tls-sidecar/i
 
 **Interfaces:**
 - `npm run oracle:validate -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json`.
-- `npm run oracle:context -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json --command-results /tmp/oracle-lab-phase-0-command-results.json --requirement HA-P0-001 --requirement HA-P0-002 --out /tmp/oracle-lab-context-pack.json`.
+- `npm run oracle:context -- --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --manifest docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json --command-results /tmp/oracle-lab-phase-0-command-results.json --requirement HA-P0-001 --requirement HA-P0-002 --out /tmp/oracle-lab-context-pack.json`.
 - `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-green --results /tmp/oracle-lab-phase-0-green-results.json`.
 - `npm run oracle:commands -- --catalog docs/superpowers/registry/oracle-lab-command-catalog.json --group phase0-red --results /tmp/oracle-lab-phase-0-red-results.json`.
 - `npm run oracle:merge-results -- --inputs /tmp/oracle-lab-phase-0-green-results.json /tmp/oracle-lab-phase-0-red-results.json --out /tmp/oracle-lab-phase-0-command-results.json`.
@@ -500,6 +500,7 @@ Run: `git add tests/red/phase0-boundary.red.test.ts sidecar/egress-tls-sidecar/i
 - `npm run oracle:exit-report -- --handoff docs/superpowers/evidence/phase-0/phase-0-handoff.json --out docs/superpowers/evidence/phase-0/phase-0-exit-report.md`.
 - `npm run oracle:receipt -- --baseline docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json --handoff docs/superpowers/evidence/phase-0/phase-0-handoff.json --handoff-commit "$HANDOFF_COMMIT" --out docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json`.
 - Packs contain approved files/symbols, line references, requirement records, and test status; they exclude raw secrets and unrestricted logs.
+- The immutable entry baseline remains a separate entry-validation artifact. Final command results, final context, handoff, exit report, and exit receipt bind only `phase-0-exit-baseline.json`; entry-bound artifacts are never reused or accepted as fallback in the exit evidence chain.
 - Add these exact package scripts: `oracle:validate`, `oracle:context`, `oracle:commands`, `oracle:merge-results`, `oracle:handoff`, `oracle:exit-report`, and `oracle:receipt`; each delegates to the corresponding `tools/oracle-lab/*.ts` entry point through the existing `tsx` toolchain.
 - `oracle:validate` composes run-manifest, requirement, claim, and command-catalog validation and fails closed if any referenced digest or requirement is missing.
 
