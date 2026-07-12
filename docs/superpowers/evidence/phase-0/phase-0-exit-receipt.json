@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-07-12T09:12:01.747Z",
-  "baseline_digest": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170",
-  "handoff_digest": "sha256:636cab57c6cda7bc8ec6ac5919fd4e91625b0dbf9fa3c47f27cefdbe00b6c113",
-  "handoff_commit": "154bbffca69fd5d5f5df5b1e47e15728bbc7ac81",
+  "generated_at": "2026-07-12T09:33:25.872Z",
+  "baseline_digest": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
+  "handoff_digest": "sha256:504037ed0bf9ea9a40d68e4540659d60f3124c946a0b6e47f8fef1f1c6ceaf6d",
+  "handoff_commit": "75922642f7a73db1d5c6056424612e060a90d7ea",
   "artifact_digests": {
-    "docs/superpowers/evidence/phase-0/phase-0-context-pack.json": "sha256:3444735a03b2a5d800c9ea3943d218623d3e80664f105e66af81c822f0e9ef11",
-    "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json": "sha256:beb6338c63be33aaec050ac8f8021ccd45d81d2271eace7ae9bbb0f43ed0f170",
-    "docs/superpowers/evidence/phase-0/phase-0-exit-report.md": "sha256:a6cf369c378d7aed3f33575c86e947735aa0d94204acea05a3c23adf8d78e340",
-    "docs/superpowers/evidence/phase-0/phase-0-handoff.json": "sha256:636cab57c6cda7bc8ec6ac5919fd4e91625b0dbf9fa3c47f27cefdbe00b6c113",
-    "docs/superpowers/registry/oracle-lab-requirements.json": "sha256:ad0f88d0e69922de6bdf94cf3055f357e2f6dc91662e5b79e07943abd7ea3926",
-    "docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md": "sha256:c163fd0e9d9d0d660cd2779af16f37e5451c5651507a29aef7c7268eeb36df26"
+    "docs/superpowers/evidence/phase-0/phase-0-context-pack.json": "sha256:a2536cf9bf395864480639f57a1ed59ca9cfe4a43c37b305d515da8d90335a92",
+    "docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json": "sha256:21004327cdc573c565d06f90d700515d3e240c631aaad93192fbaaee8392994f",
+    "docs/superpowers/evidence/phase-0/phase-0-exit-report.md": "sha256:75996abafba9399330bc06c2892c5ef93c7ecb2b0eced89cf608175fb8a06ff4",
+    "docs/superpowers/evidence/phase-0/phase-0-handoff.json": "sha256:504037ed0bf9ea9a40d68e4540659d60f3124c946a0b6e47f8fef1f1c6ceaf6d",
+    "docs/superpowers/registry/oracle-lab-requirements.json": "sha256:4624fd7c71f509a03e06c5055f5de53bcc2579bb03ea594a318a661dbbbc37a5",
+    "docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md": "sha256:0c4af76ca092f19075813786e1edf64351567b9841d87495e007f7657b059bb8"
   },
   "repository_heads": {
-    "cc_gateway": "128fdf8cd6e3ec97da8eaeffbd6a6b2b4af9267d",
+    "cc_gateway": "a94462b372b9397d914868450e12f2cc1f6dc002",
     "sub2api": "d596bb461b1cbb4f0ca8b299333f621ed8d4fd4f"
   },
   "retention_class": "phase_evidence_permanent",
