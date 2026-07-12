@@ -2,7 +2,7 @@
 
 Authoritative inputs:
 
-- CC Gateway integrated `main`: `414c520f1e06120275c0b4a2f9c6879ba640604e`
+- CC Gateway integrated `main`: `b38198763ab7e337321e3a0d9e545375d3fb3ad0`
 - Sub2API integrated `main`: `d5a42bbd24d15af2ce7646d050a5ae5c77911d4f`
 - Phase 0 exit receipt: `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json`
 
@@ -29,3 +29,7 @@ Before PI-2, use TDD to add dedicated post-integration handoff and receipt schem
 At the reviewed clean PI-1/PI-1.5 tool HEAD, capture the fresh post-integration baseline. Run each dedicated catalog command independently and classify real exit codes as `pass` or `expected_fail`. Generate a fresh context pack and handoff bound only to the new baseline and results. Validate all artifact digests and forbidden-material scans.
 
 Use two commits: first the baseline/results/context/handoff artifact commit, then a receipt-only commit binding the artifact commit and exact bytes. Record both repository heads and user-fork remote refs. Do not change tooling in this task. Write `.superpowers/sdd/task-pi-2-report.md` and update `.superpowers/sdd/post-integration-progress.md`.
+
+## Task 1.6: Rebind tooling to the clone-portable integrated main
+
+After CC Gateway portability PR #2 merges, use TDD to update the immutable CC integrated-main binding to the merge commit, add a fifth GREEN catalog command that runs `npm run test:oracle:cross-repo` with explicit `SUB2API_ROOT`, and require exactly five GREEN plus three RED results throughout results, context, handoff, schemas, and tests. The command environment digest must bind the explicit Sub2API capture root. Re-review tooling before regenerating PI-2 artifacts.
