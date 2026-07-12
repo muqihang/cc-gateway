@@ -82,6 +82,38 @@ binding behavior.
 - No file deletion, history rewrite, force push, real upstream request, or
   Phase 1 implementation occurred.
 
-## Concerns
+## PI-1.5 Remediation Addendum
 
-None.
+The independent review identified four Important binding gaps: handoff and
+receipt generation did not re-read the exact catalog bytes from the reviewed
+tool commit; lifecycle metadata was incomplete; persisted artifact paths could
+collapse to a basename; and no explicit receipt-only successor validation mode
+existed. These were fixed in `140347e` (`fix: harden post-integration evidence binding`).
+
+The binder now runs `validatePostIntegrationResultsBindings` against the catalog
+loaded from the reviewed commit and rejects cross-catalog, wrong repository
+head, wrong expected exit, missing/wrong contract, and incomplete group results.
+Handoff and receipt artifacts require exact compatibility, retention, redaction,
+and destruction metadata. All persisted paths are normalized repository-
+relative paths derived from a declared root; receipt artifact paths are checked
+against handoff paths byte-for-byte. The new `validate-receipt` CLI mode accepts
+the receipt-only successor commit while preserving the reviewed artifact commit.
+
+## Remediation Verification
+
+| Command | Result |
+|---|---|
+| focused PI entry/handoff/receipt tests | `20 passed, 0 failed` |
+| strict TypeScript over PI tools/tests | pass |
+| old Phase 0 H0 focused regression | `26 passed, 0 failed` |
+| full `npm test` | `354 passed, 0 failed` |
+| Node harness full regression | `79 passed, 0 failed` |
+| `npm run build` | pass |
+| `git diff --check` | pass |
+
+## Remaining Notes
+
+The controller-owned `.superpowers/sdd/post-integration-plan.md` and
+`.superpowers/sdd/post-integration-progress.md` remain dirty by design and
+were not included in the fix commit. No implementation, external request,
+credential, promotion, canary, deployment, or Phase 1 capability was enabled.
