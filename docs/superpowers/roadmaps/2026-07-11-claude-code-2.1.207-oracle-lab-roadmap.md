@@ -413,9 +413,6 @@ Historical plan files:
 
 ```text
 docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-0-governance-baseline.md
-docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-1-boundary-repairs.md
-docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-2-compatibility-authority.md
-...
 ```
 
 ## Historical Roadmap Acceptance Record
