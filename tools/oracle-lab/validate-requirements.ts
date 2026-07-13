@@ -251,6 +251,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     if (version === 2) {
       if (typeof value.reviewer !== 'string' || value.reviewer.trim() === '') add(errors, 'invalid_field', `${base}.reviewer`, 'reviewer must be non-empty')
       if (typeof value.phase_owner !== 'string' || value.phase_owner.trim() === '') add(errors, 'invalid_field', `${base}.phase_owner`, 'phase_owner must be non-empty')
+      else if (!phaseOrder.has(value.phase_owner)) add(errors, 'invalid_phase_owner', `${base}.phase_owner`, 'phase_owner is not in the approved roadmap phase order')
       if (value.work_package !== null && (typeof value.work_package !== 'string' || value.work_package.trim() === '')) add(errors, 'invalid_field', `${base}.work_package`, 'work_package must be a non-empty string or null')
       if (value.introduced_after_phase !== null && (typeof value.introduced_after_phase !== 'string' || value.introduced_after_phase.trim() === '')) add(errors, 'invalid_field', `${base}.introduced_after_phase`, 'introduced_after_phase must be a non-empty string or null')
       const reviewAmendment = typeof id === 'string' && id.startsWith('RA-')

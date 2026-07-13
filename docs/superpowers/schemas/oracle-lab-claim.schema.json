@@ -62,6 +62,38 @@
         "then": { "properties": { "authority_state": { "const": "unverified" } } }
       },
       {
+        "if": { "properties": { "claim_id": { "const": "CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "Matching local headers does not prove official-client identity." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-CCH-SERVER-ACCEPTANCE-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "Local CCH verification does not prove server acceptance." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-DEVICE-PROOF-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "A stable `device_id` is not trusted-device proof." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-TLS-WIRE-EQUIVALENCE-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "A local TLS summary does not prove complete wire equivalence." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-LONG-TERM-ACCOUNT-SAFETY-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "One successful request does not prove long-term account safety." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-CHANGELOG-RISK-RULES-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "Public changelog entries do not reveal private risk-control rules." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-NEWER-PERSONA-PROMOTION-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "A newer client version cannot select a newer outbound persona without profile authority." } } }
+      },
+      {
+        "if": { "properties": { "claim_id": { "const": "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED" } }, "required": ["claim_id"] },
+        "then": { "properties": { "statement": { "const": "Local or mock evidence does not authorize production traffic." } } }
+      },
+      {
         "if": { "properties": { "authority_state": { "const": "unverified" } }, "required": ["authority_state"] },
         "then": { "properties": { "observation_scope": { "const": "local" } } },
         "else": { "properties": { "evidence_ids": { "$ref": "#/$defs/nonEmptyStringArray" } } }

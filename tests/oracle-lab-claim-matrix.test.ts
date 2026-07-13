@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 import { validateClaims } from '../tools/oracle-lab/validate-claims.js'
 
@@ -216,13 +217,23 @@ test('seed claim matrix registers all eight prohibited conclusions as exact nega
   assert.deepEqual(validateClaims(claimsPath, await requirements()), { ok: true, errors: [] })
 })
 
-test('known prohibited claim IDs fail closed if rewritten as positive conclusions', async () => {
+test('runtime and schema reject positive whitespace and case drift for every prohibited claim ID', async () => {
   const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as RecordValue
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  assert.equal(validate(seeded), true, JSON.stringify(validate.errors))
+  assert.equal(validate(seeded.slice(0, 2)), true, JSON.stringify(validate.errors))
   for (const id of prohibitedClaimIds) {
-    const mutated = seeded.map((claim) => claim.claim_id === id
-      ? { ...claim, statement: `Positive provider-internal conclusion asserted by ${id}.` }
-      : claim)
-    expectError(await validateFixture(mutated), 'invalid_prohibited_claim')
+    const exact = String(prohibitedClaims[id].statement)
+    for (const statement of [
+      `Positive provider-internal conclusion asserted by ${id}.`,
+      ` ${exact}`,
+      exact.toLowerCase(),
+    ]) {
+      const mutated = seeded.map((claim) => claim.claim_id === id ? { ...claim, statement } : claim)
+      expectError(await validateFixture(mutated), 'invalid_prohibited_claim')
+      assert.equal(validate(mutated), false, `${id} schema accepted ${JSON.stringify(statement)}`)
+    }
   }
 })
 
@@ -245,6 +256,10 @@ test('seeded claim matrix and strict schema expose runtime-equivalent authority 
     'authoritative_provider_disclosure', 'evidence_ids', 'observation_scope', 'production_verified',
     'canary_evidence_ids', 'production_gate_ids', 'rollback_evidence_ids', 'deployed_artifacts']) {
     assert(serialized.includes(token), `schema conditionals are missing ${token}`)
+  }
+  for (const id of prohibitedClaimIds) {
+    assert(serialized.includes(id), `schema conditionals are missing ${id}`)
+    assert(serialized.includes(String(prohibitedClaims[id].statement)), `schema conditionals are missing ${id} statement`)
   }
   const definitions = schema.$defs as RecordValue
   assert.equal(((definitions.stringArray as RecordValue).uniqueItems), true)

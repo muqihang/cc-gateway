@@ -67,7 +67,7 @@
     },
     "contradiction_ids": { "$ref": "#/$defs/stringArray" },
     "reviewer": { "type": "string", "minLength": 1 },
-    "phase_owner": { "type": "string", "minLength": 1 },
+    "phase_owner": { "enum": ["phase_0", "phase_1", "phase_2", "phase_3a", "phase_3b", "phase_4", "phase_5", "phase_6a", "phase_6b"] },
     "work_package": {
       "oneOf": [
         { "type": "string", "minLength": 1 },

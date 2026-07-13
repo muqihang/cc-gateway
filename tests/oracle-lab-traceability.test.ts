@@ -185,6 +185,7 @@ test('schema-validated migration is deterministic, exact-covering, and never inf
   assert.deepEqual(first, second)
   assert.deepEqual(first.map((row) => row.requirement_id), v1.map((row) => row.requirement_id))
   assert(first.every((row) => row.schema_version === 2 && row.work_package === null && row.introduced_after_phase === null))
+  assert.deepEqual(validateRequirementRecords(first), { ok: true, errors: [] })
   assert.deepEqual(await registry(), [...first, ...additions])
   assert.deepEqual(await validateFixture([...first, ...additions]), { ok: true, errors: [] })
 
@@ -347,6 +348,9 @@ test('RA records remain deferred and cannot acquire local canary or production a
 })
 
 test('RA gate dependencies cannot target later phases while semantic related links may', async () => {
+  expectError(await validateFixture(await mutateRecord('HA-P0-005', {
+    phase_owner: 'phase_99',
+  })), 'invalid_phase_owner')
   expectError(await validateFixture(await mutateRecord('RA-P0-008', {
     depends_on: ['HA-P0-005', 'RA-P0-003'],
   })), 'future_phase_dependency')
@@ -627,6 +631,8 @@ test('canonical v2 JSON schema is executable and encodes governance plus product
   assert.equal(schema.$id, 'https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json')
   const properties = schema.properties as Requirement
   assert.equal((properties.schema_version as Requirement).const, 2)
+  assert.deepEqual((properties.phase_owner as Requirement).enum,
+    ['phase_0', 'phase_1', 'phase_2', 'phase_3a', 'phase_3b', 'phase_4', 'phase_5', 'phase_6a', 'phase_6b'])
   for (const field of ['reviewer', 'phase_owner', 'work_package', 'introduced_after_phase', 'refines', 'supersedes', 'related_requirements']) {
     assert(field in properties, `${field} is missing from the v2 schema`)
   }
@@ -646,4 +652,9 @@ test('canonical v2 JSON schema is executable and encodes governance plus product
 
   const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
   for (const record of await v2Registry()) assert.equal(validate(record), true, JSON.stringify(validate.errors))
+  const unknownPhase = await v2Registry()
+  const phaseTarget = unknownPhase.find((record) => record.requirement_id === 'HA-P0-005')
+  assert(phaseTarget)
+  phaseTarget.phase_owner = 'phase_99'
+  assert.equal(validate(phaseTarget), false)
 })
