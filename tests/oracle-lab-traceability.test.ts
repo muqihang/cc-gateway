@@ -269,6 +269,11 @@ test('v2 validates relationship targets, self references, and refines or superse
     cyclic[1][field] = [String(cyclic[0].requirement_id)]
     expectError(await validateFixture(cyclic), 'cyclic_relationship')
   }
+
+  const crossFieldCycle = await v2Registry()
+  crossFieldCycle[0].refines = [String(crossFieldCycle[1].requirement_id)]
+  crossFieldCycle[1].supersedes = [String(crossFieldCycle[0].requirement_id)]
+  expectError(await validateFixture(crossFieldCycle), 'cyclic_relationship')
 })
 
 test('v2 permits only symmetric registered contradictions on non-production records', async () => {

@@ -74,3 +74,35 @@ After adding the missing migration fixtures/tests but before upgrading the valid
 ## Concerns
 
 None. The canonical Registry intentionally remains v1 until Task 3; this is a required sequencing boundary, not an incomplete Task 2 implementation.
+
+## Review Fix Wave: Cross-Field Relationship Cycles
+
+### Result
+
+DONE
+
+Commit: this fix-wave commit, message `fix(oracle): reject cross-field requirement cycles`; the resulting hash is reported by the task handoff because a commit cannot embed its own hash.
+
+### RED
+
+The independent review finding was reproduced with the minimal v2 graph `A.refines = [B]` and `B.supersedes = [A]`. Before the fix, `validateRequirementRecords` returned `{ ok: true, errors: [] }` because `hasCycle` built separate per-field graphs.
+
+Command: `npm exec tsx tests/oracle-lab-traceability.test.ts`
+
+Result: exit 1, 23 tests, 22 passed, 1 failed. The relationship-cycle test failed because no `cyclic_relationship` error was emitted.
+
+### GREEN
+
+`hasCycle` now combines every record's `refines` and `supersedes` targets into one adjacency list and executes one DFS. Existing same-field and multi-hop detection remains on the same traversal, while mixed-field cycles are now rejected.
+
+- `npm exec tsx tests/oracle-lab-traceability.test.ts`: exit 0, 23/23 passed.
+- `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`: exit 0, 15/15 passed.
+- `npm test`: 40 test files, exit 0; final runners reported no failures.
+- `npm run build`: exit 0.
+- `git diff --check`: passed.
+- Historical immutable diff and canonical-v1 byte comparison: passed.
+- `codegraph sync .` followed by `codegraph status .`: required to report an up-to-date index with zero pending changes.
+
+### Concerns
+
+None.

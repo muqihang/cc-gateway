@@ -117,11 +117,12 @@ export function detectRequirementSchemaVersion(parsed: unknown[]): { version: 1 
   return { version: versions.has(2) ? 2 : 1, errors }
 }
 
-function hasCycle(records: unknown[], field: 'refines' | 'supersedes'): boolean {
+function hasCycle(records: unknown[]): boolean {
   const graph = new Map<string, string[]>()
   for (const value of records) {
-    if (!isObject(value) || typeof value.requirement_id !== 'string' || !Array.isArray(value[field])) continue
-    graph.set(value.requirement_id, value[field].filter((entry): entry is string => typeof entry === 'string'))
+    if (!isObject(value) || typeof value.requirement_id !== 'string') continue
+    const targets = ['refines', 'supersedes'].flatMap((field) => Array.isArray(value[field]) ? value[field] : [])
+    graph.set(value.requirement_id, targets.filter((entry): entry is string => typeof entry === 'string'))
   }
   const visiting = new Set<string>()
   const visited = new Set<string>()
@@ -348,9 +349,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
         }
       }
     }
-    for (const field of ['refines', 'supersedes'] as const) {
-      if (hasCycle(parsed, field)) add(errors, 'cyclic_relationship', '$', `${field} relationships must be acyclic`)
-    }
+    if (hasCycle(parsed)) add(errors, 'cyclic_relationship', '$', 'refines and supersedes relationships must form one acyclic graph')
   }
 
   return errors.length === 0 ? { ok: true, errors: [] } : { ok: false, errors }
