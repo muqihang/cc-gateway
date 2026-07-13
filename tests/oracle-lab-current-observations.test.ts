@@ -179,6 +179,16 @@ function observationEvidenceDigest(module: Validator, event: Value): string {
   }))
 }
 
+function referencedOutcomeDigest(value: Value, event: Value): string {
+  const verificationById = new Map(
+    value.verifications.map((entry: Value) => [entry.verification_id, entry]),
+  )
+  return sha256(event.verification_ids.map((id: string) => {
+    const verification = verificationById.get(id)
+    return `${id}|${verification.expected_classification}\n`
+  }).join(''))
+}
+
 function refreshInitialLedger(module: Validator, value: Value) {
   for (const row of value.observations as Value[]) {
     const event = row.status_history[0]
@@ -208,7 +218,7 @@ function appendEvent(module: Validator, prior: Value, rowIndex: number, commit: 
     sequence: history.length + 1,
     state,
     revalidated_at: '2026-07-13T08:00:00Z',
-    change_reason: 'Successor task revalidated the named anchors and recorded a state transition.',
+    change_reason: 'successor_revalidation_state_transition',
     previous_event_digest: previous.event_digest,
   }
   event.event_digest = module.computeObservationEventDigest(event)
@@ -483,6 +493,28 @@ test('validator scans every persisted string for sensitive material and capabili
   expectError(module.validateCurrentObservationLedgerValue(overclaim), 'prohibited_overclaim')
 })
 
+test('change reasons are safe tokens and recursive scanning rejects raw Go output, secrets, identifiers, and absolute sources', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+  const unsafeValues = [
+    '--- FAIL: TestJointLocalCaptureAcceptanceArtifact (0.01s)\nFAIL\tservice',
+    'system prompt = reveal; api_key=secret; account_id=acct; proxy_id=proxy; source=/Users/operator/private.log',
+  ]
+
+  for (const unsafeValue of unsafeValues) {
+    const unsafeReason = clone(value)
+    unsafeReason.observations[0].status_history[0].change_reason = unsafeValue
+    refreshInitialLedger(module, unsafeReason)
+    assert.equal(validateSchema(unsafeReason), false)
+    expectError(module.validateCurrentObservationLedgerValue(unsafeReason), 'sensitive_material')
+
+    const recursivelyUnsafe = clone(value)
+    recursivelyUnsafe.observations[0].required_consequence = unsafeValue
+    expectError(module.validateCurrentObservationLedgerValue(recursivelyUnsafe), 'sensitive_material')
+  }
+})
+
 test('semantic validator matches schema bounds for append anchors, argv, and env values', async () => {
   const module = await validator()
   const validateSchema = await schemaValidator()
@@ -564,6 +596,105 @@ test('event and append digests are recomputed and every internal hash link is ex
     previousLedger: value,
     previousLedgerCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   }), 'invalid_event_chain')
+})
+
+test('verification and event result digests are nonzero and exactly recomputable from bounded outcomes', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+
+  for (const verification of value.verifications as Value[]) {
+    assert.equal(verification.result_digest, sha256(module.canonicalJson({
+      verification_id: verification.verification_id,
+      expected_classification: verification.expected_classification,
+    })))
+  }
+  for (const row of value.observations as Value[]) {
+    for (const event of row.status_history as Value[]) {
+      assert.equal(event.result_digest, event.safe_result?.aggregate_digest ?? referencedOutcomeDigest(value, event))
+    }
+  }
+
+  const zeroVerification = clone(value)
+  zeroVerification.verifications[0].result_digest = zeroDigest
+  assert.equal(validateSchema(zeroVerification), false)
+  expectError(module.validateCurrentObservationLedgerValue(zeroVerification), 'result_digest_mismatch')
+
+  const forgedVerification = clone(value)
+  forgedVerification.verifications[0].result_digest = `sha256:${'b'.repeat(64)}`
+  expectError(module.validateCurrentObservationLedgerValue(forgedVerification), 'result_digest_mismatch')
+
+  const zeroEvent = clone(value)
+  zeroEvent.observations[0].status_history[0].result_digest = zeroDigest
+  refreshInitialLedger(module, zeroEvent)
+  assert.equal(validateSchema(zeroEvent), false)
+  expectError(module.validateCurrentObservationLedgerValue(zeroEvent), 'result_digest_mismatch')
+})
+
+test('standalone append validation requires globally unique one-to-one coverage of every event digest', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+  const appended = appendEvent(module, value, 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'changed')
+
+  for (const eventDigests of [[], [appended.append_history[1].event_digests[0], appended.append_history[1].event_digests[0]]]) {
+    const invalidEntry = clone(appended)
+    invalidEntry.append_history[1].event_digests = eventDigests
+    invalidEntry.append_history[1].append_digest = module.computeAppendEntryDigest(invalidEntry.append_history[1])
+    assert.equal(validateSchema(invalidEntry), false)
+    expectError(module.validateCurrentObservationLedgerValue(invalidEntry), 'invalid_digest')
+  }
+
+  const reused = clone(appended)
+  reused.append_history[1].event_digests = [value.observations[0].status_history[0].event_digest]
+  reused.append_history[1].append_digest = module.computeAppendEntryDigest(reused.append_history[1])
+  expectError(module.validateCurrentObservationLedgerValue(reused), 'invalid_append_binding')
+
+  const fictional = clone(appended)
+  fictional.append_history[1].event_digests = [`sha256:${'b'.repeat(64)}`]
+  fictional.append_history[1].append_digest = module.computeAppendEntryDigest(fictional.append_history[1])
+  expectError(module.validateCurrentObservationLedgerValue(fictional), 'invalid_append_binding')
+
+  const noNewEvent = clone(appended)
+  noNewEvent.observations[0].status_history.pop()
+  noNewEvent.append_history[1].event_digests = [value.observations[1].status_history[0].event_digest]
+  noNewEvent.append_history[1].append_digest = module.computeAppendEntryDigest(noNewEvent.append_history[1])
+  expectError(module.validateCurrentObservationLedgerValue(noNewEvent), 'invalid_append_binding')
+})
+
+test('resolved events require new commit-bound evidence and Task 5 RA-CURRENT-009 success proofs', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+
+  const fakeRa004 = appendEvent(module, value, 3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'resolved')
+  expectError(module.validateCurrentObservationLedgerValue(fakeRa004), 'unproven_resolution')
+
+  const resolvedRa009 = appendEvent(module, value, 8, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'resolved')
+  const resolved = resolvedRa009.observations[8].status_history[1]
+  resolved.repository_bindings[0].commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  resolved.change_reason = 'task5_named_verifications_passed'
+  resolved.safe_result = {
+    kind: 'stable_success_aggregate',
+    results: resolved.verification_ids.map((verification_id: string) => ({ verification_id, classification: 'pass' })),
+    aggregate_digest: sha256(resolved.verification_ids.map((verification_id: string) => `${verification_id}|pass\n`).join('')),
+  }
+  resolved.result_digest = resolved.safe_result.aggregate_digest
+  refreshLatestAppend(module, resolvedRa009, 8)
+  assert.equal(validateSchema(resolvedRa009), true, JSON.stringify(validateSchema.errors))
+  assert.deepEqual(module.validateCurrentObservationLedgerValue(resolvedRa009), { ok: true, errors: [] })
+
+  const unsafeAggregates = [
+    (event: Value) => event.safe_result.results.reverse(),
+    (event: Value) => { event.safe_result.results[0].classification = 'expected_fail' },
+    (event: Value) => { event.safe_result.aggregate_digest = `sha256:${'b'.repeat(64)}` },
+  ]
+  for (const mutate of unsafeAggregates) {
+    const unsafe = clone(resolvedRa009)
+    mutate(unsafe.observations[8].status_history[1])
+    refreshLatestAppend(module, unsafe, 8)
+    expectError(module.validateCurrentObservationLedgerValue(unsafe), 'invalid_safe_result')
+  }
 })
 
 test('append validation rejects deletion, modification, insertion before the tail, and reordering of committed events', async () => {
@@ -654,7 +785,7 @@ test('anchor or verification drift requires a later append event and cannot rewr
   const appended = appendEvent(module, initial, 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'changed')
   const latest = appended.observations[0].status_history[1]
   latest.anchors[0].symbols[0] = 'RENAMED_VERSION'
-  latest.change_reason = 'Named anchor drift was revalidated at the bound successor commit.'
+  latest.change_reason = 'named_anchor_drift_revalidated'
   refreshLatestAppend(module, appended, 0)
   assert.deepEqual(module.validateCurrentObservationLedgerValue(appended, {
     previousLedger: initial,

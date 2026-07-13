@@ -58,6 +58,7 @@
   },
   "$defs": {
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "resultDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[0-9a-f]{64}$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$", "maxLength": 40 },
     "repository": { "enum": ["cc-gateway", "sub2api"] },
@@ -97,7 +98,7 @@
           "additionalProperties": { "type": "string", "maxLength": 100 }
         },
         "expected_classification": { "type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 80 },
-        "result_digest": { "$ref": "#/$defs/digest" }
+        "result_digest": { "$ref": "#/$defs/resultDigest" }
       }
     },
     "repositoryBinding": { "$ref": "#/$defs/repositoryCommit" },
@@ -123,7 +124,7 @@
       },
       "anyOf": [{ "required": ["symbols"] }, { "required": ["test_names"] }]
     },
-    "safeResult": {
+    "failureSafeResult": {
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "results", "aggregate_digest"],
@@ -159,6 +160,36 @@
         },
         "aggregate_digest": { "const": "sha256:a65265c1d00fb16f440417006ba96f1d1ad4583914c8325d521de9ea73ce933b" }
       }
+    },
+    "successSafeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "results", "aggregate_digest"],
+      "properties": {
+        "kind": { "const": "stable_success_aggregate" },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["verification_id", "classification"],
+            "properties": {
+              "verification_id": { "type": "string", "pattern": "^OBS[0-9]{3}(?:-[A-Z0-9]+)*$" },
+              "classification": { "const": "pass" }
+            }
+          }
+        },
+        "aggregate_digest": { "$ref": "#/$defs/resultDigest" }
+      }
+    },
+    "safeResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/failureSafeResult" },
+        { "$ref": "#/$defs/successSafeResult" }
+      ]
     },
     "statusEvent": {
       "type": "object",
@@ -209,7 +240,7 @@
           "items": { "type": "string", "pattern": "^OBS[0-9]{3}(?:-[A-Z0-9]+)*$" }
         },
         "evidence_digest": { "$ref": "#/$defs/digest" },
-        "result_digest": { "$ref": "#/$defs/digest" },
+        "result_digest": { "$ref": "#/$defs/resultDigest" },
         "observation_scope": { "enum": ["local_structural", "local_observational", "cross_repository_local", "process_local"] },
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "phase_slices": {
@@ -219,7 +250,7 @@
           "items": { "enum": ["phase_1", "phase_2", "phase_3a", "phase_3b", "phase_3_5", "phase_4", "phase_5"] }
         },
         "wp_umbrella": { "enum": ["WP-R0", "WP-R1", "WP-R2", "WP-R3", "WP-R4", "WP-R5", "WP-R6", "WP-R7", "WP-R8", "WP-R9"] },
-        "change_reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "change_reason": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$" },
         "safe_result": { "$ref": "#/$defs/safeResult" },
         "previous_event_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
         "event_digest": { "$ref": "#/$defs/digest" }
@@ -247,7 +278,19 @@
         "then": {
           "properties": {
             "status_history": {
-              "items": { "required": ["safe_result"] }
+              "items": {
+                "allOf": [
+                  { "required": ["safe_result"] },
+                  {
+                    "if": {
+                      "properties": { "state": { "const": "resolved" } },
+                      "required": ["state"]
+                    },
+                    "then": { "properties": { "safe_result": { "$ref": "#/$defs/successSafeResult" } } },
+                    "else": { "properties": { "safe_result": { "$ref": "#/$defs/failureSafeResult" } } }
+                  }
+                ]
+              }
             }
           }
         },

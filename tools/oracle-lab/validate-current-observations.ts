@@ -10,8 +10,10 @@ type Value = Record<string, any>
 type ValidationOptions = { previousLedger?: unknown; previousLedgerCommit?: string }
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/
+const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`
 const COMMIT = /^[0-9a-f]{40}$/
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
+const CHANGE_REASON = /^[a-z0-9]+(?:_[a-z0-9]+)*$/
 const OBSERVATION_ID = /^RA-CURRENT-(?:00[1-9]|010)$/
 const EVENT_ID = /^RA-CURRENT-(?:00[1-9]|010)-E\d{3}$/
 const VERIFICATION_ID = /^OBS\d{3}(?:-[A-Z0-9]+)*$/
@@ -127,7 +129,7 @@ function isRelativeRepositoryPath(value: unknown): value is string {
 }
 
 function sensitiveText(value: unknown): boolean {
-  return typeof value === 'string' && /(Bearer\s+[A-Za-z0-9._-]+|sk-ant-[A-Za-z0-9_-]+|\bprompt\s*:|\b(?:credential|secret|token)\s*[=:]\s*\S+|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)
+  return typeof value === 'string' && /(?:Bearer\s+[A-Za-z0-9._-]+|sk-ant-[A-Za-z0-9_-]+|\b(?:system[\s_-]+)?prompt\s*[=:]|\b(?:api[_-]?key|account_id|proxy_id|credential|secret|token)\s*[=:]\s*\S+|\bsource\s*[=:]\s*(?:\/|[A-Za-z]:[\\/])|(?:^|\n)(?:=== RUN\s+|--- (?:FAIL|PASS):|FAIL(?:\s|\t|$)|panic:)|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)
 }
 
 function prohibitedOverclaim(value: unknown): boolean {
@@ -175,7 +177,25 @@ function safeFailureDigest(): string {
   return `sha256:${createHash('sha256').update('OBS009-RED-A|expected_fail|gateway_compromise_boundary_required\nOBS009-RED-B|expected_fail|gateway_compromise_boundary_required\n').digest('hex')}`
 }
 
-function validateSafeResult(value: unknown, base: string, errors: ValidationError[]) {
+function safeSuccessDigest(verificationIds: string[]): string {
+  return `sha256:${createHash('sha256').update(verificationIds.map((id) => `${id}|pass\n`).join('')).digest('hex')}`
+}
+
+function validateSafeResult(value: unknown, base: string, state: unknown, verificationIds: unknown, errors: ValidationError[]): string | undefined {
+  if (state === 'resolved') {
+    if (!uniqueStrings(verificationIds)) {
+      add(errors, 'invalid_safe_result', base, 'resolved RA-CURRENT-009 verification IDs must be ordered and unique')
+      return undefined
+    }
+    const expected = {
+      kind: 'stable_success_aggregate',
+      results: verificationIds.map((verificationId) => ({ verification_id: verificationId, classification: 'pass' })),
+      aggregate_digest: safeSuccessDigest(verificationIds),
+    }
+    if (!same(value, expected)) add(errors, 'invalid_safe_result', base, 'resolved RA-CURRENT-009 requires ordered all-pass results and their exact aggregate')
+    return expected.aggregate_digest
+  }
+
   const expected = {
     kind: 'stable_failure_code_aggregate',
     results: [
@@ -184,7 +204,8 @@ function validateSafeResult(value: unknown, base: string, errors: ValidationErro
     ],
     aggregate_digest: safeFailureDigest(),
   }
-  if (!same(value, expected)) add(errors, 'invalid_safe_result', base, 'RA-CURRENT-009 safe result must contain only the ordered stable failure aggregate')
+  if (!same(value, expected)) add(errors, 'invalid_safe_result', base, 'unresolved RA-CURRENT-009 must contain only the ordered stable failure aggregate')
+  return expected.aggregate_digest
 }
 
 export function canonicalJson(value: unknown): string {
@@ -195,6 +216,23 @@ export function canonicalJson(value: unknown): string {
 
 function digest(value: unknown): string {
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`
+}
+
+export function computeVerificationResultDigest(verification: Value): string {
+  return digest({
+    verification_id: verification.verification_id,
+    expected_classification: verification.expected_classification,
+  })
+}
+
+function computeReferencedOutcomeDigest(verificationIds: string[], verifications: Map<string, Value>): string | undefined {
+  const lines: string[] = []
+  for (const verificationId of verificationIds) {
+    const verification = verifications.get(verificationId)
+    if (!verification) return undefined
+    lines.push(`${verificationId}|${verification.expected_classification}\n`)
+  }
+  return `sha256:${createHash('sha256').update(lines.join('')).digest('hex')}`
 }
 
 export function computeObservationEvidenceDigest(event: Value): string {
@@ -215,12 +253,15 @@ export function computeCurrentObservationLedgerDigest(ledger: Value): string {
   return digest(ledger)
 }
 
-function validateVerification(value: unknown, index: number, errors: ValidationError[], ids: Set<string>) {
+function validateVerification(value: unknown, index: number, errors: ValidationError[], ids: Set<string>, verifications: Map<string, Value>) {
   const base = `$.verifications[${index}]`
   if (!exactKeys(value, VERIFICATION_FIELDS, base, errors)) return
   if (typeof value.verification_id !== 'string' || !VERIFICATION_ID.test(value.verification_id)) add(errors, 'invalid_verification_id', `${base}.verification_id`, 'invalid verification ID')
   else if (ids.has(value.verification_id)) add(errors, 'duplicate_verification_id', `${base}.verification_id`, 'verification ID is duplicated')
-  else ids.add(value.verification_id)
+  else {
+    ids.add(value.verification_id)
+    verifications.set(value.verification_id, value)
+  }
   if (!REPOSITORIES.has(String(value.repository))) add(errors, 'invalid_repository', `${base}.repository`, 'unknown repository')
   if (value.cwd !== '.' && !isRelativeRepositoryPath(value.cwd)) add(errors, 'unsafe_path', `${base}.cwd`, 'cwd must be repository-relative')
   if (!Array.isArray(value.argv) || value.argv.length < 2 || value.argv.length > 12 || value.argv.some((entry: unknown) => typeof entry !== 'string' || entry.length < 1 || entry.length > 240)) add(errors, 'invalid_command', `${base}.argv`, 'argv must contain 2-12 bounded string arguments')
@@ -228,7 +269,8 @@ function validateVerification(value: unknown, index: number, errors: ValidationE
   if (!['HERMETIC_NETWORK_ENV', 'INDEXED_CODEGRAPH'].includes(String(value.environment_profile))) add(errors, 'invalid_environment_profile', `${base}.environment_profile`, 'unknown environment profile')
   if (!isObject(value.env) || Object.entries(value.env).some(([key, item]) => !/^[A-Z_][A-Z0-9_]*$/.test(key) || typeof item !== 'string' || item.length > 100)) add(errors, 'invalid_environment', `${base}.env`, 'env must contain bounded fixed string bindings')
   if (typeof value.expected_classification !== 'string' || value.expected_classification.length > 80 || !/^[a-z0-9_]+$/.test(value.expected_classification)) add(errors, 'invalid_classification', `${base}.expected_classification`, 'invalid safe classification')
-  if (typeof value.result_digest !== 'string' || !DIGEST.test(value.result_digest)) add(errors, 'invalid_digest', `${base}.result_digest`, 'result digest must be bounded SHA-256')
+  if (typeof value.result_digest !== 'string' || !DIGEST.test(value.result_digest)) add(errors, 'invalid_digest', `${base}.result_digest`, 'result digest must be a bounded SHA-256')
+  else if (value.result_digest === ZERO_DIGEST || value.result_digest !== computeVerificationResultDigest(value)) add(errors, 'result_digest_mismatch', `${base}.result_digest`, 'verification result digest must be nonzero and bind the exact ID and safe classification')
 
   const expected = EXPECTED_VERIFICATIONS[value.verification_id]
   if (expected) {
@@ -241,7 +283,7 @@ function validateVerification(value: unknown, index: number, errors: ValidationE
   }
 }
 
-function validateEvent(value: unknown, rowId: string, eventIndex: number, verificationIds: Set<string>, errors: ValidationError[]): Value | undefined {
+function validateEvent(value: unknown, rowId: string, eventIndex: number, verificationIds: Set<string>, verifications: Map<string, Value>, errors: ValidationError[]): Value | undefined {
   const base = `$.observations[${Number(rowId.slice(-3)) - 1}].status_history[${eventIndex}]`
   if (!exactKeys(value, EVENT_FIELDS, base, errors)) return undefined
   const expectedEventId = `${rowId}-E${String(eventIndex + 1).padStart(3, '0')}`
@@ -260,23 +302,48 @@ function validateEvent(value: unknown, rowId: string, eventIndex: number, verifi
   }
   if (!uniqueStrings(value.verification_ids) || value.verification_ids.length > 4) add(errors, 'invalid_verification_id', `${base}.verification_ids`, 'verification IDs must contain one to four unique strings')
   else for (const id of value.verification_ids) if (!verificationIds.has(id)) add(errors, 'unknown_verification_id', `${base}.verification_ids`, `${id} is not registered`)
-  for (const field of ['evidence_digest', 'result_digest']) if (typeof value[field] !== 'string' || !DIGEST.test(value[field])) add(errors, 'invalid_digest', `${base}.${field}`, `${field} must be bounded SHA-256`)
+  if (typeof value.evidence_digest !== 'string' || !DIGEST.test(value.evidence_digest)) add(errors, 'invalid_digest', `${base}.evidence_digest`, 'evidence_digest must be bounded SHA-256')
+  if (typeof value.result_digest !== 'string' || !DIGEST.test(value.result_digest)) add(errors, 'invalid_digest', `${base}.result_digest`, 'result_digest must be a bounded SHA-256')
+  else if (value.result_digest === ZERO_DIGEST) add(errors, 'result_digest_mismatch', `${base}.result_digest`, 'event result digest must be nonzero')
   if (typeof value.evidence_digest === 'string' && DIGEST.test(value.evidence_digest) && value.evidence_digest !== computeObservationEvidenceDigest(value)) add(errors, 'evidence_digest_mismatch', `${base}.evidence_digest`, 'evidence digest does not bind the repository commits and anchors')
   if (!SCOPES.has(String(value.observation_scope))) add(errors, 'invalid_scope', `${base}.observation_scope`, 'unknown observation scope')
   if (typeof value.confidence !== 'number' || !Number.isFinite(value.confidence) || value.confidence < 0 || value.confidence > 1) add(errors, 'invalid_confidence', `${base}.confidence`, 'confidence must be between zero and one')
   if (!uniqueStrings(value.phase_slices) || value.phase_slices.some((phase: string) => !PHASES.has(phase))) add(errors, 'invalid_phase', `${base}.phase_slices`, 'unregistered phase slice')
   if (!WORK_PACKAGES.has(String(value.wp_umbrella))) add(errors, 'invalid_wp', `${base}.wp_umbrella`, 'unregistered WP umbrella')
-  if (typeof value.change_reason !== 'string' || value.change_reason.length < 1 || value.change_reason.length > 300) add(errors, 'invalid_change_reason', `${base}.change_reason`, 'bounded change reason is required')
+  if (typeof value.change_reason !== 'string' || value.change_reason.length > 80 || !CHANGE_REASON.test(value.change_reason)) add(errors, 'invalid_change_reason', `${base}.change_reason`, 'change reason must be a bounded safe token')
+  let expectedResultDigest: string | undefined
   if (rowId === 'RA-CURRENT-009') {
+    if (!same(value.verification_ids, ['OBS009-RED-A', 'OBS009-RED-B'])) add(errors, 'invalid_safe_result', `${base}.verification_ids`, 'RA-CURRENT-009 must retain the two named verification IDs in order')
     if (value.safe_result === undefined) add(errors, 'invalid_safe_result', `${base}.safe_result`, 'RA-CURRENT-009 requires its bounded safe result aggregate')
-    else validateSafeResult(value.safe_result, `${base}.safe_result`, errors)
-  } else if (value.safe_result !== undefined) add(errors, 'invalid_safe_result', `${base}.safe_result`, 'safe failure aggregates belong only to RA-CURRENT-009')
-  if (rowId === 'RA-CURRENT-009' && eventIndex > 0 && value.state === 'resolved') {
-    add(errors, 'unproven_resolution', `${base}.state`, 'RA-CURRENT-009 remains expected FAIL until a successor validator adopts a bounded GREEN result aggregate')
+    else expectedResultDigest = validateSafeResult(value.safe_result, `${base}.safe_result`, value.state, value.verification_ids, errors)
+  } else {
+    if (value.safe_result !== undefined) add(errors, 'invalid_safe_result', `${base}.safe_result`, 'safe result aggregates belong only to RA-CURRENT-009')
+    if (uniqueStrings(value.verification_ids)) expectedResultDigest = computeReferencedOutcomeDigest(value.verification_ids, verifications)
   }
+  if (expectedResultDigest !== undefined && value.result_digest !== ZERO_DIGEST && value.result_digest !== expectedResultDigest) add(errors, 'result_digest_mismatch', `${base}.result_digest`, 'event result digest must bind its ordered bounded outcomes')
   if (typeof value.event_digest !== 'string' || !DIGEST.test(value.event_digest)) add(errors, 'invalid_digest', `${base}.event_digest`, 'event digest must be bounded SHA-256')
   else if (value.event_digest !== computeObservationEventDigest(value)) add(errors, 'event_digest_mismatch', `${base}.event_digest`, 'event digest does not match canonical event content')
   return value
+}
+
+function validateResolvedTransition(value: Value, previous: unknown, eventIndex: number, base: string, errors: ValidationError[]) {
+  if (value.state !== 'resolved') return
+  if (eventIndex < 1 || !isObject(previous)) {
+    add(errors, 'unproven_resolution', `${base}.state`, 'resolved state requires a successor event')
+    return
+  }
+
+  const previousCommits = new Map(
+    (Array.isArray(previous.repository_bindings) ? previous.repository_bindings : [])
+      .filter(isObject)
+      .map((binding: Value) => [binding.repository, binding.commit]),
+  )
+  const commitChanged = (Array.isArray(value.repository_bindings) ? value.repository_bindings : [])
+    .filter(isObject)
+    .some((binding: Value) => previousCommits.has(binding.repository) && previousCommits.get(binding.repository) !== binding.commit)
+  if (!commitChanged || value.evidence_digest === previous.evidence_digest || value.result_digest === previous.result_digest) {
+    add(errors, 'unproven_resolution', base, 'resolved state requires a changed repository commit plus changed evidence and result digests')
+  }
 }
 
 function validateAppendEntry(value: unknown, index: number, errors: ValidationError[]): Value | undefined {
@@ -361,11 +428,13 @@ export function validateCurrentObservationLedgerValue(input: unknown, options: V
   if (!same(ledger.repository_commits, INITIAL_COMMITS)) add(errors, 'invalid_commit', '$.repository_commits', 'initial named repository commits changed')
 
   const verificationIds = new Set<string>()
+  const verifications = new Map<string, Value>()
   if (!Array.isArray(ledger.verifications)) add(errors, 'invalid_verifications', '$.verifications', 'verifications must be an array')
-  else ledger.verifications.forEach((entry: unknown, index: number) => validateVerification(entry, index, errors, verificationIds))
+  else ledger.verifications.forEach((entry: unknown, index: number) => validateVerification(entry, index, errors, verificationIds, verifications))
   const expectedVerificationIds = Object.keys(EXPECTED_VERIFICATIONS)
   if (!Array.isArray(ledger.verifications) || ledger.verifications.length !== expectedVerificationIds.length || !same([...verificationIds], expectedVerificationIds)) add(errors, 'invalid_verification_inventory', '$.verifications', 'canonical verification inventory must contain exactly 18 entries in order')
 
+  const statusEventDigests: string[] = []
   if (!Array.isArray(ledger.observations)) add(errors, 'invalid_inventory', '$.observations', 'observations must be an array')
   else ledger.observations.forEach((row: unknown, rowIndex: number) => {
     const base = `$.observations[${rowIndex}]`
@@ -377,9 +446,11 @@ export function validateCurrentObservationLedgerValue(input: unknown, options: V
     else {
       let previousDigest: string | null = null
       row.status_history.forEach((event: unknown, eventIndex: number) => {
-        const valid = validateEvent(event, String(row.observation_id), eventIndex, verificationIds, errors)
+        const valid = validateEvent(event, String(row.observation_id), eventIndex, verificationIds, verifications, errors)
         if (!valid) return
         if (valid.previous_event_digest !== previousDigest) add(errors, 'invalid_event_chain', `${base}.status_history[${eventIndex}].previous_event_digest`, 'event does not point to the exact prior event digest')
+        validateResolvedTransition(valid, row.status_history[eventIndex - 1], eventIndex, `${base}.status_history[${eventIndex}]`, errors)
+        if (typeof valid.event_digest === 'string' && DIGEST.test(valid.event_digest)) statusEventDigests.push(valid.event_digest)
         previousDigest = valid.event_digest
       })
     }
@@ -389,17 +460,24 @@ export function validateCurrentObservationLedgerValue(input: unknown, options: V
   if (!Array.isArray(ledger.append_history) || ledger.append_history.length === 0) add(errors, 'invalid_append_chain', '$.append_history', 'append history must be non-empty')
   else {
     let previousAppendDigest: string | null = null
+    const appendedEventDigests: string[] = []
     ledger.append_history.forEach((entry: unknown, index: number) => {
       const valid = validateAppendEntry(entry, index, errors)
       if (!valid) return
       if (index === 0) {
         if (valid.previous_ledger_commit !== null || valid.previous_ledger_digest !== null || valid.previous_append_digest !== null) add(errors, 'invalid_append_binding', '$.append_history[0]', 'first append has no previous ledger or append')
       } else if (valid.previous_append_digest !== previousAppendDigest) add(errors, 'invalid_append_chain', `$.append_history[${index}].previous_append_digest`, 'append does not point to the exact prior append digest')
+      if (Array.isArray(valid.event_digests)) appendedEventDigests.push(...valid.event_digests.filter((item: unknown) => typeof item === 'string'))
       previousAppendDigest = valid.append_digest
     })
     if (ledger.append_history.length === 1 && Array.isArray(ledger.observations)) {
       const initialDigests = ledger.observations.flatMap((row: Value) => Array.isArray(row.status_history) && row.status_history[0]?.event_digest ? [row.status_history[0].event_digest] : [])
       if (!same(ledger.append_history[0].event_digests, initialDigests)) add(errors, 'invalid_append_binding', '$.append_history[0].event_digests', 'initial append must bind every initial event digest in row order')
+    }
+    if (new Set(appendedEventDigests).size !== appendedEventDigests.length
+      || new Set(statusEventDigests).size !== statusEventDigests.length
+      || !same([...appendedEventDigests].sort(), [...statusEventDigests].sort())) {
+      add(errors, 'invalid_append_binding', '$.append_history', 'append event digests must cover every status event exactly once without reuse or invention')
     }
   }
   if (options.previousLedger !== undefined) validateAppendOnly(ledger, options.previousLedger, options.previousLedgerCommit, errors)
