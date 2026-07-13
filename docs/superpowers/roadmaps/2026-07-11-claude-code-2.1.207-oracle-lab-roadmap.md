@@ -3,17 +3,23 @@
 ## Status
 
 - Design date: 2026-07-11
-- Applies to:
-  - `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
-  - `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
-  - `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
+- Governing documents, highest precedence first:
+  1. `docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md`
+  2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
+  3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
+  4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
+- Historical requirement registry v1: `docs/superpowers/registry/oracle-lab-requirements.json`
+- Requirement registry v2: `docs/superpowers/registry/oracle-lab-requirements-v2.json`
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly in Registry v2, never silently replaced or superseded
 - Delivery state: Phase 0 complete; `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json` (`sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6`) is the immutable reviewed-input baseline, and `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json` binds the final roadmap bytes and Phase 0 handoff commit. Phase 1 remains gated on that receipt and the Phase 0 exit contract.
+- P0.1 governance state: the review amendment is adopted as a planning overlay; P0.1 is not
+  complete until its successor receipt, and P1 remains blocked by the integrated-main entry gates
 - Current worktree: CC Gateway repository; Sub2API and other sibling repositories are separate
   implementation surfaces
 
 ## Purpose
 
-This roadmap turns the three design documents into seven independently reviewable delivery
+This roadmap turns the four governing documents into seven independently reviewable delivery
 phases. It is the durable navigation document for context handoff. A phase may start only when
 all of its declared predecessor gates in the authoritative dependency DAG have passed and its
 entry baseline and handoff bundle are fresh; independent branches may proceed concurrently.
@@ -24,26 +30,28 @@ commands, expected failures and passes, and commit checkpoints.
 
 ## Normative Relationship
 
-Until the three design documents are consolidated, conflicts resolve in this order:
+Conflicts resolve in this order:
 
 ```text
-Hardening Amendments > Adversarial Validation v2 > Oracle Lab Design
+Review Amendments > Hardening Amendments > Adversarial Validation v2 > Oracle Lab Design
 ```
 
-The Phase 0 documentation task must either apply the amendment revision map to the two parent
-documents or record this precedence as an explicit overlay in the requirement registry. After
-consolidation, the registry becomes the operational source of truth and every requirement keeps
-its original source references.
+Every conflict is registered explicitly in Registry v2 with original source references and the
+linked Claim Matrix authority. No conflict, requirement, or authority statement is silently
+replaced. Registry `implementation_status` and Claim Matrix authority remain separate fields; the
+registry does not create a second authority lattice.
 
 ## Delivery Rules
 
-1. P0/P1 findings are not a separate pre-roadmap activity. They are Phase 0 hard gates and
-   Phase 1/2 implementation inputs.
-2. No single implementation plan spans all seven phases. One plan is written per phase.
+1. `RA-P0-*` and `RA-P1-*` encode priority, not roadmap phase. Ownership follows the phase slices
+   and dependency gates below.
+2. `WP-R0..R9` are traceability umbrellas. A phase plan consumes only its explicit WP slices, and
+   no plan may cross a phase gate.
 3. No phase starts from prose alone. It starts from every applicable predecessor handoff bundle
    and a newly frozen repository and dependency baseline. Phase 1 and Phase 2 branch from Phase 0;
-   Phase 3 follows Phase 2; Phase 4 joins Phase 1 and Phase 3; Phase 5 follows Phase 4; Phase 6
-   follows the Phase 4 and Phase 5 gates plus all other applicable prior gates.
+   Phase 3A and mandatory bridge Phase 3B/3.5 follow Phase 2; Phase 4 joins Phase 1 and
+   Phase 3B/3.5; Phase 5 follows Phase 4; Phase 6A follows the Phase 4 and Phase 5 gates plus all
+   other applicable prior gates; Phase 6B follows only after separate approval.
 4. No phase may silently broaden scope because a later design section is convenient to implement.
 5. Unknown, contradictory, expired, or missing evidence disables the affected capability.
 6. Real upstream requests are prohibited until Phase 6 and require a separate approved canary
@@ -54,27 +62,20 @@ its original source references.
 ## Phase Dependency Map
 
 ```text
-Phase 0  Governance, baseline, and harness foundation
-   |
-   +--> Phase 1  Immediate control-plane boundary repairs
-   |
-   +--> Phase 2  Normative compatibility and manifest authority
-               |
-               +--> Phase 3  Evidence factory and oracle coverage
-                           |
-                           +--> Phase 4  Transport cells, sidecar, and availability runtime
-                                       |
-                                       +--> Phase 5  Scheduler, operations, and adversarial maturity
-                                                   |
-                                                   +--> Phase 6  Staging and controlled canary
+P0 -> P1 --------------------------+
+  \-> P2 -> P3A -> P3B/3.5 -------+-> P4 -> P5 -> P6A -> approval -> P6B
 ```
 
-Phase 1 and Phase 2 may begin independently after the Phase 0 governance gates pass. Phase 3
-depends on Phase 2 and is the primary owner for reverse/static/dynamic/protocol/TLS/HTTP2/
-unknown-transport evidence capture. Phase 4 depends on both Phase 1 and Phase 3. Phase 5 depends
-on Phase 4. Phase 6 depends on the Phase 4 and Phase 5 exit gates and all other applicable prior
-gates. Version-specific profile promotion remains blocked until the required predecessor gates
-and evidence decisions pass.
+Phase 1 and Phase 2 may begin independently after the Phase 0 governance gates pass. Phase 3A
+depends on Phase 2 and owns reverse/static/dynamic/protocol/TLS/HTTP2/unknown-transport evidence.
+Phase 3B/3.5 is the mandatory local compiler/config/fixture conformance bridge. Phase 4 depends on
+both Phase 1 and Phase 3B/3.5. Phase 5 depends on Phase 4. Phase 6A owns signed complete local
+staging. Phase 6B is a separately approved canary and cannot begin without the intervening
+approval. Version-specific profile promotion remains blocked until every applicable gate passes.
+
+At the seven-top-level-phase compatibility granularity, Phase 3 depends on Phase 2 and comprises
+both Phase 3A and Phase 3B/3.5. Phase 4 depends on both Phase 1 and Phase 3, which means the Phase 3B/3.5
+mandatory bridge must have passed; these aliases do not add or remove a dependency edge.
 
 ## Phase 0: Governance, Baseline, and Harness Foundation
 
@@ -406,9 +407,9 @@ After this roadmap is accepted:
 4. Map every plan task to requirement IDs and one phase exit gate.
 5. Review and execute Phase 0.
 6. Generate a fresh handoff bundle and re-plan Phase 1 and Phase 2 from the resulting code, not
-   from stale assumptions in the roadmap; plan Phase 3 only after the Phase 2 gate, Phase 4 only
-   after both Phase 1 and Phase 3, Phase 5 only after Phase 4, and Phase 6 only after its joined
-   predecessor gates.
+   from stale assumptions in the roadmap; plan Phase 3A only after the Phase 2 gate, Phase 3B/3.5
+   only after Phase 3A, Phase 4 only after both Phase 1 and Phase 3B/3.5, Phase 5 only after Phase 4,
+   Phase 6A only after its joined predecessor gates, and Phase 6B only after separate approval.
 
 Recommended plan files:
 
@@ -436,25 +437,26 @@ This roadmap is ready to drive phase planning when:
 This amendment records the operator-approved dependency DAG:
 
 ```text
-Phase 0 -> Phase 1 --------------------+
-       \-> Phase 2 -> Phase 3 ---------+-> Phase 4 -> Phase 5 -> Phase 6A -> approval -> Phase 6B
+P0 -> P1 --------------------------+
+  \-> P2 -> P3A -> P3B/3.5 -------+-> P4 -> P5 -> P6A -> approval -> P6B
 ```
 
-Phase 1 and Phase 2 may start independently after Phase 0. Phase 3 depends on Phase 2 and owns
-reverse/static/dynamic/protocol/TLS/HTTP2/unknown-transport evidence capture. Phase 4 depends on
-both Phase 1 and Phase 3; Phase 5 depends on Phase 4; Phase 6 depends on the Phase 4 and Phase 5
-exit gates plus all applicable prior gates. Runtime integration and promotion remain blocked until
-the relevant predecessor gates pass.
+Phase 1 and Phase 2 may start independently after Phase 0. Phase 3A depends on Phase 2 and owns
+reverse/static/dynamic/protocol/TLS/HTTP2/unknown-transport evidence capture. Phase 3B/3.5 is the
+mandatory compiler/config/fixture/local-conformance bridge. Phase 4 depends on both Phase 1 and
+Phase 3B/3.5; Phase 5 depends on Phase 4; Phase 6A depends on every applicable prior gate, and
+Phase 6B remains a separately approved canary. Runtime integration and promotion remain blocked
+until the relevant predecessor gates pass.
 
 ### Design-to-Roadmap Mapping
 
 | Design phase | Roadmap owner |
 | --- | --- |
 | Design 0 restore baselines | Phase 0 |
-| Design 1 oracle core | Phase 0 foundation, Phase 2 contracts, Phase 3 evidence tooling |
-| Design 2 static/runtime matrices | Phase 3 |
-| Design 3 TLS/proxy evidence | Phase 3 |
-| Design 4 CCH/profile decisions | Phase 3 decision output constrained by Phase 2 |
+| Design 1 oracle core | Phase 0 foundation, Phase 2 contracts, Phase 3A evidence tooling |
+| Design 2 static/runtime matrices | Phase 3A |
+| Design 3 TLS/proxy evidence | Phase 3A |
+| Design 4 CCH/profile decisions | Phase 3A decision output, then Phase 3B/3.5 local conformance, constrained by Phase 2 |
 | Design 5 gateway/Sub2API integration | Phases 1, 2, 4, 5 |
 | Design 6 staging without accounts | Phase 6A |
 | Design 7 approved canary | Phase 6B |
@@ -463,24 +465,24 @@ the relevant predecessor gates pass.
 
 | Source | Primary phase | Gate/role |
 | --- | --- | --- |
-| Adversarial A evidence acquisition | P3 | P0 freeze, P2 contracts, P6 integrated rerun |
+| Adversarial A evidence acquisition | P3A | P0 freeze, P2 contracts, P6A integrated rerun |
 | Adversarial B immediate findings | P1/P2 | P0 failing fixtures, P4 enforcement, P6 proof |
-| Adversarial C campaign | P3/P4/P5 | P6 complete chain |
-| Adversarial C2 advanced campaigns | P2/P3/P4/P5 | P6 integrated execution |
+| Adversarial C campaign | P3A/P4/P5 | P6A complete chain |
+| Adversarial C2 advanced campaigns | P2/P3A/P4/P5 | P6A integrated execution |
 | Adversarial D blue-team | P5 | P6 timeline validation |
 | WP0 baseline/contract discovery | P0 | entry and exit baseline |
 | WP0.5 normative compatibility | P0 defines RED fixture; P2 implements | absence is not permission |
-| WP1 evidence factory | P3 | evidence artifacts and decision matrix |
-| WP2 manifest authority | P2 | P3 candidate evidence, P6 canary evidence |
+| WP1 evidence factory | P3A | evidence artifacts and decision matrix |
+| WP2 manifest authority | P2 | P3A candidate evidence, P3B/3.5 conformance, P6B canary evidence |
 | WP3 onboarding/replay | P1 | P6 replay acceptance |
 | WP4 sidecar authentication | P2 contract, P4 implementation | P4 mutation/restart campaign |
 | WP5 behavior budget/scheduler | P5 | operational maturity |
-| WP6 correlation/fault/state | P3/P4/P5 | P6 integrated acceptance |
+| WP6 correlation/fault/state | P3A/P4/P5 | P6A integrated acceptance |
 | WP7 staging/canary | P6A/P6B | separate approval boundaries |
 | Hardening Priority 0 | P0/P1/P2 | definitions, boundary repair, enforcement |
-| Hardening Priority 1 | P1/P3/P4/P5 | reliable evidence and safe operation |
+| Hardening Priority 1 | P1/P3A/P3B/P4/P5 | reliable evidence and safe operation |
 | Hardening Priority 2 | P5/P6 | scheduler, canary, production maturity |
-| Sections 5-6 | P3 (P0/P2 schemas) | evidence factory and safety |
+| Sections 5-6 | P3A (P0/P2 schemas) | evidence factory and safety |
 | Sections 7-8 | P2/P4/P1 | transport and control plane |
 | Sections 9-11 | P5/P6 | scheduler, canary, incident response |
 | Sections 12-14 | cross-phase, P0 reconciliation | tests, gates, parent map |
@@ -489,11 +491,119 @@ the relevant predecessor gates pass.
 ### Contract, Implementation, Campaign Ownership
 
 Phase 2 owns shared contract/specification schemas, authority, compatibility gates, negative
-capabilities, replay/envelope, transport and scheduler interfaces. Phase 1 owns control-plane
-implementation; Phase 3 owns observation/evidence tooling and the evidence-to-decision artifact;
-Phase 4 owns runtime isolation and enforcement; Phase 5 owns scheduler/operations; Phase 6 owns
-staging/canary execution. Campaign ownership follows the implementation phase, with Phase 6 as the
-integrated acceptance owner. Phase 3 never promotes a profile from local evidence alone.
+capabilities, replay/envelope, transport and scheduler interfaces. Phase 1 owns immediate
+control-plane boundaries; Phase 3A owns observation/evidence tooling and evidence decisions;
+Phase 3B/3.5 owns deterministic compiler/config/fixture/local conformance; Phase 4 owns runtime
+isolation and enforcement; Phase 5 owns scheduler/operations; Phase 6A owns complete signed local
+staging; Phase 6B owns only a separately approved canary. Campaign ownership follows the
+implementation phase. Neither Phase 3A nor Phase 3B/3.5 promotes a profile from local evidence.
+
+### Phase 3A: Evidence Factory and Environment-Fingerprint Decisions
+
+**Inputs**
+
+- the Phase 2 contract, authority, compatibility, evidence-schema, and negative-capability gates;
+- pinned package/executable provenance and a fresh hermetic run baseline;
+- approved matrix dimensions, observation mechanisms, evidence budgets, and safe retention rules;
+- current requirement relationships, Claim Matrix ceilings, and contradiction/expiry inputs.
+
+**Outputs**
+
+- request, response, control-plane, authentication, TLS/HTTP, state, failure, and destination
+  evidence with parser agreement, convergence, explicit omissions, and negative evidence;
+- version/change-point comparisons for 2.1.81, 2.1.169, 2.1.179, 2.1.197, 2.1.198-2.1.207;
+- environment-fingerprint evidence covering timezone/locale, clean versus inherited environment,
+  `ANTHROPIC_BASE_URL`, China-domain taxonomy, proxy environment, and byte-level System Prompt
+  comparison dimensions;
+- evidence-to-decision rows and safe candidate inputs, with no profile promotion.
+
+Environment fingerprint evidence is owned by Phase 3A and must be explicit in its coverage report.
+
+**Non-goals**
+
+- generating or activating executable Gateway/Sub2API profiles;
+- runtime transport enforcement, complete-chain staging, production, or real canary;
+- inferring trusted-device proof or private provider behavior from local evidence.
+
+**Artifact gate**
+
+Every Phase 3A artifact records schema/version, digest, scope, owner/reviewer, sensitivity,
+retention/destruction, exact verification, expiry, requirement IDs, environment-fingerprint cell,
+parser agreement, and negative/contradictory results. Missing cells remain degraded and disabled.
+
+### Phase 3B/3.5: Mandatory Compiler, Config, Fixture, and Local Conformance Bridge
+
+`Phase 3B` is canonical; `3.5` is its durable alias, not an eighth top-level phase.
+
+**Inputs**
+
+- reviewed, schema-valid, unexpired Phase 3A evidence and decision rows;
+- Phase 2 contracts, Claim Matrix ceilings, negative capabilities, and compatibility gates;
+- one pinned candidate version/platform/entrypoint/auth tuple and independently addressable rollback
+  tuple;
+- deterministic compiler schema, CC Gateway/Sub2API config schemas, and typed fixture schemas.
+
+**Outputs**
+
+- deterministic `ClientBuildIdentity`, request, response, control-plane, authentication, transport,
+  task/session, negative-capability, and coherence artifacts;
+- generated CC Gateway and Sub2API configuration for the same logical tuple;
+- typed de-identified request/response/state/failure fixtures and deterministic content digests;
+- TypeScript, Go, manifest, and fixture-validator agreement for new-session streaming,
+  resumed-session streaming, and bounded response failure/recovery local conformance.
+
+**Non-goals**
+
+- signed complete local-chain staging, runtime transport enforcement, production, or real canary;
+- profile promotion from compilation success or local evidence;
+- handwritten values for missing, contradictory, unexplained, or unavailable capabilities.
+
+**Artifact gate**
+
+Repeated Phase 3B/3.5 compilation must produce byte-identical canonical outputs and matching
+cross-language digests, with all negative capabilities and rollback references preserved. A
+truthful failure blocks Phase 3B/3.5 only; it does not retroactively block historical Phase 0 or
+the entire program. Phase 6A owns the signed complete staging bundle and zero-external-socket proof.
+
+### Boundary Ownership Reconciliation
+
+B1-B3 are owned by Phase 1 for immediate control-plane boundary implementation and verification.
+Phase 1 also owns loopback-by-default and remote-listen fail-closed guard planning and its immediate
+startup boundary; later multi-replica hardening remains a Phase 4 slice.
+
+B4-B6 are owned by Phase 2 for contract, envelope, negative-capability, destination, and replay semantics.
+B4-B6 are owned by Phase 4 for runtime implementation, enforcement, restart, replica, and fault campaigns.
+Phase 6A reruns the integrated acceptance chain; it does not take implementation ownership.
+
+### Review Work-Package Phase Slices
+
+`WP-R0..R9` are traceability umbrellas. The table defines the only slices a phase plan may consume;
+no plan may cross a phase gate, and each later slice requires a fresh baseline and plan.
+
+| Work package | Explicit phase slices |
+| --- | --- |
+| `WP-R0` | P0.1 adopts the overlay and reconciles traceability; each later phase updates only its own requirement/handoff slice. |
+| `WP-R1` | Phase 2 defines the cross-project contract; Phase 4 implements readiness propagation; Phase 6A verifies the integrated handshake. |
+| `WP-R2` | Phase 2 defines account/secret lifecycle contracts; Phase 4 implements lifecycle runtime; Phase 5 consumes operational decisions; Phase 6A stages them. |
+| `WP-R3` | Phase 2 defines broker/sidecar/destination/replay contracts; Phase 4 implements protected runtime enforcement; Phase 6A stages the chain. |
+| `WP-R4` | Phase 3A executes the evidence factory and expanded matrix; Phase 6A reruns only frozen integrated coverage. |
+| `WP-R5` | Phase 3B/3.5 compiles deterministic profiles/config/fixtures and proves local conformance; Phase 6A consumes the frozen tuple for staging. |
+| `WP-R6` | Phase 2 defines lineage/migration contracts; Phase 4 implements request/task runtime enforcement; Phase 6A verifies the integrated state sequence. |
+| `WP-R7` | Phase 2 defines trust-layered outcome/retry contracts; Phase 4 implements Gateway response semantics; Phase 5 implements Sub2API scheduler decisions; Phase 6A verifies them. |
+| `WP-R8` | Phase 1 owns loopback/remote-listen fail-closed guard planning and immediate startup boundary; Phase 4 owns deployment/replica runtime hardening; Phase 6A verifies staging invariants. |
+| `WP-R9` | Phase 6A owns signed complete local staging; after separate approval, Phase 6B owns only the bounded canary. |
+
+### P0.1 Handoff and Next Sequence
+
+The exact next sequence is:
+
+```text
+P0.1 branch receipt -> merge both repository branches -> prove local main equals muqihang/main -> verify P0.1 artifact/fix ancestry on integrated heads -> fresh P1 entry baseline/context -> P1 detailed plan
+```
+
+P1 planning and implementation remain unstarted until that sequence completes. Phase 6A owns
+signed complete local staging. Phase 6B remains a separately approved canary and cannot inherit
+approval from any local result.
 
 ### Evidence-to-Decision Matrix Contract
 
@@ -515,17 +625,22 @@ Phase 0 values below are decision inputs, not permission to enable runtime behav
 | AV-B6-001 | `cc-b4-b6-red` result `sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d`; `sidecar-b4-b6-red` result `sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7`; failure artifact `sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4` | Local CC Gateway URL policy plus sidecar resolver/dial fixture | Wire, semantic, state, and failure compatibility are `incompatible`: unsafe ranges/directive confusion pass and policy-owned resolution/pinning is absent | Unsafe, private, link-local, rebinding, redirect, nested-proxy, or alternate destination | `disable` | cc-gateway-oracle-owner and sidecar-owner; security-reviewer | Phase 4 proxy destination and DNS-pinning gate |
 
 Unknown, contradictory, expired, parser-disagreeing, or unexplained-transport rows remain disabled
-and cannot become acceptable in Phase 4. Each Phase 3 matrix artifact must also bind maximum
+and cannot become acceptable in Phase 4. Each Phase 3A matrix artifact must also bind maximum
 authority, blocking contradictions/expiry, rollback reference, retention, redaction, destruction,
 requirement IDs, and the verifying command digest.
 
 ### Artifact-Level Exit Gates
 
-Phase 3 exits only with schema/version/digest/scope/owner/sensitivity/retention/verification/
+Phase 3A exits only with schema/version/digest/scope/owner/sensitivity/retention/verification/
 expiry/requirement bindings for its execution graph, package inventory, static/dynamic evidence,
 HTTP/SSE/TLS/HTTP2/unknown-transport inventory, parser agreement, matrices, diffs, convergence,
 negative evidence, classifier leak report, decision matrix, negative-capability manifest, and
 destruction record.
+
+Phase 3B/3.5 exits only with deterministic compiler/config/fixture/local-conformance artifacts,
+byte-identical repeat output, matching TypeScript/Go/manifest/fixture-validator digests, one
+truthful candidate tuple, negative capabilities, and an independently addressable rollback tuple.
+It does not emit the signed complete local-staging bundle.
 
 Phase 4 exits only with code/config/contract/manifest-bound transport-cell, proxy identity,
 complete-message, replay, policy-broker, rotation/restart, isolation, resource, retry,
@@ -535,9 +650,9 @@ Phase 5 exits only with machine-readable behavior budget, deterministic schedule
 counterfactual/shadow non-mutation, cost/fairness/oscillation, metric-to-action, workload,
 blue-team, privileged-action, capacity, incident, rollback, and expiry artifacts.
 
-Phase 6A exits only with a frozen local full-chain manifest, signed bundle, zero-external-socket
+Phase 6A exits only with a frozen complete local full-chain manifest, signed bundle, zero-external-socket
 proof, campaign index, leak scan, convergence/compatibility reports, rollback propagation, and
-every capability bound to a Phase 3 decision row. Phase 6B additionally requires one approved
+every capability bound to Phase 3A evidence and Phase 3B/3.5 conformance. Phase 6B additionally requires one approved
 hypothesis, fixed manifest/contract/account/proxy/credential/transport digests, bounded timeline,
 stop rules, cleanup/destruction, conclusion-boundary validation, and an `upstream_canary_observed`
 result with no automatic promotion.

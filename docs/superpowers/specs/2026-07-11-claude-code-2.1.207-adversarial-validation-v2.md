@@ -7,8 +7,14 @@
 - Purpose: authorized defensive red-team validation of CC Gateway and Sub2API
 - Delivery state: implementation-driving design; code work has not started under this document
 - Real Anthropic credentials and production accounts: forbidden until an explicitly approved canary phase
-- Requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json`
-- Normative precedence: `hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; missing or contradictory authority fails closed
+- Governing documents, highest precedence first:
+  1. `docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md`
+  2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
+  3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
+  4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
+- Historical requirement registry v1: `docs/superpowers/registry/oracle-lab-requirements.json`
+- Requirement registry v2: `docs/superpowers/registry/oracle-lab-requirements-v2.json`
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly in Registry v2, never silently replaced or superseded
 - Requirement ID prefix: `AV-*`
 
 ## Baseline Corrections
