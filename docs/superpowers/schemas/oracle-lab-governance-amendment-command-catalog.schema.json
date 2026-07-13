@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oracle Lab Governance Amendment Command Catalog",
+  "additionalProperties": false,
+  "type": "array",
+  "minItems": 10,
+  "maxItems": 10,
+  "prefixItems": [
+    {
+      "properties": {
+        "id": { "const": "cc-build" },
+        "group": { "const": "green" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "run", "build"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "cc-tests" },
+        "group": { "const": "green" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "test"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "cc-cross-repo-baseline" },
+        "group": { "const": "green" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "run", "test:oracle:cross-repo"] },
+        "env": { "required": ["SUB2API_ROOT"] },
+        "bindings": { "const": ["cc_gateway_head", "sub2api_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot", "sub2api_before_snapshot", "sub2api_after_snapshot", "shared_contract_digest"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "sidecar-tests" },
+        "group": { "const": "green" },
+        "repository": { "const": "egress-tls-sidecar" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar" },
+        "argv": { "const": ["go", "test", "./...", "-count=1"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "sub2api-formal-pool" },
+        "group": { "const": "green" },
+        "repository": { "const": "sub2api" },
+        "cwd": { "const": "${SUB2API_ROOT}/backend" },
+        "argv": { "const": ["go", "test", "./internal/service", "./internal/server/routes", "-run", "FormalPool|FormalPoolOperations", "-count=1"] },
+        "bindings": { "const": ["sub2api_head", "sub2api_before_snapshot", "sub2api_after_snapshot", "shared_contract_digest"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "sub2api-joint-local-chain" },
+        "group": { "const": "green" },
+        "repository": { "const": "sub2api" },
+        "cwd": { "const": "${SUB2API_ROOT}/backend" },
+        "argv": { "const": ["go", "test", "./internal/service", "-run", "^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$", "-count=1", "-v"] },
+        "env": { "required": ["CC_GATEWAY_REPO_ROOT"] },
+        "bindings": { "const": ["cc_gateway_head", "sub2api_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot", "sub2api_before_snapshot", "sub2api_after_snapshot", "shared_contract_digest"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "p0-1-focused" },
+        "group": { "const": "green" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "run", "test:oracle:p0-1"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "cc-boundary-red" },
+        "group": { "const": "red" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "exec", "tsx", "tests/red/phase0-boundary.red.test.ts"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "sidecar-boundary-red" },
+        "group": { "const": "red" },
+        "repository": { "const": "egress-tls-sidecar" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar" },
+        "argv": { "const": ["go", "test", "-tags=phase0red", "./internal/control", "./internal/server", "-count=1"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
+        "id": { "const": "sub2api-boundary-red" },
+        "group": { "const": "red" },
+        "repository": { "const": "sub2api" },
+        "cwd": { "const": "${SUB2API_ROOT}/backend" },
+        "argv": { "const": ["go", "test", "-tags=phase0red", "./internal/service", "./internal/server/routes", "-run", "FormalPoolOnboarding|FormalPoolOperations|Browser|Egress", "-count=1"] },
+        "bindings": { "const": ["sub2api_head", "sub2api_before_snapshot", "sub2api_after_snapshot", "shared_contract_digest"] }
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "items": { "$ref": "#/items" }
+    }
+  ],
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "schema_version",
+      "group",
+      "owner",
+      "requirement_ids",
+      "repository",
+      "cwd",
+      "argv",
+      "env",
+      "inherit_env",
+      "shell",
+      "bindings",
+      "allowed_worktree_delta",
+      "timeout_ms",
+      "max_output_bytes",
+      "expected_exit",
+      "output_policy",
+      "rollback"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]+$"
+      },
+      "schema_version": {
+        "const": 1
+      },
+      "group": {
+        "enum": [
+          "green",
+          "red"
+        ]
+      },
+      "owner": {
+        "type": "string",
+        "minLength": 1
+      },
+      "requirement_ids": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "repository": {
+        "enum": [
+          "cc-gateway",
+          "sub2api",
+          "egress-tls-sidecar"
+        ]
+      },
+      "cwd": {
+        "enum": [
+          "${CC_GATEWAY_ROOT}",
+          "${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar",
+          "${SUB2API_ROOT}/backend"
+        ]
+      },
+      "argv": {
+        "type": "array",
+        "minItems": 2,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "required": [
+          "CI",
+          "npm_config_offline",
+          "npm_config_audit",
+          "npm_config_fund",
+          "GOPROXY",
+          "GOSUMDB",
+          "GOTOOLCHAIN",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "ALL_PROXY",
+          "NO_PROXY"
+        ],
+        "properties": {
+          "CI": {
+            "const": "1"
+          },
+          "npm_config_offline": {
+            "const": "true"
+          },
+          "npm_config_audit": {
+            "const": "false"
+          },
+          "npm_config_fund": {
+            "const": "false"
+          },
+          "GOPROXY": {
+            "const": "off"
+          },
+          "GOSUMDB": {
+            "const": "off"
+          },
+          "GOTOOLCHAIN": {
+            "const": "local"
+          },
+          "HTTP_PROXY": {
+            "const": "http://127.0.0.1:9"
+          },
+          "HTTPS_PROXY": {
+            "const": "http://127.0.0.1:9"
+          },
+          "ALL_PROXY": {
+            "const": "http://127.0.0.1:9"
+          },
+          "NO_PROXY": {
+            "const": "127.0.0.1,localhost"
+          },
+          "SUB2API_ROOT": {
+            "const": "${SUB2API_ROOT}"
+          },
+          "CC_GATEWAY_REPO_ROOT": {
+            "const": "${CC_GATEWAY_ROOT}"
+          }
+        }
+      },
+      "inherit_env": {
+        "const": [
+          "PATH",
+          "HOME",
+          "TMPDIR"
+        ]
+      },
+      "shell": {
+        "const": false
+      },
+      "bindings": {
+        "type": "array",
+        "minItems": 3,
+        "uniqueItems": true,
+        "items": {
+          "enum": [
+            "cc_gateway_head",
+            "sub2api_head",
+            "cc_gateway_before_snapshot",
+            "cc_gateway_after_snapshot",
+            "sub2api_before_snapshot",
+            "sub2api_after_snapshot",
+            "shared_contract_digest"
+          ]
+        }
+      },
+      "allowed_worktree_delta": {
+        "const": []
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3600000
+      },
+      "max_output_bytes": {
+        "const": 8388608
+      },
+      "expected_exit": {
+        "enum": [
+          0,
+          "nonzero"
+        ]
+      },
+      "output_policy": {
+        "const": "bounded_redacted_excerpt"
+      },
+      "rollback": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

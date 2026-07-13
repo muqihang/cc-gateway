@@ -23,14 +23,15 @@ const h = (character: string): string => character.repeat(40)
 const generatedAt = '2026-07-12T12:00:00.000Z'
 const now = Date.parse('2026-07-12T12:30:00.000Z')
 
-function validManifest(): PostIntegrationEntryManifest {
+function validManifest(fixtureGeneratedAt = generatedAt): PostIntegrationEntryManifest {
+  const generated = new Date(fixtureGeneratedAt)
   const repository = (head: string, remoteUrl: string) => ({
     head, branch: 'main' as const, clean: true as const, dirty_digest: sha256(Buffer.alloc(0)),
     remote: { name: 'muqihang' as const, ref: 'refs/remotes/muqihang/main' as const, commit: head, url_digest: sha256(remoteUrl) },
   })
   const input = (file: string, character: string) => ({ path: file, digest: d(character) })
   return {
-    schema_version: 1, entry_kind: 'post_integration_entry', generated_at: generatedAt, expires_at: '2026-07-13T12:00:00.000Z',
+    schema_version: 1, entry_kind: 'post_integration_entry', generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(),
     repositories: { cc_gateway: repository(POST_INTEGRATION_BINDINGS.ccGatewayHead, POST_INTEGRATION_BINDINGS.ccGatewayRemoteUrl), sub2api: repository(POST_INTEGRATION_BINDINGS.sub2apiHead, POST_INTEGRATION_BINDINGS.sub2apiRemoteUrl) },
     contract: { repository: 'sub2api', repository_relative_path: POST_INTEGRATION_BINDINGS.contractRelativePath, sha256: `sha256:${POST_INTEGRATION_BINDINGS.contractSha256}` },
     governance: { requirement_registry: `sha256:${POST_INTEGRATION_BINDINGS.requirementRegistrySha256}`, claim_registry: `sha256:${POST_INTEGRATION_BINDINGS.claimRegistrySha256}`, roadmap: `sha256:${POST_INTEGRATION_BINDINGS.roadmapSha256}` },
@@ -54,7 +55,8 @@ function validManifest(): PostIntegrationEntryManifest {
   }
 }
 
-function validResults(manifestDigest: string, catalogDigest = d('b')): PostIntegrationCommandResultSet {
+function validResults(manifestDigest: string, catalogDigest = d('b'), fixtureGeneratedAt = generatedAt): PostIntegrationCommandResultSet {
+  const generated = new Date(fixtureGeneratedAt)
   const records = ['cc-build', 'cc-test', 'cc-cross-repo-baseline', 'sidecar-test', 'sub2api-test', 'cc-b4-b6-red', 'sidecar-b4-b6-red', 'sub2api-b1-b3-red'].map((command_id, index) => {
     const unsigned = { command_id, repository: command_id.startsWith('sub2api') ? 'sub2api' as const : command_id.startsWith('sidecar') ? 'egress-tls-sidecar' as const : 'cc-gateway' as const,
     repository_commit: command_id.startsWith('sub2api') ? POST_INTEGRATION_BINDINGS.sub2apiHead : POST_INTEGRATION_BINDINGS.ccGatewayHead,
@@ -65,13 +67,14 @@ function validResults(manifestDigest: string, catalogDigest = d('b')): PostInteg
     output_digest: d(String(index + 2)) }
     return { ...unsigned, duration_ms: 1, result_digest: postIntegrationCommandRecordDigest(unsigned) }
   })
-  const unsigned = { schema_version: 1 as const, generated_at: generatedAt, expires_at: '2026-07-19T12:00:00.000Z', catalog_digest: catalogDigest, manifest_digest: manifestDigest, records }
+  const unsigned = { schema_version: 1 as const, generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 7 * 86_400_000).toISOString(), catalog_digest: catalogDigest, manifest_digest: manifestDigest, records }
   return { ...unsigned, result_set_digest: postIntegrationCommandSetDigest(unsigned) }
 }
 
-function validContext(manifestDigest: string, results: PostIntegrationCommandResultSet): PostIntegrationContext {
+function validContext(manifestDigest: string, results: PostIntegrationCommandResultSet, fixtureGeneratedAt = generatedAt): PostIntegrationContext {
+  const generated = new Date(fixtureGeneratedAt)
   return {
-    schema_version: 1, context_kind: 'post_integration_context', generated_at: generatedAt, expires_at: '2026-07-13T12:00:00.000Z',
+    schema_version: 1, context_kind: 'post_integration_context', generated_at: generated.toISOString(), expires_at: new Date(generated.getTime() + 86_400_000).toISOString(),
     manifest_digest: manifestDigest, command_results_digest: results.result_set_digest,
     registry_digest: `sha256:${POST_INTEGRATION_BINDINGS.requirementRegistrySha256}`, claims_digest: `sha256:${POST_INTEGRATION_BINDINGS.claimRegistrySha256}`,
     repositories: [{ name: 'cc_gateway', commit: POST_INTEGRATION_BINDINGS.ccGatewayHead, remote_ref: 'refs/remotes/muqihang/main' }, { name: 'sub2api', commit: POST_INTEGRATION_BINDINGS.sub2apiHead, remote_ref: 'refs/remotes/muqihang/main' }],
@@ -80,17 +83,17 @@ function validContext(manifestDigest: string, results: PostIntegrationCommandRes
   }
 }
 
-async function writeInputs(root: string) {
+async function writeInputs(root: string, fixtureGeneratedAt = generatedAt) {
   const evidenceRoot = path.join(root, 'docs/superpowers/evidence/post-integration')
   await mkdir(evidenceRoot, { recursive: true })
   const manifestPath = path.join(evidenceRoot, 'post-integration-entry.json')
   const resultsPath = path.join(evidenceRoot, 'post-integration-command-results.json')
   const contextPath = path.join(evidenceRoot, 'post-integration-context.json')
   const exitReceiptPath = path.join(evidenceRoot, 'phase-0-exit-receipt.json')
-  const manifest = validManifest()
+  const manifest = validManifest(fixtureGeneratedAt)
   const manifestDigest = sha256(`${canonicalJson(manifest)}\n`)
-  const results = validResults(manifestDigest)
-  const context = validContext(manifestDigest, results)
+  const results = validResults(manifestDigest, d('b'), fixtureGeneratedAt)
+  const context = validContext(manifestDigest, results, fixtureGeneratedAt)
   await writeFile(manifestPath, `${canonicalJson(manifest)}\n`)
   await writeFile(resultsPath, `${canonicalJson(results)}\n`)
   await writeFile(contextPath, `${canonicalJson(context)}\n`)
@@ -100,12 +103,12 @@ async function writeInputs(root: string) {
 
 function git(root: string, ...args: string[]): string { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim() }
 
-async function prepareReviewedRepository() {
+async function prepareReviewedRepository(fixtureGeneratedAt = generatedAt) {
   const parent = await mkdtemp(path.join(tmpdir(), 'oracle-pi-reviewed-'))
   const root = path.join(parent, 'repository')
   execFileSync('git', ['clone', '--shared', process.cwd(), root], { stdio: 'ignore' })
   git(root, 'config', 'user.email', 'oracle@example.invalid'); git(root, 'config', 'user.name', 'Oracle Test')
-  const inputs = await writeInputs(root)
+  const inputs = await writeInputs(root, fixtureGeneratedAt)
   const capturePaths = Object.values(inputs.manifest.capture_inputs).filter((value): value is { path: string; digest: string } => typeof value === 'object')
   for (const binding of capturePaths) {
     const destination = path.join(root, binding.path)
@@ -118,8 +121,8 @@ async function prepareReviewedRepository() {
   inputs.manifest.capture_inputs.reviewed_tool_head = git(root, 'rev-parse', 'HEAD')
   await writeFile(inputs.manifestPath, `${canonicalJson(inputs.manifest)}\n`)
   const manifestDigest = digestFile(inputs.manifestPath)
-  inputs.results = validResults(manifestDigest, inputs.manifest.capture_inputs.command_catalog.digest)
-  inputs.context = validContext(manifestDigest, inputs.results)
+  inputs.results = validResults(manifestDigest, inputs.manifest.capture_inputs.command_catalog.digest, fixtureGeneratedAt)
+  inputs.context = validContext(manifestDigest, inputs.results, fixtureGeneratedAt)
   await writeFile(inputs.resultsPath, `${canonicalJson(inputs.results)}\n`)
   await writeFile(inputs.contextPath, `${canonicalJson(inputs.context)}\n`)
   return { root, ...inputs }
@@ -289,14 +292,15 @@ test('receipt generation cross-checks handoff and receipt artifact paths exactly
 })
 
 test('validate-receipt CLI accepts a receipt-only successor commit', async () => {
-  const inputs = await prepareReviewedRepository()
+  const fixtureGeneratedAt = new Date().toISOString()
+  const inputs = await prepareReviewedRepository(fixtureGeneratedAt)
   const { root } = inputs
-  const handoff = buildPostIntegrationHandoff({ ...inputs, generatedAt })
+  const handoff = buildPostIntegrationHandoff({ ...inputs, generatedAt: fixtureGeneratedAt })
   const handoffPath = path.join(root, 'post-integration-handoff.json')
   await writeFile(handoffPath, `${canonicalJson(handoff)}\n`)
   git(root, 'add', '.'); git(root, 'commit', '-m', 'artifacts')
   const artifactCommit = git(root, 'rev-parse', 'HEAD')
-  const receipt = buildPostIntegrationReceipt({ root, artifactCommit, manifestPath: inputs.manifestPath, resultsPath: inputs.resultsPath, contextPath: inputs.contextPath, handoffPath, generatedAt })
+  const receipt = buildPostIntegrationReceipt({ root, artifactCommit, manifestPath: inputs.manifestPath, resultsPath: inputs.resultsPath, contextPath: inputs.contextPath, handoffPath, generatedAt: fixtureGeneratedAt })
   const receiptPath = path.join(root, 'post-integration-receipt.json')
   await writeFile(receiptPath, `${canonicalJson(receipt)}\n`)
   git(root, 'add', 'post-integration-receipt.json'); git(root, 'commit', '-m', 'receipt only')

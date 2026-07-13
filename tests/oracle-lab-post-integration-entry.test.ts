@@ -39,7 +39,8 @@ const h = (character: string): string => character.repeat(40)
 const generatedAt = '2026-07-12T12:00:00.000Z'
 const now = Date.parse('2026-07-12T12:30:00.000Z')
 
-function validManifest(): PostIntegrationEntryManifest {
+function validManifest(fixtureGeneratedAt = generatedAt): PostIntegrationEntryManifest {
+  const generated = new Date(fixtureGeneratedAt)
   const repository = (head: string, remoteUrl: string) => ({
     head,
     branch: 'main' as const,
@@ -50,8 +51,8 @@ function validManifest(): PostIntegrationEntryManifest {
   return {
     schema_version: 1,
     entry_kind: 'post_integration_entry',
-    generated_at: generatedAt,
-    expires_at: '2026-07-13T12:00:00.000Z',
+    generated_at: generated.toISOString(),
+    expires_at: new Date(generated.getTime() + 86_400_000).toISOString(),
     repositories: {
       cc_gateway: repository(POST_INTEGRATION_BINDINGS.ccGatewayHead, POST_INTEGRATION_BINDINGS.ccGatewayRemoteUrl),
       sub2api: repository(POST_INTEGRATION_BINDINGS.sub2apiHead, POST_INTEGRATION_BINDINGS.sub2apiRemoteUrl),
@@ -159,7 +160,7 @@ test('cross-repository runner rejects a command that changes the bound Sub2API r
   const sub = await repositoryFixture()
   const temporary = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-cross-repo-'))
   const manifestPath = path.join(temporary, 'manifest.json')
-  const manifest = validManifest()
+  const manifest = validManifest(new Date().toISOString())
   const bindFixture = (fixture: { root: string; head: string }) => ({
     head: fixture.head,
     branch: 'main' as const,
@@ -451,7 +452,7 @@ test('catalog runner validates the complete manifest before spawning any command
   const sub = await repositoryFixture()
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-post-integration-runner-'))
   const marker = path.join(root, 'executed')
-  const manifest = validManifest()
+  const manifest = validManifest(new Date().toISOString())
   manifest.repositories.cc_gateway.head = cc.head
   manifest.repositories.cc_gateway.remote.commit = cc.head
   manifest.repositories.sub2api.head = sub.head

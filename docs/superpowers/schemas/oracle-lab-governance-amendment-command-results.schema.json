@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oracle Lab Governance Amendment Command Results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "result_kind",
+    "generated_at",
+    "expires_at",
+    "manifest_digest",
+    "catalog_digest",
+    "group",
+    "records",
+    "result_set_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "result_kind": {
+      "const": "governance_amendment_command_results"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manifest_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "catalog_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "group": {
+      "enum": [
+        "green",
+        "red",
+        "merged"
+      ]
+    },
+    "records": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "result_set_digest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "repository",
+        "repository_commit",
+        "expected_exit",
+        "exit_code",
+        "status",
+        "duration_ms",
+        "stdout_digest",
+        "stderr_digest",
+        "output_bytes",
+        "timed_out",
+        "output_overflow",
+        "failure_names",
+        "manifest_digest",
+        "catalog_entry_digest",
+        "argv_digest",
+        "environment_digest",
+        "execution_bindings",
+        "result_digest"
+      ],
+      "properties": {
+        "command_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]+$"
+        },
+        "repository": {
+          "enum": [
+            "cc-gateway",
+            "sub2api",
+            "egress-tls-sidecar"
+          ]
+        },
+        "repository_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "expected_exit": {
+          "enum": [
+            0,
+            "nonzero"
+          ]
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "expected_fail",
+            "unexpected_fail",
+            "unexpected_pass"
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stdout_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "stderr_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timed_out": {
+          "type": "boolean"
+        },
+        "output_overflow": {
+          "type": "boolean"
+        },
+        "failure_names": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "catalog_entry_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "argv_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "environment_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "execution_bindings": {
+          "type": "object",
+          "minProperties": 3,
+          "additionalProperties": false,
+          "properties": {
+            "cc_gateway_head": { "$ref": "#/$defs/commit" },
+            "sub2api_head": { "$ref": "#/$defs/commit" },
+            "cc_gateway_before_snapshot": { "$ref": "#/$defs/digest" },
+            "cc_gateway_after_snapshot": { "$ref": "#/$defs/digest" },
+            "sub2api_before_snapshot": { "$ref": "#/$defs/digest" },
+            "sub2api_after_snapshot": { "$ref": "#/$defs/digest" },
+            "shared_contract_digest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        "result_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "expected_fail" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": { "failure_names": { "minItems": 1 } }
+          }
+        }
+      ]
+    }
+  }
+}
