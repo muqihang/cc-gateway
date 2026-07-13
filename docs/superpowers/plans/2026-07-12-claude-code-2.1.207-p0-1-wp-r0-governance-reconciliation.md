@@ -821,7 +821,7 @@ npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <c
 npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <commit> --receipt-commit <receipt-commit>
 ```
 
-GREEN/RED/merged results share one strict results schema. Exit and controller reports share one strict report schema with a `report_type` discriminator. Each report command produces a canonical JSON artifact and its exact deterministic Markdown rendering as one atomic pair; `validate-report` regenerates the Markdown from JSON and requires byte equality. Every other persisted component has its own schema and version.
+GREEN/RED/merged results share one strict results schema. Exit and controller reports share one strict report schema with a `report_type` discriminator. Each report command stages and exclusively publishes a canonical JSON artifact and its exact deterministic Markdown rendering with no-follow path checks, then accepts the pair as a completed stage only after both on-disk files pass exact schema/semantic/render validation and one chain-state transition binds both digests. `validate-report` regenerates the Markdown from JSON, requires byte equality, and requires that accepted chain binding. A crash can leave one or both exclusive output paths as an incomplete residue that blocks validation and later stages until operator-approved cleanup; the contract does not claim simultaneous physical visibility of two POSIX pathnames. Every other persisted component has its own schema and version.
 
 The two review inputs are strict JSON attestations under `oracle-lab-governance-amendment-review.schema.json`, not free-form Markdown. The tool requires two distinct reviewer identities and the exact roles `requirements` and `security_quality`; both must bind the reviewed candidate heads/diffs, declare `decision: approved`, and contain `critical: 0` plus `important: 0`. Human reasoning may appear only in bounded safe summary arrays covered by the schema.
 
@@ -874,7 +874,7 @@ Run `validate-reviews` after this commit. It rejects duplicate identities or rol
 
 Run `codegraph sync` and `codegraph status` in both worktrees. Capture the exit from clean reviewed heads. The manifest binds both heads, both clean states, shared contract, CodeGraph index digests/counts, all governance/review artifacts, both parent receipts, and the Task 0B entry pair.
 
-Run the GREEN and RED groups separately and merge them. Generate the schema-valid `p0-1-exit-report.json` plus exact `p0-1-exit-report.md` render pair, then generate the schema-valid `controller-final-report.json` plus exact `controller-final-report.md` render pair from the accepted results and two reviews. Run `validate-report` on both pairs. Generate context after both reports with all four explicit report bindings, then generate handoff with the same bindings. At each step, the successor tool accepts only the exact previously generated outputs as declared dirty paths and atomically adds the current output pair; any other delta aborts capture.
+Run the GREEN and RED groups separately and merge them. Generate the schema-valid `p0-1-exit-report.json` plus exact `p0-1-exit-report.md` render pair, then generate the schema-valid `controller-final-report.json` plus exact `controller-final-report.md` render pair from the accepted results and two reviews. Run `validate-report` on both pairs. Generate context after both reports with all four explicit report bindings, then generate handoff with the same bindings. At each report step, the successor tool exclusively publishes both files and completes one chain transition binding both verified digests; any incomplete pair or other delta remains unaccepted and aborts validation and later capture. This transaction contract intentionally does not promise simultaneous two-path visibility, and crash residue requires operator-approved cleanup rather than automatic deletion.
 
 Required outcomes:
 
@@ -885,7 +885,7 @@ Required outcomes:
 - both repositories have no undeclared worktree delta; the only allowed CC Gateway delta is the exact schema-valid P0.1 output chain created so far, and Sub2API remains clean;
 - no external request, credential, promotion, deployment, or canary occurs.
 
-Validate every artifact and regenerate it once to prove deterministic stable fields. No bound input may change between capture and artifact commit.
+Prove deterministic stable fields without deleting or recreating any fixed-path formal output: rely on the reviewed fixed-time builder tests; each producer's schema, semantic, and self-digest validation; deterministic Markdown re-render and byte comparison for both report pairs; and final receipt-chain validation that rehashes every bound artifact against the artifact commit. No bound input may change between capture and artifact commit. There is no in-place regeneration or chain-reset step.
 
 - [ ] **Step 3: Commit the artifact set, then issue a receipt-only commit**
 

@@ -384,6 +384,41 @@ const lateFailure = evidence.runBoundedProcess({
 })
 assert.equal(lateFailure.infrastructureFailure, true)
 assert.equal(lateFailure.failureNames.includes('TestPhase0B6LateBoundary'), true)
+const lateStdoutCanary = 'ORACLE_SECRET_' + 'CANARY=late-stdout-value'
+const lateStdoutUnsafe = evidence.runBoundedProcess({
+  argv: [process.execPath, '-e', `process.stdout.write('x'.repeat(4096) + ${JSON.stringify(lateStdoutCanary)})`],
+  cwd: root,
+  env: { PATH: process.env.PATH ?? '' },
+  timeoutMs: 5_000,
+  maxOutputBytes: 8_192,
+})
+assert.equal(lateStdoutUnsafe.unsafeOutputDetected, true)
+assert.equal(evidence.classifyBoundedProcess(lateStdoutUnsafe, 0), 'unexpected_fail')
+assert.equal(JSON.stringify(lateStdoutUnsafe).includes(lateStdoutCanary), false)
+
+const stderrCredential = 'Authorization: Bearer stderr-credential-value'
+const stderrUnsafe = evidence.runBoundedProcess({
+  argv: [process.execPath, '-e', `process.stderr.write(${JSON.stringify(stderrCredential)})`],
+  cwd: root,
+  env: { PATH: process.env.PATH ?? '' },
+  timeoutMs: 5_000,
+  maxOutputBytes: 8_192,
+})
+assert.equal(stderrUnsafe.unsafeOutputDetected, true)
+assert.equal(evidence.classifyBoundedProcess(stderrUnsafe, 0), 'unexpected_fail')
+assert.equal(JSON.stringify(stderrUnsafe).includes(stderrCredential), false)
+
+const splitCanary = 'ORACLE_SECRET_' + 'CANARY=split-across-chunks'
+const splitUnsafe = evidence.runBoundedProcess({
+  argv: [process.execPath, '-e', "process.stdout.write('ORACLE_SECRET_'); setTimeout(() => process.stdout.write('CANARY=split-across-chunks'), 25)"],
+  cwd: root,
+  env: { PATH: process.env.PATH ?? '' },
+  timeoutMs: 5_000,
+  maxOutputBytes: 8_192,
+})
+assert.equal(splitUnsafe.unsafeOutputDetected, true)
+assert.equal(evidence.classifyBoundedProcess(splitUnsafe, 0), 'unexpected_fail')
+assert.equal(JSON.stringify(splitUnsafe).includes(splitCanary), false)
 const timedOut = evidence.runBoundedProcess({
   argv: [process.execPath, '-e', 'setInterval(() => {}, 1000)'],
   cwd: root,
@@ -461,6 +496,54 @@ evidence.initializeArtifactChain(dirtyCompletion.repository)
 writeFileSync(path.join(dirtyCompletion.repository, evidence.ARTIFACT_CHAIN.green), '{"green":true}\n')
 writeFileSync(path.join(dirtyCompletion.repository, 'same-stage-extra.json'), '{}\n')
 expectCode(() => evidence.completeArtifactChainStage(dirtyCompletion.repository, 'green'), 'undeclared_dirty_path')
+
+function reportTransactionFixture(label: string): { repository: string; prior: Array<{ path: string; digest: string }> } {
+  const fixture = snapshotFixture(`report-transaction-${label}`)
+  const reportSchema = schemaRelatives[6]
+  mkdirSync(path.dirname(path.join(fixture.repository, reportSchema)), { recursive: true })
+  writeFileSync(path.join(fixture.repository, reportSchema), readFileSync(path.join(root, reportSchema)))
+  git(fixture.repository, 'add', reportSchema)
+  git(fixture.repository, 'commit', '-qm', 'report schema')
+  const prior = evidence.STAGE_TRANSITIONS.report.prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+    const artifactPath = evidence.ARTIFACT_CHAIN[name]
+    const absolute = path.join(fixture.repository, artifactPath)
+    if (!existsSync(absolute)) writeFileSync(absolute, `${JSON.stringify({ stage: name })}\n`)
+    return { path: artifactPath, digest: sha256(readFileSync(absolute)) }
+  })
+  evidence.initializeChainState(fixture.repository, prior)
+  return { repository: fixture.repository, prior }
+}
+
+function injectAt(expectedBoundary: string): (boundary: string) => void {
+  return (boundary) => {
+    if (boundary === expectedBoundary) throw Object.assign(new Error(`injected failure at ${boundary}`), { code: 'injected_pair_failure' })
+  }
+}
+
+const jsonBoundaryPair = reportTransactionFixture('after-json')
+expectCode(() => evidence.writeReportPairTransaction(jsonBoundaryPair.repository, 'report', report, injectAt('after_json_published')), 'injected_pair_failure')
+assert.equal(existsSync(path.join(jsonBoundaryPair.repository, evidence.ARTIFACT_CHAIN.report)), true)
+assert.equal(existsSync(path.join(jsonBoundaryPair.repository, evidence.ARTIFACT_CHAIN.report_markdown)), false)
+expectCode(() => evidence.assertAcceptedReportPair(jsonBoundaryPair.repository, 'report'), 'incomplete_report_transaction')
+expectCode(() => evidence.completeArtifactChainStage(jsonBoundaryPair.repository, 'report'), 'missing_artifact')
+
+const markdownBoundaryPair = reportTransactionFixture('after-markdown')
+expectCode(() => evidence.writeReportPairTransaction(markdownBoundaryPair.repository, 'report', report, injectAt('after_markdown_published')), 'injected_pair_failure')
+assert.equal(existsSync(path.join(markdownBoundaryPair.repository, evidence.ARTIFACT_CHAIN.report)), true)
+assert.equal(existsSync(path.join(markdownBoundaryPair.repository, evidence.ARTIFACT_CHAIN.report_markdown)), true)
+expectCode(() => evidence.assertAcceptedReportPair(markdownBoundaryPair.repository, 'report'), 'incomplete_report_transaction')
+expectCode(() => evidence.prepareArtifactChainStage(markdownBoundaryPair.repository, 'controller_report'), 'prior_output_mutated')
+
+const transitionBoundaryPair = reportTransactionFixture('before-transition')
+expectCode(() => evidence.writeReportPairTransaction(transitionBoundaryPair.repository, 'report', report, injectAt('before_chain_transition')), 'injected_pair_failure')
+expectCode(() => evidence.assertAcceptedReportPair(transitionBoundaryPair.repository, 'report'), 'incomplete_report_transaction')
+expectCode(() => evidence.prepareArtifactChainStage(transitionBoundaryPair.repository, 'controller_report'), 'prior_output_mutated')
+
+const acceptedPair = reportTransactionFixture('accepted')
+evidence.writeReportPairTransaction(acceptedPair.repository, 'report', report)
+assert.deepEqual(evidence.assertAcceptedReportPair(acceptedPair.repository, 'report'), report)
+evidence.prepareArtifactChainStage(acceptedPair.repository, 'controller_report')
+
 const symlinkCase = snapshotFixture('symlink')
 const symlinkPrior = path.join(symlinkCase.repository, 'docs/superpowers/evidence/p0-1/symlink.json')
 symlinkSync(path.join(symlinkCase.repository, 'tracked.txt'), symlinkPrior)
@@ -617,6 +700,12 @@ const greenSet = evidence.buildResultSet({ ...resultBase, group: 'green', record
 const redSet = evidence.buildResultSet({ ...resultBase, group: 'red', records: redRecords })
 assert.equal(evidence.validateResultSetValue(greenSet, Date.parse('2026-07-13T01:00:00.000Z')).ok, true)
 assert.equal(evidence.validateResultSetValue(redSet, Date.parse('2026-07-13T01:00:00.000Z')).ok, true)
+const safeUnexpectedRecords = structuredClone(greenRecords) as any[]
+safeUnexpectedRecords[0].status = 'unexpected_fail'
+const { result_digest: _safeUnexpectedDigest, ...safeUnexpectedUnsigned } = safeUnexpectedRecords[0]
+safeUnexpectedRecords[0].result_digest = sha256(canonical(safeUnexpectedUnsigned))
+const safeUnexpectedSet = evidence.buildResultSet({ ...resultBase, group: 'green', records: safeUnexpectedRecords })
+assert.equal(evidence.validateResultSetValue(safeUnexpectedSet, Date.parse('2026-07-13T01:00:00.000Z')).ok, true)
 const merged = evidence.mergeResultSets(greenSet, redSet, '2026-07-13T00:00:00.000Z')
 assert.equal(merged.group, 'merged')
 assert.deepEqual(merged.records.map((record: any) => record.command_id), [...COMMAND_IDS_FOR_TEST('green'), ...COMMAND_IDS_FOR_TEST('red')].sort())

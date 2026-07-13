@@ -515,8 +515,8 @@ export function initializeChainState(rootInput: string, artifacts: ArtifactBindi
   writeChainState(root, buildChainState(gitText(root, 'rev-parse', 'HEAD'), artifacts), true)
 }
 
-export function assertChainState(rootInput: string, expectedArtifacts: ArtifactBinding[]): ChainState {
-  const root = realpathSync(rootInput); let parsed: unknown
+function verifiedChainState(root: string): ChainState {
+  let parsed: unknown
   const statePath = chainStatePath(root)
   try {
     if (lstatSync(statePath).isSymbolicLink()) fail('artifact_symlink', 'P0.1 chain state is a symlink')
@@ -527,9 +527,15 @@ export function assertChainState(rootInput: string, expectedArtifacts: ArtifactB
   }
   const state = validateChainState(parsed)
   if (!isAncestor(root, state.repository_head_at_initialization, gitText(root, 'rev-parse', 'HEAD'))) fail('chain_repository_drift', 'current HEAD does not descend from chain initialization')
+  for (const binding of state.artifacts) if (!same(bindingAt(root, binding.path), binding)) fail('prior_output_mutated', `${binding.path} bytes changed after the producing stage`)
+  return state
+}
+
+export function assertChainState(rootInput: string, expectedArtifacts: ArtifactBinding[]): ChainState {
+  const root = realpathSync(rootInput)
+  const state = verifiedChainState(root)
   const expected = [...expectedArtifacts].sort((left, right) => left.path.localeCompare(right.path))
   if (!same(state.artifacts, expected)) fail('prior_output_mutated', 'prior artifact inventory or digest differs from immutable chain state')
-  for (const binding of state.artifacts) if (!same(bindingAt(root, binding.path), binding)) fail('prior_output_mutated', `${binding.path} bytes changed after the producing stage`)
   return state
 }
 
@@ -769,7 +775,7 @@ export function validateResultSetValue(value: unknown, now = Date.now()): Harnes
       if (![0, 'nonzero'].includes(record.expected_exit as never) || !Number.isInteger(record.exit_code) || !['pass', 'expected_fail', 'unexpected_fail', 'unexpected_pass'].includes(String(record.status))) add(errors, 'invalid_classification', where, 'result classification is invalid')
       const ordinaryStatus = classifyExit(Number(record.exit_code), record.expected_exit as 0 | 'nonzero')
       const expectedStatus = record.timed_out === true || record.output_overflow === true ? 'unexpected_fail' : ordinaryStatus
-      if (record.status !== expectedStatus) add(errors, 'classification_mismatch', `${where}.status`, 'classification differs from the observed exit')
+      if (record.status !== expectedStatus && record.status !== 'unexpected_fail') add(errors, 'classification_mismatch', `${where}.status`, 'classification differs from the observed exit or a conservative safety failure')
       for (const field of ['stdout_digest', 'stderr_digest', 'manifest_digest', 'catalog_entry_digest', 'argv_digest', 'environment_digest', 'result_digest'] as const) if (!DIGEST_RE.test(String(record[field]))) add(errors, 'invalid_digest', `${where}.${field}`, 'digest is invalid')
       if (!Number.isInteger(record.duration_ms) || Number(record.duration_ms) < 0 || !Number.isInteger(record.output_bytes) || Number(record.output_bytes) < 0 || typeof record.timed_out !== 'boolean' || typeof record.output_overflow !== 'boolean') add(errors, 'invalid_result_measurement', where, 'result measurements are invalid')
       if (!Array.isArray(record.failure_names) || record.failure_names.length > 64 || record.failure_names.some((name) => typeof name !== 'string' || name.length < 1 || name.length > 256)) add(errors, 'invalid_failure_names', `${where}.failure_names`, 'failure names are invalid')
@@ -1305,19 +1311,25 @@ const max = options.maxOutputBytes;
 const started = Date.now();
 const child = spawn(options.argv[0], options.argv.slice(1), { cwd: options.cwd, env: options.env, detached: process.platform !== 'win32', shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
 const stdoutHash = createHash('sha256'); const stderrHash = createHash('sha256');
-let retained = Buffer.alloc(0), total = 0, overflow = false, timedOut = false, terminating = false, forceTimer, closeState, forceKillDone = false, emitted = false, scanCarry = '', infrastructureFailure = false;
+const unsafeOutputPattern = /(?:ORACLE[_-]?SECRET[_-]?CANARY|BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,4096}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,4096}|\b(?:Cookie|Set-Cookie|Authorization)\s*:|\b(?:TOKEN|SECRET|API_KEY)\s*[:=]\s*[^\s"']{1,4096}|https?:\/\/[^\s/]{1,4096}@)/i;
+let retained = Buffer.alloc(0), total = 0, overflow = false, timedOut = false, terminating = false, forceTimer, closeState, forceKillDone = false, emitted = false, infrastructureFailure = false, unsafeOutputDetected = false;
+const scanCarry = { stdout: '', stderr: '' };
 const failureNames = new Set();
-function scan(chunk) {
-  const text = scanCarry + chunk.toString('utf8');
+function scan(stream, chunk) {
+  const text = scanCarry[stream] + chunk.toString('utf8');
   infrastructureFailure ||= /(?:go: downloading|module lookup disabled|GOPROXY=off|toolchain.*(?:unavailable|download)|npm ERR|command not found|ENOENT|network is unreachable)/i.test(text);
+  unsafeOutputDetected ||= unsafeOutputPattern.test(text);
   for (const pattern of [/--- FAIL: ([A-Za-z0-9_./-]+)/g, /\u2716\s+([^\r\n]{1,200})/g, /([A-Za-z0-9_.-]+\.red\.test\.(?:ts|go))/g]) {
     for (const match of text.matchAll(pattern)) if (failureNames.size < 128) failureNames.add(match[1]);
   }
-  scanCarry = text.slice(-1024);
+  scanCarry[stream] = text.slice(-8192);
+}
+function redact(text) {
+  return text.replace(new RegExp(unsafeOutputPattern.source, 'ig'), '[REDACTED]');
 }
 function emit() {
   if (emitted || !closeState || (terminating && !forceKillDone)) return; emitted = true;
-  process.stdout.write(JSON.stringify({ exitCode: closeState.code === null ? 128 : closeState.code, signal: closeState.signal, durationMs: Date.now() - started, stdoutDigest: 'sha256:' + stdoutHash.digest('hex'), stderrDigest: 'sha256:' + stderrHash.digest('hex'), outputBytes: total, outputExcerpt: retained.toString('utf8').slice(0, 2048), outputOverflow: overflow, timedOut, failureNames: [...failureNames].sort(), infrastructureFailure }));
+  process.stdout.write(JSON.stringify({ exitCode: closeState.code === null ? 128 : closeState.code, signal: closeState.signal, durationMs: Date.now() - started, stdoutDigest: 'sha256:' + stdoutHash.digest('hex'), stderrDigest: 'sha256:' + stderrHash.digest('hex'), outputBytes: total, outputExcerpt: unsafeOutputDetected ? '[REDACTED]' : redact(retained.toString('utf8')).slice(0, 2048), outputOverflow: overflow, timedOut, failureNames: [...failureNames].sort(), infrastructureFailure, unsafeOutputDetected }));
 }
 function terminate(reason) {
   if (terminating) return; terminating = true;
@@ -1328,8 +1340,8 @@ function terminate(reason) {
     forceKillDone = true; setTimeout(emit, 50);
   }, 250);
 }
-function consume(hash, chunk) { hash.update(chunk); scan(chunk); total += chunk.length; if (retained.length < max) retained = Buffer.concat([retained, chunk.subarray(0, max - retained.length)]); if (total > max) terminate('overflow'); }
-child.stdout.on('data', chunk => consume(stdoutHash, chunk)); child.stderr.on('data', chunk => consume(stderrHash, chunk));
+function consume(stream, hash, chunk) { hash.update(chunk); scan(stream, chunk); total += chunk.length; if (retained.length < max) retained = Buffer.concat([retained, chunk.subarray(0, max - retained.length)]); if (total > max) terminate('overflow'); }
+child.stdout.on('data', chunk => consume('stdout', stdoutHash, chunk)); child.stderr.on('data', chunk => consume('stderr', stderrHash, chunk));
 const timeout = setTimeout(() => terminate('timeout'), options.timeoutMs);
 child.on('error', error => { clearTimeout(timeout); if (forceTimer) clearTimeout(forceTimer); emitted = true; process.stdout.write(JSON.stringify({ helperError: error.message })); });
 child.on('close', (code, signal) => { clearTimeout(timeout); closeState = { code, signal }; emit(); });
@@ -1347,6 +1359,7 @@ export type BoundedProcessResult = {
   timedOut: boolean
   failureNames: string[]
   infrastructureFailure: boolean
+  unsafeOutputDetected: boolean
 }
 
 export function runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }): BoundedProcessResult {
@@ -1365,6 +1378,11 @@ export function runBoundedProcess(options: { argv: string[]; cwd: string; env: R
   try { parsed = JSON.parse(helper.stdout) as BoundedProcessResult & { helperError?: string } } catch { fail('bounded_runner_failed', 'bounded process helper returned invalid output') }
   if (parsed.helperError) fail('child_spawn_failed', parsed.helperError)
   return parsed
+}
+
+export function classifyBoundedProcess(observed: BoundedProcessResult, expectedExit: 0 | 'nonzero'): 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass' {
+  if (observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) return 'unexpected_fail'
+  return classifyExit(observed.exitCode, expectedExit)
 }
 
 function parseCommandArgs(tokens: string[], allowed: readonly string[]): ReturnType<typeof parseArgs> {
@@ -1471,7 +1489,7 @@ function buildResultRecord(
   const expected = entry.expected_exit as 0 | 'nonzero'
   const names = [...new Set([...observed.failureNames, ...failureNames(observed.outputExcerpt)])].filter((name) => /^[A-Za-z0-9 _.:()/-]{1,256}$/.test(name)).sort().slice(0, 64)
   const infra = observed.infrastructureFailure || infrastructureFailure(observed.outputExcerpt)
-  let status = observed.timedOut || observed.outputOverflow || infra ? 'unexpected_fail' : classifyExit(observed.exitCode, expected)
+  let status = classifyBoundedProcess({ ...observed, infrastructureFailure: infra }, expected)
   const expectedFamilies = EXPECTED_RED_FAILURE_FAMILIES[String(entry.id)]
   if (status === 'expected_fail' && (names.length === 0 || (expectedFamilies && expectedFamilies.some((pattern) => !names.some((name) => pattern.test(name)))))) status = 'unexpected_fail'
   const unsigned = {
@@ -1627,29 +1645,76 @@ function writeExclusiveTextArtifact(file: string, text: string, evidenceRoot: st
   }
 }
 
-export function writeExclusiveArtifactPair(jsonPath: string, jsonValue: unknown, textPath: string, textValue: string, evidenceRoot: string): void {
+export type ArtifactPairPublicationBoundary = 'after_json_published' | 'after_markdown_published'
+export type ReportPairTransactionBoundary = ArtifactPairPublicationBoundary | 'before_chain_transition'
+
+export function writeExclusiveArtifactPair(
+  jsonPath: string,
+  jsonValue: unknown,
+  textPath: string,
+  textValue: string,
+  evidenceRoot: string,
+  onBoundary?: (boundary: ArtifactPairPublicationBoundary) => void,
+): void {
   assertSafeArtifact(jsonValue); assertSafeArtifact(textValue)
   for (const file of [jsonPath, textPath]) {
     assertArtifactOutputPath(file, evidenceRoot)
     try { lstatSync(file); fail('artifact_exists', 'paired artifact output already exists') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   }
-  let jsonCreated = false
-  try {
-    writeExclusiveArtifact(jsonPath, jsonValue, evidenceRoot); jsonCreated = true
-    writeExclusiveTextArtifact(textPath, textValue, evidenceRoot)
-  } catch (error) {
-    if (jsonCreated) unlinkSync(jsonPath)
-    throw error
-  }
+  writeExclusiveArtifact(jsonPath, jsonValue, evidenceRoot)
+  onBoundary?.('after_json_published')
+  writeExclusiveTextArtifact(textPath, textValue, evidenceRoot)
+  onBoundary?.('after_markdown_published')
 }
 
-function writeReportPair(root: string, jsonPath: string, markdownPath: string, value: ReportValue): void {
-  const evidenceRoot = path.join(root, EVIDENCE_ROOT_RELATIVE)
-  assertArtifactOutputPath(jsonPath, evidenceRoot); assertArtifactOutputPath(markdownPath, evidenceRoot)
-  for (const file of [jsonPath, markdownPath]) try { lstatSync(file); fail('artifact_exists', 'report output already exists') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-  const markdown = renderReportMarkdown(value)
+type ReportPairStage = 'report' | 'controller_report'
+
+function reportPairNames(stage: ReportPairStage): readonly [ArtifactName, ArtifactName] {
+  return stage === 'report' ? ['report', 'report_markdown'] : ['controller_report', 'controller_report_markdown']
+}
+
+function readVerifiedReportPair(root: string, stage: ReportPairStage): ReportValue {
+  const [jsonName, markdownName] = reportPairNames(stage)
+  const value = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN[jsonName])
+  requireValidation(validateReportPair(value, readTextAt(root, ARTIFACT_CHAIN[markdownName])))
+  validateAgainstSchema(root, SCHEMA_PATHS.report_schema, value)
+  const expectedType = stage === 'report' ? 'exit' : 'controller'
+  if (value.report_type !== expectedType) fail('report_type_mismatch', 'report discriminator differs from its fixed path')
+  return value
+}
+
+export function assertAcceptedReportPair(rootInput: string, stage: ReportPairStage): ReportValue {
+  const root = realpathSync(rootInput)
+  let value: ReportValue
+  try { value = readVerifiedReportPair(root, stage) } catch (error) {
+    if ((error as Error & { code?: string }).code === 'missing_artifact') fail('incomplete_report_transaction', 'report pair is incomplete and was not transactionally accepted')
+    throw error
+  }
+  const expected = stageBindings(root, reportPairNames(stage))
+  const state = verifiedChainState(root)
+  for (const binding of expected) {
+    if (!state.artifacts.some((candidate) => same(candidate, binding))) fail('incomplete_report_transaction', 'report pair is not bound by the accepted chain state')
+  }
+  return value
+}
+
+export function writeReportPairTransaction(
+  rootInput: string,
+  stage: ReportPairStage,
+  value: ReportValue,
+  onBoundary?: (boundary: ReportPairTransactionBoundary) => void,
+): void {
+  const root = realpathSync(rootInput)
+  const [jsonName, markdownName] = reportPairNames(stage)
+  const jsonPath = path.join(root, ARTIFACT_CHAIN[jsonName]); const markdownPath = path.join(root, ARTIFACT_CHAIN[markdownName])
+  const evidenceRoot = path.join(root, EVIDENCE_ROOT_RELATIVE); const markdown = renderReportMarkdown(value)
   requireValidation(validateReportPair(value, markdown)); validateAgainstSchema(root, SCHEMA_PATHS.report_schema, value)
-  writeExclusiveArtifactPair(jsonPath, value, markdownPath, markdown, evidenceRoot)
+  writeExclusiveArtifactPair(jsonPath, value, markdownPath, markdown, evidenceRoot, onBoundary)
+  const published = readVerifiedReportPair(root, stage)
+  if (!same(published, value)) fail('report_bytes_mismatch', 'published report JSON differs from the validated value')
+  onBoundary?.('before_chain_transition')
+  completeArtifactChainStage(root, stage)
+  assertAcceptedReportPair(root, stage)
 }
 
 function commandReviewImport(args: ReturnType<typeof parseArgs>): void {
@@ -1693,8 +1758,7 @@ function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 
   if (results.group !== 'merged' || results.manifest_digest !== manifest.binding.digest || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'report requires accepted merged results')
   if (reportType === 'controller') {
     exactArgumentPath(root, String(one(args, 'report')), ARTIFACT_CHAIN.report); exactArgumentPath(root, String(one(args, 'report-markdown')), ARTIFACT_CHAIN.report_markdown)
-    const exitReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.report); requireValidation(validateReportPair(exitReport, readTextAt(root, ARTIFACT_CHAIN.report_markdown)))
-    if (exitReport.report_type !== 'exit') fail('report_type_mismatch', 'upstream exit report has the wrong discriminator')
+    assertAcceptedReportPair(root, 'report')
   }
   const reviews = validateReviewsForManifest(root, manifest.value, String(one(args, 'requirements-review')), String(one(args, 'security-review')))
   const summary = { pass: 0, expected_fail: 0, unexpected_fail: 0, unexpected_pass: 0 }
@@ -1712,8 +1776,8 @@ function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 
     commandSummary: summary,
   })
   void reviews
-  writeReportPair(root, out, markdownOut, value)
-  completeArtifactChainStage(root, stage)
+  void out; void markdownOut
+  writeReportPairTransaction(root, stage, value)
 }
 
 function commandValidateReport(args: ReturnType<typeof parseArgs>): void {
@@ -1721,10 +1785,7 @@ function commandValidateReport(args: ReturnType<typeof parseArgs>): void {
   const reportRelative = relativeArtifact(root, String(one(args, 'report'))); const markdownRelative = relativeArtifact(root, String(one(args, 'markdown')))
   const validPair = (reportRelative === ARTIFACT_CHAIN.report && markdownRelative === ARTIFACT_CHAIN.report_markdown) || (reportRelative === ARTIFACT_CHAIN.controller_report && markdownRelative === ARTIFACT_CHAIN.controller_report_markdown)
   if (!validPair) fail('report_path_mismatch', 'report JSON/Markdown paths are not a declared pair')
-  const value = readJsonAt(root, reportRelative)
-  requireValidation(validateReportPair(value, readTextAt(root, markdownRelative))); validateAgainstSchema(root, SCHEMA_PATHS.report_schema, value)
-  const expectedType = reportRelative === ARTIFACT_CHAIN.report ? 'exit' : 'controller'
-  if ((value as ReportValue).report_type !== expectedType) fail('report_type_mismatch', 'report discriminator differs from its fixed path')
+  assertAcceptedReportPair(root, reportRelative === ARTIFACT_CHAIN.report ? 'report' : 'controller_report')
 }
 
 function verifiedReports(root: string, args: ReturnType<typeof parseArgs>): Record<'report' | 'report_markdown' | 'controller_report' | 'controller_report_markdown', ArtifactBinding> {
@@ -1735,10 +1796,7 @@ function verifiedReports(root: string, args: ReturnType<typeof parseArgs>): Reco
     controller_report_markdown: relativeArtifact(root, String(one(args, 'controller-report-markdown'))),
   }
   for (const [name, relative] of Object.entries(paths)) if (relative !== ARTIFACT_CHAIN[name as keyof typeof ARTIFACT_CHAIN]) fail('report_path_mismatch', `${name} path is not fixed`)
-  const exitReport = readJsonAt<ReportValue>(root, paths.report); const controllerReport = readJsonAt<ReportValue>(root, paths.controller_report)
-  requireValidation(validateReportPair(exitReport, readTextAt(root, paths.report_markdown)))
-  requireValidation(validateReportPair(controllerReport, readTextAt(root, paths.controller_report_markdown)))
-  if (exitReport.report_type !== 'exit' || controllerReport.report_type !== 'controller') fail('report_type_mismatch', 'report discriminators differ from fixed paths')
+  assertAcceptedReportPair(root, 'report'); assertAcceptedReportPair(root, 'controller_report')
   return bindingsAt(root, paths)
 }
 
