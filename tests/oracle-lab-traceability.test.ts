@@ -7,7 +7,7 @@ import test from 'node:test'
 import Ajv2020 from 'ajv/dist/2020.js'
 
 import { migrateRequirementsV1ToV2, validateMigrationMetadata } from '../tools/oracle-lab/migrate-requirements-v1-to-v2.js'
-import { validateRequirements } from '../tools/oracle-lab/validate-requirements.js'
+import { validateRequirementRecords, validateRequirements } from '../tools/oracle-lab/validate-requirements.js'
 
 const registryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements.json')
 const v1RegistryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements-v1.json')
@@ -210,6 +210,11 @@ test('schema-validated migration is deterministic, exact-covering, and never inf
     () => migrateRequirementsV1ToV2(v1, substitutedReviewer),
     (error: Error & { code?: string }) => error.code === 'invalid_migration_metadata',
   )
+
+  const inheritedMetadata = metadata.map((row) => Object.create(row) as Requirement)
+  const inheritedValidation = validateMigrationMetadata(inheritedMetadata, v1)
+  assert.equal(inheritedValidation.ok, false)
+  assert(inheritedValidation.errors.some((error) => error.code === 'invalid_migration_metadata'), JSON.stringify(inheritedValidation.errors))
 })
 
 test('accepts homogeneous v2 records and rejects mixed or unsupported record versions', async () => {
@@ -218,6 +223,11 @@ test('accepts homogeneous v2 records and rejects mixed or unsupported record ver
   expectError(await validateFixture([...(await registry()).slice(0, 1), ...v2.slice(1)]), 'mixed_schema_versions')
   expectError(await validateFixture(v2.map((record, index) => index === 0 ? { ...record, schema_version: 3 } : record)), 'unsupported_schema_version')
   assert(v2.every((record) => record.schema_version === 2))
+})
+
+test('rejects inherited-only v2 requirement fields', async () => {
+  const inherited = (await v2Registry()).map((record) => Object.create(record) as Requirement)
+  expectError(validateRequirementRecords(inherited), 'missing_field')
 })
 
 test('v2 requires exact governance fields and unique relationship arrays', async () => {
@@ -500,6 +510,12 @@ test('production artifacts are bound to repository and last verified commit with
     })),
     'invalid_field',
   )
+
+  const inheritedArtifactRecords = await v2Registry()
+  inheritedArtifactRecords[1] = productionEvidence(inheritedArtifactRecords[1])
+  const [inheritedArtifact] = inheritedArtifactRecords[1].deployed_artifacts as Requirement[]
+  inheritedArtifactRecords[1].deployed_artifacts = [Object.create(inheritedArtifact) as Requirement]
+  expectError(validateRequirementRecords(inheritedArtifactRecords), 'invalid_deployed_artifact')
 })
 
 test('timestamps require strict RFC3339 date-time values', async () => {

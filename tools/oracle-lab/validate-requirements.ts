@@ -75,6 +75,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+export function hasOwn(value: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field)
+}
+
 export function isRfc3339Timestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value)
@@ -106,7 +110,7 @@ export function detectRequirementSchemaVersion(parsed: unknown[]): { version: 1 
   const errors: ValidationError[] = []
   const versions = new Set<1 | 2>()
   for (const [index, value] of parsed.entries()) {
-    if (!isObject(value) || !('schema_version' in value)) {
+    if (!isObject(value) || !hasOwn(value, 'schema_version')) {
       versions.add(1)
       continue
     }
@@ -175,7 +179,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
 
     for (const field of fields) {
-      if (!(field in value)) add(errors, 'missing_field', `${base}.${field}`, `${field} is required`)
+      if (!hasOwn(value, field)) add(errors, 'missing_field', `${base}.${field}`, `${field} is required`)
     }
     for (const field of Object.keys(value)) {
       if (!(fields as readonly string[]).includes(field)) {
@@ -264,7 +268,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
         const artifactPath = `${base}.deployed_artifacts[${artifactIndex}]`
         const expected = ['repository', 'commit', 'config_digest', 'manifest_digest', 'deployed_at']
         if (!isObject(artifact) || Object.keys(artifact).some((key) => !expected.includes(key)) ||
-            expected.some((key) => typeof artifact[key] !== 'string' || artifact[key] === '') ||
+            expected.some((key) => !hasOwn(artifact, key) || typeof artifact[key] !== 'string' || artifact[key] === '') ||
             !isSafeRepository(artifact.repository) || artifact.repository !== value.repository ||
             typeof artifact.commit !== 'string' || !commitPattern.test(artifact.commit) ||
             artifact.commit !== value.last_verified_commit ||

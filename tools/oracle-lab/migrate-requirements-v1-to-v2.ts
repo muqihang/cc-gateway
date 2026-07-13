@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { cli, one, parseArgs } from './harness-core.js'
-import { validateRequirementRecords, type ValidationError, type ValidationResult } from './validate-requirements.js'
+import { hasOwn, validateRequirementRecords, type ValidationError, type ValidationResult } from './validate-requirements.js'
 
 type RequirementRecord = Record<string, unknown>
 type MigrationMetadata = {
@@ -64,7 +64,7 @@ export function validateMigrationMetadata(metadata: unknown, input: RequirementR
       continue
     }
     for (const field of metadataFields) {
-      if (!(field in value)) invalid(errors, 'invalid_migration_metadata', `${base}.${field}`, `${field} is required and cannot be inferred`)
+      if (!hasOwn(value, field)) invalid(errors, 'invalid_migration_metadata', `${base}.${field}`, `${field} is required and cannot be inferred`)
     }
     for (const field of Object.keys(value)) {
       if (!(metadataFields as readonly string[]).includes(field)) invalid(errors, 'invalid_migration_metadata', `${base}.${field}`, `${field} is not allowed`)
@@ -95,7 +95,7 @@ export function validateMigrationMetadata(metadata: unknown, input: RequirementR
 
 export function migrateRequirementsV1ToV2(input: RequirementRecord[], metadata: unknown): RequirementRecord[] {
   const inputValidation = validateRequirementRecords(input)
-  if (!inputValidation.ok || input.some((record) => 'schema_version' in record)) {
+  if (!inputValidation.ok || input.some((record) => hasOwn(record, 'schema_version'))) {
     throw Object.assign(new Error('migration input must be a complete homogeneous v1 registry'), { code: 'invalid_migration_input' })
   }
   const metadataValidation = validateMigrationMetadata(metadata, input)

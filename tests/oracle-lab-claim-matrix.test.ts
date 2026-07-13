@@ -153,6 +153,9 @@ test('consumes normalized homogeneous v2 requirement arrays without weakening cl
   assert.notEqual(index, -1)
   authoritative[index] = authoritativeRequirement(authoritative[index])
   assert.deepEqual(await validateFixture([productionClaim()], authoritative), { ok: true, errors: [] })
+
+  const inheritedAuthority = authoritative.map((record) => Object.create(record) as RecordValue)
+  expectError(await validateFixture([productionClaim()], inheritedAuthority), 'invalid_requirement_registry')
 })
 
 test('seed claims state only the Phase 0 negative capabilities actually supported by evidence', async () => {
