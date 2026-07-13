@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -116,6 +116,33 @@ assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((m
 
 const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
 
+const cliCases = [
+  ['capture-exit', ['entry', 'entry-receipt', 'cc-gateway-root', 'sub2api-root', 'out']],
+  ['run', ['manifest', 'catalog', 'group', 'cc-gateway-root', 'sub2api-root', 'out']],
+  ['merge', ['manifest', 'green', 'red', 'out']],
+  ['review-import', ['review-source', 'adopted-amendment', 'out']],
+  ['validate-review-import', ['review-import', 'review-source', 'adopted-amendment']],
+  ['validate-reviews', ['requirements-review', 'security-review', 'review-import', 'cc-gateway-root', 'sub2api-root']],
+  ['report', ['manifest', 'results', 'requirements-review', 'security-review', 'out', 'markdown']],
+  ['controller-report', ['manifest', 'results', 'requirements-review', 'security-review', 'report', 'report-markdown', 'out', 'markdown']],
+  ['validate-report', ['report', 'markdown']],
+  ['context', ['manifest', 'results', 'review-import', 'requirements-review', 'security-review', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out']],
+  ['handoff', ['manifest', 'results', 'context', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out']],
+  ['receipt', ['artifact-commit', 'manifest', 'results', 'context', 'handoff', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out']],
+  ['validate-receipt', ['receipt', 'artifact-commit']],
+] as const
+for (const [command, names] of cliCases) {
+  const tokens = names.flatMap((name) => [`--${name}`, `${name}-value`])
+  const parsed = evidence.parseCliInvocation([command, ...tokens])
+  assert.equal(parsed.command, command)
+  assert.deepEqual(Object.keys(parsed.args.values), names)
+}
+const postCommitReceiptCli = evidence.parseCliInvocation(['validate-receipt', '--receipt', 'receipt-value', '--artifact-commit', 'artifact-value', '--receipt-commit', 'HEAD'])
+assert.deepEqual(Object.keys(postCommitReceiptCli.args.values), ['receipt', 'artifact-commit', 'receipt-commit'])
+expectCode(() => evidence.parseCliInvocation(['validate-report', '--report', 'report-only']), 'invalid_arguments')
+expectCode(() => evidence.parseCliInvocation(['validate-report', '--report', 'a', '--markdown', 'b', '--surprise', 'c']), 'invalid_arguments')
+expectCode(() => evidence.parseCliInvocation(['validate-report', '--report', 'a', '--report', 'b', '--markdown', 'c']), 'invalid_arguments')
+
 function candidateIdentityFixture(label: string, name: string, email: string): { repository: string; base: string; candidate: string } {
   const repository = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-candidate-${label}-`))
   git(repository, 'init', '-q')
@@ -172,6 +199,30 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 
+function cliFixture(label: string): string {
+  const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-cli-${label}-`))
+  const repository = path.join(parent, 'repository')
+  execFileSync('git', ['clone', '-q', '--no-hardlinks', root, repository])
+  writeFileSync(path.join(repository, toolRelative), readFileSync(path.join(root, toolRelative)))
+  symlinkSync(path.join(root, 'node_modules'), path.join(repository, 'node_modules'), 'dir')
+  return realpathSync(repository)
+}
+
+function runCli(repository: string, args: string[]): ReturnType<typeof spawnSync> {
+  return spawnSync(path.join(root, 'node_modules/.bin/tsx'), [path.join(repository, toolRelative), ...args], {
+    cwd: repository,
+    encoding: 'utf8',
+    env: { ...process.env, ...HERMETIC_NETWORK_ENV },
+  })
+}
+
+function expectCliCode(result: ReturnType<typeof spawnSync>, code: string): void {
+  assert.notEqual(result.status, 0, `CLI unexpectedly succeeded: ${result.stdout}`)
+  const lines = String(result.stderr).trim().split('\n')
+  const error = JSON.parse(lines.at(-1) ?? '{}') as { code?: string }
+  assert.equal(error.code, code, String(result.stderr))
+}
+
 assert.equal(evidence.MAX_OUTPUT_BYTES, 8 * 1024 * 1024)
 assert.deepEqual(evidence.HERMETIC_NETWORK_ENV, HERMETIC_NETWORK_ENV)
 assert.equal(evidence.classifyExit(0, 0), 'pass')
@@ -186,17 +237,29 @@ assert.equal(evidence.validateCommandCatalogValue(wrongCwd).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(missingCrossBinding).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(injectedAllowedDelta).ok, false)
 
-const importDir = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-review-import-'))
-const source = path.join(importDir, 'source.md')
-const adopted = path.join(importDir, 'adopted.md')
-writeFileSync(source, 'source amendment\n')
-writeFileSync(adopted, 'adopted amendment\n')
+const source = '/Users/muqihang/chelingxi_workspace/cc-gateway-claude-code-2.1.207-oracle-lab/docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
+const adopted = path.join(root, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md')
 const reviewImport = evidence.buildReviewImport({ reviewSource: source, adoptedAmendment: adopted, generatedAt: '2026-07-13T00:00:00.000Z' })
-assert.equal(reviewImport.source.digest, sha256(readFileSync(source)))
-assert.equal(reviewImport.adopted.digest, sha256(readFileSync(adopted)))
+assert.equal(reviewImport.source.digest, evidence.TASK_0B_REVIEW_SOURCE_DIGEST)
+assert.deepEqual(reviewImport.adopted, evidence.ADOPTED_AMENDMENT_BINDING)
 assert.equal(evidence.validateReviewImportBytes(reviewImport, source, adopted).ok, true)
-writeFileSync(adopted, 'changed adopted amendment\n')
-assert.equal(evidence.validateReviewImportBytes(reviewImport, source, adopted).ok, false)
+const zeroLengthImport = structuredClone(reviewImport)
+zeroLengthImport.transformation.source_bytes = 0
+assert.equal(evidence.validateReviewImportValue(zeroLengthImport).ok, false)
+const oversizedImport = structuredClone(reviewImport)
+oversizedImport.transformation.adopted_bytes = evidence.MAX_OUTPUT_BYTES + 1
+assert.equal(evidence.validateReviewImportValue(oversizedImport).ok, false)
+const arbitraryImportDir = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-review-import-arbitrary-'))
+const arbitrarySource = path.join(arbitraryImportDir, 'source.md'); const arbitraryAdopted = path.join(arbitraryImportDir, 'adopted.md')
+writeFileSync(arbitrarySource, 'arbitrary source amendment\n'); writeFileSync(arbitraryAdopted, 'arbitrary adopted amendment\n')
+expectCode(() => evidence.buildReviewImport({ reviewSource: arbitrarySource, adoptedAmendment: arbitraryAdopted }), 'review_source_digest_mismatch')
+
+const importCliRoot = cliFixture('review-import')
+const cliSource = path.join(importCliRoot, 'arbitrary-source.md'); const cliAdopted = path.join(importCliRoot, 'arbitrary-adopted.md')
+writeFileSync(cliSource, 'arbitrary source\n'); writeFileSync(cliAdopted, 'arbitrary adopted\n')
+expectCliCode(runCli(importCliRoot, [
+  'review-import', '--review-source', cliSource, '--adopted-amendment', cliAdopted, '--out', 'docs/superpowers/evidence/p0-1/p0-1-review-import.json',
+]), 'review_source_digest_mismatch')
 
 const report = evidence.buildReportValue({
   reportType: 'exit',
@@ -223,6 +286,32 @@ const invalidReviewReport = evidence.buildReportValue({
   commandSummary: report.command_summary,
 })
 assert.equal(evidence.validateReportValue(invalidReviewReport).ok, false)
+
+function writeReportFixture(repository: string): void {
+  const reportPath = path.join(repository, evidence.ARTIFACT_CHAIN.report)
+  mkdirSync(path.dirname(reportPath), { recursive: true })
+  writeFileSync(reportPath, `${canonical(report)}\n`)
+}
+
+const leafSymlinkCliRoot = cliFixture('report-leaf-symlink')
+writeReportFixture(leafSymlinkCliRoot)
+const leafTarget = path.join(leafSymlinkCliRoot, 'report-target.md')
+writeFileSync(leafTarget, markdown)
+symlinkSync(leafTarget, path.join(leafSymlinkCliRoot, evidence.ARTIFACT_CHAIN.report_markdown))
+expectCliCode(runCli(leafSymlinkCliRoot, [
+  'validate-report', '--report', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+]), 'artifact_symlink')
+
+const parentSymlinkCliRoot = cliFixture('report-parent-symlink')
+const evidenceParent = path.join(parentSymlinkCliRoot, 'docs/superpowers/evidence')
+const evidenceDirectory = path.join(evidenceParent, 'p0-1'); const realEvidenceDirectory = path.join(evidenceParent, 'p0-1-real')
+renameSync(evidenceDirectory, realEvidenceDirectory)
+symlinkSync(realEvidenceDirectory, evidenceDirectory, 'dir')
+writeReportFixture(parentSymlinkCliRoot)
+writeFileSync(path.join(parentSymlinkCliRoot, evidence.ARTIFACT_CHAIN.report_markdown), markdown)
+expectCliCode(runCli(parentSymlinkCliRoot, [
+  'validate-report', '--report', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+]), 'artifact_symlink')
 
 const disabled = [...evidence.DISABLED_CAPABILITIES]
 const handoff = evidence.buildHandoffValue({
@@ -419,6 +508,51 @@ const reviewExpected = {
   candidateCommitIdentities,
 }
 assert.equal(evidence.validateReviewPair(reviewBase, securityReview, reviewExpected).ok, true)
+evidence.validateReviewEvidenceSchemas({ root, requirements: reviewBase, security: securityReview, reviewImport, schemaCommit: 'HEAD' })
+const reviewWithUnknownNestedField = structuredClone(reviewBase) as any
+reviewWithUnknownNestedField.reviewed_candidate_heads.surprise = '3'.repeat(40)
+expectCode(() => evidence.validateReviewEvidenceSchemas({ root, requirements: reviewWithUnknownNestedField, security: securityReview, reviewImport, schemaCommit: 'HEAD' }), 'schema_validation_failed')
+
+const reviewCliRoot = cliFixture('strict-reviews')
+const subCloneParent = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-cli-sub2api-'))
+const reviewCliSubPath = path.join(subCloneParent, 'repository')
+execFileSync('git', ['clone', '-q', '--no-hardlinks', '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1', reviewCliSubPath])
+const reviewCliSubRoot = realpathSync(reviewCliSubPath)
+git(reviewCliRoot, 'config', 'user.name', 'Fixture Candidate')
+git(reviewCliRoot, 'config', 'user.email', 'fixture-candidate@example.invalid')
+const reviewImportRelative = 'docs/superpowers/evidence/p0-1/p0-1-review-import.json'
+writeFileSync(path.join(reviewCliRoot, reviewImportRelative), `${canonical(reviewImport)}\n`)
+git(reviewCliRoot, 'add', reviewImportRelative)
+git(reviewCliRoot, 'commit', '-qm', 'candidate review import')
+const reviewCliCandidate = git(reviewCliRoot, 'rev-parse', 'HEAD')
+const reviewCliSubCandidate = git(reviewCliSubRoot, 'rev-parse', 'HEAD')
+const cliReviewBase = {
+  ...structuredClone(reviewBase),
+  reviewed_candidate_heads: { cc_gateway: reviewCliCandidate, sub2api: reviewCliSubCandidate },
+  diff_digests: {
+    cc_gateway: sha256(execFileSync('git', ['-C', reviewCliRoot, 'diff', '--binary', `9ca9ea72d881fccd2cfb3fd1b939a2f56db69516...${reviewCliCandidate}`, '--'])),
+    sub2api: sha256(execFileSync('git', ['-C', reviewCliSubRoot, 'diff', '--binary', `d5a42bbd24d15af2ce7646d050a5ae5c77911d4f...${reviewCliSubCandidate}`, '--'])),
+  },
+  plan_digest: sha256(readFileSync(path.join(reviewCliRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
+  review_import_digest: sha256(readFileSync(path.join(reviewCliRoot, reviewImportRelative))),
+}
+const invalidCliRequirementsReview = structuredClone(cliReviewBase) as any
+invalidCliRequirementsReview.reviewed_candidate_heads.surprise = '4'.repeat(40)
+const cliSecurityReview = { ...structuredClone(cliReviewBase), reviewer_identity: 'reviewer-security', reviewer_role: 'security_quality' }
+const cliRequirementsPath = path.join(reviewCliRoot, 'docs/superpowers/evidence/p0-1/requirements-review.json')
+const cliSecurityPath = path.join(reviewCliRoot, 'docs/superpowers/evidence/p0-1/security-quality-review.json')
+writeFileSync(cliRequirementsPath, `${canonical(invalidCliRequirementsReview)}\n`)
+writeFileSync(cliSecurityPath, `${canonical(cliSecurityReview)}\n`)
+git(reviewCliRoot, 'add', 'docs/superpowers/evidence/p0-1/requirements-review.json', 'docs/superpowers/evidence/p0-1/security-quality-review.json')
+git(reviewCliRoot, 'commit', '-qm', 'approval attestations')
+expectCliCode(runCli(reviewCliRoot, [
+  'validate-reviews',
+  '--requirements-review', cliRequirementsPath,
+  '--security-review', cliSecurityPath,
+  '--review-import', path.join(reviewCliRoot, reviewImportRelative),
+  '--cc-gateway-root', reviewCliRoot,
+  '--sub2api-root', reviewCliSubRoot,
+]), 'schema_validation_failed')
 assert.equal(evidence.validateReviewPair(reviewBase, { ...securityReview, reviewer_identity: 'reviewer.requirements' }, reviewExpected).ok, false)
 assert.equal(evidence.validateReviewPair({ ...reviewBase, reviewer_identity: 'candidate.author' }, securityReview, reviewExpected).ok, false)
 assert.equal(evidence.validateReviewPair(reviewBase, { ...securityReview, reviewer_identity: 'candidate.sub@example.invalid' }, reviewExpected).ok, false)
@@ -544,6 +678,30 @@ const receiptValue = evidence.buildReceiptValue({
 assert.equal(evidence.validateReceiptValue(receiptValue).ok, true)
 assert.equal(evidence.validateReceiptValue({ ...receiptValue, artifact_commit: 'not-a-commit' }).ok, false)
 assert.equal(evidence.validateReceiptValue({ ...receiptValue, disabled_capabilities: receiptValue.disabled_capabilities.slice(1) }).ok, false)
+const arbitraryReceiptAmendment = evidence.buildReceiptValue({
+  generatedAt: receiptValue.generated_at,
+  artifactCommit: receiptValue.artifact_commit,
+  reviewedHeads: receiptValue.reviewed_heads,
+  parentReceipts: receiptValue.parent_receipts,
+  artifactDigests: receiptValue.artifact_digests,
+  reviewAmendment: { source_digest: sha256('arbitrary-source'), adopted_digest: sha256('arbitrary-adopted') },
+})
+assert.equal(evidence.validateReceiptValue(arbitraryReceiptAmendment).ok, false)
+
+const revisionRoot = cliFixture('receipt-revision')
+const revisionHead = git(revisionRoot, 'rev-parse', 'HEAD')
+assert.equal(evidence.resolveCommitish(revisionRoot, 'HEAD', 'invalid_receipt_commit'), revisionHead)
+const blobPath = path.join(revisionRoot, 'not-a-commit.txt')
+writeFileSync(blobPath, 'not a commit\n')
+const blob = git(revisionRoot, 'hash-object', '-w', blobPath)
+expectCode(() => evidence.resolveCommitish(revisionRoot, 'does-not-exist', 'invalid_receipt_commit'), 'invalid_receipt_commit')
+expectCode(() => evidence.resolveCommitish(revisionRoot, blob, 'invalid_receipt_commit'), 'invalid_receipt_commit')
+expectCliCode(runCli(revisionRoot, [
+  'validate-receipt', '--receipt', evidence.ARTIFACT_CHAIN.receipt, '--artifact-commit', revisionHead, '--receipt-commit', 'does-not-exist',
+]), 'invalid_receipt_commit')
+expectCliCode(runCli(revisionRoot, [
+  'validate-receipt', '--receipt', evidence.ARTIFACT_CHAIN.receipt, '--artifact-commit', revisionHead, '--receipt-commit', blob,
+]), 'invalid_receipt_commit')
 assert.deepEqual(evidence.SUPPORTED_SUBCOMMANDS, [
   'capture-exit',
   'run',

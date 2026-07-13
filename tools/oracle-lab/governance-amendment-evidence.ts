@@ -124,6 +124,22 @@ export const SUPPORTED_SUBCOMMANDS = [
   'controller-report', 'validate-report', 'context', 'handoff', 'receipt', 'validate-receipt',
 ] as const
 
+const CLI_ARGUMENTS: Record<(typeof SUPPORTED_SUBCOMMANDS)[number], readonly string[]> = {
+  'capture-exit': ['entry', 'entry-receipt', 'cc-gateway-root', 'sub2api-root', 'out'],
+  run: ['manifest', 'catalog', 'group', 'cc-gateway-root', 'sub2api-root', 'out'],
+  merge: ['manifest', 'green', 'red', 'out'],
+  'review-import': ['review-source', 'adopted-amendment', 'out'],
+  'validate-review-import': ['review-import', 'review-source', 'adopted-amendment'],
+  'validate-reviews': ['requirements-review', 'security-review', 'review-import', 'cc-gateway-root', 'sub2api-root'],
+  report: ['manifest', 'results', 'requirements-review', 'security-review', 'out', 'markdown'],
+  'controller-report': ['manifest', 'results', 'requirements-review', 'security-review', 'report', 'report-markdown', 'out', 'markdown'],
+  'validate-report': ['report', 'markdown'],
+  context: ['manifest', 'results', 'review-import', 'requirements-review', 'security-review', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
+  handoff: ['manifest', 'results', 'context', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
+  receipt: ['artifact-commit', 'manifest', 'results', 'context', 'handoff', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
+  'validate-receipt': ['receipt', 'artifact-commit', 'receipt-commit'],
+}
+
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const EVIDENCE_ROOT_RELATIVE = 'docs/superpowers/evidence'
 const P0_1_EVIDENCE_RELATIVE = `${EVIDENCE_ROOT_RELATIVE}/p0-1`
@@ -157,6 +173,12 @@ const GOVERNANCE_PATHS = {
   review_import: REVIEW_IMPORT_PATH,
   requirements_review: REQUIREMENTS_REVIEW_PATH,
   security_review: SECURITY_REVIEW_PATH,
+} as const
+export const TASK_0B_REVIEW_SOURCE_DIGEST = 'sha256:76e662ede1e113018eb5bf8cb835e2e825ae094d426a1c73c4af17f8a643dbf4'
+const TASK_0B_REVIEW_SOURCE_LEAF = '2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
+export const ADOPTED_AMENDMENT_BINDING = {
+  path: GOVERNANCE_PATHS.amendment,
+  digest: 'sha256:997eb373ba8342fbe678e01b13dd25507bdede6e915e9e5a6a9de4d90d8e8819',
 } as const
 const SCHEMA_PATHS = {
   exit_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
@@ -330,14 +352,19 @@ function safeLeaf(file: string): string {
 
 export function buildReviewImport(options: { reviewSource: string; adoptedAmendment: string; generatedAt?: string }): ReviewImport {
   const source = readFileSync(options.reviewSource)
-  const adopted = readFileSync(options.adoptedAmendment)
+  if (sha256(source) !== TASK_0B_REVIEW_SOURCE_DIGEST) fail('review_source_digest_mismatch', 'review source differs from the immutable Task 0B digest')
+  const adoptedRelative = relativeArtifact(REPOSITORY_ROOT, options.adoptedAmendment)
+  if (adoptedRelative !== ADOPTED_AMENDMENT_BINDING.path) fail('adopted_amendment_path_mismatch', 'adopted amendment path is not fixed')
+  const adoptedBinding = bindingAt(REPOSITORY_ROOT, adoptedRelative)
+  if (!same(adoptedBinding, ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment bytes differ from the fixed reviewed digest')
+  const adopted = readFileSync(path.join(REPOSITORY_ROOT, adoptedRelative))
   if (source.length === 0 || adopted.length === 0 || source.length > MAX_OUTPUT_BYTES || adopted.length > MAX_OUTPUT_BYTES) fail('invalid_review_import_bytes', 'review inputs must be nonempty and at most 8 MiB')
   const value: ReviewImport = {
     schema_version: 1,
     import_kind: 'governance_amendment_review_import',
     generated_at: new Date(options.generatedAt ?? new Date().toISOString()).toISOString(),
-    source: { path: safeLeaf(options.reviewSource), digest: sha256(source) },
-    adopted: { path: safeLeaf(options.adoptedAmendment), digest: sha256(adopted) },
+    source: { path: safeLeaf(options.reviewSource), digest: TASK_0B_REVIEW_SOURCE_DIGEST },
+    adopted: { ...ADOPTED_AMENDMENT_BINDING },
     transformation: {
       algorithm: 'sha256_exact_bytes_v1',
       source_bytes: source.length,
@@ -356,7 +383,11 @@ export function validateReviewImportValue(value: unknown): HarnessResult {
   if (value.schema_version !== 1 || value.import_kind !== 'governance_amendment_review_import' || !validUtcTimestamp(value.generated_at)) add(errors, 'invalid_review_import', '$', 'review import header is invalid')
   if (!validArtifact(value.source) || !validArtifact(value.adopted)) add(errors, 'invalid_review_import', '$', 'source and adopted bindings are invalid')
   if (!exactKeys(value.transformation, ['algorithm', 'source_bytes', 'adopted_bytes', 'pair_digest'], '$.transformation', errors)) return result(errors)
-  if (value.transformation.algorithm !== 'sha256_exact_bytes_v1' || !Number.isInteger(value.transformation.source_bytes) || !Number.isInteger(value.transformation.adopted_bytes) || !DIGEST_RE.test(String(value.transformation.pair_digest))) add(errors, 'invalid_review_import', '$.transformation', 'transformation is invalid')
+  if (value.transformation.algorithm !== 'sha256_exact_bytes_v1'
+    || typeof value.transformation.source_bytes !== 'number' || !Number.isInteger(value.transformation.source_bytes) || value.transformation.source_bytes < 1 || value.transformation.source_bytes > MAX_OUTPUT_BYTES
+    || typeof value.transformation.adopted_bytes !== 'number' || !Number.isInteger(value.transformation.adopted_bytes) || value.transformation.adopted_bytes < 1 || value.transformation.adopted_bytes > MAX_OUTPUT_BYTES
+    || !DIGEST_RE.test(String(value.transformation.pair_digest))) add(errors, 'invalid_review_import', '$.transformation', 'transformation is invalid')
+  if (!same(value.source, { path: TASK_0B_REVIEW_SOURCE_LEAF, digest: TASK_0B_REVIEW_SOURCE_DIGEST }) || !same(value.adopted, ADOPTED_AMENDMENT_BINDING)) add(errors, 'review_import_binding_mismatch', '$', 'review import does not bind the fixed Task 0B source and adopted amendment')
   return result(errors)
 }
 
@@ -819,6 +850,21 @@ function gitText(root: string, ...args: string[]): string {
   catch { fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`) }
 }
 
+export function resolveCommitish(root: string, revision: string, errorCode: string): string {
+  try {
+    const resolved = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], {
+      cwd: realpathSync(root),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim()
+    if (!/^[0-9a-f]{40,64}$/.test(resolved)) fail(errorCode, `${revision} did not resolve to a full commit object ID`)
+    return resolved
+  } catch (error) {
+    if ((error as Error & { code?: string }).code === errorCode) throw error
+    fail(errorCode, `${revision} is not a valid commit-ish`)
+  }
+}
+
 function gitBuffer(root: string, ...args: string[]): Buffer {
   try { return execFileSync('git', args, { cwd: root, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 }) }
   catch { fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`) }
@@ -839,11 +885,16 @@ function relativeArtifact(rootInput: string, fileInput: string): string {
 
 function bindingAt(root: string, relative: string): ArtifactBinding {
   if (!normalizedRepositoryPath(relative)) fail('invalid_artifact_path', `${relative} is not repository-relative`)
-  const absolute = path.join(root, relative)
+  const components = relative.split('/')
+  let absolute = root
   let stat
-  try { stat = lstatSync(absolute) } catch { fail('missing_artifact', `${relative} is missing`) }
-  if (stat.isSymbolicLink()) fail('artifact_symlink', `${relative} is a symlink`)
-  if (!stat.isFile()) fail('invalid_artifact', `${relative} is not a regular file`)
+  for (let index = 0; index < components.length; index += 1) {
+    absolute = path.join(absolute, components[index])
+    try { stat = lstatSync(absolute) } catch { fail('missing_artifact', `${relative} is missing`) }
+    if (stat.isSymbolicLink()) fail('artifact_symlink', `${relative} contains a symlink`)
+    if (index < components.length - 1 && !stat.isDirectory()) fail('invalid_artifact', `${relative} has a non-directory parent`)
+  }
+  if (!stat?.isFile()) fail('invalid_artifact', `${relative} is not a regular file`)
   return { path: relative, digest: sha256(readFileSync(absolute)) }
 }
 
@@ -854,6 +905,11 @@ function bindingsAt<T extends Record<string, string>>(root: string, paths: T): {
 function readJsonAt<T>(root: string, relative: string): T {
   bindingAt(root, relative)
   try { return readJson(path.join(root, relative)) as T } catch { fail('invalid_json', `${relative} is not valid JSON`) }
+}
+
+function readTextAt(root: string, relative: string): string {
+  bindingAt(root, relative)
+  return readFileSync(path.join(root, relative), 'utf8')
 }
 
 function requireValidation(validation: HarnessResult): void {
@@ -941,7 +997,7 @@ function validateReviewArtifacts(options: { ccRoot: string; subRoot: string; req
   const requirements = readJsonAt<Record<string, unknown>>(ccRoot, requirementsRelative)
   const security = readJsonAt<Record<string, unknown>>(ccRoot, securityRelative)
   const reviewImport = readJsonAt(ccRoot, reviewImportRelative)
-  requireValidation(validateReviewImportValue(reviewImport))
+  validateReviewEvidenceSchemas({ root: ccRoot, requirements, security, reviewImport, schemaCommit: gitText(ccRoot, 'rev-parse', 'HEAD') })
   const heads = isObject(requirements.reviewed_candidate_heads) ? requirements.reviewed_candidate_heads as ReviewExpected['heads'] : { cc_gateway: '', sub2api: '' }
   const expected: ReviewExpected = {
     heads,
@@ -1172,7 +1228,7 @@ export function buildReceiptValue(options: {
     artifact_commit: options.artifactCommit,
     reviewed_heads: options.reviewedHeads,
     shared_contract: { path: SHARED_CONTRACT_PATH, digest: SHARED_CONTRACT_DIGEST },
-    review_amendment: options.reviewAmendment ?? { source_digest: sha256('unspecified-review-source'), adopted_digest: sha256('unspecified-adopted-amendment') },
+    review_amendment: options.reviewAmendment ?? { source_digest: TASK_0B_REVIEW_SOURCE_DIGEST, adopted_digest: ADOPTED_AMENDMENT_BINDING.digest },
     parent_receipts: options.parentReceipts,
     artifact_digests: Object.fromEntries(Object.entries(options.artifactDigests).sort(([left], [right]) => left.localeCompare(right))),
     disabled_capabilities: [...DISABLED_CAPABILITIES],
@@ -1189,7 +1245,8 @@ export function validateReceiptValue(value: unknown): HarnessResult {
   if (value.schema_version !== 1 || value.receipt_kind !== 'governance_amendment_successor_receipt' || !validUtcTimestamp(value.generated_at) || !/^[0-9a-f]{40,64}$/.test(String(value.artifact_commit))) add(errors, 'invalid_receipt', '$', 'receipt header is invalid')
   if (!isObject(value.reviewed_heads) || !exactKeys(value.reviewed_heads, ['cc_gateway', 'sub2api'], '$.reviewed_heads', errors) || !Object.values(value.reviewed_heads).every((head) => /^[0-9a-f]{40,64}$/.test(String(head)))) add(errors, 'invalid_reviewed_heads', '$.reviewed_heads', 'reviewed heads are invalid')
   if (!validArtifact(value.shared_contract) || value.shared_contract.path !== SHARED_CONTRACT_PATH || value.shared_contract.digest !== SHARED_CONTRACT_DIGEST) add(errors, 'contract_drift', '$.shared_contract', 'shared contract binding drifted')
-  if (!isObject(value.review_amendment) || !exactKeys(value.review_amendment, ['source_digest', 'adopted_digest'], '$.review_amendment', errors) || !Object.values(value.review_amendment).every((digest) => DIGEST_RE.test(String(digest)))) add(errors, 'invalid_review_amendment', '$.review_amendment', 'review amendment digests are invalid')
+  if (!isObject(value.review_amendment) || !exactKeys(value.review_amendment, ['source_digest', 'adopted_digest'], '$.review_amendment', errors)
+    || !same(value.review_amendment, { source_digest: TASK_0B_REVIEW_SOURCE_DIGEST, adopted_digest: ADOPTED_AMENDMENT_BINDING.digest })) add(errors, 'invalid_review_amendment', '$.review_amendment', 'review amendment digests do not bind the fixed reviewed pair')
   if (!isObject(value.parent_receipts) || !exactKeys(value.parent_receipts, ['phase_zero', 'post_integration_v2'], '$.parent_receipts', errors) || !Object.values(value.parent_receipts).every(validArtifact)) add(errors, 'invalid_parent_receipts', '$.parent_receipts', 'both parent receipt bindings are required')
   if (!isObject(value.artifact_digests) || Object.keys(value.artifact_digests).length < 8 || Object.entries(value.artifact_digests).some(([artifactPath, digest]) => !normalizedRepositoryPath(artifactPath) || !DIGEST_RE.test(String(digest)))) add(errors, 'invalid_artifact_digests', '$.artifact_digests', 'artifact digests are invalid')
   if (!same(value.disabled_capabilities, DISABLED_CAPABILITIES)) add(errors, 'disabled_capability_drift', '$.disabled_capabilities', 'deferred capabilities must remain disabled')
@@ -1315,6 +1372,15 @@ function parseCommandArgs(tokens: string[], allowed: readonly string[]): ReturnT
   if (parsed.positionals.length > 0) fail('invalid_arguments', `unexpected positional arguments: ${parsed.positionals.join(',')}`)
   for (const name of Object.keys(parsed.values)) if (!allowed.includes(name)) fail('invalid_arguments', `--${name} is not accepted by this subcommand`)
   return parsed
+}
+
+export function parseCliInvocation(tokens: string[]): { command: (typeof SUPPORTED_SUBCOMMANDS)[number]; args: ReturnType<typeof parseArgs> } {
+  const [commandInput, ...argumentTokens] = tokens
+  if (!SUPPORTED_SUBCOMMANDS.includes(commandInput as (typeof SUPPORTED_SUBCOMMANDS)[number])) fail('invalid_arguments', `unsupported P0.1 subcommand: ${commandInput ?? ''}`)
+  const command = commandInput as (typeof SUPPORTED_SUBCOMMANDS)[number]
+  const args = parseCommandArgs(argumentTokens, CLI_ARGUMENTS[command])
+  for (const name of CLI_ARGUMENTS[command]) if (!(command === 'validate-receipt' && name === 'receipt-commit')) one(args, name)
+  return { command, args }
 }
 
 function exactArgumentPath(root: string, input: string, expected: string): string {
@@ -1524,12 +1590,15 @@ function commandMerge(args: ReturnType<typeof parseArgs>): void {
   completeArtifactChainStage(root, 'results')
 }
 
-function validateReviewsForManifest(root: string, manifest: ExitValue, requirementsInput: string, securityInput: string): { requirements: Record<string, unknown>; security: Record<string, unknown> } {
+function validateReviewsForManifest(root: string, manifest: ExitValue, requirementsInput: string, securityInput: string, schemaCommit = gitText(root, 'rev-parse', 'HEAD')): { requirements: Record<string, unknown>; security: Record<string, unknown> } {
   const requirementsRelative = relativeArtifact(root, requirementsInput); const securityRelative = relativeArtifact(root, securityInput)
   if (requirementsRelative !== REQUIREMENTS_REVIEW_PATH || securityRelative !== SECURITY_REVIEW_PATH) fail('review_path_mismatch', 'review paths differ from the fixed attestations')
   const requirementsBinding = bindingAt(root, requirementsRelative); const securityBinding = bindingAt(root, securityRelative)
   if (!same(requirementsBinding, manifest.governance.requirements_review) || !same(securityBinding, manifest.governance.security_review)) fail('review_digest_mismatch', 'review bytes differ from the exit manifest')
   const requirements = readJsonAt<Record<string, unknown>>(root, requirementsRelative); const security = readJsonAt<Record<string, unknown>>(root, securityRelative)
+  const reviewImport = readJsonAt(root, REVIEW_IMPORT_PATH)
+  validateReviewEvidenceSchemas({ root, requirements, security, reviewImport, schemaCommit })
+  if (!same(bindingAt(root, REVIEW_IMPORT_PATH), manifest.governance.review_import) || !same(manifest.governance.amendment, ADOPTED_AMENDMENT_BINDING)) fail('review_import_binding_mismatch', 'manifest review amendment bindings are not the fixed reviewed pair')
   const diffs = isObject(requirements.diff_digests) ? requirements.diff_digests as ReviewExpected['diffs'] : { cc_gateway: '', sub2api: '' }
   requireValidation(validateReviewPair(requirements, security, {
     heads: manifest.reviewed_candidate_heads,
@@ -1587,7 +1656,7 @@ function commandReviewImport(args: ReturnType<typeof parseArgs>): void {
   const root = REPOSITORY_ROOT
   const out = exactArgumentPath(root, String(one(args, 'out')), REVIEW_IMPORT_PATH)
   const value = buildReviewImport({ reviewSource: String(one(args, 'review-source')), adoptedAmendment: String(one(args, 'adopted-amendment')) })
-  requireValidation(validateReviewImportValue(value)); validateAgainstSchema(root, SCHEMA_PATHS.review_import_schema, value)
+  requireValidation(validateReviewImportValue(value)); validateAgainstCommittedSchema(root, gitText(root, 'rev-parse', 'HEAD'), SCHEMA_PATHS.review_import_schema, value)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
 }
 
@@ -1597,7 +1666,7 @@ function commandValidateReviewImport(args: ReturnType<typeof parseArgs>): void {
   if (relative !== REVIEW_IMPORT_PATH) fail('review_import_path_mismatch', 'review import path is not fixed')
   const value = readJsonAt(root, relative)
   requireValidation(validateReviewImportBytes(value, String(one(args, 'review-source')), String(one(args, 'adopted-amendment'))))
-  validateAgainstSchema(root, SCHEMA_PATHS.review_import_schema, value)
+  validateAgainstCommittedSchema(root, gitText(root, 'rev-parse', 'HEAD'), SCHEMA_PATHS.review_import_schema, value)
 }
 
 function commandValidateReviews(args: ReturnType<typeof parseArgs>): void {
@@ -1624,7 +1693,7 @@ function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 
   if (results.group !== 'merged' || results.manifest_digest !== manifest.binding.digest || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'report requires accepted merged results')
   if (reportType === 'controller') {
     exactArgumentPath(root, String(one(args, 'report')), ARTIFACT_CHAIN.report); exactArgumentPath(root, String(one(args, 'report-markdown')), ARTIFACT_CHAIN.report_markdown)
-    const exitReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.report); requireValidation(validateReportPair(exitReport, readFileSync(path.join(root, ARTIFACT_CHAIN.report_markdown), 'utf8')))
+    const exitReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.report); requireValidation(validateReportPair(exitReport, readTextAt(root, ARTIFACT_CHAIN.report_markdown)))
     if (exitReport.report_type !== 'exit') fail('report_type_mismatch', 'upstream exit report has the wrong discriminator')
   }
   const reviews = validateReviewsForManifest(root, manifest.value, String(one(args, 'requirements-review')), String(one(args, 'security-review')))
@@ -1653,7 +1722,7 @@ function commandValidateReport(args: ReturnType<typeof parseArgs>): void {
   const validPair = (reportRelative === ARTIFACT_CHAIN.report && markdownRelative === ARTIFACT_CHAIN.report_markdown) || (reportRelative === ARTIFACT_CHAIN.controller_report && markdownRelative === ARTIFACT_CHAIN.controller_report_markdown)
   if (!validPair) fail('report_path_mismatch', 'report JSON/Markdown paths are not a declared pair')
   const value = readJsonAt(root, reportRelative)
-  requireValidation(validateReportPair(value, readFileSync(path.join(root, markdownRelative), 'utf8'))); validateAgainstSchema(root, SCHEMA_PATHS.report_schema, value)
+  requireValidation(validateReportPair(value, readTextAt(root, markdownRelative))); validateAgainstSchema(root, SCHEMA_PATHS.report_schema, value)
   const expectedType = reportRelative === ARTIFACT_CHAIN.report ? 'exit' : 'controller'
   if ((value as ReportValue).report_type !== expectedType) fail('report_type_mismatch', 'report discriminator differs from its fixed path')
 }
@@ -1667,8 +1736,8 @@ function verifiedReports(root: string, args: ReturnType<typeof parseArgs>): Reco
   }
   for (const [name, relative] of Object.entries(paths)) if (relative !== ARTIFACT_CHAIN[name as keyof typeof ARTIFACT_CHAIN]) fail('report_path_mismatch', `${name} path is not fixed`)
   const exitReport = readJsonAt<ReportValue>(root, paths.report); const controllerReport = readJsonAt<ReportValue>(root, paths.controller_report)
-  requireValidation(validateReportPair(exitReport, readFileSync(path.join(root, paths.report_markdown), 'utf8')))
-  requireValidation(validateReportPair(controllerReport, readFileSync(path.join(root, paths.controller_report_markdown), 'utf8')))
+  requireValidation(validateReportPair(exitReport, readTextAt(root, paths.report_markdown)))
+  requireValidation(validateReportPair(controllerReport, readTextAt(root, paths.controller_report_markdown)))
   if (exitReport.report_type !== 'exit' || controllerReport.report_type !== 'controller') fail('report_type_mismatch', 'report discriminators differ from fixed paths')
   return bindingsAt(root, paths)
 }
@@ -1704,6 +1773,7 @@ function commandHandoff(args: ReturnType<typeof parseArgs>): void {
   const results = readJsonAt<ResultSet>(root, resultsRelative); requireValidation(validateResultSetValue(results)); if (results.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'handoff results differ from manifest')
   const context = readJsonAt<ContextValue>(root, contextRelative); requireValidation(validateContextValue(context))
   const reportBindings = verifiedReports(root, args)
+  validateReviewsForManifest(root, manifest.value, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH))
   const value = buildHandoffValue({ generatedAt: new Date().toISOString(), bindings: { manifest: manifest.binding, results: bindingAt(root, resultsRelative), context: bindingAt(root, contextRelative), ...reportBindings } })
   requireValidation(validateHandoffValue(value)); validateAgainstSchema(root, SCHEMA_PATHS.handoff_schema, value)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
@@ -1720,7 +1790,7 @@ function committedDigest(root: string, commit: string, relative: string): string
 
 function validateAgainstCommittedSchema(root: string, commit: string, schemaRelative: string, value: unknown): void {
   let schema: unknown
-  try { schema = JSON.parse(committedBytes(root, commit, schemaRelative).toString('utf8')) as unknown } catch { fail('invalid_schema', 'committed receipt schema is invalid JSON') }
+  try { schema = JSON.parse(committedBytes(root, commit, schemaRelative).toString('utf8')) as unknown } catch { fail('invalid_schema', `${schemaRelative} is invalid committed JSON`) }
   try {
     const ajv = new Ajv2020Constructor({ strict: false, allErrors: true, formats: { 'date-time': true } })
     const validate = ajv.compile(schema)
@@ -1729,6 +1799,24 @@ function validateAgainstCommittedSchema(root: string, commit: string, schemaRela
     if ((error as Error & { code?: string }).code === 'schema_validation_failed') throw error
     fail('invalid_schema', (error as Error).message)
   }
+}
+
+export function validateReviewEvidenceSchemas(options: {
+  root: string
+  requirements: unknown
+  security: unknown
+  reviewImport: unknown
+  schemaCommit?: string
+}): void {
+  const root = realpathSync(options.root)
+  const validate = options.schemaCommit
+    ? (schemaRelative: string, value: unknown) => validateAgainstCommittedSchema(root, options.schemaCommit as string, schemaRelative, value)
+    : (schemaRelative: string, value: unknown) => validateAgainstSchema(root, schemaRelative, value)
+  validate(SCHEMA_PATHS.review_schema, options.requirements)
+  validate(SCHEMA_PATHS.review_schema, options.security)
+  validate(SCHEMA_PATHS.review_import_schema, options.reviewImport)
+  requireValidation(validateReviewImportValue(options.reviewImport))
+  if (!same(bindingAt(root, ADOPTED_AMENDMENT_BINDING.path), ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment differs from the fixed reviewed bytes')
 }
 
 function receiptArtifactPaths(manifest: ExitValue): string[] {
@@ -1758,18 +1846,17 @@ function assertReceiptInputs(root: string, args: ReturnType<typeof parseArgs>): 
   for (const [name, relative] of Object.entries(expected)) if (relativeArtifact(root, String(one(args, name))) !== relative) fail('artifact_path_mismatch', `--${name} does not name the fixed artifact`)
 }
 
-function validateReceiptChainValues(root: string, manifest: ExitValue, now = Date.now()): void {
+function validateReceiptChainValues(root: string, manifest: ExitValue, now = Date.now(), schemaCommit = gitText(root, 'rev-parse', 'HEAD')): void {
   const reviewImport = readJsonAt<ReviewImport>(root, REVIEW_IMPORT_PATH)
-  requireValidation(validateReviewImportValue(reviewImport))
-  validateReviewsForManifest(root, manifest, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH))
+  validateReviewsForManifest(root, manifest, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH), schemaCommit)
   const results = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.results); requireValidation(validateResultSetValue(results, now))
   const manifestBinding = bindingAt(root, ARTIFACT_CHAIN.exit); const catalog = validateCatalogAt(root, path.join(root, COMMAND_CATALOG_PATH), manifest)
   requireValidation(validateResultSetBindings(results, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
   if (results.group !== 'merged' || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'receipt requires accepted merged results')
   const context = readJsonAt<ContextValue>(root, ARTIFACT_CHAIN.context); requireValidation(validateContextValue(context, now))
   const handoff = readJsonAt<HandoffValue>(root, ARTIFACT_CHAIN.handoff); requireValidation(validateHandoffValue(handoff, now))
-  const exitReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.report); requireValidation(validateReportPair(exitReport, readFileSync(path.join(root, ARTIFACT_CHAIN.report_markdown), 'utf8')))
-  const controllerReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.controller_report); requireValidation(validateReportPair(controllerReport, readFileSync(path.join(root, ARTIFACT_CHAIN.controller_report_markdown), 'utf8')))
+  const exitReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.report); requireValidation(validateReportPair(exitReport, readTextAt(root, ARTIFACT_CHAIN.report_markdown)))
+  const controllerReport = readJsonAt<ReportValue>(root, ARTIFACT_CHAIN.controller_report); requireValidation(validateReportPair(controllerReport, readTextAt(root, ARTIFACT_CHAIN.controller_report_markdown)))
   if (exitReport.report_type !== 'exit' || controllerReport.report_type !== 'controller') fail('report_type_mismatch', 'receipt report discriminators differ from fixed paths')
   const resultsBinding = bindingAt(root, ARTIFACT_CHAIN.results)
   const reportBindings = {
@@ -1796,7 +1883,7 @@ function commandReceipt(args: ReturnType<typeof parseArgs>): void {
   const manifest = loadManifest(root, String(one(args, 'manifest')))
   assertReceiptInputs(root, args)
   prepareArtifactChainStage(root, 'receipt')
-  validateReceiptChainValues(root, manifest.value)
+  validateReceiptChainValues(root, manifest.value, Date.now(), artifactCommit)
   const artifactPaths = receiptArtifactPaths(manifest.value)
   const artifactDigests: Record<string, string> = {}
   for (const relative of artifactPaths) {
@@ -1821,7 +1908,9 @@ function commandReceipt(args: ReturnType<typeof parseArgs>): void {
 }
 
 export function validateReceiptArtifact(options: { root: string; receiptPath: string; artifactCommit: string; receiptCommit?: string; now?: number }): void {
-  const root = realpathSync(options.root); const receiptRelative = relativeArtifact(root, options.receiptPath)
+  const root = realpathSync(options.root)
+  const receiptCommit = options.receiptCommit ? resolveCommitish(root, options.receiptCommit, 'invalid_receipt_commit') : undefined
+  const receiptRelative = relativeArtifact(root, options.receiptPath)
   if (receiptRelative !== ARTIFACT_CHAIN.receipt) fail('receipt_path_mismatch', 'receipt path is not fixed')
   const receipt = readJsonAt<ReceiptValue>(root, receiptRelative)
   requireValidation(validateReceiptValue(receipt))
@@ -1840,13 +1929,13 @@ export function validateReceiptArtifact(options: { root: string; receiptPath: st
   if (!same(receipt.reviewed_heads, { cc_gateway: manifest.repositories.cc_gateway.head, sub2api: manifest.repositories.sub2api.head }) || !same(receipt.parent_receipts, manifest.parent_receipts)) fail('receipt_binding_mismatch', 'receipt heads or parent receipts differ from the manifest')
   const reviewImport = readJsonAt<ReviewImport>(root, REVIEW_IMPORT_PATH)
   if (!same(receipt.review_amendment, { source_digest: reviewImport.source.digest, adopted_digest: reviewImport.adopted.digest })) fail('review_import_bytes_mismatch', 'receipt review-amendment digests differ from review import')
-  validateReceiptChainValues(root, manifest, options.now)
-  if (options.receiptCommit) {
-    if (gitText(root, 'rev-parse', 'HEAD') !== options.receiptCommit) fail('wrong_receipt_commit', 'worktree HEAD is not the receipt commit')
-    if (gitText(root, 'rev-parse', `${options.receiptCommit}^`) !== options.artifactCommit) fail('invalid_receipt_commit_parent', 'receipt commit parent is not the artifact commit')
-    const delta = gitText(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', options.receiptCommit).split('\n').filter(Boolean)
+  validateReceiptChainValues(root, manifest, options.now, options.artifactCommit)
+  if (receiptCommit) {
+    if (gitText(root, 'rev-parse', 'HEAD') !== receiptCommit) fail('wrong_receipt_commit', 'worktree HEAD is not the receipt commit')
+    if (gitText(root, 'rev-parse', `${receiptCommit}^`) !== options.artifactCommit) fail('invalid_receipt_commit_parent', 'receipt commit parent is not the artifact commit')
+    const delta = gitText(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', receiptCommit).split('\n').filter(Boolean)
     if (!same(delta, [`A\t${ARTIFACT_CHAIN.receipt}`])) fail('invalid_receipt_commit_delta', 'receipt commit must add exactly one receipt path')
-    if (!readFileSync(path.join(root, receiptRelative)).equals(committedBytes(root, options.receiptCommit, receiptRelative))) fail('receipt_commit_bytes_mismatch', 'committed receipt differs from validated worktree bytes')
+    if (!readFileSync(path.join(root, receiptRelative)).equals(committedBytes(root, receiptCommit, receiptRelative))) fail('receipt_commit_bytes_mismatch', 'committed receipt differs from validated worktree bytes')
     captureRepositorySnapshot(root)
   } else {
     if (gitText(root, 'rev-parse', 'HEAD') !== options.artifactCommit) fail('wrong_artifact_commit', 'pre-commit validation must run at the artifact commit')
@@ -1864,24 +1953,9 @@ function commandValidateReceipt(args: ReturnType<typeof parseArgs>): void {
 }
 
 function dispatch(command: string, tokens: string[]): void {
-  const allowed: Record<string, readonly string[]> = {
-    'capture-exit': ['entry', 'entry-receipt', 'cc-gateway-root', 'sub2api-root', 'out'],
-    run: ['manifest', 'catalog', 'group', 'cc-gateway-root', 'sub2api-root', 'out'],
-    merge: ['manifest', 'green', 'red', 'out'],
-    'review-import': ['review-source', 'adopted-amendment', 'out'],
-    'validate-review-import': ['review-import', 'review-source', 'adopted-amendment'],
-    'validate-reviews': ['requirements-review', 'security-review', 'review-import', 'cc-gateway-root', 'sub2api-root'],
-    report: ['manifest', 'results', 'requirements-review', 'security-review', 'out', 'markdown'],
-    'controller-report': ['manifest', 'results', 'requirements-review', 'security-review', 'report', 'report-markdown', 'out', 'markdown'],
-    'validate-report': ['report', 'markdown'],
-    context: ['manifest', 'results', 'review-import', 'requirements-review', 'security-review', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
-    handoff: ['manifest', 'results', 'context', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
-    receipt: ['artifact-commit', 'manifest', 'results', 'context', 'handoff', 'report', 'report-markdown', 'controller-report', 'controller-report-markdown', 'out'],
-    'validate-receipt': ['receipt', 'artifact-commit', 'receipt-commit'],
-  }
-  if (!SUPPORTED_SUBCOMMANDS.includes(command as never)) fail('invalid_arguments', `unsupported P0.1 subcommand: ${command}`)
-  const args = parseCommandArgs(tokens, allowed[command])
-  switch (command) {
+  const invocation = parseCliInvocation([command, ...tokens])
+  const args = invocation.args
+  switch (invocation.command) {
     case 'capture-exit': commandCaptureExit(args); break
     case 'run': commandRun(args); break
     case 'merge': commandMerge(args); break
@@ -1896,11 +1970,11 @@ function dispatch(command: string, tokens: string[]): void {
     case 'receipt': commandReceipt(args); break
     case 'validate-receipt': commandValidateReceipt(args); break
   }
-  process.stdout.write(`${canonicalJson({ ok: true, command })}\n`)
+  process.stdout.write(`${canonicalJson({ ok: true, command: invocation.command })}\n`)
 }
 
 function main(): void {
-  if (process.argv[1] && fileURLToPath(import.meta.url) !== path.resolve(process.argv[1])) return
+  if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) !== realpathSync(process.argv[1])) return
   const tokens = process.argv.slice(2)
   const command = tokens.shift()
   if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
