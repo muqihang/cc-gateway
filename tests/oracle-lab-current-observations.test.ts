@@ -515,6 +515,53 @@ test('change reasons are safe tokens and recursive scanning rejects raw Go outpu
   }
 })
 
+test('rehash cannot legitimize reserved sensitive identifiers in successor change-reason tokens', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+  const commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+  for (const changeReason of [
+    'system_prompt_reveal_hidden',
+    'api_key_secret123',
+    'account_id_acct123',
+    'proxy_id_proxy123',
+  ]) {
+    const unsafe = appendEvent(module, value, 0, commit, 'changed')
+    unsafe.observations[0].status_history[1].change_reason = changeReason
+    refreshLatestAppend(module, unsafe, 0)
+    assert.equal(validateSchema(unsafe), false)
+    expectError(module.validateCurrentObservationLedgerValue(unsafe, {
+      previousLedger: value,
+      previousLedgerCommit: commit,
+    }), 'sensitive_material')
+  }
+})
+
+test('rehash cannot legitimize absolute, traversing, whitespace, control, or raw-output anchor identifiers', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+  const commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const mutations = [
+    (event: Value) => { event.anchors[1].test_names[0] = '/Users/operator/private.log' },
+    (event: Value) => { event.anchors[1].test_names[0] = 'PASS\nok\tservice\t0.001s' },
+    (event: Value) => { event.anchors[0].symbols[0] = '../private_symbol' },
+    (event: Value) => { event.anchors[0].symbols[0] = 'C:\\private_symbol' },
+  ]
+
+  for (const mutate of mutations) {
+    const unsafe = appendEvent(module, value, 0, commit, 'changed')
+    mutate(unsafe.observations[0].status_history[1])
+    refreshLatestAppend(module, unsafe, 0)
+    assert.equal(validateSchema(unsafe), false)
+    expectError(module.validateCurrentObservationLedgerValue(unsafe, {
+      previousLedger: value,
+      previousLedgerCommit: commit,
+    }), 'invalid_anchor')
+  }
+})
+
 test('semantic validator matches schema bounds for append anchors, argv, and env values', async () => {
   const module = await validator()
   const validateSchema = await schemaValidator()
@@ -683,6 +730,10 @@ test('resolved events require new commit-bound evidence and Task 5 RA-CURRENT-00
   refreshLatestAppend(module, resolvedRa009, 8)
   assert.equal(validateSchema(resolvedRa009), true, JSON.stringify(validateSchema.errors))
   assert.deepEqual(module.validateCurrentObservationLedgerValue(resolvedRa009), { ok: true, errors: [] })
+  assert.deepEqual(module.validateCurrentObservationLedgerValue(resolvedRa009, {
+    previousLedger: value,
+    previousLedgerCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  }), { ok: true, errors: [] })
 
   const unsafeAggregates = [
     (event: Value) => event.safe_result.results.reverse(),
@@ -693,6 +744,7 @@ test('resolved events require new commit-bound evidence and Task 5 RA-CURRENT-00
     const unsafe = clone(resolvedRa009)
     mutate(unsafe.observations[8].status_history[1])
     refreshLatestAppend(module, unsafe, 8)
+    assert.equal(validateSchema(unsafe), false)
     expectError(module.validateCurrentObservationLedgerValue(unsafe), 'invalid_safe_result')
   }
 })

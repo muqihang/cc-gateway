@@ -13,7 +13,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/
 const ZERO_DIGEST = `sha256:${'0'.repeat(64)}`
 const COMMIT = /^[0-9a-f]{40}$/
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
-const CHANGE_REASON = /^[a-z0-9]+(?:_[a-z0-9]+)*$/
+const CHANGE_REASON = /^(?!.*(?:system_prompt|api_key|account_id|proxy_id)(?:_|$))[a-z0-9]+(?:_[a-z0-9]+)*$/
 const OBSERVATION_ID = /^RA-CURRENT-(?:00[1-9]|010)$/
 const EVENT_ID = /^RA-CURRENT-(?:00[1-9]|010)-E\d{3}$/
 const VERIFICATION_ID = /^OBS\d{3}(?:-[A-Z0-9]+)*$/
@@ -129,7 +129,10 @@ function isRelativeRepositoryPath(value: unknown): value is string {
 }
 
 function sensitiveText(value: unknown): boolean {
-  return typeof value === 'string' && /(?:Bearer\s+[A-Za-z0-9._-]+|sk-ant-[A-Za-z0-9_-]+|\b(?:system[\s_-]+)?prompt\s*[=:]|\b(?:api[_-]?key|account_id|proxy_id|credential|secret|token)\s*[=:]\s*\S+|\bsource\s*[=:]\s*(?:\/|[A-Za-z]:[\\/])|(?:^|\n)(?:=== RUN\s+|--- (?:FAIL|PASS):|FAIL(?:\s|\t|$)|panic:)|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)
+  return typeof value === 'string' && (
+    /(?:^|[^A-Za-z0-9])(?:system[_ -]?prompt|api[_ -]?key|account[_ -]?id|proxy[_ -]?id)(?=[^A-Za-z0-9]|$)/i.test(value)
+    || /(?:Bearer\s+[A-Za-z0-9._-]+|sk-ant-[A-Za-z0-9_-]+|\bprompt\s*[=:]|\b(?:credential|secret|token)\s*[=:]\s*\S+|\bsource\s*[=:]\s*(?:\/|[A-Za-z]:[\\/])|(?:^|\n)(?:=== RUN\s+|--- (?:FAIL|PASS):|FAIL(?:\s|\t|$)|panic:)|-----BEGIN [A-Z ]+PRIVATE KEY-----)/i.test(value)
+  )
 }
 
 function prohibitedOverclaim(value: unknown): boolean {
@@ -169,8 +172,13 @@ function validateAnchor(value: unknown, base: string, errors: ValidationError[])
   const hasSymbols = uniqueStrings(value.symbols)
   const hasTests = uniqueStrings(value.test_names)
   if (!hasSymbols && !hasTests) add(errors, 'invalid_anchor', base, 'anchor requires symbols or test names')
-  if (hasSymbols && value.symbols.some((item: string) => item.length > 120 || !/^[A-Za-z0-9_./-]+$/.test(item))) add(errors, 'invalid_anchor', `${base}.symbols`, 'invalid symbol')
-  if (hasTests && value.test_names.some((item: string) => item.length > 180)) add(errors, 'invalid_anchor', `${base}.test_names`, 'invalid test name')
+  const safeIdentifier = (item: string, maxLength: number) => item.length <= maxLength
+    && !path.isAbsolute(item)
+    && !/^[A-Za-z]:[\\/]/.test(item)
+    && !item.split('/').includes('..')
+    && /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(item)
+  if (hasSymbols && value.symbols.some((item: string) => !safeIdentifier(item, 120))) add(errors, 'invalid_anchor', `${base}.symbols`, 'symbols must be bounded repository-relative safe identifiers')
+  if (hasTests && value.test_names.some((item: string) => !safeIdentifier(item, 180))) add(errors, 'invalid_anchor', `${base}.test_names`, 'test names must be bounded repository-relative safe identifiers')
 }
 
 function safeFailureDigest(): string {

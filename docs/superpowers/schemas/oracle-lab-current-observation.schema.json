@@ -113,13 +113,13 @@
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[A-Za-z0-9_./-]+$" }
+          "items": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_][A-Za-z0-9_./-]*$" }
         },
         "test_names": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "items": { "type": "string", "minLength": 1, "maxLength": 180 }
+          "items": { "type": "string", "minLength": 1, "maxLength": 180, "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_][A-Za-z0-9_./-]*$" }
         }
       },
       "anyOf": [{ "required": ["symbols"] }, { "required": ["test_names"] }]
@@ -169,20 +169,31 @@
         "kind": { "const": "stable_success_aggregate" },
         "results": {
           "type": "array",
-          "minItems": 1,
-          "maxItems": 4,
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["verification_id", "classification"],
-            "properties": {
-              "verification_id": { "type": "string", "pattern": "^OBS[0-9]{3}(?:-[A-Z0-9]+)*$" },
-              "classification": { "const": "pass" }
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-A" },
+                "classification": { "const": "pass" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-B" },
+                "classification": { "const": "pass" }
+              }
             }
-          }
+          ],
+          "items": false
         },
-        "aggregate_digest": { "$ref": "#/$defs/resultDigest" }
+        "aggregate_digest": { "const": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468" }
       }
     },
     "safeResult": {
@@ -250,7 +261,7 @@
           "items": { "enum": ["phase_1", "phase_2", "phase_3a", "phase_3b", "phase_3_5", "phase_4", "phase_5"] }
         },
         "wp_umbrella": { "enum": ["WP-R0", "WP-R1", "WP-R2", "WP-R3", "WP-R4", "WP-R5", "WP-R6", "WP-R7", "WP-R8", "WP-R9"] },
-        "change_reason": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z0-9]+(?:_[a-z0-9]+)*$" },
+        "change_reason": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^(?!.*(?:system_prompt|api_key|account_id|proxy_id)(?:_|$))[a-z0-9]+(?:_[a-z0-9]+)*$" },
         "safe_result": { "$ref": "#/$defs/safeResult" },
         "previous_event_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
         "event_digest": { "$ref": "#/$defs/digest" }
