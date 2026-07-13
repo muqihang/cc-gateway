@@ -350,14 +350,15 @@ function safeLeaf(file: string): string {
   return leaf
 }
 
-export function buildReviewImport(options: { reviewSource: string; adoptedAmendment: string; generatedAt?: string }): ReviewImport {
+export function buildReviewImport(options: { reviewSource: string; adoptedAmendment: string; generatedAt?: string; repositoryRoot?: string }): ReviewImport {
+  const repositoryRoot = realpathSync(options.repositoryRoot ?? REPOSITORY_ROOT)
   const source = readFileSync(options.reviewSource)
   if (sha256(source) !== TASK_0B_REVIEW_SOURCE_DIGEST) fail('review_source_digest_mismatch', 'review source differs from the immutable Task 0B digest')
-  const adoptedRelative = relativeArtifact(REPOSITORY_ROOT, options.adoptedAmendment)
+  const adoptedRelative = relativeArtifact(repositoryRoot, options.adoptedAmendment)
   if (adoptedRelative !== ADOPTED_AMENDMENT_BINDING.path) fail('adopted_amendment_path_mismatch', 'adopted amendment path is not fixed')
-  const adoptedBinding = bindingAt(REPOSITORY_ROOT, adoptedRelative)
+  const adoptedBinding = bindingAt(repositoryRoot, adoptedRelative)
   if (!same(adoptedBinding, ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment bytes differ from the fixed reviewed digest')
-  const adopted = readFileSync(path.join(REPOSITORY_ROOT, adoptedRelative))
+  const adopted = readFileSync(path.join(repositoryRoot, adoptedRelative))
   if (source.length === 0 || adopted.length === 0 || source.length > MAX_OUTPUT_BYTES || adopted.length > MAX_OUTPUT_BYTES) fail('invalid_review_import_bytes', 'review inputs must be nonempty and at most 8 MiB')
   const value: ReviewImport = {
     schema_version: 1,
@@ -391,10 +392,10 @@ export function validateReviewImportValue(value: unknown): HarnessResult {
   return result(errors)
 }
 
-export function validateReviewImportBytes(value: unknown, reviewSource: string, adoptedAmendment: string): HarnessResult {
+export function validateReviewImportBytes(value: unknown, reviewSource: string, adoptedAmendment: string, repositoryRoot = REPOSITORY_ROOT): HarnessResult {
   const structural = validateReviewImportValue(value)
   if (!structural.ok) return structural
-  const expected = buildReviewImport({ reviewSource, adoptedAmendment, generatedAt: String((value as ReviewImport).generated_at) })
+  const expected = buildReviewImport({ reviewSource, adoptedAmendment, generatedAt: String((value as ReviewImport).generated_at), repositoryRoot })
   return same(value, expected) ? result([]) : result([{ code: 'review_import_bytes_mismatch', path: '$', message: 'review import is not derived from the named exact bytes' }])
 }
 
@@ -803,7 +804,7 @@ export function validateResultSetBindings(value: ResultSet, catalog: Array<Recor
     if (!entry) { add(errors, 'unknown_command_result', where, 'result command is absent from catalog'); continue }
     const expectedHead = entry.repository === 'sub2api' ? manifest.repositories.sub2api.head : manifest.repositories.cc_gateway.head
     if (record.repository !== entry.repository || record.repository_commit !== expectedHead || record.expected_exit !== entry.expected_exit || record.catalog_entry_digest !== catalogEntryDigest(entry) || record.manifest_digest !== manifestDigest) add(errors, 'catalog_result_mismatch', where, 'result differs from catalog or manifest')
-    if (!same(Object.keys(record.execution_bindings), entry.bindings)) add(errors, 'incomplete_execution_binding', `${where}.execution_bindings`, 'execution bindings differ from catalog declaration')
+    if (!same(Object.keys(record.execution_bindings).sort(), [...entry.bindings as string[]].sort())) add(errors, 'incomplete_execution_binding', `${where}.execution_bindings`, 'execution bindings differ from catalog declaration')
     const bindings = record.execution_bindings
     if ('cc_gateway_head' in bindings && bindings.cc_gateway_head !== manifest.repositories.cc_gateway.head) add(errors, 'wrong_repository_head', `${where}.execution_bindings.cc_gateway_head`, 'CC Gateway binding differs')
     if ('sub2api_head' in bindings && bindings.sub2api_head !== manifest.repositories.sub2api.head) add(errors, 'wrong_repository_head', `${where}.execution_bindings.sub2api_head`, 'Sub2API binding differs')
@@ -1380,6 +1381,20 @@ export function runBoundedProcess(options: { argv: string[]; cwd: string; env: R
   return parsed
 }
 
+export type CliRuntime = Readonly<{
+  repositoryRoot: string
+  runBoundedProcess: typeof runBoundedProcess
+  inspectCodeGraphIndex: typeof inspectCodeGraphIndex
+  writeStdout: (value: string) => void
+}>
+
+const PRODUCTION_CLI_RUNTIME: CliRuntime = Object.freeze({
+  repositoryRoot: REPOSITORY_ROOT,
+  runBoundedProcess,
+  inspectCodeGraphIndex,
+  writeStdout: (value: string) => process.stdout.write(value),
+})
+
 export function classifyBoundedProcess(observed: BoundedProcessResult, expectedExit: 0 | 'nonzero'): 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass' {
   if (observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) return 'unexpected_fail'
   return classifyExit(observed.exitCode, expectedExit)
@@ -1523,7 +1538,7 @@ function buildResultRecord(
   return { ...unsigned, result_digest: sha256(canonicalJson(unsigned)) }
 }
 
-function commandCaptureExit(args: ReturnType<typeof parseArgs>): void {
+function commandCaptureExit(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): void {
   const ccRoot = realpathSync(String(one(args, 'cc-gateway-root'))); const subRoot = realpathSync(String(one(args, 'sub2api-root')))
   const out = exactArgumentPath(ccRoot, String(one(args, 'out')), ARTIFACT_CHAIN.exit)
   assertChainStateAbsent(ccRoot)
@@ -1556,14 +1571,14 @@ function commandCaptureExit(args: ReturnType<typeof parseArgs>): void {
     parent_receipts: { phase_zero: entry.parent_receipts.phase_zero, post_integration_v2: entry.parent_receipts.post_integration_v2 },
     governance: bindingsAt(ccRoot, GOVERNANCE_PATHS),
     capture_inputs: bindingsAt(ccRoot, CAPTURE_INPUT_PATHS),
-    codegraph: { cc_gateway: inspectCodeGraphIndex(ccRoot), sub2api: inspectCodeGraphIndex(subRoot) },
+    codegraph: { cc_gateway: runtime.inspectCodeGraphIndex(ccRoot), sub2api: runtime.inspectCodeGraphIndex(subRoot) },
   })
   requireValidation(validateExitValue(value)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.exit_schema, value)
   writeExclusiveArtifact(out, value, path.join(ccRoot, EVIDENCE_ROOT_RELATIVE))
   initializeArtifactChain(ccRoot)
 }
 
-function commandRun(args: ReturnType<typeof parseArgs>): void {
+function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): void {
   const ccRoot = realpathSync(String(one(args, 'cc-gateway-root'))); const subRoot = realpathSync(String(one(args, 'sub2api-root')))
   const manifestLoaded = loadManifest(ccRoot, String(one(args, 'manifest'))); const group = String(one(args, 'group'))
   if (group !== 'green' && group !== 'red') fail('invalid_result_group', '--group must be green or red')
@@ -1582,7 +1597,7 @@ function commandRun(args: ReturnType<typeof parseArgs>): void {
     const beforeCc = captureRepositorySnapshot(ccRoot, prior); const beforeSub = captureRepositorySnapshot(subRoot)
     const cwd = expandCatalogString(String(entry.cwd), roots)
     const argv = (entry.argv as string[]).map((part) => expandCatalogString(part, roots)); const environment = childEnvironment(entry, roots)
-    const observed = runBoundedProcess({ argv, cwd, env: environment, timeoutMs: Number(entry.timeout_ms), maxOutputBytes: Number(entry.max_output_bytes) })
+    const observed = runtime.runBoundedProcess({ argv, cwd, env: environment, timeoutMs: Number(entry.timeout_ms), maxOutputBytes: Number(entry.max_output_bytes) })
     const afterCc = assertRepositorySnapshot(ccRoot, beforeCc, prior); const afterSub = assertRepositorySnapshot(subRoot, beforeSub)
     records.push(buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, beforeCc, afterCc, beforeSub, afterSub))
   }
@@ -1593,8 +1608,8 @@ function commandRun(args: ReturnType<typeof parseArgs>): void {
   completeArtifactChainStage(ccRoot, outputName)
 }
 
-function commandMerge(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT; const manifest = loadManifest(root, String(one(args, 'manifest')))
+function commandMerge(args: ReturnType<typeof parseArgs>, root: string): void {
+  const manifest = loadManifest(root, String(one(args, 'manifest')))
   exactArgumentPath(root, String(one(args, 'green')), ARTIFACT_CHAIN.green); exactArgumentPath(root, String(one(args, 'red')), ARTIFACT_CHAIN.red)
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.results)
   prepareArtifactChainStage(root, 'results')
@@ -1717,20 +1732,18 @@ export function writeReportPairTransaction(
   assertAcceptedReportPair(root, stage)
 }
 
-function commandReviewImport(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT
+function commandReviewImport(args: ReturnType<typeof parseArgs>, root: string): void {
   const out = exactArgumentPath(root, String(one(args, 'out')), REVIEW_IMPORT_PATH)
-  const value = buildReviewImport({ reviewSource: String(one(args, 'review-source')), adoptedAmendment: String(one(args, 'adopted-amendment')) })
+  const value = buildReviewImport({ reviewSource: String(one(args, 'review-source')), adoptedAmendment: String(one(args, 'adopted-amendment')), repositoryRoot: root })
   requireValidation(validateReviewImportValue(value)); validateAgainstCommittedSchema(root, gitText(root, 'rev-parse', 'HEAD'), SCHEMA_PATHS.review_import_schema, value)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
 }
 
-function commandValidateReviewImport(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT
+function commandValidateReviewImport(args: ReturnType<typeof parseArgs>, root: string): void {
   const relative = relativeArtifact(root, String(one(args, 'review-import')))
   if (relative !== REVIEW_IMPORT_PATH) fail('review_import_path_mismatch', 'review import path is not fixed')
   const value = readJsonAt(root, relative)
-  requireValidation(validateReviewImportBytes(value, String(one(args, 'review-source')), String(one(args, 'adopted-amendment'))))
+  requireValidation(validateReviewImportBytes(value, String(one(args, 'review-source')), String(one(args, 'adopted-amendment')), root))
   validateAgainstCommittedSchema(root, gitText(root, 'rev-parse', 'HEAD'), SCHEMA_PATHS.review_import_schema, value)
 }
 
@@ -1745,8 +1758,8 @@ function commandValidateReviews(args: ReturnType<typeof parseArgs>): void {
   })
 }
 
-function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 'controller'): void {
-  const root = REPOSITORY_ROOT; const manifest = loadManifest(root, String(one(args, 'manifest')))
+function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 'controller', root: string): void {
+  const manifest = loadManifest(root, String(one(args, 'manifest')))
   const resultsRelative = relativeArtifact(root, String(one(args, 'results')))
   if (resultsRelative !== ARTIFACT_CHAIN.results) fail('results_path_mismatch', 'merged results path is not fixed')
   const reportKey = reportType === 'exit' ? 'report' : 'controller_report'; const markdownKey = reportType === 'exit' ? 'report_markdown' : 'controller_report_markdown'
@@ -1780,8 +1793,7 @@ function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 
   writeReportPairTransaction(root, stage, value)
 }
 
-function commandValidateReport(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT
+function commandValidateReport(args: ReturnType<typeof parseArgs>, root: string): void {
   const reportRelative = relativeArtifact(root, String(one(args, 'report'))); const markdownRelative = relativeArtifact(root, String(one(args, 'markdown')))
   const validPair = (reportRelative === ARTIFACT_CHAIN.report && markdownRelative === ARTIFACT_CHAIN.report_markdown) || (reportRelative === ARTIFACT_CHAIN.controller_report && markdownRelative === ARTIFACT_CHAIN.controller_report_markdown)
   if (!validPair) fail('report_path_mismatch', 'report JSON/Markdown paths are not a declared pair')
@@ -1800,8 +1812,8 @@ function verifiedReports(root: string, args: ReturnType<typeof parseArgs>): Reco
   return bindingsAt(root, paths)
 }
 
-function commandContext(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT; const manifest = loadManifest(root, String(one(args, 'manifest')))
+function commandContext(args: ReturnType<typeof parseArgs>, root: string): void {
+  const manifest = loadManifest(root, String(one(args, 'manifest')))
   const resultsRelative = relativeArtifact(root, String(one(args, 'results')))
   if (resultsRelative !== ARTIFACT_CHAIN.results) fail('results_path_mismatch', 'merged results path is not fixed')
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.context)
@@ -1822,8 +1834,8 @@ function commandContext(args: ReturnType<typeof parseArgs>): void {
   completeArtifactChainStage(root, 'context')
 }
 
-function commandHandoff(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT; const manifest = loadManifest(root, String(one(args, 'manifest')))
+function commandHandoff(args: ReturnType<typeof parseArgs>, root: string): void {
+  const manifest = loadManifest(root, String(one(args, 'manifest')))
   const resultsRelative = relativeArtifact(root, String(one(args, 'results'))); const contextRelative = relativeArtifact(root, String(one(args, 'context')))
   if (resultsRelative !== ARTIFACT_CHAIN.results || contextRelative !== ARTIFACT_CHAIN.context) fail('artifact_path_mismatch', 'handoff inputs are not fixed')
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.handoff)
@@ -1935,8 +1947,8 @@ function validateReceiptChainValues(root: string, manifest: ExitValue, now = Dat
   if (!same(manifest.disabled_capabilities, context.disabled_capabilities) || !same(context.disabled_capabilities, handoff.disabled_capabilities)) fail('disabled_capability_drift', 'receipt chain enables a deferred capability')
 }
 
-function commandReceipt(args: ReturnType<typeof parseArgs>): void {
-  const root = REPOSITORY_ROOT; const artifactCommit = String(one(args, 'artifact-commit'))
+function commandReceipt(args: ReturnType<typeof parseArgs>, root: string): void {
+  const artifactCommit = String(one(args, 'artifact-commit'))
   if (!/^[0-9a-f]{40,64}$/.test(artifactCommit) || gitText(root, 'rev-parse', 'HEAD') !== artifactCommit) fail('wrong_artifact_commit', 'receipt must be built at the exact artifact commit')
   const manifest = loadManifest(root, String(one(args, 'manifest')))
   assertReceiptInputs(root, args)
@@ -2001,42 +2013,46 @@ export function validateReceiptArtifact(options: { root: string; receiptPath: st
   }
 }
 
-function commandValidateReceipt(args: ReturnType<typeof parseArgs>): void {
+function commandValidateReceipt(args: ReturnType<typeof parseArgs>, root: string): void {
   validateReceiptArtifact({
-    root: REPOSITORY_ROOT,
+    root,
     receiptPath: String(one(args, 'receipt')),
     artifactCommit: String(one(args, 'artifact-commit')),
     receiptCommit: one(args, 'receipt-commit', false),
   })
 }
 
-function dispatch(command: string, tokens: string[]): void {
+function dispatch(command: string, tokens: string[], runtime: CliRuntime): void {
   const invocation = parseCliInvocation([command, ...tokens])
   const args = invocation.args
+  const root = realpathSync(runtime.repositoryRoot)
   switch (invocation.command) {
-    case 'capture-exit': commandCaptureExit(args); break
-    case 'run': commandRun(args); break
-    case 'merge': commandMerge(args); break
-    case 'review-import': commandReviewImport(args); break
-    case 'validate-review-import': commandValidateReviewImport(args); break
+    case 'capture-exit': commandCaptureExit(args, runtime); break
+    case 'run': commandRun(args, runtime); break
+    case 'merge': commandMerge(args, root); break
+    case 'review-import': commandReviewImport(args, root); break
+    case 'validate-review-import': commandValidateReviewImport(args, root); break
     case 'validate-reviews': commandValidateReviews(args); break
-    case 'report': commandReport(args, 'exit'); break
-    case 'controller-report': commandReport(args, 'controller'); break
-    case 'validate-report': commandValidateReport(args); break
-    case 'context': commandContext(args); break
-    case 'handoff': commandHandoff(args); break
-    case 'receipt': commandReceipt(args); break
-    case 'validate-receipt': commandValidateReceipt(args); break
+    case 'report': commandReport(args, 'exit', root); break
+    case 'controller-report': commandReport(args, 'controller', root); break
+    case 'validate-report': commandValidateReport(args, root); break
+    case 'context': commandContext(args, root); break
+    case 'handoff': commandHandoff(args, root); break
+    case 'receipt': commandReceipt(args, root); break
+    case 'validate-receipt': commandValidateReceipt(args, root); break
   }
-  process.stdout.write(`${canonicalJson({ ok: true, command: invocation.command })}\n`)
+  runtime.writeStdout(`${canonicalJson({ ok: true, command: invocation.command })}\n`)
+}
+
+export function runCliEntry(tokens: string[], runtime: CliRuntime): void {
+  const [command, ...argumentTokens] = tokens
+  if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
+  dispatch(command, argumentTokens, runtime)
 }
 
 function main(): void {
   if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) !== realpathSync(process.argv[1])) return
-  const tokens = process.argv.slice(2)
-  const command = tokens.shift()
-  if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
-  dispatch(command, tokens)
+  runCliEntry(process.argv.slice(2), PRODUCTION_CLI_RUNTIME)
 }
 
 cli(main)
