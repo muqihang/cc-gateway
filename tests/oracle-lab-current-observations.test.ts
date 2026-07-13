@@ -788,10 +788,11 @@ test('authorized future fixture revert must append changed or stale truth after 
   falseResolution.repository_bindings = [{ repository: 'sub2api', commit: revertedSub2APICommit }]
   falseResolution.change_reason = 'fixture_revert_still_resolved'
   refreshLatestAppend(module, stillResolved, rowIndex)
+  expectError(module.validateCurrentObservationLedgerValue(stillResolved), 'invalid_rollback_transition')
   expectError(module.validateCurrentObservationLedgerValue(stillResolved, {
     previousLedger: value,
     previousLedgerCommit,
-  }), 'unproven_resolution')
+  }), 'invalid_rollback_transition')
 
   const deletedResolution = clone(value)
   deletedResolution.observations[rowIndex].status_history.pop()
@@ -800,6 +801,26 @@ test('authorized future fixture revert must append changed or stale truth after 
     previousLedger: value,
     previousLedgerCommit,
   }), 'append_only_violation')
+
+  for (const state of ['confirmed', 'partial']) {
+    const invalidSuccessor = appendEvent(module, value, rowIndex, previousLedgerCommit, state)
+    const invalidEvent = invalidSuccessor.observations[rowIndex].status_history.at(-1)
+    invalidEvent.revalidated_at = '2026-07-13T10:00:00Z'
+    invalidEvent.change_reason = `fixture_revert_invalid_${state}_successor`
+    invalidEvent.safe_result = clone(failureSafeResult)
+    invalidEvent.result_digest = invalidEvent.safe_result.aggregate_digest
+    invalidSuccessor.append_history.at(-1).appended_at = '2026-07-13T10:00:00Z'
+    refreshLatestAppend(module, invalidSuccessor, rowIndex)
+
+    assert.equal(validateSchema(invalidSuccessor), true, JSON.stringify(validateSchema.errors))
+    assert.deepEqual(invalidEvent.repository_bindings, resolved.repository_bindings)
+    assert.equal(invalidEvent.evidence_digest, resolved.evidence_digest)
+    expectError(module.validateCurrentObservationLedgerValue(invalidSuccessor), 'invalid_rollback_transition')
+    expectError(module.validateCurrentObservationLedgerValue(invalidSuccessor, {
+      previousLedger: value,
+      previousLedgerCommit,
+    }), 'invalid_rollback_transition')
+  }
 
   for (const state of ['changed', 'stale']) {
     const unchangedEvidence = appendEvent(module, value, rowIndex, previousLedgerCommit, state)

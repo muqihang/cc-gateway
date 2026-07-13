@@ -357,8 +357,11 @@ function validateResolvedTransition(value: Value, previous: unknown, eventIndex:
 function validateRollbackTransition(value: Value, previous: unknown, rowId: string, base: string, errors: ValidationError[]) {
   if (rowId !== 'RA-CURRENT-009'
     || !isObject(previous)
-    || previous.state !== 'resolved'
-    || (value.state !== 'changed' && value.state !== 'stale')) return
+    || previous.state !== 'resolved') return
+  if (value.state !== 'changed' && value.state !== 'stale') {
+    add(errors, 'invalid_rollback_transition', `${base}.state`, 'resolved fixture observations may transition only to changed or stale')
+    return
+  }
 
   const previousSub2API = (Array.isArray(previous.repository_bindings) ? previous.repository_bindings : [])
     .find((binding: unknown): binding is Value => isObject(binding) && binding.repository === 'sub2api')
