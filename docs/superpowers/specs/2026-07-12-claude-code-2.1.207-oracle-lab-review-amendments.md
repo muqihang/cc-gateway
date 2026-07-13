@@ -11,10 +11,15 @@
   2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
   3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
   4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
-- Historical requirement registry v1: `docs/superpowers/registry/oracle-lab-requirements.json`
-- Requirement registry v2: `docs/superpowers/registry/oracle-lab-requirements-v2.json`
-- Conflict handling: every conflict MUST be registered explicitly in Registry v2; no document,
-  requirement, or authority statement may be silently replaced or superseded
+- Canonical requirement registry (Task 1/2 schema v1; Task 3 migrates this path in place to v2):
+  `docs/superpowers/registry/oracle-lab-requirements.json`
+- Preserved Registry v1 snapshot (created by Task 2):
+  `docs/superpowers/registry/oracle-lab-requirements-v1.json`
+- Registry adoption state: pending through Task 2 and Task 3 for Registry v2 and RA adoption; this
+  Status does not claim those migrations are complete
+- Conflict handling: every conflict MUST be registered explicitly by the reviewed Task 2/3
+  migration; registration remains pending, and no document, requirement, or authority statement
+  may be silently replaced or superseded
 - Public release state verified at review time:
   - npm `latest=2.1.207`
   - npm `next=2.1.207`
@@ -40,7 +45,8 @@ not yet fully become:
 
 1. a versioned protocol compatibility firewall;
 2. a response and streaming-semantics authority;
-3. a single-request transport authorization authority;
+3. a consumer and constraint enforcer for independently issued single-request transport
+   capabilities;
 4. a task-lineage and cross-version session authority;
 5. a cross-project compatibility and readiness authority;
 6. a safe protocol-drift and control-plane discovery sensor.
@@ -72,6 +78,8 @@ registry. `Owner` identifies the implementation authority, not permission to sel
 `RA-P0-*` and `RA-P1-*` encode requirement priority, not roadmap phase. Each row has exactly one
 primary work package; Registry v2 `related_requirements` and roadmap phase slices carry secondary
 ownership.
+
+Under `protected_gateway`, Gateway consumes and constrains an independently issued single-request transport capability. The policy broker issues it and the sidecar verifies it; Gateway does not authorize its own transport.
 
 | Requirement ID | Normative requirement | Owner | Primary work package | Blocks |
 | --- | --- | --- | --- | --- |

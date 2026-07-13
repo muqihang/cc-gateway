@@ -10,7 +10,9 @@ const documents = {
   design: 'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md',
 } as const
 
-const registryV2 = 'docs/superpowers/registry/oracle-lab-requirements-v2.json'
+const canonicalRegistry = 'docs/superpowers/registry/oracle-lab-requirements.json'
+const preservedRegistryV1 = 'docs/superpowers/registry/oracle-lab-requirements-v1.json'
+const forbiddenVersionedRegistryV2 = 'docs/superpowers/registry/oracle-lab-requirements-v2.json'
 const roadmapPath = 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md'
 const precedence = [
   documents.review,
@@ -33,6 +35,14 @@ function statusOverlay(markdown: string): string {
   return match[1]
 }
 
+function section(markdown: string, start: string, end: string): string {
+  const startIndex = markdown.indexOf(start)
+  const endIndex = markdown.indexOf(end, startIndex + start.length)
+  assert.ok(startIndex >= 0, `missing section start: ${start}`)
+  assert.ok(endIndex > startIndex, `missing section end: ${end}`)
+  return markdown.slice(startIndex, endIndex)
+}
+
 function assertInOrder(haystack: string, needles: readonly string[], message: string): void {
   let cursor = -1
   for (const needle of needles) {
@@ -42,15 +52,17 @@ function assertInOrder(haystack: string, needles: readonly string[], message: st
   }
 }
 
-test('every specification Status overlay names all authorities and Registry v2', () => {
+test('every specification Status overlay names authorities and the in-place Registry migration contract', () => {
   for (const [name, relativePath] of Object.entries(documents)) {
     const overlay = statusOverlay(read(relativePath))
-    for (const requiredPath of [...precedence, registryV2]) {
+    for (const requiredPath of [...precedence, canonicalRegistry, preservedRegistryV1]) {
       assert.ok(overlay.includes(requiredPath), `${name} Status overlay missing ${requiredPath}`)
     }
+    assert.ok(!overlay.includes(forbiddenVersionedRegistryV2), `${name} invents a versioned Registry v2 path`)
     assertInOrder(overlay, precedence, `${name} precedence`)
     assert.match(overlay, /conflict[^\n]*(?:register|registry)/i, `${name} must register conflicts explicitly`)
     assert.match(overlay, /(?:no|never)[^\n]*silently/i, `${name} must prohibit silent replacement`)
+    assert.match(overlay, /pending[^\n]*Task 2[^\n]*Task 3/i, `${name} must keep Registry v2 and RA adoption pending`)
   }
 })
 
@@ -77,6 +89,14 @@ test('roadmap assigns boundary work and work-package slices to the owning phase'
   }
 })
 
+test('Phase 1 owns only B1-B3 and the fail-closed listener startup boundary', () => {
+  const roadmap = read(roadmapPath)
+  const phase1 = section(roadmap, '## Phase 1:', '## Phase 2:')
+  assert.match(phase1, /B1-B3/i)
+  assert.match(phase1, /loopback[^\n]*remote-listen[^\n]*fail-closed/i)
+  assert.doesNotMatch(phase1, /\bB[456]\b|direct-egress|sidecar|destination|DNS|resolve|pin|dial/i)
+})
+
 test('Phase 3B local conformance is separate from signed staging and canary approval', () => {
   const roadmap = read(roadmapPath)
   assert.match(roadmap, /Phase 3B\/3\.5[^\n]*(?:compiler|config|fixture|local conformance)/i)
@@ -88,4 +108,36 @@ test('Phase 3B local conformance is separate from signed staging and canary appr
 test('roadmap records the exact P0.1 to P1 integration sequence', () => {
   const roadmap = read(roadmapPath)
   assert.ok(roadmap.includes('P0.1 branch receipt -> merge both repository branches -> prove local main equals muqihang/main -> verify P0.1 artifact/fix ancestry on integrated heads -> fresh P1 entry baseline/context -> P1 detailed plan'))
+})
+
+test('roadmap treats Phase 0 planning as completed history and keeps only the P0.1-to-P1 next plan', () => {
+  const roadmap = read(roadmapPath)
+  for (const activeImperative of [
+    'Write the Phase 0 implementation plan only.',
+    'Review and execute Phase 0.',
+    'the first detailed plan is limited to Phase 0',
+  ]) {
+    assert.ok(!roadmap.includes(activeImperative), `roadmap reopens completed Phase 0: ${activeImperative}`)
+  }
+  assert.match(roadmap, /historical Phase 0 planning record[^\n]*complete/i)
+  assert.match(roadmap, /current next plan[^\n]*P0\.1 branch receipt/i)
+})
+
+test('protected Gateway consumes an independently issued transport capability without owning authorization', () => {
+  const amendment = read(documents.review)
+  const executive = section(amendment, '## 1. Executive Decision', '## 2. Evidence and Claim Boundary')
+  assert.ok(!executive.includes('single-request transport authorization authority'))
+  assert.match(executive, /Gateway[^\n]*consumes[^\n]*constrains[^\n]*independently issued[^\n]*single-request transport capabilit/i)
+  assert.match(amendment, /broker and sidecar produce independently verifiable transport-authorization/i)
+})
+
+test('conflict registration and Registry v2 RA adoption remain reviewed pending gates', () => {
+  const roadmap = read(roadmapPath)
+  const overlay = statusOverlay(roadmap)
+  assert.ok(overlay.includes(canonicalRegistry))
+  assert.ok(overlay.includes(preservedRegistryV1))
+  assert.ok(!overlay.includes(forbiddenVersionedRegistryV2))
+  assert.ok(!roadmap.includes('Every conflict is registered explicitly'))
+  assert.match(roadmap, /Every conflict MUST be registered/i)
+  assert.match(roadmap, /Registry v2[^\n]*RA adoption[^\n]*pending[^\n]*Task 2[^\n]*Task 3/i)
 })

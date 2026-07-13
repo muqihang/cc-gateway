@@ -8,9 +8,10 @@
   2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
   3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
   4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
-- Historical requirement registry v1: `docs/superpowers/registry/oracle-lab-requirements.json`
-- Requirement registry v2: `docs/superpowers/registry/oracle-lab-requirements-v2.json`
-- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly in Registry v2, never silently replaced or superseded
+- Canonical requirement registry (Task 1/2 schema v1; Task 3 migrates this path in place to v2): `docs/superpowers/registry/oracle-lab-requirements.json`
+- Preserved Registry v1 snapshot (created by Task 2): `docs/superpowers/registry/oracle-lab-requirements-v1.json`
+- Registry adoption state: Registry v2 and RA adoption remain pending reviewed gates through Task 2 and Task 3; this Status does not claim those migrations are complete
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly by the reviewed Task 2/3 migration, which remains pending; no conflict may be silently replaced or superseded
 - Delivery state: Phase 0 complete; `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json` (`sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6`) is the immutable reviewed-input baseline, and `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json` binds the final roadmap bytes and Phase 0 handoff commit. Phase 1 remains gated on that receipt and the Phase 0 exit contract.
 - P0.1 governance state: the review amendment is adopted as a planning overlay; P0.1 is not
   complete until its successor receipt, and P1 remains blocked by the integrated-main entry gates
@@ -36,10 +37,12 @@ Conflicts resolve in this order:
 Review Amendments > Hardening Amendments > Adversarial Validation v2 > Oracle Lab Design
 ```
 
-Every conflict is registered explicitly in Registry v2 with original source references and the
-linked Claim Matrix authority. No conflict, requirement, or authority statement is silently
+Every conflict MUST be registered explicitly by the reviewed Task 2/3 migration with original
+source references and linked Claim Matrix authority. Registry v2 and RA adoption remain pending
+reviewed gates through Task 2 and Task 3. Until those gates pass, the canonical registry remains
+schema v1 and no conflict, requirement, or authority statement is treated as migrated or silently
 replaced. Registry `implementation_status` and Claim Matrix authority remain separate fields; the
-registry does not create a second authority lattice.
+in-place v2 migration does not create a second authority lattice.
 
 ## Delivery Rules
 
@@ -143,35 +146,33 @@ Phase 0 is complete only when:
 
 ### Objective
 
-Close the already identified authorization, attestation, origin, direct-egress, sidecar-admission,
-and proxy-destination boundary defects without depending on client-specific reverse engineering.
+Close B1-B3 browser attestation, authorization, and public-origin defects, plus the fail-closed
+listener startup boundary, without taking Phase 2 contract or Phase 4 runtime ownership.
 
 ### Required Work
 
-- Server-side browser egress attestation and replay protection.
-- Principal, tenant, group, creator, role, object-state, and expected-version authorization.
-- Trusted public-origin construction and forwarded-header policy.
-- Structural formal-pool direct-egress elimination before DNS/socket creation.
-- Proxy destination validation, normalization, DNS pinning, redirect rejection, and network
-  policy.
-- Fail-closed behavior for missing sidecar, missing manifest authority, proxy mismatch, or stale
-  context.
+- B1 server-side browser egress attestation and replay protection.
+- B2 principal, tenant, group, creator, role, object-state, and expected-version authorization.
+- B3 trusted public-origin construction and forwarded-header policy.
+- Loopback-by-default listen behavior and remote-listen fail-closed startup checks requiring
+  explicit capability, inbound TLS, strong authentication, and approved exposure policy.
 
 ### Harness H1: Boundary Fixtures
 
 - route and flow authorization matrix fixtures;
 - attestation mutation and replay corpus;
-- pre-socket egress assertion harness;
-- proxy URL and DNS-rebinding corpus;
+- trusted-origin and forwarded-header mutation corpus;
+- listener bind and remote-startup configuration corpus;
 - secret-canary sinks and leak scanner;
 - deterministic failure-class fixtures.
 
 ### Exit Gate
 
-- All Phase 0 failing tests for boundary defects are green.
-- No formal-pool request can reach DNS or socket creation without the required local authority.
-- Cross-user, cross-group, cross-tenant, replay, stale-context, and proxy-mismatch tests pass.
-- The harness proves prevention with syscall/socket evidence, not application logs alone.
+- All B1-B3 failing tests are green.
+- Cross-user, cross-group, cross-tenant, replay, stale-context, and untrusted-origin tests pass.
+- An omitted listen host binds loopback, while any remote listen fails startup without every
+  declared encryption, authentication, capability, and exposure-policy prerequisite.
+- The harness proves the listener boundary from observed bind state, not application logs alone.
 
 ## Phase 2: Normative Compatibility and Manifest Authority
 
@@ -395,23 +396,20 @@ rollback_reference
 next_phase_entry_conditions
 ```
 
-## Plan Authoring Rules
+## Historical Phase 0 Planning Record (Complete)
 
-After this roadmap is accepted:
+The historical Phase 0 planning record is complete and is retained only to explain the reviewed
+receipt. It is not an active instruction and must not reopen Phase 0:
 
-1. Write the Phase 0 implementation plan only.
-2. Inspect the current CC Gateway and Sub2API trees, CodeGraph indexes, tests, scripts, and
-   recent commits before naming files or commands.
-3. Use TDD task slices: failing test, failure command, minimal implementation, passing command,
-   artifact update, and commit checkpoint.
-4. Map every plan task to requirement IDs and one phase exit gate.
-5. Review and execute Phase 0.
-6. Generate a fresh handoff bundle and re-plan Phase 1 and Phase 2 from the resulting code, not
-   from stale assumptions in the roadmap; plan Phase 3A only after the Phase 2 gate, Phase 3B/3.5
-   only after Phase 3A, Phase 4 only after both Phase 1 and Phase 3B/3.5, Phase 5 only after Phase 4,
-   Phase 6A only after its joined predecessor gates, and Phase 6B only after separate approval.
+1. The Phase 0 implementation plan was written before implementation.
+2. The CC Gateway and Sub2API trees, CodeGraph indexes, tests, scripts, and recent commits were
+   inspected before files or commands were named.
+3. TDD task slices recorded failing tests, minimal implementation, passing commands, artifacts,
+   and commit checkpoints.
+4. Every plan task mapped to requirement IDs and one phase exit gate.
+5. Phase 0 was reviewed, executed, and closed by its immutable exit receipt.
 
-Recommended plan files:
+Historical plan files:
 
 ```text
 docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-0-governance-baseline.md
@@ -420,17 +418,19 @@ docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-2-compatibility-auth
 ...
 ```
 
-## Roadmap Acceptance Criteria
+## Historical Roadmap Acceptance Record
 
-This roadmap is ready to drive phase planning when:
+The historical roadmap admitted Phase 0 planning only after:
 
 - the seven phases, dependencies, non-goals, and exit gates are accepted;
 - Phase 0 explicitly contains all P0/P1 governance blockers;
 - Harness H0 and the cross-phase handoff contract are defined;
 - the Gateway compromise boundary is a Phase 0 decision gate;
 - no phase implies that local evidence proves provider-internal behavior;
-- the first detailed plan is limited to Phase 0 and names exact files only after repository
-  reconnaissance.
+- its first detailed plan was limited to Phase 0 and named exact files only after repository
+  reconnaissance; that plan is complete and is not reopened.
+
+The current next plan begins only after: P0.1 branch receipt -> merge both repository branches -> prove local main equals muqihang/main -> verify P0.1 artifact/fix ancestry on integrated heads -> fresh P1 entry baseline/context -> P1 detailed plan.
 
 ## Phase 0 AMEND: Cross-Document Coverage and Ownership
 

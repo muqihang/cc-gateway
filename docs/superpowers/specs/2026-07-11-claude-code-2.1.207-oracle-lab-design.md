@@ -13,9 +13,10 @@
   2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
   3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
   4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
-- Historical requirement registry v1: `docs/superpowers/registry/oracle-lab-requirements.json`
-- Requirement registry v2: `docs/superpowers/registry/oracle-lab-requirements-v2.json`
-- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly in Registry v2, never silently replaced or superseded
+- Canonical requirement registry (Task 1/2 schema v1; Task 3 migrates this path in place to v2): `docs/superpowers/registry/oracle-lab-requirements.json`
+- Preserved Registry v1 snapshot (created by Task 2): `docs/superpowers/registry/oracle-lab-requirements-v1.json`
+- Registry adoption state: Registry v2 and RA adoption remain pending reviewed gates through Task 2 and Task 3; this Status does not claim those migrations are complete
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly by the reviewed Task 2/3 migration, which remains pending; no conflict may be silently replaced or superseded
 - Requirement ID prefix: `OL-*`
 
 ## Objective
