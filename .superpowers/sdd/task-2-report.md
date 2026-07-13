@@ -1,108 +1,83 @@
-# P0.1 / WP-R0 Task 2 Report: Homogeneous Requirement Registry Schema v2
+# Task 2 Report: Claim Matrix and Authority Rules
 
 ## Result
 
-DONE
+DONE_WITH_CONCERNS
 
-- Baseline: `826c987a0251b785fa5df46e4b99fac67f406ae2`
-- Branch: `codex/oracle-p0-1-governance`
-- Commit: this Task 2 commit, message `feat(oracle): add requirement registry schema v2`; the resulting hash is reported by the task handoff because a commit cannot embed its own hash.
+Commit: `e90f1e6` (`feat: add oracle lab claim authority matrix`)
 
 ## RED Evidence
 
-The initial hermetic traceability run produced a valid behavioral RED: 22 tests, 16 passed, 6 failed. The v2 fixtures were rejected with `unknown_field` for the eight added fields, and the canonical schema still declared `schema_version: 1.0.0`.
+`npm exec tsx tests/oracle-lab-claim-matrix.test.ts` initially failed with `ERR_MODULE_NOT_FOUND` for the missing `tools/oracle-lab/validate-claims.js` implementation.
 
-After adding the missing migration fixtures/tests but before upgrading the validator, all four focused suites exited 1:
-
-- Traceability rejected v2 fields, migration output, and schema version 2.
-- Claim matrix returned `invalid_requirement_registry` for homogeneous v2 requirements.
-- Harness and reviewed-snapshot suites stopped at `invalid_migration_output` because v2 records were unsupported.
-- A separate exact-mapping RED passed 22/23 traceability tests and proved that the first migration schema draft incorrectly accepted substituted reviewer/phase metadata.
-
-## Implementation
-
-- Preserved the canonical 23-record v1 Registry bytes at `oracle-lab-requirements-v1.json` and created a v1 schema with a unique versioned `$id`.
-- Replaced the canonical requirement record schema with strict v2 fields while retaining the top-level array contract.
-- Added an exact 23-row, schema-validated reviewer/phase migration mapping and deterministic CLI/API migration. Missing, duplicate, extra, or substituted governance metadata fails closed.
-- Added homogeneous version detection. Mixed and unsupported versions fail before authority derivation.
-- Kept all v1 validation, inventory, production evidence, timestamp, repository, dependency, and empty-only contradiction rules unchanged.
-- Added v2 RA governance rules, honest legacy `null` history, exact fields, unique relationship arrays, target/self checks, `refines`/`supersedes` cycle checks, symmetric contradictions, and contradiction-free production authority.
-- Kept `validateClaims` on its existing normalized `Record[]` API. Its existing call to `validateRequirementRecords` now accepts homogeneous v2 arrays without weakening production authority; the v2 claim tests cover both normal and production paths. No no-op edit was made to `validate-claims.ts` merely to match the planning file list.
-- Added the minimal `validate-run-manifest.ts` version guard required for historical H0 fail-closed behavior. Phase 0 entry manifests use `absent_pre_governance_bootstrap`, so digest checks alone would otherwise allow a v2 Registry to reach historical builders. H0 tools now return `historical_registry_version_mismatch`; reviewed Phase 0 exit validation separately proves the 41-v2 versus 23-v1 inventory mismatch.
+The follow-up production fixture also correctly failed with `authority_ceiling_exceeded` until the `upstream_canary` ceiling was widened to represent a fully evidenced `production_verified` claim.
 
 ## GREEN Evidence
 
-- `npm exec tsx tests/oracle-lab-traceability.test.ts`: 23/23 passed.
-- `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`: 15/15 passed.
-- `npm exec tsx tests/oracle-lab-harness.test.ts`: 26/26 passed.
-- `npm exec tsx tests/oracle-lab-reviewed-snapshot-binding.test.ts`: 5/5 passed.
-- Focused total: 69/69 passed.
-- Migration CLI executed twice with byte-identical output: 23 records, one version `[2]`, SHA-256 `06eb0b463d4753ba10e237e31ee92b54d4c07b41a5e51a6a09a6aa3414c1f262`.
-- `npm test`: 40 test files, exit 0; final runners reported no failures.
-- `npm run build`: exit 0.
+- Claim matrix tests: 6 passed.
+- Task 1 traceability regression: 14 passed.
+- Task 0.5 baseline freeze regression: passed.
+- JSON parsing for registry and schema: passed.
 - `git diff --check`: passed.
 
-## Immutability
-
-- Canonical `docs/superpowers/registry/oracle-lab-requirements.json` remains byte-identical to the baseline and v1 preservation file: SHA-256 `2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5`.
-- `git diff --exit-code` against the task baseline passed for the canonical Registry, Claims, and all historical evidence.
-- No Sub2API, historical evidence, claim authority, dependency, package/lock, or progress-ledger bytes were changed.
-- Task 3 remains solely responsible for atomically replacing the canonical Registry with all 41 validated v2 rows.
+The tests cover valid local structural and pinned-client observations, provider-internal synthetic correlation rejection, authority/scope mismatch, local server-acceptance overclaiming, pre-canary production rejection, schema enum/strictness parity, and a fully populated production evidence fixture.
 
 ## Changed Files
 
-- `docs/superpowers/registry/oracle-lab-requirements-v1.json`
-- `docs/superpowers/registry/oracle-lab-requirement-v2-migration.json`
-- `docs/superpowers/schemas/oracle-lab-requirement-v1.schema.json`
-- `docs/superpowers/schemas/oracle-lab-requirement.schema.json`
-- `docs/superpowers/schemas/oracle-lab-requirement-v2-migration.schema.json`
-- `tools/oracle-lab/migrate-requirements-v1-to-v2.ts`
-- `tools/oracle-lab/validate-requirements.ts`
-- `tools/oracle-lab/validate-run-manifest.ts`
-- `tests/oracle-lab-traceability.test.ts`
+- `docs/superpowers/registry/oracle-lab-claims.json`
+- `docs/superpowers/schemas/oracle-lab-claim.schema.json`
+- `tools/oracle-lab/validate-claims.ts`
 - `tests/oracle-lab-claim-matrix.test.ts`
-- `tests/oracle-lab-harness.test.ts`
-- `tests/oracle-lab-reviewed-snapshot-binding.test.ts`
-- `.superpowers/sdd/task-2-report.md`
 
-## CodeGraph
+The validator reuses Task 1's `ValidationError`/`ValidationResult` shape and validates strict fields, enum ceilings, evidence scope, server dependency, confidence, contradictions, expiry, provider disclosure, canary linkage, production gates, rollback evidence, and deployed digests.
 
-- Used `codegraph explore` before file reads to locate requirement validation, claim authority, reviewed snapshot, and H0 builder call paths.
-- Used `codegraph node` for `validateRequirementRecords`, `validateClaims`, `validateRunInputs`, `validatePendingGovernance`, and `buildContextPack` before editing the relevant surfaces.
-- `codegraph sync .` indexed 1 added and 6 modified code files, adding/updating 164 nodes. Final status is required to show zero pending changes.
+## Self-Review
+
+- Provider-internal claims remain `unverified` without an authoritative provider disclosure; synthetic correlation cannot elevate them.
+- Local observations cannot imply server acceptance.
+- Production verification is fail-closed on canary, required registry gates, rollback evidence, deployed commit/config/manifest digests, expiry, and contradictions.
+- No secrets, machine paths, credentials, upstream calls, deployment, package changes, or parent evidence changes were introduced.
 
 ## Concerns
 
-None. The canonical Registry intentionally remains v1 until Task 3; this is a required sequencing boundary, not an incomplete Task 2 implementation.
+Full `npm exec tsc -- --noEmit` remains blocked by the pre-existing missing type declarations/modules for `https-proxy-agent` and `socks-proxy-agent` in `src/proxy-agent.ts`. Package and lock files were intentionally left unchanged per task instructions.
 
-## Review Fix Wave: Cross-Field Relationship Cycles
+## FIX2
 
-### Result
+Result: DONE_WITH_CONCERNS
 
-DONE
+The remaining authority-boundary gap is closed. `validateClaims` now validates the entire caller-supplied requirement array through Task 1's complete strict in-memory registry contract before constructing any requirement map or deriving production authority. This enforces the fixed inventory, canonical source-section mapping, complete record shape, status transitions, production-only field rules, strict timestamps/artifacts, and duplicate evidence-array rejection. Invalid, partial, missing, invented, or fabricated requirement registries fail closed with `invalid_requirement_registry`.
 
-Commit: this fix-wave commit, message `fix(oracle): reject cross-field requirement cycles`; the resulting hash is reported by the task handoff because a commit cannot embed its own hash.
+RED/GREEN coverage was added for partial registries, invented inventory IDs, and duplicate requirement evidence arrays. Existing exact evidence-union and artifact linkage behavior remains covered.
 
-### RED
+Verification:
 
-The independent review finding was reproduced with the minimal v2 graph `A.refines = [B]` and `B.supersedes = [A]`. Before the fix, `validateRequirementRecords` returned `{ ok: true, errors: [] }` because `hasCycle` built separate per-field graphs.
-
-Command: `npm exec tsx tests/oracle-lab-traceability.test.ts`
-
-Result: exit 1, 23 tests, 22 passed, 1 failed. The relationship-cycle test failed because no `cyclic_relationship` error was emitted.
-
-### GREEN
-
-`hasCycle` now combines every record's `refines` and `supersedes` targets into one adjacency list and executes one DFS. Existing same-field and multi-hop detection remains on the same traversal, while mixed-field cycles are now rejected.
-
-- `npm exec tsx tests/oracle-lab-traceability.test.ts`: exit 0, 23/23 passed.
-- `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`: exit 0, 15/15 passed.
-- `npm test`: 40 test files, exit 0; final runners reported no failures.
-- `npm run build`: exit 0.
+- `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`: 13 passed.
+- `npm exec tsx tests/oracle-lab-traceability.test.ts`: 14 passed.
+- `npm exec tsx tests/oracle-lab-baseline-freeze.test.ts`: passed.
+- Focused strict `tsc` for both validators and relevant tests: passed.
+- JSON parsing for registry/schema/requirements: passed.
 - `git diff --check`: passed.
-- Historical immutable diff and canonical-v1 byte comparison: passed.
-- `codegraph sync .` followed by `codegraph status .`: required to report an up-to-date index with zero pending changes.
+- Full `npm test` and project `npm exec tsc -- --noEmit`: blocked only by pre-existing missing `https-proxy-agent` and `socks-proxy-agent` modules/types in `src/proxy-agent.ts`; package and lock files remain unchanged.
 
-### Concerns
+## FIX
 
-None.
+Result: DONE_WITH_CONCERNS
+
+Fix commit: `a9b1250` (`fix: bind claim authority to requirement evidence`)
+
+The claim validator now binds every `production_verified` claim to authoritative referenced RequirementRecords. Each referenced requirement must itself be current `production_verified` authority with a verified repository/commit, non-expired canary/gate/rollback evidence, no contradictions, and valid deployed artifacts. Claim canary, production-gate, rollback, aggregate evidence IDs, and deployed repository/commit/config/manifest records must exactly equal the authoritative union; invented, partial, extra, local-only, design-only, deferred, failing-test, or canary-only authority is rejected.
+
+Local structural and observational claims now reject both server and provider dependencies at every authority state. Provider-internal claims remain `unverified` without authoritative disclosure. Authority scopes, ceilings, non-unverified evidence, provider disclosure, local dependency boundaries, production fields, non-production emptiness, strict arrays, and deployed artifact structure are encoded in the JSON schema.
+
+Task 1's strict RFC3339 calendar validator is exported and reused, so impossible dates are rejected consistently.
+
+Verification:
+
+- `npm exec tsx tests/oracle-lab-claim-matrix.test.ts`: 11 passed.
+- `npm exec tsx tests/oracle-lab-traceability.test.ts`: 14 passed.
+- `npm exec tsx tests/oracle-lab-baseline-freeze.test.ts`: passed.
+- Focused strict `tsc` for both validators and the claim tests: passed.
+- Claim registry/schema JSON parse: passed.
+- `git diff --check`: passed.
+- Full `npm exec tsc -- --noEmit` and `npm run build`: blocked only by the pre-existing missing `https-proxy-agent` and `socks-proxy-agent` modules/types in `src/proxy-agent.ts`; package and lock files remain unchanged.
