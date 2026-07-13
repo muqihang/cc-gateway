@@ -264,7 +264,7 @@ test('ledger contains the exact RA-CURRENT inventory and canonical consequences 
     assert(expected)
     assert.equal(row.required_consequence, expected.consequence)
     assert.equal(row.prohibited_promotion, expected.prohibited)
-    assert.equal(row.status_history.length, 1)
+    assert.equal(row.status_history.length, row.observation_id === 'RA-CURRENT-009' ? 2 : 1)
     const event = row.status_history[0]
     assert.equal(event.state, expected.state)
     assert.equal(event.source_section, `Task 4 / ${row.observation_id}`)
@@ -364,7 +364,7 @@ test('standalone validation binds every initial canonical anchor and repository 
   expectError(module.validateCurrentObservationLedgerValue(commitDrift), 'invalid_canonical_observation')
 })
 
-test('RA-CURRENT-009 stores only ordered safe failure classifications and remains expected FAIL', async () => {
+test('RA-CURRENT-009 E001 retains only ordered safe failure classifications and the reproduced RED', async () => {
   const value = await ledger()
   const row = value.observations.find((entry: Value) => entry.observation_id === 'RA-CURRENT-009')
   const event = row.status_history[0]
@@ -609,7 +609,6 @@ test('event IDs are unique and their numeric suffix equals sequence', async () =
 test('event and append digests are recomputed and every internal hash link is exact', async () => {
   const module = await validator()
   const value = await ledger()
-  const eventDigests: string[] = []
   for (const row of value.observations as Value[]) {
     let prior: string | null = null
     row.status_history.forEach((event: Value, index: number) => {
@@ -617,15 +616,28 @@ test('event and append digests are recomputed and every internal hash link is ex
       assert.equal(event.previous_event_digest, prior)
       assert.equal(event.event_digest, module.computeObservationEventDigest(event))
       prior = event.event_digest
-      eventDigests.push(event.event_digest)
     })
   }
-  assert.equal(value.append_history.length, 1)
+  assert.equal(value.append_history.length, 2)
   assert.equal(value.append_history[0].previous_ledger_commit, null)
   assert.equal(value.append_history[0].previous_ledger_digest, null)
   assert.equal(value.append_history[0].previous_append_digest, null)
-  assert.deepEqual(value.append_history[0].event_digests, eventDigests)
+  assert.deepEqual(
+    value.append_history[0].event_digests,
+    value.observations.map((row: Value) => row.status_history[0].event_digest),
+  )
   assert.equal(value.append_history[0].append_digest, module.computeAppendEntryDigest(value.append_history[0]))
+
+  const priorLedger = clone(value)
+  priorLedger.observations[8].status_history.pop()
+  priorLedger.append_history.pop()
+  const resolved = value.observations[8].status_history[1]
+  const resolutionAppend = value.append_history[1]
+  assert.equal(resolutionAppend.previous_ledger_commit, '19f4ce49f5d5598309b70a1d09c70e848428ec46')
+  assert.equal(resolutionAppend.previous_ledger_digest, module.computeCurrentObservationLedgerDigest(priorLedger))
+  assert.equal(resolutionAppend.previous_append_digest, priorLedger.append_history[0].append_digest)
+  assert.deepEqual(resolutionAppend.event_digests, [resolved.event_digest])
+  assert.equal(resolutionAppend.append_digest, module.computeAppendEntryDigest(resolutionAppend))
 
   const modified = clone(value)
   modified.observations[0].status_history[0].confidence = 0.01
@@ -683,57 +695,69 @@ test('standalone append validation requires globally unique one-to-one coverage 
   const validateSchema = await schemaValidator()
   const value = await ledger()
   const appended = appendEvent(module, value, 0, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'changed')
+  const appendedTail = appended.append_history.at(-1)
 
-  for (const eventDigests of [[], [appended.append_history[1].event_digests[0], appended.append_history[1].event_digests[0]]]) {
+  for (const eventDigests of [[], [appendedTail.event_digests[0], appendedTail.event_digests[0]]]) {
     const invalidEntry = clone(appended)
-    invalidEntry.append_history[1].event_digests = eventDigests
-    invalidEntry.append_history[1].append_digest = module.computeAppendEntryDigest(invalidEntry.append_history[1])
+    const invalidTail = invalidEntry.append_history.at(-1)
+    invalidTail.event_digests = eventDigests
+    invalidTail.append_digest = module.computeAppendEntryDigest(invalidTail)
     assert.equal(validateSchema(invalidEntry), false)
     expectError(module.validateCurrentObservationLedgerValue(invalidEntry), 'invalid_digest')
   }
 
   const reused = clone(appended)
-  reused.append_history[1].event_digests = [value.observations[0].status_history[0].event_digest]
-  reused.append_history[1].append_digest = module.computeAppendEntryDigest(reused.append_history[1])
+  const reusedTail = reused.append_history.at(-1)
+  reusedTail.event_digests = [value.observations[0].status_history[0].event_digest]
+  reusedTail.append_digest = module.computeAppendEntryDigest(reusedTail)
   expectError(module.validateCurrentObservationLedgerValue(reused), 'invalid_append_binding')
 
   const fictional = clone(appended)
-  fictional.append_history[1].event_digests = [`sha256:${'b'.repeat(64)}`]
-  fictional.append_history[1].append_digest = module.computeAppendEntryDigest(fictional.append_history[1])
+  const fictionalTail = fictional.append_history.at(-1)
+  fictionalTail.event_digests = [`sha256:${'b'.repeat(64)}`]
+  fictionalTail.append_digest = module.computeAppendEntryDigest(fictionalTail)
   expectError(module.validateCurrentObservationLedgerValue(fictional), 'invalid_append_binding')
 
   const noNewEvent = clone(appended)
   noNewEvent.observations[0].status_history.pop()
-  noNewEvent.append_history[1].event_digests = [value.observations[1].status_history[0].event_digest]
-  noNewEvent.append_history[1].append_digest = module.computeAppendEntryDigest(noNewEvent.append_history[1])
+  const noNewEventTail = noNewEvent.append_history.at(-1)
+  noNewEventTail.event_digests = [value.observations[1].status_history[0].event_digest]
+  noNewEventTail.append_digest = module.computeAppendEntryDigest(noNewEventTail)
   expectError(module.validateCurrentObservationLedgerValue(noNewEvent), 'invalid_append_binding')
 })
 
-test('resolved events require new commit-bound evidence and Task 5 RA-CURRENT-009 success proofs', async () => {
+test('resolved events require new commit-bound evidence and published Task 5 RA-CURRENT-009 success proofs', async () => {
   const module = await validator()
   const validateSchema = await schemaValidator()
   const value = await ledger()
 
-  const fakeRa004 = appendEvent(module, value, 3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'resolved')
-  expectError(module.validateCurrentObservationLedgerValue(fakeRa004), 'unproven_resolution')
-
-  const resolvedRa009 = appendEvent(module, value, 8, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'resolved')
-  const resolved = resolvedRa009.observations[8].status_history[1]
-  resolved.repository_bindings[0].commit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-  resolved.change_reason = 'task5_named_verifications_passed'
-  resolved.safe_result = {
+  const priorLedger = clone(value)
+  priorLedger.observations[8].status_history.pop()
+  priorLedger.append_history.pop()
+  const resolved = value.observations[8].status_history[1]
+  assert.equal(validateSchema(value), true, JSON.stringify(validateSchema.errors))
+  assert.deepEqual(module.validateCurrentObservationLedgerValue(value), { ok: true, errors: [] })
+  assert.deepEqual(module.validateCurrentObservationLedgerValue(value, {
+    previousLedger: priorLedger,
+    previousLedgerCommit: '19f4ce49f5d5598309b70a1d09c70e848428ec46',
+  }), { ok: true, errors: [] })
+  assert.equal(resolved.state, 'resolved')
+  assert.deepEqual(resolved.repository_bindings, [{
+    repository: 'sub2api',
+    commit: '0a97b3f3b84b5c679788b3694d5840e235031f07',
+  }])
+  assert.equal(resolved.change_reason, 'task5_fixture_drift_resolved')
+  assert.deepEqual(resolved.safe_result, {
     kind: 'stable_success_aggregate',
     results: resolved.verification_ids.map((verification_id: string) => ({ verification_id, classification: 'pass' })),
     aggregate_digest: sha256(resolved.verification_ids.map((verification_id: string) => `${verification_id}|pass\n`).join('')),
-  }
-  resolved.result_digest = resolved.safe_result.aggregate_digest
-  refreshLatestAppend(module, resolvedRa009, 8)
-  assert.equal(validateSchema(resolvedRa009), true, JSON.stringify(validateSchema.errors))
-  assert.deepEqual(module.validateCurrentObservationLedgerValue(resolvedRa009), { ok: true, errors: [] })
-  assert.deepEqual(module.validateCurrentObservationLedgerValue(resolvedRa009, {
-    previousLedger: value,
-    previousLedgerCommit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  }), { ok: true, errors: [] })
+  })
+  assert.equal(resolved.result_digest, resolved.safe_result.aggregate_digest)
+  assert.notEqual(resolved.evidence_digest, priorLedger.observations[8].status_history[0].evidence_digest)
+  assert.notEqual(resolved.result_digest, priorLedger.observations[8].status_history[0].result_digest)
+
+  const fakeRa004 = appendEvent(module, value, 3, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'resolved')
+  expectError(module.validateCurrentObservationLedgerValue(fakeRa004), 'unproven_resolution')
 
   const unsafeAggregates = [
     (event: Value) => event.safe_result.results.reverse(),
@@ -741,11 +765,62 @@ test('resolved events require new commit-bound evidence and Task 5 RA-CURRENT-00
     (event: Value) => { event.safe_result.aggregate_digest = `sha256:${'b'.repeat(64)}` },
   ]
   for (const mutate of unsafeAggregates) {
-    const unsafe = clone(resolvedRa009)
+    const unsafe = clone(value)
     mutate(unsafe.observations[8].status_history[1])
     refreshLatestAppend(module, unsafe, 8)
     assert.equal(validateSchema(unsafe), false)
     expectError(module.validateCurrentObservationLedgerValue(unsafe), 'invalid_safe_result')
+  }
+})
+
+test('authorized future fixture revert must append changed or stale truth after the resolved event', async () => {
+  const module = await validator()
+  const validateSchema = await schemaValidator()
+  const value = await ledger()
+  const rowIndex = 8
+  const previousLedgerCommit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const revertedSub2APICommit = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+  const resolved = value.observations[rowIndex].status_history.at(-1)
+  const failureSafeResult = clone(value.observations[rowIndex].status_history[0].safe_result)
+
+  const stillResolved = appendEvent(module, value, rowIndex, previousLedgerCommit, 'resolved')
+  const falseResolution = stillResolved.observations[rowIndex].status_history.at(-1)
+  falseResolution.repository_bindings = [{ repository: 'sub2api', commit: revertedSub2APICommit }]
+  falseResolution.change_reason = 'fixture_revert_still_resolved'
+  refreshLatestAppend(module, stillResolved, rowIndex)
+  expectError(module.validateCurrentObservationLedgerValue(stillResolved, {
+    previousLedger: value,
+    previousLedgerCommit,
+  }), 'unproven_resolution')
+
+  const deletedResolution = clone(value)
+  deletedResolution.observations[rowIndex].status_history.pop()
+  deletedResolution.append_history.pop()
+  expectError(module.validateCurrentObservationLedgerValue(deletedResolution, {
+    previousLedger: value,
+    previousLedgerCommit,
+  }), 'append_only_violation')
+
+  for (const state of ['changed', 'stale']) {
+    const successor = appendEvent(module, value, rowIndex, previousLedgerCommit, state)
+    const event = successor.observations[rowIndex].status_history.at(-1)
+    event.revalidated_at = '2026-07-13T10:00:00Z'
+    event.repository_bindings = [{ repository: 'sub2api', commit: revertedSub2APICommit }]
+    event.change_reason = `fixture_revert_${state}_revalidated`
+    event.safe_result = clone(failureSafeResult)
+    event.result_digest = event.safe_result.aggregate_digest
+    successor.append_history.at(-1).appended_at = '2026-07-13T10:00:00Z'
+    refreshLatestAppend(module, successor, rowIndex)
+
+    assert.equal(validateSchema(successor), true, JSON.stringify(validateSchema.errors))
+    assert.deepEqual(module.validateCurrentObservationLedgerValue(successor, {
+      previousLedger: value,
+      previousLedgerCommit,
+    }), { ok: true, errors: [] })
+    assert.equal(event.previous_event_digest, resolved.event_digest)
+    assert.deepEqual(event.repository_bindings, [{ repository: 'sub2api', commit: revertedSub2APICommit }])
+    assert.equal(successor.append_history.at(-1).previous_ledger_digest, module.computeCurrentObservationLedgerDigest(value))
+    assert.equal(successor.append_history.at(-1).previous_append_digest, value.append_history.at(-1).append_digest)
   }
 })
 
@@ -800,10 +875,10 @@ test('later appends bind the exact prior ledger digest, commit, append digest, a
   const initial = await ledger()
   const commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   const next = appendEvent(module, initial, 0, commit, 'changed')
-  const append = next.append_history[1]
+  const append = next.append_history.at(-1)
   assert.equal(append.previous_ledger_commit, commit)
   assert.equal(append.previous_ledger_digest, module.computeCurrentObservationLedgerDigest(initial))
-  assert.equal(append.previous_append_digest, initial.append_history[0].append_digest)
+  assert.equal(append.previous_append_digest, initial.append_history.at(-1).append_digest)
   assert.deepEqual(append.event_digests, [next.observations[0].status_history[1].event_digest])
 
   for (const [field, value] of [
@@ -812,8 +887,9 @@ test('later appends bind the exact prior ledger digest, commit, append digest, a
     ['previous_append_digest', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'],
   ]) {
     const unsafe = clone(next)
-    unsafe.append_history[1][field] = value
-    unsafe.append_history[1].append_digest = module.computeAppendEntryDigest(unsafe.append_history[1])
+    const unsafeAppend = unsafe.append_history.at(-1)
+    unsafeAppend[field] = value
+    unsafeAppend.append_digest = module.computeAppendEntryDigest(unsafeAppend)
     expectError(module.validateCurrentObservationLedgerValue(unsafe, {
       previousLedger: initial,
       previousLedgerCommit: commit,

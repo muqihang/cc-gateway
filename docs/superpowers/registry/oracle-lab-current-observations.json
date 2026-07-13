@@ -219,6 +219,17 @@
         "sha256:722e30d1e04d70f1887c876d82339afd3fb70428f58812f9829bc2e115ac1372"
       ],
       "append_digest": "sha256:8760d1661678d690151302f2ee73e280c03c1938e79e03b64d1e5115a626cce3"
+    },
+    {
+      "sequence": 2,
+      "appended_at": "2026-07-13T09:44:13Z",
+      "previous_ledger_commit": "19f4ce49f5d5598309b70a1d09c70e848428ec46",
+      "previous_ledger_digest": "sha256:d6db962709227d5333b6e4d98e053adb77be542d31f502e9f7bc0467054351e1",
+      "previous_append_digest": "sha256:8760d1661678d690151302f2ee73e280c03c1938e79e03b64d1e5115a626cce3",
+      "event_digests": [
+        "sha256:6d78a176893613692a0bf84cb67592eda1dd9c197d9d69b2e001f549d54b396a"
+      ],
+      "append_digest": "sha256:ad733ef63d7cc4f69e78bf8345de07760d0e26035b4a1cec9c33c03e0aaf8e6c"
     }
   ],
   "observations": [
@@ -484,6 +495,36 @@
         },
         "previous_event_digest": null,
         "event_digest": "sha256:ffcc80bdc40b8f29694609230fedc9ad533bacde65b5413069aada2360de56c0"
+      },
+      {
+        "event_id": "RA-CURRENT-009-E002",
+        "sequence": 2,
+        "state": "resolved",
+        "source_section": "Task 4 / RA-CURRENT-009",
+        "revalidated_at": "2026-07-13T09:44:13Z",
+        "repository_bindings": [{ "repository": "sub2api", "commit": "0a97b3f3b84b5c679788b3694d5840e235031f07" }],
+        "anchors": [
+          { "repository": "sub2api", "path": "backend/internal/service/claude_platform_aws_full_chain_e2e_test.go", "symbols": ["cp6AWSGatewayConfigYAML"], "test_names": ["TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream"] },
+          { "repository": "sub2api", "path": "backend/internal/service/local_capture_acceptance_artifact_test.go", "symbols": ["jointGatewayConfigYAML", "jointGatewaySigningConfigYAML", "jointGatewayDisabledConfigYAML"], "test_names": ["TestJointLocalCaptureAcceptanceArtifact"] }
+        ],
+        "verification_ids": ["OBS009-RED-A", "OBS009-RED-B"],
+        "evidence_digest": "sha256:cdd6cdf9828a09563cb1eeeff824bdc85f8f0f7fe7ed824a085e4e148d6710d6",
+        "result_digest": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468",
+        "observation_scope": "cross_repository_local",
+        "confidence": 1,
+        "phase_slices": ["phase_2"],
+        "wp_umbrella": "WP-R1",
+        "change_reason": "task5_fixture_drift_resolved",
+        "safe_result": {
+          "kind": "stable_success_aggregate",
+          "results": [
+            { "verification_id": "OBS009-RED-A", "classification": "pass" },
+            { "verification_id": "OBS009-RED-B", "classification": "pass" }
+          ],
+          "aggregate_digest": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468"
+        },
+        "previous_event_digest": "sha256:ffcc80bdc40b8f29694609230fedc9ad533bacde65b5413069aada2360de56c0",
+        "event_digest": "sha256:6d78a176893613692a0bf84cb67592eda1dd9c197d9d69b2e001f549d54b396a"
       }]
     },
     {
