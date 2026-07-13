@@ -1,0 +1,753 @@
+[
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-001",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-001",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-001",
+      "HA-P0-002",
+      "HA-P0-007",
+      "HA-P0-009"
+    ],
+    "acceptance_gate": "phase_3b_profile_compiler",
+    "implementation_status": "deferred",
+    "owner": "oracle-profile-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "profile-compiler-reviewer",
+    "phase_owner": "phase_3b",
+    "work_package": "WP-R5",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-001",
+      "RA-P1-002"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-002",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-002",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "RA-P0-001",
+      "HA-P0-009"
+    ],
+    "acceptance_gate": "phase_3b_minimum_truthful_candidate",
+    "implementation_status": "deferred",
+    "owner": "oracle-profile-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "candidate-truthfulness-reviewer",
+    "phase_owner": "phase_3b",
+    "work_package": "WP-R5",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-002"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-003",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-003",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-005",
+      "AV-B4-001",
+      "AV-B5-001"
+    ],
+    "acceptance_gate": "phase_4_sidecar_capability_and_replay",
+    "implementation_status": "deferred",
+    "owner": "policy-broker-sidecar-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "sidecar-capability-security-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R3",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "AV-B5-001"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-004",
+      "RA-P0-009"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-004",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-004",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-005",
+      "AV-B6-001"
+    ],
+    "acceptance_gate": "phase_4_resolve_classify_pin_dial",
+    "implementation_status": "deferred",
+    "owner": "sidecar-destination-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "destination-enforcement-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R3",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "AV-B6-001"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-003",
+      "RA-P0-009"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-005",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-005",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-006"
+    ],
+    "acceptance_gate": "phase_2_versioned_contract_and_readiness",
+    "implementation_status": "deferred",
+    "owner": "cross-repository-contract-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "cross-repository-contract-reviewer",
+    "phase_owner": "phase_2",
+    "work_package": "WP-R1",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P0-006"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-001",
+      "RA-P1-007"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-006",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-006",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-006",
+      "RA-P0-005"
+    ],
+    "acceptance_gate": "phase_4_account_authority_lifecycle",
+    "implementation_status": "deferred",
+    "owner": "account-authority-owner",
+    "repository": "Sub2API",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "account-lifecycle-security-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R2",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "HA-P1-005",
+      "RA-P1-006"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-007",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-007",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "RA-P0-005",
+      "HA-P1-003"
+    ],
+    "acceptance_gate": "phase_4_layered_response_outcome_facts",
+    "implementation_status": "deferred",
+    "owner": "response-outcome-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "response-authority-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R7",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P1-003"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-009"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-008",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-008",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-005"
+    ],
+    "acceptance_gate": "phase_1_loopback_remote_tls_guard",
+    "implementation_status": "deferred",
+    "owner": "gateway-deployment-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "deployment-boundary-reviewer",
+    "phase_owner": "phase_1",
+    "work_package": "WP-R8",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-007"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P0-009",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P0-009",
+    "precedence": "review_amendments",
+    "priority": "P0",
+    "depends_on": [
+      "HA-P0-005",
+      "RA-P0-003",
+      "RA-P0-004",
+      "RA-P0-008"
+    ],
+    "acceptance_gate": "phase_4_protected_production_gate",
+    "implementation_status": "deferred",
+    "owner": "protected-production-gate-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "protected-boundary-security-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R3",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P0-005"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "AV-B4-001",
+      "AV-B5-001",
+      "AV-B6-001"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-001",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-001",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "HA-P1-001",
+      "HA-P1-002"
+    ],
+    "acceptance_gate": "phase_3a_change_point_matrix",
+    "implementation_status": "deferred",
+    "owner": "oracle-matrix-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "evidence-coverage-reviewer",
+    "phase_owner": "phase_3a",
+    "work_package": "WP-R4",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P1-001",
+      "HA-P1-002"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-001",
+      "RA-P1-008"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-002",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-002",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-001",
+      "RA-P1-001"
+    ],
+    "acceptance_gate": "phase_3b_coherent_profile_outputs",
+    "implementation_status": "deferred",
+    "owner": "profile-coherence-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "coherent-profile-reviewer",
+    "phase_owner": "phase_3b",
+    "work_package": "WP-R5",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P0-009"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-002",
+      "RA-P1-003"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-003",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-003",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P1-001",
+      "HA-P1-003"
+    ],
+    "acceptance_gate": "phase_3a_bounded_drift_fixtures",
+    "implementation_status": "deferred",
+    "owner": "protocol-drift-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "drift-fixture-reviewer",
+    "phase_owner": "phase_3a",
+    "work_package": "WP-R4",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "HA-P1-003"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-002"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-004",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-004",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-005",
+      "RA-P1-002"
+    ],
+    "acceptance_gate": "phase_4_task_lineage_and_migration",
+    "implementation_status": "deferred",
+    "owner": "task-lineage-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "session-migration-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R6",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-005",
+      "RA-P1-009"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-005",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-005",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-005"
+    ],
+    "acceptance_gate": "phase_2_device_proof_or_negative_capability",
+    "implementation_status": "deferred",
+    "owner": "device-proof-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "device-trust-reviewer",
+    "phase_owner": "phase_2",
+    "work_package": "WP-R6",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-004"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-006",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-006",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-006"
+    ],
+    "acceptance_gate": "phase_4_refresh_rotation_restart",
+    "implementation_status": "deferred",
+    "owner": "sub2api-credential-owner",
+    "repository": "Sub2API",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "credential-lifecycle-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R2",
+    "introduced_after_phase": "phase_0",
+    "refines": [
+      "RA-P0-006"
+    ],
+    "supersedes": [],
+    "related_requirements": [
+      "HA-P1-005"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-007",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-007",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-005",
+      "RA-P0-003"
+    ],
+    "acceptance_gate": "phase_4_readiness_replica_consistency",
+    "implementation_status": "deferred",
+    "owner": "gateway-readiness-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "readiness-replica-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R8",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-008"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-008",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-008",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P1-001"
+    ],
+    "acceptance_gate": "phase_3a_paired_nonessential_traffic",
+    "implementation_status": "deferred",
+    "owner": "hermetic-host-guard-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "control-plane-observation-reviewer",
+    "phase_owner": "phase_3a",
+    "work_package": "WP-R4",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P1-003"
+    ]
+  },
+  {
+    "schema_version": 2,
+    "requirement_id": "RA-P1-009",
+    "source_document": "2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+    "source_section": "1.1 Normative requirement registry / RA-P1-009",
+    "precedence": "review_amendments",
+    "priority": "P1",
+    "depends_on": [
+      "RA-P0-005",
+      "RA-P0-007",
+      "RA-P1-004"
+    ],
+    "acceptance_gate": "phase_4_incremental_security_boundary_split",
+    "implementation_status": "deferred",
+    "owner": "gateway-security-boundary-owner",
+    "repository": "cc-gateway",
+    "implementation_files": [],
+    "test_files": [],
+    "verification_command": "",
+    "evidence_artifact": "",
+    "last_verified_commit": null,
+    "last_verified_at": null,
+    "expiry": null,
+    "known_gaps": [
+      "implementation_not_started"
+    ],
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "contradiction_ids": [],
+    "reviewer": "modular-security-reviewer",
+    "phase_owner": "phase_4",
+    "work_package": "WP-R6",
+    "introduced_after_phase": "phase_0",
+    "refines": [],
+    "supersedes": [],
+    "related_requirements": [
+      "RA-P0-007",
+      "RA-P1-004"
+    ]
+  }
+]

@@ -10,9 +10,15 @@ import { migrateRequirementsV1ToV2 } from '../tools/oracle-lab/migrate-requireme
 import { validateRunInputs } from '../tools/oracle-lab/validate-run-manifest.js'
 
 const registryRelative = 'docs/superpowers/registry/oracle-lab-requirements.json'
+const registryV1Relative = 'docs/superpowers/registry/oracle-lab-requirements-v1.json'
 const claimsRelative = 'docs/superpowers/registry/oracle-lab-claims.json'
 const catalog = path.resolve('docs/superpowers/registry/oracle-lab-command-catalog.json')
 const entryBaseline = path.resolve('docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json')
+
+async function historicalClaimsBytes(): Promise<string> {
+  const claims = JSON.parse(await readFile(path.resolve(claimsRelative), 'utf8')) as unknown[]
+  return `${JSON.stringify(claims.slice(0, 2), null, 2)}\n`
+}
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' }).trim()
@@ -31,8 +37,8 @@ async function fixture(): Promise<{
   const claims = path.join(root, claimsRelative)
   const manifest = path.join(root, 'exit.json')
   await mkdir(path.dirname(registry), { recursive: true })
-  await writeFile(registry, await readFile(path.resolve(registryRelative)))
-  await writeFile(claims, await readFile(path.resolve(claimsRelative)))
+  await writeFile(registry, await readFile(path.resolve(registryV1Relative)))
+  await writeFile(claims, await historicalClaimsBytes())
   git(root, 'init', '-q')
   git(root, 'config', 'user.email', 'test@example.invalid')
   git(root, 'config', 'user.name', 'Oracle Test')
@@ -171,8 +177,8 @@ test('entry manifests retain current-working-byte digest behavior', async () => 
   const registry = path.join(root, 'requirements.json')
   const claims = path.join(root, 'claims.json')
   const manifest = path.join(root, 'entry.json')
-  await writeFile(registry, await readFile(path.resolve(registryRelative)))
-  await writeFile(claims, await readFile(path.resolve(claimsRelative)))
+  await writeFile(registry, await readFile(path.resolve(registryV1Relative)))
+  await writeFile(claims, await historicalClaimsBytes())
   const entry = JSON.parse(await readFile(entryBaseline, 'utf8'))
   entry.governance = {
     requirement_registry: { status: 'present', sha256: digestFile(registry).slice(7) },

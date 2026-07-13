@@ -27,6 +27,16 @@ const commitPattern = /^[0-9a-f]{40}$/
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 const safeRepositoryPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/
 const artifactFields = ['repository', 'commit', 'config_digest', 'manifest_digest', 'deployed_at'] as const
+const prohibitedStatements = new Map<string, string>([
+  ['CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED', 'Matching local headers does not prove official-client identity.'],
+  ['CL-CCH-SERVER-ACCEPTANCE-PROHIBITED', 'Local CCH verification does not prove server acceptance.'],
+  ['CL-DEVICE-PROOF-PROHIBITED', 'A stable `device_id` is not trusted-device proof.'],
+  ['CL-TLS-WIRE-EQUIVALENCE-PROHIBITED', 'A local TLS summary does not prove complete wire equivalence.'],
+  ['CL-LONG-TERM-ACCOUNT-SAFETY-PROHIBITED', 'One successful request does not prove long-term account safety.'],
+  ['CL-CHANGELOG-RISK-RULES-PROHIBITED', 'Public changelog entries do not reveal private risk-control rules.'],
+  ['CL-NEWER-PERSONA-PROMOTION-PROHIBITED', 'A newer client version cannot select a newer outbound persona without profile authority.'],
+  ['CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED', 'Local or mock evidence does not authorize production traffic.'],
+])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -110,6 +120,9 @@ export function validateClaims(path: string, requirements: RequirementRecord[]):
     if (typeof id !== 'string' || !/^CL-[A-Z0-9]+(?:-[A-Z0-9]+)*$/.test(id)) add(errors, 'invalid_claim_id', `${base}.claim_id`, 'claim_id has an invalid format')
     else if (claimIds.has(id)) add(errors, 'duplicate_claim_id', `${base}.claim_id`, `${id} is duplicated`)
     else claimIds.add(id)
+    if (typeof id === 'string' && prohibitedStatements.has(id) && value.statement !== prohibitedStatements.get(id)) {
+      add(errors, 'invalid_prohibited_claim', `${base}.statement`, `${id} must remain the adopted negative conclusion`)
+    }
 
     for (const field of arrayFields) {
       const entries = value[field]

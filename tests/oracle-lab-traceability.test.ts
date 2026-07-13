@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -14,7 +15,9 @@ const v1RegistryPath = path.resolve('docs/superpowers/registry/oracle-lab-requir
 const schemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement.schema.json')
 const v1SchemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement-v1.schema.json')
 const migrationPath = path.resolve('docs/superpowers/registry/oracle-lab-requirement-v2-migration.json')
+const additionsPath = path.resolve('docs/superpowers/registry/oracle-lab-review-requirements.json')
 const migrationSchemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement-v2-migration.schema.json')
+const reviewAmendmentPath = path.resolve('docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md')
 const v1RegistryDigest = '2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5'
 
 type Requirement = Record<string, unknown>
@@ -24,7 +27,9 @@ async function registry(): Promise<Requirement[]> {
 }
 
 async function v2Registry(): Promise<Requirement[]> {
-  return (await registry()).map((record, index) => ({
+  const records = await registry()
+  if (records.every((record) => record.schema_version === 2)) return records.map((record) => ({ ...record }))
+  return records.map((record, index) => ({
     ...record,
     schema_version: 2,
     reviewer: `independent-reviewer-${index}`,
@@ -37,40 +42,28 @@ async function v2Registry(): Promise<Requirement[]> {
   }))
 }
 
-function reviewAmendment(template: Requirement, suffix = '001'): Requirement {
-  return {
-    ...template,
-    requirement_id: `RA-WPR0-${suffix}`,
-    source_document: '2026-07-12-oracle-p0-1-review-amendments.md',
-    source_section: `WP-R0 review amendment ${suffix}`,
-    precedence: 'review_amendments',
-    priority: 'P0',
-    depends_on: [],
-    acceptance_gate: 'p0_1_requirement_governance',
-    implementation_status: 'design_only',
-    owner: 'requirement-governance-owner',
-    reviewer: 'requirement-governance-reviewer',
-    phase_owner: 'phase_0',
-    work_package: 'WP-R0',
-    introduced_after_phase: 'phase_0',
-    implementation_files: [],
-    test_files: [],
-    verification_command: '',
-    evidence_artifact: '',
-    last_verified_commit: null,
-    last_verified_at: null,
-    expiry: null,
-    known_gaps: [],
-    canary_evidence_ids: [],
-    production_gate_ids: [],
-    rollback_evidence_ids: [],
-    deployed_artifacts: [],
-    contradiction_ids: [],
-    refines: [],
-    supersedes: [],
-    related_requirements: [],
-  }
+const raRequirements: Record<string, Requirement> = {
+  'RA-P0-001': { owner: 'oracle-profile-owner', reviewer: 'profile-compiler-reviewer', phase_owner: 'phase_3b', work_package: 'WP-R5', acceptance_gate: 'phase_3b_profile_compiler', depends_on: ['HA-P0-001', 'HA-P0-002', 'HA-P0-007', 'HA-P0-009'], refines: [], related_requirements: ['RA-P1-001', 'RA-P1-002'], repository: 'cc-gateway' },
+  'RA-P0-002': { owner: 'oracle-profile-owner', reviewer: 'candidate-truthfulness-reviewer', phase_owner: 'phase_3b', work_package: 'WP-R5', acceptance_gate: 'phase_3b_minimum_truthful_candidate', depends_on: ['RA-P0-001', 'HA-P0-009'], refines: [], related_requirements: ['RA-P1-002'], repository: 'cc-gateway' },
+  'RA-P0-003': { owner: 'policy-broker-sidecar-owner', reviewer: 'sidecar-capability-security-reviewer', phase_owner: 'phase_4', work_package: 'WP-R3', acceptance_gate: 'phase_4_sidecar_capability_and_replay', depends_on: ['HA-P0-005', 'AV-B4-001', 'AV-B5-001'], refines: ['AV-B5-001'], related_requirements: ['RA-P0-004', 'RA-P0-009'], repository: 'cc-gateway' },
+  'RA-P0-004': { owner: 'sidecar-destination-owner', reviewer: 'destination-enforcement-reviewer', phase_owner: 'phase_4', work_package: 'WP-R3', acceptance_gate: 'phase_4_resolve_classify_pin_dial', depends_on: ['HA-P0-005', 'AV-B6-001'], refines: ['AV-B6-001'], related_requirements: ['RA-P0-003', 'RA-P0-009'], repository: 'cc-gateway' },
+  'RA-P0-005': { owner: 'cross-repository-contract-owner', reviewer: 'cross-repository-contract-reviewer', phase_owner: 'phase_2', work_package: 'WP-R1', acceptance_gate: 'phase_2_versioned_contract_and_readiness', depends_on: ['HA-P0-006'], refines: ['HA-P0-006'], related_requirements: ['RA-P0-001', 'RA-P1-007'], repository: 'cc-gateway' },
+  'RA-P0-006': { owner: 'account-authority-owner', reviewer: 'account-lifecycle-security-reviewer', phase_owner: 'phase_4', work_package: 'WP-R2', acceptance_gate: 'phase_4_account_authority_lifecycle', depends_on: ['HA-P0-006', 'RA-P0-005'], refines: [], related_requirements: ['HA-P1-005', 'RA-P1-006'], repository: 'Sub2API' },
+  'RA-P0-007': { owner: 'response-outcome-owner', reviewer: 'response-authority-reviewer', phase_owner: 'phase_4', work_package: 'WP-R7', acceptance_gate: 'phase_4_layered_response_outcome_facts', depends_on: ['RA-P0-005', 'HA-P1-003'], refines: ['HA-P1-003'], related_requirements: ['RA-P1-009'], repository: 'cc-gateway' },
+  'RA-P0-008': { owner: 'gateway-deployment-owner', reviewer: 'deployment-boundary-reviewer', phase_owner: 'phase_1', work_package: 'WP-R8', acceptance_gate: 'phase_1_loopback_remote_tls_guard', depends_on: ['HA-P0-005'], refines: [], related_requirements: ['RA-P1-007'], repository: 'cc-gateway' },
+  'RA-P0-009': { owner: 'protected-production-gate-owner', reviewer: 'protected-boundary-security-reviewer', phase_owner: 'phase_4', work_package: 'WP-R3', acceptance_gate: 'phase_4_protected_production_gate', depends_on: ['HA-P0-005', 'RA-P0-003', 'RA-P0-004', 'RA-P0-008'], refines: ['HA-P0-005'], related_requirements: ['AV-B4-001', 'AV-B5-001', 'AV-B6-001'], repository: 'cc-gateway' },
+  'RA-P1-001': { owner: 'oracle-matrix-owner', reviewer: 'evidence-coverage-reviewer', phase_owner: 'phase_3a', work_package: 'WP-R4', acceptance_gate: 'phase_3a_change_point_matrix', depends_on: ['HA-P1-001', 'HA-P1-002'], refines: ['HA-P1-001', 'HA-P1-002'], related_requirements: ['RA-P0-001', 'RA-P1-008'], repository: 'cc-gateway' },
+  'RA-P1-002': { owner: 'profile-coherence-owner', reviewer: 'coherent-profile-reviewer', phase_owner: 'phase_3b', work_package: 'WP-R5', acceptance_gate: 'phase_3b_coherent_profile_outputs', depends_on: ['RA-P0-001', 'RA-P1-001'], refines: ['HA-P0-009'], related_requirements: ['RA-P0-002', 'RA-P1-003'], repository: 'cc-gateway' },
+  'RA-P1-003': { owner: 'protocol-drift-owner', reviewer: 'drift-fixture-reviewer', phase_owner: 'phase_3a', work_package: 'WP-R4', acceptance_gate: 'phase_3a_bounded_drift_fixtures', depends_on: ['RA-P1-001', 'HA-P1-003'], refines: ['HA-P1-003'], related_requirements: ['RA-P1-002'], repository: 'cc-gateway' },
+  'RA-P1-004': { owner: 'task-lineage-owner', reviewer: 'session-migration-reviewer', phase_owner: 'phase_4', work_package: 'WP-R6', acceptance_gate: 'phase_4_task_lineage_and_migration', depends_on: ['RA-P0-005', 'RA-P1-002'], refines: [], related_requirements: ['RA-P1-005', 'RA-P1-009'], repository: 'cc-gateway' },
+  'RA-P1-005': { owner: 'device-proof-owner', reviewer: 'device-trust-reviewer', phase_owner: 'phase_2', work_package: 'WP-R6', acceptance_gate: 'phase_2_device_proof_or_negative_capability', depends_on: ['RA-P0-005'], refines: [], related_requirements: ['RA-P1-004'], repository: 'cc-gateway' },
+  'RA-P1-006': { owner: 'sub2api-credential-owner', reviewer: 'credential-lifecycle-reviewer', phase_owner: 'phase_4', work_package: 'WP-R2', acceptance_gate: 'phase_4_refresh_rotation_restart', depends_on: ['RA-P0-006'], refines: ['RA-P0-006'], related_requirements: ['HA-P1-005'], repository: 'Sub2API' },
+  'RA-P1-007': { owner: 'gateway-readiness-owner', reviewer: 'readiness-replica-reviewer', phase_owner: 'phase_4', work_package: 'WP-R8', acceptance_gate: 'phase_4_readiness_replica_consistency', depends_on: ['RA-P0-005', 'RA-P0-003'], refines: [], related_requirements: ['RA-P0-008'], repository: 'cc-gateway' },
+  'RA-P1-008': { owner: 'hermetic-host-guard-owner', reviewer: 'control-plane-observation-reviewer', phase_owner: 'phase_3a', work_package: 'WP-R4', acceptance_gate: 'phase_3a_paired_nonessential_traffic', depends_on: ['RA-P1-001'], refines: [], related_requirements: ['RA-P1-003'], repository: 'cc-gateway' },
+  'RA-P1-009': { owner: 'gateway-security-boundary-owner', reviewer: 'modular-security-reviewer', phase_owner: 'phase_4', work_package: 'WP-R6', acceptance_gate: 'phase_4_incremental_security_boundary_split', depends_on: ['RA-P0-005', 'RA-P0-007', 'RA-P1-004'], refines: [], related_requirements: ['RA-P0-007', 'RA-P1-004'], repository: 'cc-gateway' },
 }
+
+const raIds = Object.keys(raRequirements)
 
 async function validateFixture(records: Requirement[]) {
   const directory = await mkdtemp(path.join(tmpdir(), 'oracle-lab-requirements-'))
@@ -115,9 +108,9 @@ function expectError(result: Awaited<ReturnType<typeof validateRequirements>>, c
   assert(result.errors.some((error) => error.code === code), JSON.stringify(result.errors))
 }
 
-test('seeded registry contains exactly the fixed Phase 0 P0/P1 inventory and validates', async () => {
+test('canonical registry atomically contains the migrated 23 rows plus the exact 18 RA rows as homogeneous v2', async () => {
   const records = await registry()
-  const expectedSections = {
+  const legacySections = {
     'HA-P0-000': 'Adversarial Validation WP0. Baseline and Contract Discovery plus Design Phase 0: Restore Trustworthy Baselines',
     'HA-P0-001': '3.1 Requirement Status Registry',
     'HA-P0-002': '3. Normative Status and Traceability',
@@ -142,8 +135,14 @@ test('seeded registry contains exactly the fixed Phase 0 P0/P1 inventory and val
     'HA-P1-005': '7.3 Rotation and Drain State Machine, 7.4 Restart Recovery, 8.1 Fail-Closed Backpressure, and 8.2 Replay-Ledger Partition Semantics',
     'HA-P1-006': '8.3 Complete Authorization Matrix and 8.4 Operator and Administrator Threats',
   }
+  const expectedSections = {
+    ...legacySections,
+    ...Object.fromEntries(raIds.map((id) => [id, `1.1 Normative requirement registry / ${id}`])),
+  }
 
+  assert.equal(records.length, 41)
   assert.deepEqual(records.map((record) => record.requirement_id).sort(), Object.keys(expectedSections).sort())
+  assert(records.every((record) => record.schema_version === 2))
   assert.deepEqual(
     Object.fromEntries(records.map((record) => [record.requirement_id, record.source_section])),
     expectedSections,
@@ -152,10 +151,9 @@ test('seeded registry contains exactly the fixed Phase 0 P0/P1 inventory and val
 })
 
 test('preserves the reviewed v1 bytes and validates the complete v1 array under its versioned schema', async () => {
-  const canonicalBytes = await readFile(registryPath)
   const v1Bytes = await readFile(v1RegistryPath)
-  assert.deepEqual(v1Bytes, canonicalBytes)
   assert.equal(createHash('sha256').update(v1Bytes).digest('hex'), v1RegistryDigest)
+  assert.equal((JSON.parse(v1Bytes.toString('utf8')) as Requirement[]).length, 23)
   assert.deepEqual(await validateRequirements(v1RegistryPath), { ok: true, errors: [] })
 
   const schema = JSON.parse(await readFile(v1SchemaPath, 'utf8')) as Requirement
@@ -170,6 +168,7 @@ test('preserves the reviewed v1 bytes and validates the complete v1 array under 
 test('schema-validated migration is deterministic, exact-covering, and never infers governance metadata', async () => {
   const v1 = JSON.parse(await readFile(v1RegistryPath, 'utf8')) as Requirement[]
   const metadata = JSON.parse(await readFile(migrationPath, 'utf8')) as Requirement[]
+  const additions = JSON.parse(await readFile(additionsPath, 'utf8')) as Requirement[]
   const schema = JSON.parse(await readFile(migrationSchemaPath, 'utf8')) as Requirement
   const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
   assert.equal(validate(metadata), true, JSON.stringify(validate.errors))
@@ -186,8 +185,8 @@ test('schema-validated migration is deterministic, exact-covering, and never inf
   assert.deepEqual(first, second)
   assert.deepEqual(first.map((row) => row.requirement_id), v1.map((row) => row.requirement_id))
   assert(first.every((row) => row.schema_version === 2 && row.work_package === null && row.introduced_after_phase === null))
-  assert.deepEqual(await validateFixture(first), { ok: true, errors: [] })
-  assert.equal(createHash('sha256').update(await readFile(registryPath)).digest('hex'), v1RegistryDigest)
+  assert.deepEqual(await registry(), [...first, ...additions])
+  assert.deepEqual(await validateFixture([...first, ...additions]), { ok: true, errors: [] })
 
   for (const invalid of [metadata.slice(1), [...metadata, metadata[0]]]) {
     assert.throws(
@@ -217,10 +216,81 @@ test('schema-validated migration is deterministic, exact-covering, and never inf
   assert(inheritedValidation.errors.some((error) => error.code === 'invalid_migration_metadata'), JSON.stringify(inheritedValidation.errors))
 })
 
+test('checked-in RA additions implement the approved owner reviewer phase WP gate and relationship mapping exactly', async () => {
+  const additions = JSON.parse(await readFile(additionsPath, 'utf8')) as Requirement[]
+  const amendment = await readFile(reviewAmendmentPath, 'utf8')
+  assert.equal(additions.length, 18)
+  assert.deepEqual(additions.map((record) => record.requirement_id), raIds)
+
+  for (const record of additions) {
+    const id = String(record.requirement_id)
+    const expected = raRequirements[id]
+    assert(expected, `${id} is not approved`)
+    for (const [field, value] of Object.entries(expected)) assert.deepEqual(record[field], value, `${id}.${field}`)
+    assert.equal(record.schema_version, 2)
+    assert.equal(record.source_document, '2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md')
+    assert.equal(record.source_section, `1.1 Normative requirement registry / ${id}`)
+    assert.equal(record.precedence, 'review_amendments')
+    assert.equal(record.priority, id.startsWith('RA-P0-') ? 'P0' : 'P1')
+    assert.equal(record.introduced_after_phase, 'phase_0')
+    assert.equal(record.implementation_status, 'deferred')
+    assert.notEqual(record.owner, record.reviewer)
+    assert.deepEqual(record.implementation_files, [])
+    assert.deepEqual(record.test_files, [])
+    assert.equal(record.verification_command, '')
+    assert.equal(record.evidence_artifact, '')
+    assert.equal(record.last_verified_commit, null)
+    assert.equal(record.last_verified_at, null)
+    assert.equal(record.expiry, null)
+    assert.deepEqual(record.known_gaps, ['implementation_not_started'])
+    assert.deepEqual(record.canary_evidence_ids, [])
+    assert.deepEqual(record.production_gate_ids, [])
+    assert.deepEqual(record.rollback_evidence_ids, [])
+    assert.deepEqual(record.deployed_artifacts, [])
+    assert.deepEqual(record.contradiction_ids, [])
+    assert.deepEqual(record.supersedes, [])
+    assert.match(amendment, new RegExp(`\\| ${id.replaceAll('-', '\\-')} \\|`))
+  }
+})
+
+test('normative migration CLI deterministically assembles and checks the canonical 41-row registry while retaining old output flags', async () => {
+  const tsx = path.resolve('node_modules/.bin/tsx')
+  const tool = path.resolve('tools/oracle-lab/migrate-requirements-v1-to-v2.ts')
+  const check = spawnSync(tsx, [tool,
+    '--registry-v1', v1RegistryPath,
+    '--mapping', migrationPath,
+    '--additions', additionsPath,
+    '--check', registryPath,
+  ], { encoding: 'utf8' })
+  assert.equal(check.status, 0, check.stderr)
+  assert.equal(check.stderr, '')
+
+  const directory = await mkdtemp(path.join(tmpdir(), 'oracle-lab-migration-cli-'))
+  const out = path.join(directory, 'legacy-v2.json')
+  const legacy = spawnSync(tsx, [tool, '--input', v1RegistryPath, '--metadata', migrationPath, '--out', out], { encoding: 'utf8' })
+  assert.equal(legacy.status, 0, legacy.stderr)
+  assert.deepEqual(JSON.parse(await readFile(out, 'utf8')), migrateRequirementsV1ToV2(
+    JSON.parse(await readFile(v1RegistryPath, 'utf8')) as Requirement[],
+    JSON.parse(await readFile(migrationPath, 'utf8')) as Requirement[],
+  ))
+
+  const incomplete = path.join(directory, 'incomplete.json')
+  await writeFile(incomplete, `${JSON.stringify((await registry()).slice(0, -1), null, 2)}\n`)
+  const mismatch = spawnSync(tsx, [tool,
+    '--registry-v1', v1RegistryPath,
+    '--mapping', migrationPath,
+    '--additions', additionsPath,
+    '--check', incomplete,
+  ], { encoding: 'utf8' })
+  assert.equal(mismatch.status, 1)
+  assert.match(mismatch.stderr, /"code":"migration_check_mismatch"/)
+})
+
 test('accepts homogeneous v2 records and rejects mixed or unsupported record versions', async () => {
   const v2 = await v2Registry()
+  const v1 = JSON.parse(await readFile(v1RegistryPath, 'utf8')) as Requirement[]
   assert.deepEqual(await validateFixture(v2), { ok: true, errors: [] })
-  expectError(await validateFixture([...(await registry()).slice(0, 1), ...v2.slice(1)]), 'mixed_schema_versions')
+  expectError(await validateFixture([...v1.slice(0, 1), ...v2.slice(1)]), 'mixed_schema_versions')
   expectError(await validateFixture(v2.map((record, index) => index === 0 ? { ...record, schema_version: 3 } : record)), 'unsupported_schema_version')
   assert(v2.every((record) => record.schema_version === 2))
 })
@@ -246,21 +316,45 @@ test('v2 requires exact governance fields and unique relationship arrays', async
 })
 
 test('RA IDs and review precedence are v2-only and require honest post-Phase-0 work-package history', async () => {
-  const v2 = await v2Registry()
-  const ra = reviewAmendment(v2[0])
-  assert.deepEqual(await validateFixture([...v2, ra]), { ok: true, errors: [] })
-
-  expectError(await validateFixture([...(await registry()), {
-    ...ra,
-    schema_version: undefined,
-  }]), 'invalid_requirement_id')
-  expectError(await validateFixture([...v2, { ...ra, work_package: null }]), 'invalid_review_amendment')
-  expectError(await validateFixture([...v2, { ...ra, introduced_after_phase: null }]), 'invalid_review_amendment')
-  expectError(await validateFixture([...v2, { ...ra, introduced_after_phase: 'phase_1' }]), 'invalid_review_amendment')
+  const records = await registry()
+  assert(records.some((record) => record.requirement_id === 'RA-P0-001'))
+  expectError(await validateFixture(await mutateRecord('RA-P0-001', { schema_version: undefined })), 'mixed_schema_versions')
+  expectError(await validateFixture(await mutateRecord('RA-P0-001', { work_package: null })), 'invalid_review_amendment')
+  expectError(await validateFixture(await mutateRecord('RA-P0-001', { introduced_after_phase: null })), 'invalid_review_amendment')
+  expectError(await validateFixture(await mutateRecord('RA-P0-001', { introduced_after_phase: 'phase_1' })), 'invalid_review_amendment')
+  expectError(await validateFixture(await mutateRecord('RA-P0-001', { reviewer: 'oracle-profile-owner' })), 'invalid_review_amendment')
 
   const fabricated = await v2Registry()
   fabricated[0] = { ...fabricated[0], work_package: 'WP-R0', introduced_after_phase: 'phase_0' }
   expectError(await validateFixture(fabricated), 'invalid_legacy_governance_history')
+})
+
+test('RA records remain deferred and cannot acquire local canary or production authority by registration', async () => {
+  for (const id of raIds) {
+    for (const implementation_status of ['locally_verified', 'upstream_canary_observed', 'production_verified']) {
+      expectError(await validateFixture(await mutateRecord(id, {
+        implementation_status,
+        implementation_files: ['invented-implementation.ts'],
+        test_files: ['invented-test.ts'],
+        last_verified_commit: '0123456789abcdef0123456789abcdef01234567',
+        last_verified_at: '2026-07-12T00:00:00Z',
+      })), 'review_amendment_promotion_prohibited')
+    }
+    expectError(await validateFixture(await mutateRecord(id, {
+      canary_evidence_ids: ['invented-canary'],
+    })), 'review_amendment_promotion_prohibited')
+  }
+})
+
+test('RA gate dependencies cannot target later phases while semantic related links may', async () => {
+  expectError(await validateFixture(await mutateRecord('RA-P0-008', {
+    depends_on: ['HA-P0-005', 'RA-P0-003'],
+  })), 'future_phase_dependency')
+  const records = await registry()
+  const deployment = records.find((record) => record.requirement_id === 'RA-P0-008')
+  assert(deployment)
+  assert.deepEqual(deployment.related_requirements, ['RA-P1-007'])
+  assert.deepEqual(await validateFixture(records), { ok: true, errors: [] })
 })
 
 test('v2 validates relationship targets, self references, and refines or supersedes cycles', async () => {

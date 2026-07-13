@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -17,6 +17,13 @@ import { validateCommandCatalogValue, type CommandCatalogEntry } from '../tools/
 import { contextPackDigest, validateContextPackValue, type ContextPack } from '../tools/oracle-lab/validate-context-pack.js'
 
 const catalogPath = path.resolve('docs/superpowers/registry/oracle-lab-command-catalog.json')
+const historicalRegistryPath = 'docs/superpowers/registry/oracle-lab-requirements-v1.json'
+const historicalClaimsPath = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-h0-legacy-claims-')), 'claims.json')
+writeFileSync(historicalClaimsPath, `${JSON.stringify(
+  (JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-claims.json', 'utf8')) as unknown[]).slice(0, 2),
+  null,
+  2,
+)}\n`)
 const entryBaseline = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'
 const approvedPlan = 'docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-0-governance-baseline.md'
 const digest = `sha256:${'a'.repeat(64)}`
@@ -173,8 +180,8 @@ test('result evidence binds exactly to catalog, manifest, repository heads, cont
 })
 
 test('context and handoff builders reject cross-input evidence and missing selected requirement results', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const manifest = JSON.parse(await readFile(entryBaseline, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
   const catalogValue = await catalog()
   const make = (entry: CommandCatalogEntry): CommandResultRecord => {
@@ -214,8 +221,8 @@ test('historical H0 context builder rejects v2 registry bytes bound to a v1 entr
 })
 
 test('handoff rejects a known context requirement with no catalog command mapping', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-unmapped-requirement-'))
   const results = path.join(root, 'results.json')
   const contextPath = path.join(root, 'context.json')
@@ -237,8 +244,8 @@ test('handoff rejects a known context requirement with no catalog command mappin
 })
 
 test('handoff rejects context test status forged without changing command id or result digest', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-forged-status-'))
   const results = path.join(root, 'results.json')
   const contextPath = path.join(root, 'context.json')
@@ -260,8 +267,8 @@ test('handoff rejects context test status forged without changing command id or 
 })
 
 test('handoff rejects a transient context pack whose registry claims or required command evidence is unrelated', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-context-binding-'))
   const results = path.join(root, 'results.json')
   const baseline = entryBaseline
@@ -323,7 +330,10 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
   for (const file of fixtureFiles) {
     const destination = path.join(root, file)
     await mkdir(path.dirname(destination), { recursive: true })
-    await writeFile(destination, await readFile(path.join(originalCwd, file)))
+    const source = file === 'docs/superpowers/registry/oracle-lab-requirements.json'
+      ? historicalRegistryPath
+      : file === 'docs/superpowers/registry/oracle-lab-claims.json' ? historicalClaimsPath : path.join(originalCwd, file)
+    await writeFile(destination, await readFile(source))
   }
   await mkdir(path.dirname(path.join(root, baseline)), { recursive: true })
   await writeFile(path.join(root, entryManifest), await readFile(path.join(originalCwd, entryBaseline)))
@@ -464,8 +474,8 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
 })
 
 test('context builder fails closed when any selected requirement source bytes are missing', async () => {
-  const registryPath = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registryPath = historicalRegistryPath
+  const claims = historicalClaimsPath
   const registry = JSON.parse(await readFile(registryPath, 'utf8')) as Array<Record<string, unknown>>
   const baseline = JSON.parse(await readFile(entryBaseline, 'utf8')) as Record<string, unknown> & { governance: Record<string, { sha256: string }>; repositories: Record<string, { head: string }>; contract: { sha256: string } }
   const catalogValue = await catalog()

@@ -61,6 +61,16 @@ const canonicalSections = new Map<string, string>([
   ['HA-P1-006', '8.3 Complete Authorization Matrix and 8.4 Operator and Administrator Threats'],
 ])
 
+const reviewAmendmentSections = new Map<string, string>([
+  ...Array.from({ length: 9 }, (_, index) => `RA-P0-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 9 }, (_, index) => `RA-P1-${String(index + 1).padStart(3, '0')}`),
+].map((id) => [id, `1.1 Normative requirement registry / ${id}`]))
+const allCanonicalSections = new Map([...canonicalSections, ...reviewAmendmentSections])
+const reviewAmendmentDocument = '2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
+const phaseOrder = new Map([
+  'phase_0', 'phase_1', 'phase_2', 'phase_3a', 'phase_3b', 'phase_4', 'phase_5', 'phase_6a', 'phase_6b',
+].map((phase, index) => [phase, index]))
+
 const phase0DeferredPolicy = new Map<string, { acceptanceGate: string; negativeCapabilitiesDisabled: boolean }>([
   ['HA-P0-009', { acceptanceGate: 'phase_2_negative_capability_enforcement', negativeCapabilitiesDisabled: true }],
   ['HA-P1-001', { acceptanceGate: 'phase_1_control_flow_evidence', negativeCapabilitiesDisabled: true }],
@@ -201,7 +211,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
 
     if (typeof value.source_section !== 'string' || value.source_section.trim() === '') {
       add(errors, 'missing_source_section', `${base}.source_section`, 'source_section must be non-empty')
-    } else if (typeof id === 'string' && canonicalSections.has(id) && value.source_section !== canonicalSections.get(id)) {
+    } else if (typeof id === 'string' && allCanonicalSections.has(id) && value.source_section !== allCanonicalSections.get(id)) {
       add(errors, 'invalid_source_section', `${base}.source_section`, `${id} must use its canonical source section`)
     }
     if (typeof value.source_document !== 'string' || value.source_document.trim() === '') {
@@ -248,6 +258,11 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
           (reviewAmendment && (typeof value.work_package !== 'string' || value.work_package.trim() === '' || value.introduced_after_phase !== 'phase_0'))) {
         add(errors, 'invalid_review_amendment', base, 'RA records require review_amendments precedence, a work package, and phase_0 introduction history')
       }
+      if (reviewAmendment && (value.source_document !== reviewAmendmentDocument ||
+          value.priority !== (id.startsWith('RA-P0-') ? 'P0' : 'P1') || value.owner === value.reviewer ||
+          !phaseOrder.has(String(value.phase_owner)))) {
+        add(errors, 'invalid_review_amendment', base, 'RA records require the adopted source, priority-specific ID, recognized phase, and independent reviewer')
+      }
       if (typeof id === 'string' && canonicalSections.has(id) && (value.work_package !== null || value.introduced_after_phase !== null)) {
         add(errors, 'invalid_legacy_governance_history', base, 'legacy coverage anchors must retain null work-package and introduction history')
       }
@@ -287,6 +302,19 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
 
     const status = value.implementation_status
+    if (version === 2 && typeof id === 'string' && id.startsWith('RA-')) {
+      const populated = status !== 'deferred' || value.verification_command !== '' || value.evidence_artifact !== '' ||
+        value.last_verified_commit !== null || value.last_verified_at !== null || value.expiry !== null ||
+        !Array.isArray(value.known_gaps) || value.known_gaps.length !== 1 || value.known_gaps[0] !== 'implementation_not_started' ||
+        !Array.isArray(value.implementation_files) || value.implementation_files.length > 0 ||
+        !Array.isArray(value.test_files) || value.test_files.length > 0 ||
+        [...productionFields, 'deployed_artifacts', 'contradiction_ids'].some((field) =>
+          !Array.isArray(value[field]) || value[field].length > 0) ||
+        !Array.isArray(value.supersedes) || value.supersedes.length > 0
+      if (populated) {
+        add(errors, 'review_amendment_promotion_prohibited', base, 'registering an RA requirement cannot confer implementation or verification authority')
+      }
+    }
     const deferredPolicy = typeof id === 'string' ? phase0DeferredPolicy.get(id) : undefined
     if (deferredPolicy && (status !== 'deferred' || value.acceptance_gate !== deferredPolicy.acceptanceGate ||
         (deferredPolicy.negativeCapabilitiesDisabled && Array.isArray(value.implementation_files) && value.implementation_files.length > 0))) {
@@ -323,16 +351,27 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
   }
 
-  for (const expectedId of canonicalSections.keys()) {
-    if (!ids.has(expectedId)) add(errors, 'invalid_inventory', '$', `${expectedId} is missing from the fixed Phase 0 inventory`)
+  const hasReviewAmendment = [...ids].some((id) => id.startsWith('RA-'))
+  const expectedInventory = version === 2 && hasReviewAmendment ? allCanonicalSections : canonicalSections
+  for (const expectedId of expectedInventory.keys()) {
+    if (!ids.has(expectedId)) add(errors, 'invalid_inventory', '$', `${expectedId} is missing from the fixed requirement inventory`)
   }
-  if (version === 1) for (const id of ids) if (!canonicalSections.has(id)) add(errors, 'invalid_inventory', '$', `${id} is not in the fixed Phase 0 inventory`)
+  for (const id of ids) {
+    if (!expectedInventory.has(id)) add(errors, 'invalid_inventory', '$', `${id} is not in the fixed requirement inventory`)
+  }
 
   for (const [index, value] of parsed.entries()) {
     if (!isObject(value) || !Array.isArray(value.depends_on)) continue
     for (const dependency of value.depends_on) {
       if (typeof dependency === 'string' && !ids.has(dependency)) {
         add(errors, 'unresolved_dependency', `$[${index}].depends_on`, `${dependency} is not registered`)
+      } else if (typeof dependency === 'string' && typeof value.requirement_id === 'string' &&
+          value.requirement_id.startsWith('RA-')) {
+        const requirementPhase = phaseOrder.get(String(value.phase_owner))
+        const dependencyPhase = phaseOrder.get(String(recordsById.get(dependency)?.phase_owner))
+        if (requirementPhase !== undefined && dependencyPhase !== undefined && dependencyPhase > requirementPhase) {
+          add(errors, 'future_phase_dependency', `$[${index}].depends_on`, `${dependency} belongs to a later roadmap phase; use related_requirements for semantic coverage`)
+        }
       }
     }
   }

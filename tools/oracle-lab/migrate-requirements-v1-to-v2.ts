@@ -122,14 +122,47 @@ export function migrateRequirementsV1ToV2(input: RequirementRecord[], metadata: 
   return output
 }
 
+export function assembleRequirementsV2(input: RequirementRecord[], metadata: unknown, additions: unknown): RequirementRecord[] {
+  if (!Array.isArray(additions) || !additions.every(isObject)) {
+    throw Object.assign(new Error('review-amendment additions must be an object array'), { code: 'invalid_migration_additions' })
+  }
+  const output = [...migrateRequirementsV1ToV2(input, metadata), ...additions]
+  const validation = validateRequirementRecords(output)
+  if (!validation.ok) throw Object.assign(new Error(JSON.stringify(validation.errors)), { code: 'invalid_migration_additions' })
+  return output
+}
+
+function readRecordArray(file: string): RequirementRecord[] {
+  const value = JSON.parse(readFileSync(file, 'utf8')) as unknown
+  if (!Array.isArray(value) || !value.every(isObject)) {
+    throw Object.assign(new Error(`${file} must contain an object array`), { code: 'invalid_migration_input' })
+  }
+  return value
+}
+
 const invoked = process.argv[1]
 if (invoked && existsSync(invoked) && realpathSync(invoked) === fileURLToPath(import.meta.url)) cli(() => {
   const args = parseArgs(process.argv.slice(2))
+  const checkMode = ['registry-v1', 'mapping', 'additions', 'check'].some((name) => args.values[name] !== undefined)
+  if (checkMode) {
+    const input = one(args, 'registry-v1')!
+    const metadata = one(args, 'mapping')!
+    const additions = one(args, 'additions')!
+    const check = one(args, 'check')!
+    const assembled = assembleRequirementsV2(
+      readRecordArray(input),
+      JSON.parse(readFileSync(metadata, 'utf8')) as unknown,
+      JSON.parse(readFileSync(additions, 'utf8')) as unknown,
+    )
+    const expected = `${JSON.stringify(assembled, null, 2)}\n`
+    if (readFileSync(check, 'utf8') !== expected) {
+      throw Object.assign(new Error(`${check} does not match the deterministic 41-row v2 assembly`), { code: 'migration_check_mismatch' })
+    }
+    return
+  }
   const input = one(args, 'input')!
   const metadata = one(args, 'metadata')!
   const out = one(args, 'out')!
-  const inputValue = JSON.parse(readFileSync(input, 'utf8')) as unknown
-  if (!Array.isArray(inputValue) || !inputValue.every(isObject)) throw Object.assign(new Error('migration input must be an object array'), { code: 'invalid_migration_input' })
   const metadataValue = JSON.parse(readFileSync(metadata, 'utf8')) as unknown
-  writeFileSync(out, `${JSON.stringify(migrateRequirementsV1ToV2(inputValue, metadataValue), null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(out, `${JSON.stringify(migrateRequirementsV1ToV2(readRecordArray(input), metadataValue), null, 2)}\n`, { mode: 0o600 })
 })
