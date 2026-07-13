@@ -354,6 +354,26 @@ function validateResolvedTransition(value: Value, previous: unknown, eventIndex:
   }
 }
 
+function validateRollbackTransition(value: Value, previous: unknown, rowId: string, base: string, errors: ValidationError[]) {
+  if (rowId !== 'RA-CURRENT-009'
+    || !isObject(previous)
+    || previous.state !== 'resolved'
+    || (value.state !== 'changed' && value.state !== 'stale')) return
+
+  const previousSub2API = (Array.isArray(previous.repository_bindings) ? previous.repository_bindings : [])
+    .find((binding: unknown): binding is Value => isObject(binding) && binding.repository === 'sub2api')
+  const currentSub2API = (Array.isArray(value.repository_bindings) ? value.repository_bindings : [])
+    .find((binding: unknown): binding is Value => isObject(binding) && binding.repository === 'sub2api')
+  const newCommitBound = typeof previousSub2API?.commit === 'string'
+    && typeof currentSub2API?.commit === 'string'
+    && currentSub2API.commit !== previousSub2API.commit
+  const changedRecomputableEvidence = value.evidence_digest !== previous.evidence_digest
+    && value.evidence_digest === computeObservationEvidenceDigest(value)
+  if (!newCommitBound || !changedRecomputableEvidence) {
+    add(errors, 'unproven_rollback_transition', base, 'rollback from resolved requires a new Sub2API commit and changed recomputable evidence')
+  }
+}
+
 function validateAppendEntry(value: unknown, index: number, errors: ValidationError[]): Value | undefined {
   const base = `$.append_history[${index}]`
   if (!exactKeys(value, APPEND_FIELDS, base, errors)) return undefined
@@ -458,6 +478,7 @@ export function validateCurrentObservationLedgerValue(input: unknown, options: V
         if (!valid) return
         if (valid.previous_event_digest !== previousDigest) add(errors, 'invalid_event_chain', `${base}.status_history[${eventIndex}].previous_event_digest`, 'event does not point to the exact prior event digest')
         validateResolvedTransition(valid, row.status_history[eventIndex - 1], eventIndex, `${base}.status_history[${eventIndex}]`, errors)
+        validateRollbackTransition(valid, row.status_history[eventIndex - 1], String(row.observation_id), `${base}.status_history[${eventIndex}]`, errors)
         if (typeof valid.event_digest === 'string' && DIGEST.test(valid.event_digest)) statusEventDigests.push(valid.event_digest)
         previousDigest = valid.event_digest
       })

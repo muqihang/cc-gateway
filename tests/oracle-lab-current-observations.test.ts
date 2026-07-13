@@ -802,6 +802,24 @@ test('authorized future fixture revert must append changed or stale truth after 
   }), 'append_only_violation')
 
   for (const state of ['changed', 'stale']) {
+    const unchangedEvidence = appendEvent(module, value, rowIndex, previousLedgerCommit, state)
+    const unchangedEvent = unchangedEvidence.observations[rowIndex].status_history.at(-1)
+    unchangedEvent.revalidated_at = '2026-07-13T10:00:00Z'
+    unchangedEvent.change_reason = `fixture_revert_${state}_without_new_commit`
+    unchangedEvent.safe_result = clone(failureSafeResult)
+    unchangedEvent.result_digest = unchangedEvent.safe_result.aggregate_digest
+    unchangedEvidence.append_history.at(-1).appended_at = '2026-07-13T10:00:00Z'
+    refreshLatestAppend(module, unchangedEvidence, rowIndex)
+
+    assert.equal(validateSchema(unchangedEvidence), true, JSON.stringify(validateSchema.errors))
+    assert.deepEqual(unchangedEvent.repository_bindings, resolved.repository_bindings)
+    assert.equal(unchangedEvent.evidence_digest, resolved.evidence_digest)
+    expectError(module.validateCurrentObservationLedgerValue(unchangedEvidence), 'unproven_rollback_transition')
+    expectError(module.validateCurrentObservationLedgerValue(unchangedEvidence, {
+      previousLedger: value,
+      previousLedgerCommit,
+    }), 'unproven_rollback_transition')
+
     const successor = appendEvent(module, value, rowIndex, previousLedgerCommit, state)
     const event = successor.observations[rowIndex].status_history.at(-1)
     event.revalidated_at = '2026-07-13T10:00:00Z'
