@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json",
-  "title": "Oracle Lab Requirement v2",
-  "schema_version": "2.0.0",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-requirement-v1.schema.json",
+  "title": "Oracle Lab Requirement v1",
+  "schema_version": "1.0.0",
   "compatibility_policy": "fail_closed_exact_schema",
   "retention_class": "phase_governance_permanent",
   "redaction_policy": "references_and_safe_categories_only",
@@ -10,20 +10,18 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version", "requirement_id", "source_document", "source_section", "precedence", "priority",
+    "requirement_id", "source_document", "source_section", "precedence", "priority",
     "depends_on", "acceptance_gate", "implementation_status", "owner", "repository",
     "implementation_files", "test_files", "verification_command", "evidence_artifact",
     "last_verified_commit", "last_verified_at", "expiry", "known_gaps",
     "canary_evidence_ids", "production_gate_ids", "rollback_evidence_ids",
-    "deployed_artifacts", "contradiction_ids", "reviewer", "phase_owner", "work_package",
-    "introduced_after_phase", "refines", "supersedes", "related_requirements"
+    "deployed_artifacts", "contradiction_ids"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
-    "requirement_id": { "type": "string", "pattern": "^(OL|AV|HA|RA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
+    "requirement_id": { "type": "string", "pattern": "^(OL|AV|HA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
     "source_document": { "type": "string", "minLength": 1 },
     "source_section": { "type": "string", "minLength": 1 },
-    "precedence": { "enum": ["oracle_lab_design", "adversarial_validation_v2", "hardening_amendments", "review_amendments"] },
+    "precedence": { "enum": ["oracle_lab_design", "adversarial_validation_v2", "hardening_amendments"] },
     "priority": { "enum": ["P0", "P1", "P2"] },
     "depends_on": { "$ref": "#/$defs/stringArray" },
     "acceptance_gate": { "type": "string", "minLength": 1 },
@@ -65,24 +63,7 @@
       "type": "array",
       "items": { "$ref": "#/$defs/deployedArtifact" }
     },
-    "contradiction_ids": { "$ref": "#/$defs/stringArray" },
-    "reviewer": { "type": "string", "minLength": 1 },
-    "phase_owner": { "type": "string", "minLength": 1 },
-    "work_package": {
-      "oneOf": [
-        { "type": "string", "minLength": 1 },
-        { "type": "null" }
-      ]
-    },
-    "introduced_after_phase": {
-      "oneOf": [
-        { "type": "string", "minLength": 1 },
-        { "type": "null" }
-      ]
-    },
-    "refines": { "$ref": "#/$defs/stringArray" },
-    "supersedes": { "$ref": "#/$defs/stringArray" },
-    "related_requirements": { "$ref": "#/$defs/stringArray" }
+    "contradiction_ids": { "$ref": "#/$defs/stringArray" }
   },
   "allOf": [
     {
@@ -108,7 +89,8 @@
           "canary_evidence_ids": { "type": "array", "maxItems": 0 },
           "production_gate_ids": { "type": "array", "maxItems": 0 },
           "rollback_evidence_ids": { "type": "array", "maxItems": 0 },
-          "deployed_artifacts": { "type": "array", "maxItems": 0 }
+          "deployed_artifacts": { "type": "array", "maxItems": 0 },
+          "contradiction_ids": { "type": "array", "maxItems": 0 }
         }
       }
     },
@@ -137,50 +119,6 @@
       },
       "then": {
         "properties": { "test_files": { "$ref": "#/$defs/nonEmptyStringArray" } }
-      }
-    },
-    {
-      "if": {
-        "properties": { "precedence": { "const": "review_amendments" } },
-        "required": ["precedence"]
-      },
-      "then": {
-        "properties": {
-          "requirement_id": { "type": "string", "pattern": "^RA-[A-Z0-9]+(?:-[A-Z0-9]+)*$" },
-          "work_package": { "type": "string", "minLength": 1 },
-          "introduced_after_phase": { "const": "phase_0" }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": { "requirement_id": { "type": "string", "pattern": "^RA-" } },
-        "required": ["requirement_id"]
-      },
-      "then": {
-        "properties": { "precedence": { "const": "review_amendments" } }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "requirement_id": {
-            "enum": [
-              "HA-P0-000", "HA-P0-001", "HA-P0-002", "HA-P0-003", "HA-P0-004",
-              "HA-P0-005", "HA-P0-006", "HA-P0-007", "HA-P0-008", "HA-P0-009",
-              "OL-LEGACY-001", "AV-B1-001", "AV-B2-001", "AV-B3-001", "AV-B4-001",
-              "AV-B5-001", "AV-B6-001", "HA-P1-001", "HA-P1-002", "HA-P1-003",
-              "HA-P1-004", "HA-P1-005", "HA-P1-006"
-            ]
-          }
-        },
-        "required": ["requirement_id"]
-      },
-      "then": {
-        "properties": {
-          "work_package": { "type": "null" },
-          "introduced_after_phase": { "type": "null" }
-        }
       }
     }
   ],

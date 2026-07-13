@@ -10,6 +10,7 @@ import { buildContextPack } from '../tools/oracle-lab/build-context-pack.js'
 import { buildExitReceipt, requiredReceiptArtifacts, validateExitReceiptValue } from '../tools/oracle-lab/build-exit-receipt.js'
 import { buildHandoff, validateHandoffValue } from '../tools/oracle-lab/build-handoff-bundle.js'
 import { assertSafeArtifact, canonicalJson, digestFile, digestValue, writeJson } from '../tools/oracle-lab/harness-core.js'
+import { migrateRequirementsV1ToV2 } from '../tools/oracle-lab/migrate-requirements-v1-to-v2.js'
 import { commandRecordDigest, commandSetDigest, mergeCommandResults, validateCommandResultsBindings, validateCommandResultsValue, type CommandResultRecord, type CommandResultSet } from '../tools/oracle-lab/merge-command-results.js'
 import { redactOutput, runCommandCatalog } from '../tools/oracle-lab/run-command-catalog.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from '../tools/oracle-lab/validate-command-catalog.js'
@@ -192,6 +193,24 @@ test('context and handoff builders reject cross-input evidence and missing selec
   const cross = { ...bound, manifest_digest: otherDigest, records: bound.records.map((entry) => ({ ...entry, manifest_digest: otherDigest })) }; cross.records = cross.records.map((entry) => { const { result_digest: _old, duration_ms: _duration, ...recordUnsigned } = entry; return { ...entry, result_digest: commandRecordDigest(recordUnsigned) } }); cross.result_set_digest = commandSetDigest((({ result_set_digest: _old, ...rest }) => rest)(cross)); const crossPath = path.join(path.dirname(resultPath), 'cross.json'); await writeFile(crossPath, JSON.stringify(cross))
   assert.throws(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: crossPath, requirementIds: ['HA-P0-007'] }), (error: Error & { code?: string }) => error.code === 'cross_manifest_results')
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
+})
+
+test('historical H0 context builder rejects v2 registry bytes bound to a v1 entry manifest', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-v2-registry-'))
+  const registry = path.join(root, 'requirements-v2.json')
+  const v1 = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-requirements-v1.json', 'utf8')) as Array<Record<string, unknown>>
+  const metadata = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-requirement-v2-migration.json', 'utf8')) as Array<Record<string, unknown>>
+  await writeFile(registry, `${JSON.stringify(migrateRequirementsV1ToV2(v1, metadata), null, 2)}\n`)
+  assert.throws(
+    () => buildContextPack({
+      registry,
+      claims: 'docs/superpowers/registry/oracle-lab-claims.json',
+      manifest: entryBaseline,
+      commandResults: path.join(root, 'not-consumed.json'),
+      requirementIds: ['HA-P0-007'],
+    }),
+    (error: Error & { code?: string }) => error.code === 'historical_registry_version_mismatch',
+  )
 })
 
 test('handoff rejects a known context requirement with no catalog command mapping', async () => {

@@ -7,7 +7,7 @@ import { validateClaims } from './validate-claims.js'
 import { validateManifestArtifact } from './freeze-baseline.js'
 import { canonicalJson, cli, COMMIT_RE, digestFile, getField, isObject, parseArgs, readJson, requireValid, result, sha256, type HarnessErrorRecord, type HarnessResult } from './harness-core.js'
 import { validateCommandCatalog } from './validate-command-catalog.js'
-import { validateRequirements } from './validate-requirements.js'
+import { detectRequirementSchemaVersion, validateRequirements } from './validate-requirements.js'
 
 const REQUIREMENT_REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-requirements.json'
 const CLAIM_REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-claims.json'
@@ -98,6 +98,9 @@ export function validateRunInputs(registry: string, claims: string, manifestFile
   if (!requirementValidation.ok) errors.push(...requirementValidation.errors)
   const requirements = readJson(registry)
   if (Array.isArray(requirements)) {
+    if (detectRequirementSchemaVersion(requirements).version !== 1) {
+      errors.push({ code: 'historical_registry_version_mismatch', path: '$', message: 'Phase 0 H0 tools accept only the reviewed v1 requirement registry' })
+    }
     const claimValidation = validateClaims(claims, requirements.filter(isObject))
     if (!claimValidation.ok) errors.push(...claimValidation.errors)
   } else errors.push({ code: 'invalid_registry', path: '$', message: 'registry must be an array' })

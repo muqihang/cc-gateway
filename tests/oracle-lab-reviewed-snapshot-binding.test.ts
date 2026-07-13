@@ -6,6 +6,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { digestFile } from '../tools/oracle-lab/harness-core.js'
+import { migrateRequirementsV1ToV2 } from '../tools/oracle-lab/migrate-requirements-v1-to-v2.js'
 import { validateRunInputs } from '../tools/oracle-lab/validate-run-manifest.js'
 
 const registryRelative = 'docs/superpowers/registry/oracle-lab-requirements.json'
@@ -80,6 +81,30 @@ test('exit validation reads reviewed governance bytes from the bound ancestor co
   await writePendingRegistry(f.registry, f.reviewedHead)
   assert.notEqual(digestFile(f.registry).slice(7), JSON.parse(await readFile(f.manifest, 'utf8')).governance.requirement_registry.sha256)
   assert.deepEqual(validateRunInputs(f.registry, f.claims, f.manifest, catalog), { ok: true, errors: [] })
+})
+
+test('historical exit validation rejects a 41-record v2 registry against the reviewed 23-record v1 snapshot', async () => {
+  const f = await fixture()
+  const v1 = JSON.parse(await readFile(f.registry, 'utf8')) as Array<Record<string, unknown>>
+  const metadata = JSON.parse(await readFile(path.resolve('docs/superpowers/registry/oracle-lab-requirement-v2-migration.json'), 'utf8')) as Array<Record<string, unknown>>
+  const migrated = migrateRequirementsV1ToV2(v1, metadata)
+  const amendments = Array.from({ length: 18 }, (_, index) => ({
+    ...migrated[0],
+    requirement_id: `RA-WPR0-${String(index + 1).padStart(3, '0')}`,
+    source_document: '2026-07-12-oracle-p0-1-review-amendments.md',
+    source_section: `WP-R0 review amendment ${index + 1}`,
+    precedence: 'review_amendments',
+    depends_on: [],
+    implementation_status: 'design_only',
+    reviewer: `review-amendment-reviewer-${index + 1}`,
+    work_package: 'WP-R0',
+    introduced_after_phase: 'phase_0',
+  }))
+  await writeFile(f.registry, `${JSON.stringify([...migrated, ...amendments], null, 2)}\n`)
+
+  const validation = validateRunInputs(f.registry, f.claims, f.manifest, catalog)
+  assert.equal(validation.ok, false)
+  assert(validation.errors.some((error) => error.code === 'pending_inventory_mismatch'), JSON.stringify(validation.errors))
 })
 
 test('exit validation rejects tampered reviewed digests, unavailable or non-ancestor commits, wrong repositories, and missing committed paths', async () => {

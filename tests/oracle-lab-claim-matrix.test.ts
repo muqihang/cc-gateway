@@ -17,6 +17,20 @@ async function requirements(): Promise<RecordValue[]> {
   return JSON.parse(await readFile(registryPath, 'utf8')) as RecordValue[]
 }
 
+async function v2Requirements(): Promise<RecordValue[]> {
+  return (await requirements()).map((record, index) => ({
+    ...record,
+    schema_version: 2,
+    reviewer: `independent-reviewer-${index}`,
+    phase_owner: 'phase_0',
+    work_package: null,
+    introduced_after_phase: null,
+    refines: [],
+    supersedes: [],
+    related_requirements: [],
+  }))
+}
+
 async function validateRaw(contents: string, records?: RecordValue[]) {
   const directory = await mkdtemp(path.join(tmpdir(), 'oracle-lab-claims-'))
   const fixturePath = path.join(directory, 'claims.json')
@@ -127,6 +141,18 @@ async function authoritativeRecords(requirementId = 'HA-P0-003') {
 
 test('accepts valid direct-egress structural and pinned-client observation claims', async () => {
   assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation]), { ok: true, errors: [] })
+})
+
+test('consumes normalized homogeneous v2 requirement arrays without weakening claim authority', async () => {
+  const v2 = await v2Requirements()
+  assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation], v2), { ok: true, errors: [] })
+  expectError(await validateFixture([directEgressStructural], [...(await requirements()).slice(0, 1), ...v2.slice(1)]), 'invalid_requirement_registry')
+
+  const authoritative = v2.map((record) => ({ ...record }))
+  const index = authoritative.findIndex((entry) => entry.requirement_id === 'HA-P0-003')
+  assert.notEqual(index, -1)
+  authoritative[index] = authoritativeRequirement(authoritative[index])
+  assert.deepEqual(await validateFixture([productionClaim()], authoritative), { ok: true, errors: [] })
 })
 
 test('seed claims state only the Phase 0 negative capabilities actually supported by evidence', async () => {

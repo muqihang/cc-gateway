@@ -4,16 +4,72 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import Ajv2020 from 'ajv/dist/2020.js'
 
+import { migrateRequirementsV1ToV2, validateMigrationMetadata } from '../tools/oracle-lab/migrate-requirements-v1-to-v2.js'
 import { validateRequirements } from '../tools/oracle-lab/validate-requirements.js'
 
 const registryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements.json')
+const v1RegistryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements-v1.json')
 const schemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement.schema.json')
+const v1SchemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement-v1.schema.json')
+const migrationPath = path.resolve('docs/superpowers/registry/oracle-lab-requirement-v2-migration.json')
+const migrationSchemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-requirement-v2-migration.schema.json')
+const v1RegistryDigest = '2e212e0fd8cfeec8272178fefc3d952a29f76129e5f1c75b1dd57a95456aada5'
 
 type Requirement = Record<string, unknown>
 
 async function registry(): Promise<Requirement[]> {
   return JSON.parse(await readFile(registryPath, 'utf8')) as Requirement[]
+}
+
+async function v2Registry(): Promise<Requirement[]> {
+  return (await registry()).map((record, index) => ({
+    ...record,
+    schema_version: 2,
+    reviewer: `independent-reviewer-${index}`,
+    phase_owner: 'phase_0',
+    work_package: null,
+    introduced_after_phase: null,
+    refines: [],
+    supersedes: [],
+    related_requirements: [],
+  }))
+}
+
+function reviewAmendment(template: Requirement, suffix = '001'): Requirement {
+  return {
+    ...template,
+    requirement_id: `RA-WPR0-${suffix}`,
+    source_document: '2026-07-12-oracle-p0-1-review-amendments.md',
+    source_section: `WP-R0 review amendment ${suffix}`,
+    precedence: 'review_amendments',
+    priority: 'P0',
+    depends_on: [],
+    acceptance_gate: 'p0_1_requirement_governance',
+    implementation_status: 'design_only',
+    owner: 'requirement-governance-owner',
+    reviewer: 'requirement-governance-reviewer',
+    phase_owner: 'phase_0',
+    work_package: 'WP-R0',
+    introduced_after_phase: 'phase_0',
+    implementation_files: [],
+    test_files: [],
+    verification_command: '',
+    evidence_artifact: '',
+    last_verified_commit: null,
+    last_verified_at: null,
+    expiry: null,
+    known_gaps: [],
+    canary_evidence_ids: [],
+    production_gate_ids: [],
+    rollback_evidence_ids: [],
+    deployed_artifacts: [],
+    contradiction_ids: [],
+    refines: [],
+    supersedes: [],
+    related_requirements: [],
+  }
 }
 
 async function validateFixture(records: Requirement[]) {
@@ -93,6 +149,148 @@ test('seeded registry contains exactly the fixed Phase 0 P0/P1 inventory and val
     expectedSections,
   )
   assert.deepEqual(await validateRequirements(registryPath), { ok: true, errors: [] })
+})
+
+test('preserves the reviewed v1 bytes and validates the complete v1 array under its versioned schema', async () => {
+  const canonicalBytes = await readFile(registryPath)
+  const v1Bytes = await readFile(v1RegistryPath)
+  assert.deepEqual(v1Bytes, canonicalBytes)
+  assert.equal(createHash('sha256').update(v1Bytes).digest('hex'), v1RegistryDigest)
+  assert.deepEqual(await validateRequirements(v1RegistryPath), { ok: true, errors: [] })
+
+  const schema = JSON.parse(await readFile(v1SchemaPath, 'utf8')) as Requirement
+  assert.equal(schema.$id, 'https://cc-gateway.local/schemas/oracle-lab-requirement-v1.schema.json')
+  assert.notEqual(schema.$id, 'https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json')
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  for (const record of JSON.parse(v1Bytes.toString('utf8')) as Requirement[]) {
+    assert.equal(validate(record), true, JSON.stringify(validate.errors))
+  }
+})
+
+test('schema-validated migration is deterministic, exact-covering, and never infers governance metadata', async () => {
+  const v1 = JSON.parse(await readFile(v1RegistryPath, 'utf8')) as Requirement[]
+  const metadata = JSON.parse(await readFile(migrationPath, 'utf8')) as Requirement[]
+  const schema = JSON.parse(await readFile(migrationSchemaPath, 'utf8')) as Requirement
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  assert.equal(validate(metadata), true, JSON.stringify(validate.errors))
+  assert.deepEqual(validateMigrationMetadata(metadata, v1), { ok: true, errors: [] })
+  assert.equal(metadata.length, 23)
+  assert.deepEqual(metadata.map((row) => row.requirement_id), v1.map((row) => row.requirement_id))
+  assert(metadata.every((row) => row.work_package === null && row.introduced_after_phase === null))
+
+  const first = migrateRequirementsV1ToV2(v1, metadata)
+  const second = migrateRequirementsV1ToV2(
+    JSON.parse(JSON.stringify(v1)) as Requirement[],
+    JSON.parse(JSON.stringify(metadata)) as Requirement[],
+  )
+  assert.deepEqual(first, second)
+  assert.deepEqual(first.map((row) => row.requirement_id), v1.map((row) => row.requirement_id))
+  assert(first.every((row) => row.schema_version === 2 && row.work_package === null && row.introduced_after_phase === null))
+  assert.deepEqual(await validateFixture(first), { ok: true, errors: [] })
+  assert.equal(createHash('sha256').update(await readFile(registryPath)).digest('hex'), v1RegistryDigest)
+
+  for (const invalid of [metadata.slice(1), [...metadata, metadata[0]]]) {
+    assert.throws(
+      () => migrateRequirementsV1ToV2(v1, invalid),
+      (error: Error & { code?: string }) => error.code === 'invalid_migration_coverage',
+    )
+  }
+  const missingReviewer = metadata.map((row, index) => index === 0
+    ? Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'reviewer'))
+    : row)
+  assert.throws(
+    () => migrateRequirementsV1ToV2(v1, missingReviewer),
+    (error: Error & { code?: string }) => error.code === 'invalid_migration_metadata',
+  )
+  const substitutedReviewer = metadata.map((row, index) => index === 0
+    ? { ...row, reviewer: 'plausible-but-unapproved-reviewer', phase_owner: 'phase_4' }
+    : row)
+  assert.equal(validate(substitutedReviewer), false)
+  assert.throws(
+    () => migrateRequirementsV1ToV2(v1, substitutedReviewer),
+    (error: Error & { code?: string }) => error.code === 'invalid_migration_metadata',
+  )
+})
+
+test('accepts homogeneous v2 records and rejects mixed or unsupported record versions', async () => {
+  const v2 = await v2Registry()
+  assert.deepEqual(await validateFixture(v2), { ok: true, errors: [] })
+  expectError(await validateFixture([...(await registry()).slice(0, 1), ...v2.slice(1)]), 'mixed_schema_versions')
+  expectError(await validateFixture(v2.map((record, index) => index === 0 ? { ...record, schema_version: 3 } : record)), 'unsupported_schema_version')
+  assert(v2.every((record) => record.schema_version === 2))
+})
+
+test('v2 requires exact governance fields and unique relationship arrays', async () => {
+  for (const field of ['schema_version', 'reviewer', 'phase_owner', 'work_package', 'introduced_after_phase',
+    'refines', 'supersedes', 'related_requirements'] as const) {
+    const records = await v2Registry()
+    const { [field]: _omitted, ...withoutField } = records[0]
+    records[0] = withoutField
+    expectError(await validateFixture(records), field === 'schema_version' ? 'mixed_schema_versions' : 'missing_field')
+  }
+  for (const field of ['refines', 'supersedes', 'related_requirements'] as const) {
+    const records = await v2Registry()
+    records[0][field] = [String(records[1].requirement_id), String(records[1].requirement_id)]
+    expectError(await validateFixture(records), 'invalid_field')
+  }
+})
+
+test('RA IDs and review precedence are v2-only and require honest post-Phase-0 work-package history', async () => {
+  const v2 = await v2Registry()
+  const ra = reviewAmendment(v2[0])
+  assert.deepEqual(await validateFixture([...v2, ra]), { ok: true, errors: [] })
+
+  expectError(await validateFixture([...(await registry()), {
+    ...ra,
+    schema_version: undefined,
+  }]), 'invalid_requirement_id')
+  expectError(await validateFixture([...v2, { ...ra, work_package: null }]), 'invalid_review_amendment')
+  expectError(await validateFixture([...v2, { ...ra, introduced_after_phase: null }]), 'invalid_review_amendment')
+  expectError(await validateFixture([...v2, { ...ra, introduced_after_phase: 'phase_1' }]), 'invalid_review_amendment')
+
+  const fabricated = await v2Registry()
+  fabricated[0] = { ...fabricated[0], work_package: 'WP-R0', introduced_after_phase: 'phase_0' }
+  expectError(await validateFixture(fabricated), 'invalid_legacy_governance_history')
+})
+
+test('v2 validates relationship targets, self references, and refines or supersedes cycles', async () => {
+  for (const field of ['refines', 'supersedes', 'related_requirements'] as const) {
+    const unresolved = await v2Registry()
+    unresolved[0][field] = ['RA-MISSING-001']
+    expectError(await validateFixture(unresolved), 'unresolved_relationship')
+
+    const self = await v2Registry()
+    self[0][field] = [String(self[0].requirement_id)]
+    expectError(await validateFixture(self), 'self_relationship')
+  }
+  for (const field of ['refines', 'supersedes'] as const) {
+    const cyclic = await v2Registry()
+    cyclic[0][field] = [String(cyclic[1].requirement_id)]
+    cyclic[1][field] = [String(cyclic[0].requirement_id)]
+    expectError(await validateFixture(cyclic), 'cyclic_relationship')
+  }
+})
+
+test('v2 permits only symmetric registered contradictions on non-production records', async () => {
+  const symmetric = await v2Registry()
+  symmetric[0].contradiction_ids = [String(symmetric[1].requirement_id)]
+  symmetric[1].contradiction_ids = [String(symmetric[0].requirement_id)]
+  assert.deepEqual(await validateFixture(symmetric), { ok: true, errors: [] })
+
+  const unresolved = await v2Registry()
+  unresolved[0].contradiction_ids = ['RA-MISSING-001']
+  expectError(await validateFixture(unresolved), 'unresolved_relationship')
+  const asymmetric = await v2Registry()
+  asymmetric[0].contradiction_ids = [String(asymmetric[1].requirement_id)]
+  expectError(await validateFixture(asymmetric), 'asymmetric_contradiction')
+  const self = await v2Registry()
+  self[0].contradiction_ids = [String(self[0].requirement_id)]
+  expectError(await validateFixture(self), 'self_relationship')
+
+  const production = await v2Registry()
+  production[0] = { ...productionEvidence(production[0]), contradiction_ids: [String(production[1].requirement_id)] }
+  production[1].contradiction_ids = [String(production[0].requirement_id)]
+  expectError(await validateFixture(production), 'invalid_production_evidence')
 })
 
 test('all design Status sections declare registry authority, precedence, and ID prefix', async () => {
@@ -308,11 +506,18 @@ test('timestamps require strict RFC3339 date-time values', async () => {
   }
 })
 
-test('JSON schema encodes runtime-equivalent production evidence conditions and strict formats', async () => {
+test('canonical v2 JSON schema is executable and encodes governance plus production conditions', async () => {
   const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as Requirement
+  assert.equal(schema.schema_version, '2.0.0')
+  assert.equal(schema.$id, 'https://cc-gateway.local/schemas/oracle-lab-requirement.schema.json')
+  const properties = schema.properties as Requirement
+  assert.equal((properties.schema_version as Requirement).const, 2)
+  for (const field of ['reviewer', 'phase_owner', 'work_package', 'introduced_after_phase', 'refines', 'supersedes', 'related_requirements']) {
+    assert(field in properties, `${field} is missing from the v2 schema`)
+  }
   const allOf = schema.allOf as Requirement[]
   assert(Array.isArray(allOf) && allOf.length >= 2)
-  assert.equal((schema.properties as Requirement).last_verified_commit instanceof Object, true)
+  assert.equal(properties.last_verified_commit instanceof Object, true)
   const definitions = schema.$defs as Requirement
   const artifact = definitions.deployedArtifact as Requirement
   const artifactProperties = artifact.properties as Requirement
@@ -322,4 +527,8 @@ test('JSON schema encodes runtime-equivalent production evidence conditions and 
   assert(allOf.some((rule) => JSON.stringify(rule).includes('production_verified')))
   assert(allOf.some((rule) => JSON.stringify(rule).includes('maxItems')))
   assert(allOf.some((rule) => JSON.stringify(rule).includes('minItems')))
+  assert(allOf.some((rule) => JSON.stringify(rule).includes('review_amendments')))
+
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  for (const record of await v2Registry()) assert.equal(validate(record), true, JSON.stringify(validate.errors))
 })
