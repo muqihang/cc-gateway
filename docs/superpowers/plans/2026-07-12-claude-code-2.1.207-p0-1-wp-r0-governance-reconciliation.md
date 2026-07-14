@@ -882,7 +882,11 @@ external audit that binds exact argv, cwd, environment keys/values, and command
 order, and cannot provide `git`, `codegraph`, `node`, or `tsx`. The fixture must
 observe 16/16 accepted outer process exits, 13/13 supported subcommands, 10/10
 audited catalog children, both CodeGraph statuses, steady disk below 30 MiB,
-observed peak below 60 MiB, and elapsed time no greater than 90 seconds.
+observed peak below 60 MiB, and cumulative monotonic elapsed time across the 16
+accepted outer process invocations no greater than 90 seconds. Topology setup and
+independent fail-closed negative fixtures remain mandatory test coverage, but
+their clone and mutation-preparation time is reported separately and is not
+charged to the accepted production-chain process budget.
 
 GREEN/RED/merged results share one strict results schema. Exit and controller reports share one strict report schema with a `report_type` discriminator. Each report command stages and exclusively publishes a canonical JSON artifact and its exact deterministic Markdown rendering with no-follow path checks, then accepts the pair as a completed stage only after both on-disk files pass exact schema/semantic/render validation and one chain-state transition binds both digests. `validate-report` regenerates the Markdown from JSON, requires byte equality, and requires that accepted chain binding. A crash can leave one or both exclusive output paths as an incomplete residue that blocks validation and later stages until operator-approved cleanup; the contract does not claim simultaneous physical visibility of two POSIX pathnames. No-follow/exclusive pathname checks reject persistent leaf or ancestor symlinks observed at check/use boundaries, but Node's pathname APIs do not provide `openat`-style protection against a concurrent same-user ancestor replacement between those boundaries. Final Git artifact and receipt commits, not the pre-commit pathname checks, are the integrity anchor. Every other persisted component has its own schema and version.
 

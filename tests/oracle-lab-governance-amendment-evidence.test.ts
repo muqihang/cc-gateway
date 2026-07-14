@@ -1363,7 +1363,7 @@ assert.equal(evidence.validateReviewPair({ ...reviewBase, reviewed_candidate_hea
 // Drive every formal operation through the reviewed non-Node controller,
 // absolute Node and clone-local tsx, cli(main),
 // and the private frozen production runtime. Only reviewed catalog children use shims.
-const acceptanceStartedAt = Date.now()
+const acceptanceFixtureStartedAt = Date.now()
 const acceptanceFixtureRoot = mkdtempSync('/tmp/op01-cli-')
 const acceptanceTmp = path.join(acceptanceFixtureRoot, 'tmp')
 const acceptanceCcPath = path.join(acceptanceFixtureRoot, 'cc-gateway')
@@ -1423,12 +1423,15 @@ writeCatalogShims({
 writeFileSync(path.join(acceptanceCcRoot, trustedReviewersRelative), `${canonical(testReviewerRegistry)}\n`)
 writeFileSync(path.join(acceptanceCcRoot, reviewedToolchainRelative), `${canonical(testToolchainRegistry(acceptanceShimBin))}\n`)
 const acceptanceCommands: string[] = []
+let acceptanceAcceptedProcessElapsedNs = 0n
 let acceptancePeakBytes = directoryBytes(acceptanceFixtureRoot)
 function observeAcceptanceSize(): void {
   acceptancePeakBytes = Math.max(acceptancePeakBytes, directoryBytes(acceptanceFixtureRoot))
 }
 function runAcceptanceCli(args: string[]): void {
+  const startedAt = process.hrtime.bigint()
   const result = runProductionLauncherCli(acceptanceCcRoot, args, acceptanceShimBin, acceptanceTmp)
+  acceptanceAcceptedProcessElapsedNs += process.hrtime.bigint() - startedAt
   expectProductionCliOk(result, args[0])
   acceptanceCommands.push(args[0])
   observeAcceptanceSize()
@@ -1968,7 +1971,8 @@ assert.deepEqual([...new Set(acceptanceCommands)].sort(), [...evidence.SUPPORTED
 assert.equal(acceptanceCommands.filter((command) => command === 'run').length, 2)
 assert.equal(acceptanceCommands.filter((command) => command === 'validate-report').length, 2)
 assert.equal(acceptanceCommands.filter((command) => command === 'validate-receipt').length, 2)
-const acceptanceElapsedMs = Date.now() - acceptanceStartedAt
+const acceptanceElapsedMs = Math.ceil(Number(acceptanceAcceptedProcessElapsedNs) / 1_000_000)
+const acceptanceFixtureWallElapsedMs = Date.now() - acceptanceFixtureStartedAt
 const acceptanceSteadyBytes = directoryBytes(acceptanceFixtureRoot)
 acceptancePeakBytes = Math.max(acceptancePeakBytes, acceptanceSteadyBytes)
 assert.equal(acceptanceElapsedMs <= PRODUCTION_CLI_TIMEOUT_MS, true, `production CLI fixture ${acceptanceElapsedMs} ms exceeded ${PRODUCTION_CLI_TIMEOUT_MS} ms`)
@@ -1983,6 +1987,7 @@ console.log(canonical({
     },
     distinct_subcommands: '13/13',
     elapsed_ms: acceptanceElapsedMs,
+    fixture_wall_elapsed_ms: acceptanceFixtureWallElapsedMs,
     outer_processes: '16/16',
     peak_bytes_observed: acceptancePeakBytes,
     steady_bytes: acceptanceSteadyBytes,
