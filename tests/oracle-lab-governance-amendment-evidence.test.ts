@@ -363,7 +363,13 @@ function resolveRealExecutable(name: string): string {
 const realCodeGraphExecutable = resolveRealExecutable('codegraph')
 assert.equal(path.isAbsolute(realCodeGraphExecutable), true)
 
-function cloneSharedSparseRepository(sourceRepository: string, destination: string, sparsePaths: readonly string[], branch = productionBranch): string {
+function cloneSharedSparseRepository(
+  sourceRepository: string,
+  destination: string,
+  sparsePaths: readonly string[],
+  branch = productionBranch,
+  startingRef = branch,
+): string {
   mkdirSync(path.dirname(destination), { recursive: true })
   execFileSync('git', [
     'clone', '-q', '--shared', '--no-checkout', '--single-branch', '--branch', branch,
@@ -375,7 +381,10 @@ function cloneSharedSparseRepository(sourceRepository: string, destination: stri
   execFileSync('git', ['-C', destination, 'sparse-checkout', 'set', '--no-cone', '--stdin'], {
     input: `${[...sparsePaths].join('\n')}\n`, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
   })
-  execFileSync('git', ['-C', destination, 'checkout', '-q', branch], {
+  const checkoutArgs = startingRef === branch
+    ? ['-C', destination, 'checkout', '-q', branch]
+    : ['-C', destination, 'checkout', '-q', '-B', branch, startingRef]
+  execFileSync('git', checkoutArgs, {
     stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
   })
   const repository = realpathSync(destination)
@@ -1277,7 +1286,13 @@ const acceptanceTmp = path.join(acceptanceFixtureRoot, 'tmp')
 const acceptanceCcPath = path.join(acceptanceFixtureRoot, 'cc-gateway')
 const acceptanceSubPath = path.join(acceptanceFixtureRoot, 'sub2api')
 mkdirSync(acceptanceTmp, { recursive: true })
-const acceptanceCcRoot = cloneSharedSparseRepository(root, acceptanceCcPath, [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS])
+const acceptanceCcRoot = cloneSharedSparseRepository(
+  root,
+  acceptanceCcPath,
+  [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS],
+  productionBranch,
+  'a9c1959a06fa8f836b47f0dbc20799802beda869',
+)
 const acceptanceSubRoot = cloneSharedSparseRepository(sub2apiSourceRoot, acceptanceSubPath, SUB_SPARSE_PATHS)
 const dependencyRoot = path.join(root, 'node_modules')
 assert.equal(lstatSync(dependencyRoot).isDirectory(), true)
@@ -1293,9 +1308,12 @@ const acceptanceCandidatePaths = [
   boundedFileRelative,
   ignoredInventoryRelative,
   'tools/oracle-lab/governance-amendment-entry.ts',
+  'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   taskPlanRelative,
   schemaRelatives[0],
   schemaRelatives[2],
+  schemaRelatives[5],
+  schemaRelatives[7],
 ] as const
 for (const relative of acceptanceCandidatePaths) {
   writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
@@ -1412,6 +1430,8 @@ const packedRefsWrongTypeRoot = candidateIdentityFixture('packed-refs-wrong-type
 mkdirSync(path.join(packedRefsWrongTypeRoot, '.git/packed-refs'))
 expectCode(() => secureRuntime.assertNoGitReplacementRefs(packedRefsWrongTypeRoot), 'git_packed_refs_storage_type')
 
+git(acceptanceCcRoot, 'add', ...acceptanceCandidatePaths)
+git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review-import inputs')
 runAcceptanceCli([
   'review-import',
   '--review-source', source,
@@ -1424,7 +1444,7 @@ runAcceptanceCli([
   '--review-source', source,
   '--adopted-amendment', path.join(acceptanceCcRoot, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'),
 ])
-git(acceptanceCcRoot, 'add', ...acceptanceCandidatePaths, reviewImportRelative)
+git(acceptanceCcRoot, 'add', reviewImportRelative)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review import')
 const acceptanceCandidate = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
 const acceptanceSubCandidate = git(acceptanceSubRoot, 'rev-parse', 'HEAD')
