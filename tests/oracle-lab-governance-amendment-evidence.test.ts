@@ -2023,6 +2023,35 @@ expectProductionCliCode(earlyJointFailureResult, 'unexpected_classification')
 assert.deepEqual(ignoredInventory.computeIgnoredPathInventory(earlyJointFailureSubRoot).summary, earlyJointFailureBefore)
 assert.equal(existsSync(path.join(earlyJointFailureRoot, evidence.ARTIFACT_CHAIN.green)), false)
 
+const failedJointOutputRoot = cloneAcceptanceRef('failed-joint-output', acceptanceManifest.approval_attestation_head)
+const failedJointOutputSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'failed-joint-output-sub', acceptanceSubCandidate)
+initializeCaptureExitCheckpoint(failedJointOutputRoot, failedJointOutputSubRoot)
+const failedJointOutputStatePath = git(failedJointOutputRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+const failedJointOutputStateBefore = readFileSync(failedJointOutputStatePath)
+const failedJointOutputMarker = 'joint-output-then-failure'
+const failedJointOutputShimBin = path.join(acceptanceFixtureRoot, 'failed-joint-output-shim-bin')
+writeCatalogShims({
+  directory: failedJointOutputShimBin,
+  auditLog: path.join(acceptanceFixtureRoot, 'failed-joint-output-audit.jsonl'),
+  ccRoot: failedJointOutputRoot,
+  subRoot: failedJointOutputSubRoot,
+  unsafeCommandId: 'sub2api-joint-local-chain',
+  unsafeMarker: failedJointOutputMarker,
+})
+const failedJointOutputResult = runProductionLauncherCli(failedJointOutputRoot, [
+  'run',
+  '--manifest', evidence.ARTIFACT_CHAIN.exit,
+  '--catalog', catalogRelative,
+  '--group', 'green',
+  '--cc-gateway-root', failedJointOutputRoot,
+  '--sub2api-root', failedJointOutputSubRoot,
+  '--out', evidence.ARTIFACT_CHAIN.green,
+], failedJointOutputShimBin, acceptanceTmp)
+expectProductionCliCode(failedJointOutputResult, 'repository_mutation')
+assert.equal(`${failedJointOutputResult.stdout}${failedJointOutputResult.stderr}`.includes(failedJointOutputMarker), false)
+assert.equal(existsSync(path.join(failedJointOutputRoot, evidence.ARTIFACT_CHAIN.green)), false)
+assert.deepEqual(readFileSync(failedJointOutputStatePath), failedJointOutputStateBefore)
+
 function expectIgnoredMutationRejected(
   label: string,
   setup: (ccRoot: string, subRoot: string) => void,
