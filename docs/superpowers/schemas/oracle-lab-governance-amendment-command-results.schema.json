@@ -11,6 +11,8 @@
     "manifest_digest",
     "catalog_digest",
     "group",
+    "initial_ignored_inventories",
+    "terminal_ignored_inventories",
     "records",
     "result_set_digest"
   ],
@@ -41,6 +43,12 @@
         "red",
         "merged"
       ]
+    },
+    "initial_ignored_inventories": {
+      "$ref": "#/$defs/repository_ignored_inventories"
+    },
+    "terminal_ignored_inventories": {
+      "$ref": "#/$defs/repository_ignored_inventories"
     },
     "records": {
       "type": "array",
@@ -211,7 +219,7 @@
       "properties": {
         "repository": { "const": "sub2api" },
         "policy": { "const": "sub2api_joint_safe_deliverable_v1" },
-        "policy_digest": { "const": "sha256:daad32022b14228f7575212a00a5e80d33f119a2cc047d63d1f21c59bb65391e" },
+        "policy_digest": { "const": "sha256:f4eff8bcc6e92c4d077473209f9d02de9bd1177d5ed2775d85b5e485dd75acfa" },
         "before": { "$ref": "#/$defs/ignored_inventory_summary" },
         "after": { "$ref": "#/$defs/ignored_inventory_summary" }
       }
@@ -237,6 +245,39 @@
         "directory_count": { "type": "integer", "minimum": 0, "maximum": 2 },
         "symlink_count": { "const": 0 },
         "regular_file_bytes": { "type": "integer", "minimum": 0, "maximum": 393216 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "repository_ignored_inventories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cc_gateway", "sub2api"],
+      "properties": {
+        "cc_gateway": { "$ref": "#/$defs/full_ignored_inventory_summary" },
+        "sub2api": { "$ref": "#/$defs/full_ignored_inventory_summary" }
+      }
+    },
+    "full_ignored_inventory_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "endpoint_count",
+        "entry_count",
+        "regular_file_count",
+        "directory_count",
+        "symlink_count",
+        "regular_file_bytes",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": { "const": "git_exclude_standard_recursive_v1" },
+        "endpoint_count": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "entry_count": { "type": "integer", "minimum": 0, "maximum": 250000 },
+        "regular_file_count": { "type": "integer", "minimum": 0, "maximum": 250000 },
+        "directory_count": { "type": "integer", "minimum": 0, "maximum": 250000 },
+        "symlink_count": { "type": "integer", "minimum": 0, "maximum": 250000 },
+        "regular_file_bytes": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
         "digest": { "$ref": "#/$defs/digest" }
       }
     }

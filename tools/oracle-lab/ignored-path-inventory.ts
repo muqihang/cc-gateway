@@ -79,6 +79,10 @@ const JOINT_POLICY = Object.freeze({
   root: 'docs/anti-ban/captures/real-baseline',
   directory_suffix: '-sub2api-cc-gateway-joint-local-capture',
   safe_directory: 'safe-deliverable',
+  modes: Object.freeze({
+    directory: 0o755,
+    regular_file: 0o644,
+  }),
   leaves: Object.freeze({
     'README.md': 131_072,
     'joint_local_capture_summary.redacted.json': 262_144,
@@ -362,6 +366,8 @@ function validSurface(records: readonly IgnoredInventoryRecord[], root: Buffer, 
   const readmeRecord = records.find((record) => record.path.equals(readme))
   const summaryRecord = records.find((record) => record.path.equals(summary))
   if (rootRecord?.type !== 'directory' || safeRecord?.type !== 'directory' || readmeRecord?.type !== 'regular' || summaryRecord?.type !== 'regular') return false
+  if (rootRecord.mode !== JOINT_POLICY.modes.directory || safeRecord.mode !== JOINT_POLICY.modes.directory
+    || readmeRecord.mode !== JOINT_POLICY.modes.regular_file || summaryRecord.mode !== JOINT_POLICY.modes.regular_file) return false
   if ((readmeRecord.size ?? Number.POSITIVE_INFINITY) > JOINT_POLICY.leaves['README.md']) return false
   if ((summaryRecord.size ?? Number.POSITIVE_INFINITY) > JOINT_POLICY.leaves['joint_local_capture_summary.redacted.json']) return false
   return (readmeRecord.size ?? 0) + (summaryRecord.size ?? 0) <= JOINT_POLICY.max_total_regular_file_bytes

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, renameSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -197,6 +197,19 @@ const policyRewriteBefore = inventory(policyRewriteRoot)
 writeFileSync(path.join(policyRewriteRoot, SAFE_DIRECTORY, 'README.md'), 'rewritten readme\n')
 writeFileSync(path.join(policyRewriteRoot, SAFE_DIRECTORY, 'joint_local_capture_summary.redacted.json'), '{"rewritten":true}\n')
 assert.equal(compareJoint(policyRewriteBefore, inventory(policyRewriteRoot)).observation?.after.regular_file_count, 2)
+
+for (const [label, relative, mode] of [
+  ['date-directory', `${SAFE_ROOT}/${DATE_DIRECTORY}`, 0o700],
+  ['safe-directory', SAFE_DIRECTORY, 0o700],
+  ['readme', `${SAFE_DIRECTORY}/README.md`, 0o755],
+  ['summary', `${SAFE_DIRECTORY}/joint_local_capture_summary.redacted.json`, 0o755],
+] as const) {
+  const repository = policyFixture(`mode-${label}`)
+  writePair(repository)
+  const before = inventory(repository)
+  chmodSync(path.join(repository, relative), mode)
+  expectCode(() => compareJoint(before, inventory(repository)), 'repository_mutation')
+}
 
 for (const [label, mutate] of [
   ['one-file', (repository: string) => {

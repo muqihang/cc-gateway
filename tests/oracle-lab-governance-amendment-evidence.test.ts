@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -408,6 +408,7 @@ function writeCatalogShims(options: {
   unsafeCommandId?: string
   unsafeMarker?: string
   mutation?: ShimMutation
+  jointModeNode?: 'date-directory' | 'safe-directory' | 'readme' | 'summary'
 }): void {
   mkdirSync(options.directory, { recursive: true })
   const accepted = catalog.map((entry: any) => ({
@@ -419,7 +420,7 @@ function writeCatalogShims(options: {
   }))
   const statePath = path.join(path.dirname(options.auditLog), `${path.basename(options.directory)}-mutation-state`)
   const script = `#!${process.execPath}
-import { appendFileSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 const accepted = ${JSON.stringify(accepted)}
 const auditLog = ${JSON.stringify(options.auditLog)}
@@ -427,6 +428,7 @@ const mutationState = ${JSON.stringify(statePath)}
 const mutation = ${JSON.stringify(options.mutation ?? null)}
 const unsafeCommandId = ${JSON.stringify(options.unsafeCommandId ?? null)}
 const unsafeMarker = ${JSON.stringify(options.unsafeMarker ?? '')}
+const jointModeNode = ${JSON.stringify(options.jointModeNode ?? null)}
 const executable = path.basename(process.argv[1])
 const argv = process.argv.slice(2)
 const cwd = process.cwd()
@@ -450,6 +452,15 @@ if (match.id === 'sub2api-joint-local-chain') {
   mkdirSync(output, { recursive: true })
   writeFileSync(path.join(output, 'README.md'), 'safe local acceptance readme\\n')
   writeFileSync(path.join(output, 'joint_local_capture_summary.redacted.json'), '{"safe":true}\\n')
+  if (jointModeNode) {
+    const targets = {
+      'date-directory': path.dirname(output),
+      'safe-directory': output,
+      readme: path.join(output, 'README.md'),
+      summary: path.join(output, 'joint_local_capture_summary.redacted.json'),
+    }
+    chmodSync(targets[jointModeNode], jointModeNode.endsWith('directory') ? 0o700 : 0o755)
+  }
 }
 if (match.id === unsafeCommandId) {
   process.stderr.write('\\u2716 ' + unsafeMarker + '\\n')
@@ -1137,7 +1148,9 @@ assert.equal(lstatSync(dependencyRoot).isDirectory(), true)
 assert.equal(existsSync(path.join(dependencyRoot, '.bin/tsx')), true)
 assert.equal(existsSync(path.join(dependencyRoot, 'ajv')), true)
 linkCloneDependencies(acceptanceCcRoot, dependencyRoot)
-for (const relative of [toolRelative, taskPlanRelative]) {
+linkCloneDependencies(acceptanceSubRoot, dependencyRoot)
+const acceptanceCandidatePaths = [toolRelative, ignoredInventoryRelative, taskPlanRelative, schemaRelatives[0], schemaRelatives[2]] as const
+for (const relative of acceptanceCandidatePaths) {
   writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
 }
 git(acceptanceCcRoot, 'config', 'user.name', 'Acceptance Candidate')
@@ -1175,7 +1188,7 @@ runAcceptanceCli([
   '--review-source', source,
   '--adopted-amendment', path.join(acceptanceCcRoot, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'),
 ])
-git(acceptanceCcRoot, 'add', toolRelative, taskPlanRelative, reviewImportRelative)
+git(acceptanceCcRoot, 'add', ...acceptanceCandidatePaths, reviewImportRelative)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review import')
 const acceptanceCandidate = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
 const acceptanceSubCandidate = git(acceptanceSubRoot, 'rev-parse', 'HEAD')
@@ -1214,6 +1227,8 @@ runAcceptanceCli([
 
 const acceptanceCcCodeGraph = initializeRealCodeGraph(acceptanceCcRoot, acceptanceTmp)
 const acceptanceSubCodeGraph = initializeRealCodeGraph(acceptanceSubRoot, acceptanceTmp)
+symlinkSync('codegraph.db', path.join(acceptanceCcRoot, '.codegraph/continuity-link'))
+symlinkSync('codegraph.db', path.join(acceptanceSubRoot, '.codegraph/continuity-link'))
 observeAcceptanceSize()
 runAcceptanceCli([
   'capture-exit',
@@ -1234,6 +1249,99 @@ for (const [name, status] of [['cc_gateway', acceptanceCcCodeGraph], ['sub2api',
   assert.equal(binding.node_count, status.nodeCount)
   assert.equal(binding.edge_count, status.edgeCount)
   assert.equal(binding.index_digest, sha256(readFileSync(path.join(name === 'cc_gateway' ? acceptanceCcRoot : acceptanceSubRoot, '.codegraph/codegraph.db'))))
+}
+
+function initializeCaptureExitCheckpoint(ccCheckpoint: string, subCheckpoint: string): void {
+  cpSync(path.join(acceptanceCcRoot, '.codegraph'), path.join(ccCheckpoint, '.codegraph'), { recursive: true, verbatimSymlinks: true })
+  cpSync(path.join(acceptanceSubRoot, '.codegraph'), path.join(subCheckpoint, '.codegraph'), { recursive: true, verbatimSymlinks: true })
+  linkCloneDependencies(subCheckpoint, dependencyRoot)
+  const exit = path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.exit)
+  mkdirSync(path.dirname(exit), { recursive: true })
+  writeFileSync(exit, readFileSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)))
+  evidence.initializeArtifactChain(ccCheckpoint, subCheckpoint, {
+    cc_gateway: acceptanceManifest.repositories.cc_gateway.initial_ignored_inventory,
+    sub2api: acceptanceManifest.repositories.sub2api.initial_ignored_inventory,
+  })
+}
+
+type PersistentIgnoredDrift = 'create' | 'modify' | 'delete' | 'type' | 'mode' | 'symlink-target'
+let continuityCheckpointPeakBytes = 0
+
+function applyPersistentIgnoredDrift(root: string, label: string, drift: PersistentIgnoredDrift): void {
+  const database = path.join(root, '.codegraph/codegraph.db')
+  const retained = path.join(acceptanceFixtureRoot, `${label}-retained`)
+  if (drift === 'create') writeFileSync(path.join(root, `.codegraph/${label}.txt`), 'persistent between-stage bytes\n')
+  if (drift === 'modify') writeFileSync(database, 'persistent modified database bytes\n')
+  if (drift === 'delete') renameSync(database, `${retained}.db`)
+  if (drift === 'type') {
+    renameSync(database, `${retained}.db`)
+    mkdirSync(database)
+  }
+  if (drift === 'mode') {
+    const currentMode = lstatSync(database).mode & 0o777
+    chmodSync(database, currentMode === 0o600 ? 0o640 : 0o600)
+  }
+  if (drift === 'symlink-target') {
+    renameSync(path.join(root, '.codegraph/continuity-link'), `${retained}-continuity-link`)
+    symlinkSync('alternate-codegraph.db', path.join(root, '.codegraph/continuity-link'))
+  }
+}
+
+function observeContinuityCheckpoint(ccCheckpoint: string, subCheckpoint: string): void {
+  const bytes = directoryBytes(path.dirname(ccCheckpoint)) + directoryBytes(path.dirname(subCheckpoint))
+  continuityCheckpointPeakBytes = Math.max(continuityCheckpointPeakBytes, bytes)
+  assert.equal(bytes < 12 * MiB, true, `continuity checkpoint ${bytes} bytes exceeded 12 MiB`)
+}
+
+function expectCaptureExitToGreenIgnoredDriftRejected(repository: 'cc' | 'sub', drift: PersistentIgnoredDrift): void {
+  const label = `exit-green-${repository}-${drift}`
+  const ccCheckpoint = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+  const subCheckpoint = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+  initializeCaptureExitCheckpoint(ccCheckpoint, subCheckpoint)
+  const mutatedRoot = repository === 'cc' ? ccCheckpoint : subCheckpoint
+  applyPersistentIgnoredDrift(mutatedRoot, label, drift)
+  const shimBin = path.join(acceptanceFixtureRoot, `checkpoint-shim-${label}`)
+  writeCatalogShims({
+    directory: shimBin,
+    auditLog: path.join(acceptanceFixtureRoot, `checkpoint-audit-${label}.jsonl`),
+    ccRoot: ccCheckpoint,
+    subRoot: subCheckpoint,
+  })
+  const observed = runProductionNpmCli(ccCheckpoint, [
+    'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+    '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.green,
+  ], shimBin, acceptanceTmp)
+  expectProductionCliCode(observed, 'repository_mutation')
+  assert.equal(existsSync(path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.green)), false)
+  observeContinuityCheckpoint(ccCheckpoint, subCheckpoint)
+}
+
+for (const repository of ['cc', 'sub'] as const) {
+  for (const drift of ['create', 'modify', 'delete', 'type', 'mode', 'symlink-target'] as const) {
+    expectCaptureExitToGreenIgnoredDriftRejected(repository, drift)
+  }
+}
+
+for (const node of ['date-directory', 'safe-directory', 'readme', 'summary'] as const) {
+  const label = `joint-mode-${node}`
+  const ccCheckpoint = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+  const subCheckpoint = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+  initializeCaptureExitCheckpoint(ccCheckpoint, subCheckpoint)
+  const shimBin = path.join(acceptanceFixtureRoot, `checkpoint-shim-${label}`)
+  writeCatalogShims({
+    directory: shimBin,
+    auditLog: path.join(acceptanceFixtureRoot, `checkpoint-audit-${label}.jsonl`),
+    ccRoot: ccCheckpoint,
+    subRoot: subCheckpoint,
+    jointModeNode: node,
+  })
+  const observed = runProductionNpmCli(ccCheckpoint, [
+    'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+    '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.green,
+  ], shimBin, acceptanceTmp)
+  expectProductionCliCode(observed, 'repository_mutation')
+  assert.equal(existsSync(path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.green)), false)
+  observeContinuityCheckpoint(ccCheckpoint, subCheckpoint)
 }
 
 runAcceptanceCli([
@@ -1420,6 +1528,47 @@ console.log(canonical({
   },
 }))
 
+function initializeGreenCheckpoint(ccCheckpoint: string, subCheckpoint: string): void {
+  initializeCaptureExitCheckpoint(ccCheckpoint, subCheckpoint)
+  const captureBase = path.join(acceptanceSubRoot, 'docs/anti-ban/captures/real-baseline')
+  const dateDirectories = readdirSync(captureBase).filter((name) => name.endsWith('-sub2api-cc-gateway-joint-local-capture'))
+  assert.equal(dateDirectories.length, 1)
+  const destinationBase = path.join(subCheckpoint, 'docs/anti-ban/captures/real-baseline')
+  mkdirSync(destinationBase, { recursive: true })
+  cpSync(path.join(captureBase, dateDirectories[0]), path.join(destinationBase, dateDirectories[0]), { recursive: true })
+  writeFileSync(
+    path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.green),
+    readFileSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.green)),
+  )
+  evidence.completeArtifactChainStage(ccCheckpoint, 'green', acceptanceGreenResults.terminal_ignored_inventories)
+}
+
+for (const repository of ['cc', 'sub'] as const) {
+  for (const drift of ['create', 'modify', 'delete', 'type', 'mode', 'symlink-target'] as const) {
+    const label = `green-red-${repository}-${drift}`
+    const ccCheckpoint = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+    const subCheckpoint = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+    initializeGreenCheckpoint(ccCheckpoint, subCheckpoint)
+    applyPersistentIgnoredDrift(repository === 'cc' ? ccCheckpoint : subCheckpoint, label, drift)
+    const shimBin = path.join(acceptanceFixtureRoot, `checkpoint-shim-${label}`)
+    writeCatalogShims({
+      directory: shimBin,
+      auditLog: path.join(acceptanceFixtureRoot, `checkpoint-audit-${label}.jsonl`),
+      ccRoot: ccCheckpoint,
+      subRoot: subCheckpoint,
+    })
+    const observed = runProductionNpmCli(ccCheckpoint, [
+      'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'red',
+      '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.red,
+    ], shimBin, acceptanceTmp)
+    expectProductionCliCode(observed, 'repository_mutation')
+    assert.equal(existsSync(path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.red)), false)
+    observeContinuityCheckpoint(ccCheckpoint, subCheckpoint)
+  }
+}
+assert.equal(continuityCheckpointPeakBytes < 12 * MiB, true)
+console.log(canonical({ production_cli_continuity_negatives: { cases: '28/28', checkpoint_peak_bytes: continuityCheckpointPeakBytes } }))
+
 function cloneRepositoryRef(sourceRepository: string, label: string, commit: string): string {
   const branch = `fixture-${label}`
   git(sourceRepository, 'branch', branch, commit)
@@ -1448,10 +1597,7 @@ function expectAcceptanceCliCode(repository: string, args: string[], code: strin
 
 const unsafeCliRoot = cloneAcceptanceRef('unsafe-cli-persistence', acceptanceManifest.approval_attestation_head)
 const unsafeCliSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'unsafe-cli-sub', acceptanceSubCandidate)
-const unsafeCliExit = path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.exit)
-mkdirSync(path.dirname(unsafeCliExit), { recursive: true })
-writeFileSync(unsafeCliExit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
-evidence.initializeArtifactChain(unsafeCliRoot)
+initializeCaptureExitCheckpoint(unsafeCliRoot, unsafeCliSubRoot)
 const unsafeCliMarker = 'Bearer unsafe-cli-failure-name'
 const unsafeShimBin = path.join(acceptanceFixtureRoot, 'unsafe-shim-bin')
 writeCatalogShims({
@@ -1482,11 +1628,7 @@ function expectIgnoredMutationRejected(
 ): void {
   const ccRepository = cloneAcceptanceRef(`ignored-mutation-${label}`, acceptanceManifest.approval_attestation_head)
   const subRepository = cloneRepositoryRef(acceptanceSubRoot, `ignored-mutation-sub-${label}`, acceptanceSubCandidate)
-  writeFileSync(path.join(subRepository, '.git/info/exclude'), '.superpowers/\n')
-  const exit = path.join(ccRepository, evidence.ARTIFACT_CHAIN.exit)
-  mkdirSync(path.dirname(exit), { recursive: true })
-  writeFileSync(exit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
-  evidence.initializeArtifactChain(ccRepository)
+  initializeCaptureExitCheckpoint(ccRepository, subRepository)
   setup(ccRepository, subRepository)
   const mutation = mutate(ccRepository, subRepository)
   const mutationShimBin = path.join(acceptanceFixtureRoot, `mutation-shim-${label}`)
@@ -1506,25 +1648,18 @@ function expectIgnoredMutationRejected(
 }
 
 for (const repository of ['cc', 'sub'] as const) {
-  const ignoredRelative = repository === 'cc' ? 'runtime/mutation-secret.txt' : '.superpowers/mutation-secret.txt'
+  const ignoredRelative = '.codegraph/mutation-secret.txt'
+  const existingIgnoredRelative = '.codegraph/codegraph.db'
   expectIgnoredMutationRejected(`${repository}-create`, () => {}, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
     return { kind: 'create', repositoryRoot: root, relativePath: ignoredRelative }
   })
-  expectIgnoredMutationRejected(`${repository}-modify`, (ccRoot, subRoot) => {
-    const root = repository === 'cc' ? ccRoot : subRoot
-    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
-    writeFileSync(path.join(root, ignoredRelative), 'before ignored bytes\n')
-  }, (ccRoot, subRoot) => {
-    return { kind: 'modify', repositoryRoot: repository === 'cc' ? ccRoot : subRoot, relativePath: ignoredRelative }
+  expectIgnoredMutationRejected(`${repository}-modify`, () => {}, (ccRoot, subRoot) => {
+    return { kind: 'modify', repositoryRoot: repository === 'cc' ? ccRoot : subRoot, relativePath: existingIgnoredRelative }
   })
-  expectIgnoredMutationRejected(`${repository}-delete`, (ccRoot, subRoot) => {
+  expectIgnoredMutationRejected(`${repository}-delete`, () => {}, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
-    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
-    writeFileSync(path.join(root, ignoredRelative), 'retained ignored bytes\n')
-  }, (ccRoot, subRoot) => {
-    const root = repository === 'cc' ? ccRoot : subRoot
-    return { kind: 'rename', repositoryRoot: root, relativePath: ignoredRelative, renameTarget: path.join(acceptanceFixtureRoot, `${repository}-retained-mutation-secret.txt`) }
+    return { kind: 'rename', repositoryRoot: root, relativePath: existingIgnoredRelative, renameTarget: path.join(acceptanceFixtureRoot, `${repository}-retained-codegraph.db`) }
   })
   expectIgnoredMutationRejected(`${repository}-symlink`, () => {}, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
@@ -1810,6 +1945,14 @@ const resultBase = {
   expires_at: '2026-07-20T00:00:00.000Z',
   manifest_digest: sha256('manifest'),
   catalog_digest: sha256('catalog'),
+  initial_ignored_inventories: {
+    cc_gateway: ignoredSummary('cc-stage-state', { endpoints: 1, regular: 1, directories: 1, bytes: 4_096 }),
+    sub2api: ignoredSummary('sub-stage-state', { endpoints: 1, regular: 1, directories: 1, bytes: 4_096 }),
+  },
+  terminal_ignored_inventories: {
+    cc_gateway: ignoredSummary('cc-stage-state', { endpoints: 1, regular: 1, directories: 1, bytes: 4_096 }),
+    sub2api: ignoredSummary('sub-stage-state', { endpoints: 1, regular: 1, directories: 1, bytes: 4_096 }),
+  },
 }
 const greenRecords = expectedCatalog.slice(0, 7).map(([id]) => resultRecord(id, 'pass', 0))
 const redRecords = expectedCatalog.slice(7).map(([id]) => resultRecord(id, 'expected_fail', 'nonzero'))
@@ -1983,8 +2126,8 @@ const exitValue = evidence.buildExitValue({
   entry: { path: 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json', digest: 'sha256:e6d7426c63f8bf96a91de5c47d9fc6807fae5da68ad507e8ba65b93f2732f235' },
   entry_receipt: { path: 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.receipt.json', digest: 'sha256:f787ea8bfd1e7f640719dbba11f8e4835d468bed1045e82faa50561bdbcf9d06' },
   repositories: {
-    cc_gateway: { head: '1'.repeat(40), branch: 'codex/oracle-p0-1-governance', clean: true, snapshot_digest: sha256('cc-snapshot') },
-    sub2api: { head: '2'.repeat(40), branch: 'codex/oracle-p0-1-governance', clean: true, snapshot_digest: sha256('sub-snapshot') },
+    cc_gateway: { head: '1'.repeat(40), branch: 'codex/oracle-p0-1-governance', clean: true, snapshot_digest: sha256('cc-snapshot'), initial_ignored_inventory: resultBase.initial_ignored_inventories.cc_gateway },
+    sub2api: { head: '2'.repeat(40), branch: 'codex/oracle-p0-1-governance', clean: true, snapshot_digest: sha256('sub-snapshot'), initial_ignored_inventory: resultBase.initial_ignored_inventories.sub2api },
   },
   reviewed_candidate_heads: { cc_gateway: '3'.repeat(40), sub2api: '2'.repeat(40) },
   candidate_commit_identities: candidateCommitIdentities,

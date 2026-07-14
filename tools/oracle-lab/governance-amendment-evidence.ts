@@ -32,6 +32,7 @@ import {
 } from './harness-core.js'
 import { computeRepositoryState } from './freeze-baseline.js'
 import {
+  DEFAULT_IGNORED_INVENTORY_LIMITS,
   IGNORED_INVENTORY_ALGORITHM,
   IGNORED_OUTPUT_POLICY_DIGESTS,
   compareIgnoredPathInventories,
@@ -247,7 +248,7 @@ const CATALOG_FIELDS = [
 const REPORT_FIELDS = ['schema_version', 'report_type', 'generated_at', 'status', 'manifest', 'results', 'reviews', 'command_summary', 'report_digest'] as const
 const HANDOFF_FIELDS = ['schema_version', 'handoff_kind', 'generated_at', 'expires_at', 'bindings', 'disabled_capabilities', 'next_planning_entry_conditions', 'next_implementation_entry_conditions', 'handoff_digest'] as const
 const REVIEW_FIELDS = ['schema_version', 'review_kind', 'reviewer_identity', 'reviewer_role', 'reviewed_candidate_heads', 'diff_digests', 'plan_digest', 'review_import_digest', 'decision', 'findings', 'verification'] as const
-const RESULT_FIELDS = ['schema_version', 'result_kind', 'generated_at', 'expires_at', 'manifest_digest', 'catalog_digest', 'group', 'records', 'result_set_digest'] as const
+const RESULT_FIELDS = ['schema_version', 'result_kind', 'generated_at', 'expires_at', 'manifest_digest', 'catalog_digest', 'group', 'initial_ignored_inventories', 'terminal_ignored_inventories', 'records', 'result_set_digest'] as const
 const RESULT_RECORD_FIELDS = ['command_id', 'repository', 'repository_commit', 'expected_exit', 'exit_code', 'status', 'duration_ms', 'stdout_digest', 'stderr_digest', 'output_bytes', 'timed_out', 'output_overflow', 'failure_names', 'manifest_digest', 'catalog_entry_digest', 'argv_digest', 'environment_digest', 'execution_bindings', 'ignored_output_observations', 'result_digest'] as const
 const CONTEXT_FIELDS = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'bindings', 'review_import', 'reviews', 'disabled_capabilities', 'context_digest'] as const
 const RECEIPT_FIELDS = ['schema_version', 'receipt_kind', 'generated_at', 'artifact_commit', 'reviewed_heads', 'shared_contract', 'review_amendment', 'parent_receipts', 'artifact_digests', 'disabled_capabilities', 'next_planning_entry_conditions', 'next_implementation_entry_conditions', 'receipt_digest'] as const
@@ -563,8 +564,61 @@ type ChainState = {
   schema_version: 1
   state_kind: 'governance_amendment_chain_state'
   repository_head_at_initialization: string
+  repositories: {
+    cc_gateway: { root: string; terminal_ignored_inventory: IgnoredInventorySummary }
+    sub2api: { root: string; terminal_ignored_inventory: IgnoredInventorySummary }
+  }
   artifacts: ArtifactBinding[]
   state_digest: string
+}
+
+export type RepositoryIgnoredInventories = {
+  cc_gateway: IgnoredInventorySummary
+  sub2api: IgnoredInventorySummary
+}
+
+const FULL_IGNORED_SUMMARY_FIELDS = ['algorithm', 'endpoint_count', 'entry_count', 'regular_file_count', 'directory_count', 'symlink_count', 'regular_file_bytes', 'digest'] as const
+
+function validFullIgnoredSummary(value: unknown): value is IgnoredInventorySummary {
+  if (!isObject(value) || !same(Object.keys(value).sort(), [...FULL_IGNORED_SUMMARY_FIELDS].sort())
+    || value.algorithm !== IGNORED_INVENTORY_ALGORITHM || !DIGEST_RE.test(String(value.digest))) return false
+  for (const field of ['endpoint_count', 'entry_count', 'regular_file_count', 'directory_count', 'symlink_count', 'regular_file_bytes'] as const) {
+    if (!Number.isSafeInteger(value[field]) || Number(value[field]) < 0) return false
+  }
+  return Number(value.endpoint_count) <= DEFAULT_IGNORED_INVENTORY_LIMITS.maxEndpointRoots
+    && Number(value.entry_count) <= DEFAULT_IGNORED_INVENTORY_LIMITS.maxEntries
+    && Number(value.regular_file_count) + Number(value.directory_count) + Number(value.symlink_count) === Number(value.entry_count)
+    && Number(value.regular_file_bytes) <= DEFAULT_IGNORED_INVENTORY_LIMITS.maxRegularFileBytes
+}
+
+function validateRepositoryIgnoredInventories(value: unknown, where: string, errors: HarnessErrorRecord[]): value is RepositoryIgnoredInventories {
+  if (!exactKeys(value, ['cc_gateway', 'sub2api'], where, errors)) return false
+  let valid = true
+  for (const name of ['cc_gateway', 'sub2api'] as const) {
+    if (!validFullIgnoredSummary(value[name])) {
+      add(errors, 'invalid_ignored_inventory', `${where}.${name}`, 'repository ignored inventory summary is invalid')
+      valid = false
+    }
+  }
+  return valid
+}
+
+function ignoredInventoriesFromSnapshots(cc: RepositorySnapshot, sub: RepositorySnapshot): RepositoryIgnoredInventories {
+  return { cc_gateway: cc.ignored_inventory, sub2api: sub.ignored_inventory }
+}
+
+function chainIgnoredInventories(state: ChainState): RepositoryIgnoredInventories {
+  return {
+    cc_gateway: state.repositories.cc_gateway.terminal_ignored_inventory,
+    sub2api: state.repositories.sub2api.terminal_ignored_inventory,
+  }
+}
+
+function manifestInitialIgnoredInventories(manifest: ExitValue): RepositoryIgnoredInventories {
+  return {
+    cc_gateway: manifest.repositories.cc_gateway.initial_ignored_inventory,
+    sub2api: manifest.repositories.sub2api.initial_ignored_inventory,
+  }
 }
 
 function chainStatePath(root: string): string {
@@ -580,11 +634,20 @@ function assertChainStateAbsent(root: string): void {
   }
 }
 
-function buildChainState(head: string, artifacts: ArtifactBinding[]): ChainState {
+function buildChainState(
+  head: string,
+  artifacts: ArtifactBinding[],
+  roots: { cc_gateway: string; sub2api: string },
+  terminalIgnored: RepositoryIgnoredInventories,
+): ChainState {
   const unsigned = {
     schema_version: 1 as const,
     state_kind: 'governance_amendment_chain_state' as const,
     repository_head_at_initialization: head,
+    repositories: {
+      cc_gateway: { root: roots.cc_gateway, terminal_ignored_inventory: terminalIgnored.cc_gateway },
+      sub2api: { root: roots.sub2api, terminal_ignored_inventory: terminalIgnored.sub2api },
+    },
     artifacts: [...artifacts].sort((left, right) => left.path.localeCompare(right.path)),
   }
   return { ...unsigned, state_digest: sha256(canonicalJson(unsigned)) }
@@ -592,15 +655,21 @@ function buildChainState(head: string, artifacts: ArtifactBinding[]): ChainState
 
 function validateChainState(value: unknown): ChainState {
   const errors: HarnessErrorRecord[] = []
-  if (!exactKeys(value, ['schema_version', 'state_kind', 'repository_head_at_initialization', 'artifacts', 'state_digest'], '$', errors)
+  if (!exactKeys(value, ['schema_version', 'state_kind', 'repository_head_at_initialization', 'repositories', 'artifacts', 'state_digest'], '$', errors)
     || value.schema_version !== 1 || value.state_kind !== 'governance_amendment_chain_state' || !/^[0-9a-f]{40,64}$/.test(String(value.repository_head_at_initialization))
     || !Array.isArray(value.artifacts) || value.artifacts.some((binding) => !validArtifact(binding)) || !DIGEST_RE.test(String(value.state_digest))
     || value.state_digest !== digestUnsigned(value, 'state_digest')) fail('invalid_chain_state', 'P0.1 chain state is invalid')
+  if (!isObject(value.repositories) || !exactKeys(value.repositories, ['cc_gateway', 'sub2api'], '$.repositories', errors)) fail('invalid_chain_state', 'P0.1 chain repositories are invalid')
+  for (const name of ['cc_gateway', 'sub2api'] as const) {
+    const repository = value.repositories[name]
+    if (!exactKeys(repository, ['root', 'terminal_ignored_inventory'], `$.repositories.${name}`, errors)
+      || typeof repository.root !== 'string' || !path.isAbsolute(repository.root)
+      || !validFullIgnoredSummary(repository.terminal_ignored_inventory)) fail('invalid_chain_state', 'P0.1 chain repository state is invalid')
+  }
   return value as unknown as ChainState
 }
 
 function writeChainState(root: string, value: ChainState, exclusive: boolean): void {
-  assertSafeArtifact(value)
   const file = chainStatePath(root); const temp = `${file}.tmp-${process.pid}-${Date.now()}`
   if (exclusive) try { lstatSync(file); fail('chain_state_exists', 'P0.1 chain state already exists') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   else try { if (lstatSync(file).isSymbolicLink()) fail('artifact_symlink', 'chain state is a symlink') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
@@ -615,10 +684,21 @@ function writeChainState(root: string, value: ChainState, exclusive: boolean): v
   }
 }
 
-export function initializeChainState(rootInput: string, artifacts: ArtifactBinding[]): void {
+export function initializeChainState(
+  rootInput: string,
+  artifacts: ArtifactBinding[],
+  sub2apiRootInput = rootInput,
+  expectedIgnored?: RepositoryIgnoredInventories,
+): void {
   const root = realpathSync(rootInput)
+  const subRoot = realpathSync(sub2apiRootInput)
   for (const binding of artifacts) if (!same(bindingAt(root, binding.path), binding)) fail('prior_output_mutated', `${binding.path} bytes differ before chain initialization`)
-  writeChainState(root, buildChainState(gitText(root, 'rev-parse', 'HEAD'), artifacts), true)
+  const actualIgnored = {
+    cc_gateway: computeIgnoredPathInventory(root).summary,
+    sub2api: subRoot === root ? computeIgnoredPathInventory(root).summary : computeIgnoredPathInventory(subRoot).summary,
+  }
+  if (expectedIgnored && !same(actualIgnored, expectedIgnored)) fail('repository_mutation', 'initial ignored repository state differs from exit evidence')
+  writeChainState(root, buildChainState(gitText(root, 'rev-parse', 'HEAD'), artifacts, { cc_gateway: root, sub2api: subRoot }, actualIgnored), true)
 }
 
 function verifiedChainState(root: string): ChainState {
@@ -632,6 +712,12 @@ function verifiedChainState(root: string): ChainState {
     fail('missing_chain_state', 'P0.1 chain state is missing')
   }
   const state = validateChainState(parsed)
+  if (state.repositories.cc_gateway.root !== root) fail('chain_repository_drift', 'chain CC Gateway root differs from the active repository')
+  for (const name of ['cc_gateway', 'sub2api'] as const) {
+    try {
+      if (realpathSync(state.repositories[name].root) !== state.repositories[name].root) fail('chain_repository_drift', `chain ${name} root identity changed`)
+    } catch { fail('chain_repository_drift', `chain ${name} root is unavailable`) }
+  }
   if (!isAncestor(root, state.repository_head_at_initialization, gitText(root, 'rev-parse', 'HEAD'))) fail('chain_repository_drift', 'current HEAD does not descend from chain initialization')
   for (const binding of state.artifacts) if (!same(bindingAt(root, binding.path), binding)) fail('prior_output_mutated', `${binding.path} bytes changed after the producing stage`)
   return state
@@ -649,44 +735,79 @@ function stageBindings(root: string, names: readonly ArtifactName[]): ArtifactBi
   return names.map((name) => bindingAt(root, ARTIFACT_CHAIN[name]))
 }
 
-export function initializeArtifactChain(rootInput: string): void {
+export function initializeArtifactChain(rootInput: string, sub2apiRootInput = rootInput, expectedIgnored?: RepositoryIgnoredInventories): void {
   const root = realpathSync(rootInput)
+  const subRoot = realpathSync(sub2apiRootInput)
   const produced = stageBindings(root, STAGE_TRANSITIONS.exit.produced)
-  captureRepositorySnapshot(root, produced)
-  initializeChainState(root, produced)
+  const cc = captureRepositorySnapshot(root, produced)
+  const sub = subRoot === root ? cc : captureRepositorySnapshot(subRoot)
+  const actualIgnored = ignoredInventoriesFromSnapshots(cc, sub)
+  if (expectedIgnored && !same(actualIgnored, expectedIgnored)) fail('repository_mutation', 'initial ignored repository state differs from exit evidence')
+  initializeChainState(root, produced, subRoot, actualIgnored)
 }
 
-function prepareArtifactChainStagePrior(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): { root: string; prior: ArtifactBinding[] } {
+function prepareArtifactChainStagePrior(
+  rootInput: string,
+  stage: Exclude<ArtifactStage, 'exit'>,
+  expectedRoots?: { cc_gateway: string; sub2api: string },
+): { root: string; prior: ArtifactBinding[]; state: ChainState; cc: RepositorySnapshot; sub: RepositorySnapshot } {
   const root = realpathSync(rootInput)
   const prior = stageBindings(root, STAGE_TRANSITIONS[stage].prior)
-  assertChainState(root, prior)
-  return { root, prior }
+  const state = assertChainState(root, prior)
+  if (expectedRoots && (realpathSync(expectedRoots.cc_gateway) !== state.repositories.cc_gateway.root
+    || realpathSync(expectedRoots.sub2api) !== state.repositories.sub2api.root)) fail('chain_repository_drift', 'stage repository roots differ from chain initialization')
+  const cc = captureRepositorySnapshot(root, prior)
+  const subRoot = state.repositories.sub2api.root
+  const sub = subRoot === root ? cc : captureRepositorySnapshot(subRoot)
+  if (!same(ignoredInventoriesFromSnapshots(cc, sub), chainIgnoredInventories(state))) fail('repository_mutation', 'ignored repository state differs from the preceding accepted stage')
+  return { root, prior, state, cc, sub }
 }
 
 export function prepareArtifactChainStage(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): ArtifactBinding[] {
-  const { root, prior } = prepareArtifactChainStagePrior(rootInput, stage)
-  captureRepositorySnapshot(root, prior)
+  const { prior } = prepareArtifactChainStagePrior(rootInput, stage)
   return prior
 }
 
-export function completeArtifactChainStage(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): void {
+export function completeArtifactChainStage(
+  rootInput: string,
+  stage: Exclude<ArtifactStage, 'exit'>,
+  terminalIgnored?: RepositoryIgnoredInventories,
+): void {
   const root = realpathSync(rootInput)
   const transition = STAGE_TRANSITIONS[stage]
   const prior = stageBindings(root, transition.prior)
   const produced = stageBindings(root, transition.produced)
-  assertChainState(root, prior)
-  captureRepositorySnapshot(root, [...prior, ...produced])
-  advanceChainState(root, prior, produced)
+  const state = assertChainState(root, prior)
+  const cc = captureRepositorySnapshot(root, [...prior, ...produced])
+  const sub = state.repositories.sub2api.root === root ? cc : captureRepositorySnapshot(state.repositories.sub2api.root)
+  const actualIgnored = ignoredInventoriesFromSnapshots(cc, sub)
+  const expectedTerminal = terminalIgnored ?? chainIgnoredInventories(state)
+  if (!same(actualIgnored, expectedTerminal)) fail('repository_mutation', 'stage terminal ignored repository state differs from accepted evidence')
+  advanceChainState(root, prior, produced, expectedTerminal)
 }
 
-function advanceChainState(root: string, expectedArtifacts: ArtifactBinding[], newArtifacts: ArtifactBinding[]): void {
+function advanceChainState(root: string, expectedArtifacts: ArtifactBinding[], newArtifacts: ArtifactBinding[], terminalIgnored: RepositoryIgnoredInventories): void {
   const state = assertChainState(root, expectedArtifacts)
   const paths = new Set(state.artifacts.map((binding) => binding.path))
   for (const binding of newArtifacts) {
     if (paths.has(binding.path) || !same(bindingAt(root, binding.path), binding)) fail('invalid_chain_advance', `${binding.path} cannot advance the chain`)
     paths.add(binding.path)
   }
-  writeChainState(root, buildChainState(state.repository_head_at_initialization, [...state.artifacts, ...newArtifacts]), false)
+  writeChainState(root, buildChainState(
+    state.repository_head_at_initialization,
+    [...state.artifacts, ...newArtifacts],
+    { cc_gateway: state.repositories.cc_gateway.root, sub2api: state.repositories.sub2api.root },
+    terminalIgnored,
+  ), false)
+}
+
+function assertCurrentChainContinuity(rootInput: string): ChainState {
+  const root = realpathSync(rootInput)
+  const state = verifiedChainState(root)
+  const cc = captureRepositorySnapshot(root, state.artifacts)
+  const sub = state.repositories.sub2api.root === root ? cc : captureRepositorySnapshot(state.repositories.sub2api.root)
+  if (!same(ignoredInventoriesFromSnapshots(cc, sub), chainIgnoredInventories(state))) fail('repository_mutation', 'ignored repository state differs from the accepted chain terminal')
+  return state
 }
 
 type ReviewExpected = {
@@ -848,6 +969,8 @@ export type ResultSet = {
   manifest_digest: string
   catalog_digest: string
   group: 'green' | 'red' | 'merged'
+  initial_ignored_inventories: RepositoryIgnoredInventories
+  terminal_ignored_inventories: RepositoryIgnoredInventories
   records: ResultRecord[]
   result_set_digest: string
 }
@@ -859,6 +982,8 @@ export function buildResultSet(options: {
   manifest_digest: string
   catalog_digest: string
   group: ResultSet['group']
+  initial_ignored_inventories: RepositoryIgnoredInventories
+  terminal_ignored_inventories: RepositoryIgnoredInventories
   records: Array<Record<string, unknown> | ResultRecord>
 }): ResultSet {
   const generated = new Date(options.generatedAt ?? options.generated_at ?? new Date().toISOString())
@@ -871,6 +996,8 @@ export function buildResultSet(options: {
     manifest_digest: options.manifest_digest,
     catalog_digest: options.catalog_digest,
     group: options.group,
+    initial_ignored_inventories: structuredClone(options.initial_ignored_inventories),
+    terminal_ignored_inventories: structuredClone(options.terminal_ignored_inventories),
     records,
   }
   return { ...unsigned, result_set_digest: sha256(canonicalJson(unsigned)) }
@@ -923,6 +1050,8 @@ export function validateResultSetValue(value: unknown, now = Date.now()): Harnes
   if (value.schema_version !== 1 || value.result_kind !== 'governance_amendment_command_results' || !['green', 'red', 'merged'].includes(String(value.group))) add(errors, 'invalid_result_set', '$', 'result-set header is invalid')
   if (!validUtcTimestamp(value.generated_at) || !validUtcTimestamp(value.expires_at) || !Number.isFinite(generated) || !Number.isFinite(expires) || expires - generated !== 7 * 86_400_000 || expires <= now) add(errors, 'expired_results', '$.expires_at', 'results must be fresh for exactly seven days')
   if (!DIGEST_RE.test(String(value.manifest_digest)) || !DIGEST_RE.test(String(value.catalog_digest))) add(errors, 'invalid_digest', '$', 'manifest and catalog digests are required')
+  validateRepositoryIgnoredInventories(value.initial_ignored_inventories, '$.initial_ignored_inventories', errors)
+  validateRepositoryIgnoredInventories(value.terminal_ignored_inventories, '$.terminal_ignored_inventories', errors)
   if (!Array.isArray(value.records)) add(errors, 'invalid_records', '$.records', 'records must be an array')
   else {
     const ids = new Set<string>()
@@ -987,8 +1116,25 @@ export function mergeResultSets(green: ResultSet, red: ResultSet, generatedAt?: 
   const redValidation = validateResultSetValue(red, Date.parse(red.generated_at)); if (!redValidation.ok) fail(redValidation.errors[0].code, JSON.stringify(redValidation.errors))
   if (green.group !== 'green' || red.group !== 'red') fail('wrong_result_group', 'GREEN and RED result sets are required')
   if (green.manifest_digest !== red.manifest_digest || green.catalog_digest !== red.catalog_digest) fail('cross_manifest_results', 'GREEN and RED result bindings differ')
+  if (!same(green.terminal_ignored_inventories, red.initial_ignored_inventories)) fail('repository_mutation', 'RED initial ignored state differs from GREEN terminal evidence')
   if (green.records.some((record) => record.status !== 'pass') || red.records.some((record) => record.status !== 'expected_fail')) fail('unexpected_classification', 'only accepted GREEN and RED classifications can merge')
-  return buildResultSet({ generatedAt: generatedAt ?? green.generated_at, manifest_digest: green.manifest_digest, catalog_digest: green.catalog_digest, group: 'merged', records: [...green.records, ...red.records] })
+  return buildResultSet({
+    generatedAt: generatedAt ?? green.generated_at,
+    manifest_digest: green.manifest_digest,
+    catalog_digest: green.catalog_digest,
+    group: 'merged',
+    initial_ignored_inventories: green.initial_ignored_inventories,
+    terminal_ignored_inventories: red.terminal_ignored_inventories,
+    records: [...green.records, ...red.records],
+  })
+}
+
+export function validateIgnoredEvidenceContinuity(manifest: ExitValue, green: ResultSet, red: ResultSet, merged?: ResultSet): void {
+  const exitInitial = manifestInitialIgnoredInventories(manifest)
+  if (!same(green.initial_ignored_inventories, exitInitial)) fail('repository_mutation', 'GREEN initial ignored state differs from exit evidence')
+  if (!same(red.initial_ignored_inventories, green.terminal_ignored_inventories)) fail('repository_mutation', 'RED initial ignored state differs from GREEN terminal evidence')
+  if (merged && (!same(merged.initial_ignored_inventories, green.initial_ignored_inventories)
+    || !same(merged.terminal_ignored_inventories, red.terminal_ignored_inventories))) fail('repository_mutation', 'merged ignored-state evidence does not preserve exit to GREEN to RED continuity')
 }
 
 type CodeGraphValue = ReturnType<typeof inspectCodeGraphIndex>
@@ -999,8 +1145,8 @@ export type ExitValue = {
   entry: ArtifactBinding
   entry_receipt: ArtifactBinding
   repositories: {
-    cc_gateway: { head: string; branch: string; clean: true; snapshot_digest: string }
-    sub2api: { head: string; branch: string; clean: true; snapshot_digest: string }
+    cc_gateway: { head: string; branch: string; clean: true; snapshot_digest: string; initial_ignored_inventory: IgnoredInventorySummary }
+    sub2api: { head: string; branch: string; clean: true; snapshot_digest: string; initial_ignored_inventory: IgnoredInventorySummary }
   }
   reviewed_candidate_heads: { cc_gateway: string; sub2api: string }
   candidate_commit_identities: CandidateCommitIdentities
@@ -1128,8 +1274,9 @@ export function validateExitValue(value: unknown): HarnessResult {
   else for (const name of ['cc_gateway', 'sub2api'] as const) {
     const repository = value.repositories[name]
     const where = `$.repositories.${name}`
-    if (!exactKeys(repository, ['head', 'branch', 'clean', 'snapshot_digest'], where, errors)) continue
+    if (!exactKeys(repository, ['head', 'branch', 'clean', 'snapshot_digest', 'initial_ignored_inventory'], where, errors)) continue
     if (!/^[0-9a-f]{40,64}$/.test(String(repository.head)) || repository.branch !== 'codex/oracle-p0-1-governance' || repository.clean !== true || !DIGEST_RE.test(String(repository.snapshot_digest))) add(errors, 'invalid_repository_binding', where, 'repository binding is invalid')
+    if (!validFullIgnoredSummary(repository.initial_ignored_inventory)) add(errors, 'invalid_repository_binding', `${where}.initial_ignored_inventory`, 'initial ignored inventory is invalid')
   }
   if (!isObject(value.reviewed_candidate_heads) || !exactKeys(value.reviewed_candidate_heads, ['cc_gateway', 'sub2api'], '$.reviewed_candidate_heads', errors) || !Object.values(value.reviewed_candidate_heads).every((head) => /^[0-9a-f]{40,64}$/.test(String(head))) || !/^[0-9a-f]{40,64}$/.test(String(value.approval_attestation_head))) add(errors, 'invalid_reviewed_heads', '$', 'reviewed and approval heads are invalid')
   else if (isObject(value.repositories) && isObject(value.repositories.cc_gateway) && isObject(value.repositories.sub2api)
@@ -1729,8 +1876,8 @@ function commandCaptureExit(args: ReturnType<typeof parseArgs>, runtime: CliRunt
     entry: bindingAt(ccRoot, entryRelative),
     entry_receipt: bindingAt(ccRoot, receiptRelative),
     repositories: {
-      cc_gateway: { head: ccSnapshot.head, branch: ccSnapshot.branch, clean: true, snapshot_digest: ccSnapshot.snapshot_digest },
-      sub2api: { head: subSnapshot.head, branch: subSnapshot.branch, clean: true, snapshot_digest: subSnapshot.snapshot_digest },
+      cc_gateway: { head: ccSnapshot.head, branch: ccSnapshot.branch, clean: true, snapshot_digest: ccSnapshot.snapshot_digest, initial_ignored_inventory: ccSnapshot.ignored_inventory },
+      sub2api: { head: subSnapshot.head, branch: subSnapshot.branch, clean: true, snapshot_digest: subSnapshot.snapshot_digest, initial_ignored_inventory: subSnapshot.ignored_inventory },
     },
     reviewed_candidate_heads: reviews.expected.heads,
     candidate_commit_identities: reviews.expected.candidateCommitIdentities,
@@ -1743,7 +1890,7 @@ function commandCaptureExit(args: ReturnType<typeof parseArgs>, runtime: CliRunt
   })
   requireValidation(validateExitValue(value)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.exit_schema, value)
   writeExclusiveArtifact(out, value, path.join(ccRoot, EVIDENCE_ROOT_RELATIVE))
-  initializeArtifactChain(ccRoot)
+  initializeArtifactChain(ccRoot, subRoot, manifestInitialIgnoredInventories(value))
 }
 
 function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): void {
@@ -1753,13 +1900,17 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
   const outputName = group as 'green' | 'red'; const out = exactArgumentPath(ccRoot, String(one(args, 'out')), ARTIFACT_CHAIN[outputName])
   const catalog = validateCatalogAt(ccRoot, String(one(args, 'catalog')), manifestLoaded.value)
   assertManifestHeads(manifestLoaded.value, ccRoot, subRoot)
+  const prepared = prepareArtifactChainStagePrior(ccRoot, outputName, { cc_gateway: ccRoot, sub2api: subRoot })
+  const initialIgnored = ignoredInventoriesFromSnapshots(prepared.cc, prepared.sub)
+  if (group === 'green' && !same(initialIgnored, manifestInitialIgnoredInventories(manifestLoaded.value))) fail('repository_mutation', 'GREEN initial ignored state differs from exit evidence')
   if (group === 'red') {
     const priorGreen = readJsonAt<ResultSet>(ccRoot, ARTIFACT_CHAIN.green)
     requireValidation(validateResultSetValue(priorGreen)); if (priorGreen.group !== 'green' || priorGreen.manifest_digest !== manifestLoaded.binding.digest) fail('cross_manifest_results', 'prior GREEN result differs from the manifest')
+    if (!same(initialIgnored, priorGreen.terminal_ignored_inventories)) fail('repository_mutation', 'RED initial ignored state differs from GREEN terminal evidence')
   }
-  const { prior } = prepareArtifactChainStagePrior(ccRoot, outputName)
-  let currentCc = captureRepositorySnapshot(ccRoot, prior)
-  let currentSub = captureRepositorySnapshot(subRoot)
+  const { prior } = prepared
+  let currentCc = prepared.cc
+  let currentSub = prepared.sub
   const roots = { CC_GATEWAY_ROOT: ccRoot, SUB2API_ROOT: subRoot }
   const records: ResultRecord[] = []
   for (const entry of catalog.value.filter((candidate) => candidate.group === group)) {
@@ -1788,11 +1939,20 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     currentCc = afterCc
     currentSub = afterSub
   }
-  const value = buildResultSet({ generatedAt: new Date().toISOString(), manifest_digest: manifestLoaded.binding.digest, catalog_digest: catalog.binding.digest, group, records })
+  const terminalIgnored = ignoredInventoriesFromSnapshots(currentCc, currentSub)
+  const value = buildResultSet({
+    generatedAt: new Date().toISOString(),
+    manifest_digest: manifestLoaded.binding.digest,
+    catalog_digest: catalog.binding.digest,
+    group,
+    initial_ignored_inventories: initialIgnored,
+    terminal_ignored_inventories: terminalIgnored,
+    records,
+  })
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); requireValidation(validateResultSetBindings(value, catalog.value, manifestLoaded.value, manifestLoaded.binding.digest, catalog.binding.digest)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.results_schema, value)
   if (value.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'command group contains an unexpected result')
   writeExclusiveArtifact(out, value, path.join(ccRoot, EVIDENCE_ROOT_RELATIVE))
-  completeArtifactChainStage(ccRoot, outputName)
+  completeArtifactChainStage(ccRoot, outputName, terminalIgnored)
 }
 
 function commandMerge(args: ReturnType<typeof parseArgs>, root: string): void {
@@ -1804,7 +1964,9 @@ function commandMerge(args: ReturnType<typeof parseArgs>, root: string): void {
   if (green.manifest_digest !== manifest.binding.digest || red.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'result set does not bind the named manifest')
   const catalog = validateCatalogAt(root, path.join(root, COMMAND_CATALOG_PATH), manifest.value)
   requireValidation(validateResultSetBindings(green, catalog.value, manifest.value, manifest.binding.digest, catalog.binding.digest)); requireValidation(validateResultSetBindings(red, catalog.value, manifest.value, manifest.binding.digest, catalog.binding.digest))
+  validateIgnoredEvidenceContinuity(manifest.value, green, red)
   const value = mergeResultSets(green, red, green.generated_at)
+  validateIgnoredEvidenceContinuity(manifest.value, green, red, value)
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); validateAgainstSchema(root, SCHEMA_PATHS.results_schema, value)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
   completeArtifactChainStage(root, 'results')
@@ -1897,6 +2059,7 @@ export function assertAcceptedReportPair(rootInput: string, stage: ReportPairSta
   for (const binding of expected) {
     if (!state.artifacts.some((candidate) => same(candidate, binding))) fail('incomplete_report_transaction', 'report pair is not bound by the accepted chain state')
   }
+  assertCurrentChainContinuity(root)
   return value
 }
 
@@ -2149,9 +2312,14 @@ function assertReceiptInputs(root: string, args: ReturnType<typeof parseArgs>): 
 function validateReceiptChainValues(root: string, manifest: ExitValue, now = Date.now(), schemaCommit = gitText(root, 'rev-parse', 'HEAD')): void {
   const reviewImport = readJsonAt<ReviewImport>(root, REVIEW_IMPORT_PATH)
   validateReviewsForManifest(root, manifest, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH), schemaCommit)
+  const green = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.green); requireValidation(validateResultSetValue(green, now))
+  const red = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.red); requireValidation(validateResultSetValue(red, now))
   const results = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.results); requireValidation(validateResultSetValue(results, now))
   const manifestBinding = bindingAt(root, ARTIFACT_CHAIN.exit); const catalog = validateCatalogAt(root, path.join(root, COMMAND_CATALOG_PATH), manifest)
+  requireValidation(validateResultSetBindings(green, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
+  requireValidation(validateResultSetBindings(red, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
   requireValidation(validateResultSetBindings(results, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
+  validateIgnoredEvidenceContinuity(manifest, green, red, results)
   if (results.group !== 'merged' || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'receipt requires accepted merged results')
   const context = readJsonAt<ContextValue>(root, ARTIFACT_CHAIN.context); requireValidation(validateContextValue(context, now))
   const handoff = readJsonAt<HandoffValue>(root, ARTIFACT_CHAIN.handoff); requireValidation(validateHandoffValue(handoff, now))
