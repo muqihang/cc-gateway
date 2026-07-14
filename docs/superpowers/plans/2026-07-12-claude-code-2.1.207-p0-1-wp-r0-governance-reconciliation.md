@@ -751,6 +751,7 @@ CC Gateway ledger commit message: `docs(oracle): resolve joint fixture drift obs
 - Modify: `tools/oracle-lab/governance-amendment-entry.ts`
 - Create: `tools/oracle-lab/governance-amendment-evidence.ts` (including the local cross-stage two-repository journal)
 - Create: `tools/oracle-lab/ignored-path-inventory.ts` (including fixed joint-surface modes)
+- Modify: `tests/oracle-lab-governance-amendment-entry.test.ts`
 - Modify: `tests/oracle-lab-post-integration-entry.test.ts`
 - Modify: `tests/oracle-lab-post-integration-handoff.test.ts`
 - Create: `tests/run-p0-1.ts`
@@ -858,7 +859,7 @@ using the absolute reviewed POSIX controller
 `/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 <subcommand> ...`. The sequence covers all 13 distinct
 subcommands, including both `run` groups, both report validations, and receipt
 validation before and after the receipt-only commit. Its disposable topology
-uses shared no-checkout sparse clones, 33 exact materialized CC Gateway tracked
+uses shared no-checkout sparse clones, 34 exact materialized CC Gateway tracked
 inputs (including the statically imported
 `tools/oracle-lab/ignored-path-inventory.ts`), four exact Sub2API tracked
 inputs, and fixed sparse patterns for generated evidence. Both clone-local
