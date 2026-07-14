@@ -1,13 +1,15 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, createPublicKey, verify } from 'node:crypto'
 import {
   closeSync,
   constants as fsConstants,
   linkSync,
   lstatSync,
   openSync,
+  readFileSync,
   realpathSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -60,6 +62,8 @@ import {
 import Ajv2020 from 'ajv/dist/2020.js'
 import {
   REVIEWED_CODEGRAPH_EXECUTABLE,
+  REVIEWED_GIT_EXECUTABLE,
+  REVIEWED_NODE_EXECUTABLE,
   assertNoGitReplacementRefs,
   assertProductionStartupEnvironment,
   minimalToolEnvironment,
@@ -71,6 +75,51 @@ const Ajv2020Constructor = Ajv2020 as unknown as new (options: Record<string, un
 
 let activeEvidenceReadBudget: BoundedReadBudget | undefined
 let activeCodeGraphReadBudget: BoundedReadBudget | undefined
+let activeReviewedCommandTools: ReviewedCommandTools | undefined
+
+type ReviewedCommandTool = Readonly<{ name: 'npm' | 'go'; executable: string; realpath: string; executable_digest: string; version_digest: string; fixture: boolean }>
+type ReviewedCommandTools = Readonly<Record<'npm' | 'go', ReviewedCommandTool>>
+
+function validateReviewedCommandTool(name: 'npm' | 'go', expected: Record<string, unknown>, trustMode: string, fixtureRootDigest?: string): ReviewedCommandTool {
+  const selected = process.env[name === 'npm' ? 'ORACLE_P0_1_NPM' : 'ORACLE_P0_1_GO']
+  if (!selected || !path.isAbsolute(selected)) fail('unsafe_startup_environment', `reviewed ${name} executable must be selected by the launcher`)
+  let canonical: string
+  try { canonical = realpathSync(selected) } catch { fail('unsafe_startup_environment', `reviewed ${name} executable is unavailable`) }
+  const stat = statSync(canonical)
+  if (!stat.isFile() || stat.size < 1 || stat.size > 256 * 1024 * 1024) fail('unsafe_startup_environment', `reviewed ${name} executable has an invalid type or size`)
+  const executableDigest = sha256(readFileSync(canonical))
+  const realpathDigest = sha256(canonical)
+  const pathAccepted = trustMode === 'exact_executables_v1'
+    ? expected.realpath_sha256 === realpathDigest
+    : trustMode === 'test_fixture_root_v1' && fixtureRootDigest === sha256(path.dirname(path.dirname(canonical)))
+  if (expected.name !== name || expected.executable_sha256 !== executableDigest || !pathAccepted) fail('unsafe_startup_environment', `reviewed ${name} executable provenance mismatch`)
+  const trustedPath = [path.dirname(canonical), path.dirname(REVIEWED_NODE_EXECUTABLE), path.dirname(REVIEWED_GIT_EXECUTABLE), '/usr/bin', '/bin'].filter((value, index, values) => values.indexOf(value) === index).join(path.delimiter)
+  const observed = spawnSync(canonical, name === 'go' ? ['version'] : ['--version'], {
+    encoding: 'utf8',
+    shell: false,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    env: { HOME: '/dev/null', TMPDIR: '/tmp', PATH: trustedPath, npm_config_userconfig: '/dev/null', npm_config_globalconfig: '/etc/oracle-p0-1-empty-npmrc', GOENV: 'off', GOTOOLCHAIN: 'local' },
+  })
+  if (observed.error || observed.status !== 0 || expected.version_sha256 !== sha256(String(observed.stdout).trim())) fail('unsafe_startup_environment', `reviewed ${name} version provenance mismatch`)
+  return Object.freeze({ name, executable: selected, realpath: canonical, executable_digest: executableDigest, version_digest: String(expected.version_sha256), fixture: trustMode === 'test_fixture_root_v1' })
+}
+
+function validateReviewedToolchain(root: string): ReviewedCommandTools {
+  const registry = readJsonAt<Record<string, unknown>>(root, REVIEWED_TOOLCHAIN_PATH)
+  validateAgainstSchema(root, SCHEMA_PATHS.reviewed_toolchain_schema, registry)
+  if (!exactKeys(registry, ['environment', 'fixture_root_sha256', 'schema_version', 'tools', 'trust_mode'], '$reviewed_toolchain', []) || registry.schema_version !== 1 || !Array.isArray(registry.tools) || registry.tools.length !== 2) fail('invalid_reviewed_toolchain', 'reviewed toolchain registry is invalid')
+  if (!same(registry.environment, { goenv: 'off', home: '/dev/null', npm_global_config: '/etc/oracle-p0-1-empty-npmrc', npm_user_config: '/dev/null' })) fail('invalid_reviewed_toolchain', 'reviewed toolchain environment policy is invalid')
+  if (registry.trust_mode !== 'exact_executables_v1' && registry.trust_mode !== 'test_fixture_root_v1') fail('invalid_reviewed_toolchain', 'reviewed toolchain trust mode is invalid')
+  if (registry.trust_mode === 'exact_executables_v1' && registry.fixture_root_sha256 !== null) fail('invalid_reviewed_toolchain', 'production toolchain cannot declare a fixture root')
+  if (registry.trust_mode === 'test_fixture_root_v1' && !DIGEST_RE.test(String(registry.fixture_root_sha256))) fail('invalid_reviewed_toolchain', 'test fixture toolchain root is invalid')
+  const byName = new Map(registry.tools.filter(isObject).map((tool) => [String(tool.name), tool]))
+  if (byName.size !== 2 || !byName.has('npm') || !byName.has('go')) fail('invalid_reviewed_toolchain', 'reviewed npm and go entries are required')
+  return Object.freeze({
+    npm: validateReviewedCommandTool('npm', byName.get('npm') as Record<string, unknown>, String(registry.trust_mode), String(registry.fixture_root_sha256)),
+    go: validateReviewedCommandTool('go', byName.get('go') as Record<string, unknown>, String(registry.trust_mode), String(registry.fixture_root_sha256)),
+  })
+}
 
 function evidenceReadBudget(): BoundedReadBudget {
   return activeEvidenceReadBudget ?? createBoundedReadBudget(MAX_EVIDENCE_AGGREGATE_BYTES)
@@ -199,6 +248,8 @@ const P0_1_EVIDENCE_RELATIVE = `${EVIDENCE_ROOT_RELATIVE}/p0-1`
 const REVIEW_IMPORT_PATH = `${P0_1_EVIDENCE_RELATIVE}/p0-1-review-import.json`
 const REQUIREMENTS_REVIEW_PATH = `${P0_1_EVIDENCE_RELATIVE}/requirements-review.json`
 const SECURITY_REVIEW_PATH = `${P0_1_EVIDENCE_RELATIVE}/security-quality-review.json`
+const TRUSTED_REVIEWERS_PATH = 'docs/superpowers/registry/oracle-lab-p0-1-trusted-reviewers.json'
+const REVIEWED_TOOLCHAIN_PATH = 'docs/superpowers/registry/oracle-lab-p0-1-reviewed-toolchain.json'
 const ENTRY_PATH = `${P0_1_EVIDENCE_RELATIVE}/p0-1-entry-baseline.json`
 const ENTRY_RECEIPT_PATH = `${P0_1_EVIDENCE_RELATIVE}/p0-1-entry-baseline.receipt.json`
 const ENTRY_CAPTURE_COMMIT = 'ce08739e0b8edae3ea7c9859b935ee5d23ede9f2'
@@ -249,6 +300,8 @@ const SCHEMA_PATHS = {
   report_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-report.schema.json',
   review_import_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json',
   review_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
+  trusted_reviewers_schema: 'docs/superpowers/schemas/oracle-lab-p0-1-trusted-reviewers.schema.json',
+  reviewed_toolchain_schema: 'docs/superpowers/schemas/oracle-lab-p0-1-reviewed-toolchain.schema.json',
 } as const
 const COMMAND_CATALOG_PATH = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
 const CAPTURE_INPUT_PATHS = {
@@ -259,6 +312,8 @@ const CAPTURE_INPUT_PATHS = {
   bounded_repository_state: 'tools/oracle-lab/bounded-repository-state.ts',
   ignored_path_inventory: 'tools/oracle-lab/ignored-path-inventory.ts',
   command_catalog: COMMAND_CATALOG_PATH,
+  trusted_reviewers: TRUSTED_REVIEWERS_PATH,
+  reviewed_toolchain: REVIEWED_TOOLCHAIN_PATH,
   ...SCHEMA_PATHS,
 } as const
 
@@ -294,7 +349,7 @@ const CATALOG_FIELDS = [
 
 const REPORT_FIELDS = ['schema_version', 'report_type', 'generated_at', 'status', 'manifest', 'results', 'reviews', 'command_summary', 'report_digest'] as const
 const HANDOFF_FIELDS = ['schema_version', 'handoff_kind', 'generated_at', 'expires_at', 'bindings', 'disabled_capabilities', 'next_planning_entry_conditions', 'next_implementation_entry_conditions', 'handoff_digest'] as const
-const REVIEW_FIELDS = ['schema_version', 'review_kind', 'reviewer_identity', 'reviewer_role', 'reviewed_candidate_heads', 'diff_digests', 'plan_digest', 'review_import_digest', 'decision', 'findings', 'verification'] as const
+const REVIEW_FIELDS = ['schema_version', 'review_kind', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'reviewed_candidate_heads', 'diff_digests', 'plan_digest', 'review_import_digest', 'decision', 'findings', 'verification', 'signature'] as const
 const RESULT_FIELDS = ['schema_version', 'result_kind', 'generated_at', 'expires_at', 'manifest_digest', 'catalog_digest', 'group', 'initial_ignored_inventories', 'terminal_ignored_inventories', 'records', 'result_set_digest'] as const
 const RESULT_RECORD_FIELDS = ['command_id', 'repository', 'repository_commit', 'expected_exit', 'exit_code', 'status', 'duration_ms', 'stdout_digest', 'stderr_digest', 'output_bytes', 'timed_out', 'output_overflow', 'failure_names', 'manifest_digest', 'catalog_entry_digest', 'argv_digest', 'environment_digest', 'execution_bindings', 'ignored_output_observations', 'result_digest'] as const
 const CONTEXT_FIELDS = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'bindings', 'review_import', 'reviews', 'disabled_capabilities', 'context_digest'] as const
@@ -373,7 +428,7 @@ export function validateCommandCatalogValue(value: unknown): HarnessResult {
       for (const key of Object.keys(candidate.env)) if (!allowed.has(key)) add(errors, 'non_hermetic_environment', `${where}.env.${key}`, 'undeclared environment override')
       if (reviewed && !same(Object.fromEntries(Object.entries(candidate.env).filter(([key]) => ![...Object.keys(HERMETIC_NETWORK_ENV), 'CI'].includes(key))), 'extraEnv' in reviewed ? reviewed.extraEnv : {})) add(errors, 'non_hermetic_environment', `${where}.env`, 'command-specific environment differs from the reviewed inventory')
     }
-    if (!same(candidate.inherit_env, ['PATH', 'HOME', 'TMPDIR'])) add(errors, 'invalid_inherited_environment', `${where}.inherit_env`, 'only PATH, HOME, TMPDIR may be inherited')
+    if (!same(candidate.inherit_env, [])) add(errors, 'invalid_inherited_environment', `${where}.inherit_env`, 'formal commands may not inherit parent environment paths or homes')
     if (!reviewed || !same(candidate.bindings, reviewed.bindings)) add(errors, 'incomplete_execution_binding', `${where}.bindings`, 'execution bindings differ from the reviewed inventory')
     if (!same(candidate.allowed_worktree_delta, [])) add(errors, 'invalid_allowed_delta', `${where}.allowed_worktree_delta`, 'catalog entries cannot add worktree deltas')
     if (!reviewed || candidate.ignored_output_policy !== reviewed.ignoredPolicy) add(errors, 'invalid_ignored_output_policy', `${where}.ignored_output_policy`, 'ignored-output policy differs from the reviewed inventory')
@@ -888,6 +943,56 @@ type ReviewExpected = {
   planDigest: string
   reviewImportDigest: string
   candidateCommitIdentities: CandidateCommitIdentities
+  reviewerRegistry: TrustedReviewerRegistry
+}
+
+type TrustedReviewer = {
+  key_id: string
+  public_key_der_base64: string
+  reviewer_identity: string
+  reviewer_role: 'requirements' | 'security_quality'
+}
+
+type TrustedReviewerRegistry = {
+  schema_version: 1
+  trust_model: 'ed25519_ephemeral_independent_reviewers_v1'
+  reviewers: TrustedReviewer[]
+}
+
+export function validateTrustedReviewerRegistry(value: unknown): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  if (!exactKeys(value, ['schema_version', 'trust_model', 'reviewers'], '$trusted_reviewers', errors)) return result(errors)
+  if (value.schema_version !== 1 || value.trust_model !== 'ed25519_ephemeral_independent_reviewers_v1') add(errors, 'invalid_reviewer_registry', '$trusted_reviewers', 'reviewer trust model is invalid')
+  if (!Array.isArray(value.reviewers) || value.reviewers.length !== 2) {
+    add(errors, 'invalid_reviewer_registry', '$trusted_reviewers.reviewers', 'exactly two trusted reviewers are required')
+    return result(errors)
+  }
+  const roles = new Set<string>()
+  const identities = new Set<string>()
+  const keys = new Set<string>()
+  for (const [index, reviewer] of value.reviewers.entries()) {
+    const where = `$trusted_reviewers.reviewers[${index}]`
+    if (!exactKeys(reviewer, ['key_id', 'public_key_der_base64', 'reviewer_identity', 'reviewer_role'], where, errors)) continue
+    if (!['requirements', 'security_quality'].includes(String(reviewer.reviewer_role))) add(errors, 'invalid_reviewer_registry', `${where}.reviewer_role`, 'reviewer role is invalid')
+    if (typeof reviewer.reviewer_identity !== 'string' || !/^[A-Za-z0-9._@-]{3,128}$/.test(reviewer.reviewer_identity)) add(errors, 'invalid_reviewer_registry', `${where}.reviewer_identity`, 'reviewer identity is invalid')
+    let publicDer: Buffer
+    try {
+      publicDer = Buffer.from(String(reviewer.public_key_der_base64), 'base64')
+      if (publicDer.toString('base64') !== reviewer.public_key_der_base64 || createPublicKey({ key: publicDer, format: 'der', type: 'spki' }).asymmetricKeyType !== 'ed25519') throw new Error('invalid Ed25519 key')
+    } catch {
+      add(errors, 'invalid_reviewer_registry', `${where}.public_key_der_base64`, 'reviewer public key is invalid')
+      continue
+    }
+    if (reviewer.key_id !== sha256(publicDer)) add(errors, 'invalid_reviewer_registry', `${where}.key_id`, 'reviewer key ID does not bind the public key')
+    if (roles.has(String(reviewer.reviewer_role)) || identities.has(String(reviewer.reviewer_identity)) || keys.has(String(reviewer.key_id))) add(errors, 'duplicate_reviewer_authority', where, 'reviewer authorities must be distinct')
+    roles.add(String(reviewer.reviewer_role)); identities.add(String(reviewer.reviewer_identity)); keys.add(String(reviewer.key_id))
+  }
+  if (!roles.has('requirements') || !roles.has('security_quality')) add(errors, 'invalid_reviewer_registry', '$trusted_reviewers.reviewers', 'both reviewer roles are required')
+  return result(errors)
+}
+
+export function reviewSigningPayload(value: Record<string, unknown>): Buffer {
+  return Buffer.from(`${canonicalJson(Object.fromEntries(Object.entries(value).filter(([name]) => name !== 'signature')))}\n`)
 }
 
 export type CommitIdentity = {
@@ -977,6 +1082,18 @@ function validateReviewValue(value: unknown, expectedRole: 'requirements' | 'sec
   if (value.schema_version !== 1 || value.review_kind !== 'governance_amendment_review') add(errors, 'invalid_review', where, 'review header is invalid')
   if (typeof value.reviewer_identity !== 'string' || !/^[A-Za-z0-9._@-]{3,128}$/.test(value.reviewer_identity) || identityAliases(value.reviewer_identity).size === 0) add(errors, 'invalid_reviewer_identity', `${where}.reviewer_identity`, 'reviewer identity is invalid')
   if (value.reviewer_role !== expectedRole) add(errors, 'wrong_reviewer_role', `${where}.reviewer_role`, 'reviewer role is not the required role')
+  const authority = expected.reviewerRegistry.reviewers.find((reviewer) => reviewer.reviewer_role === expectedRole)
+  if (!authority || value.reviewer_identity !== authority.reviewer_identity || value.signing_key_id !== authority.key_id || value.signature_algorithm !== 'ed25519_canonical_json_v1') {
+    add(errors, 'untrusted_reviewer_identity', where, 'reviewer identity, role, or signing key is not trusted')
+  } else if (typeof value.signature !== 'string') {
+    add(errors, 'invalid_review_signature', `${where}.signature`, 'review signature is missing')
+  } else {
+    try {
+      const publicKey = createPublicKey({ key: Buffer.from(authority.public_key_der_base64, 'base64'), format: 'der', type: 'spki' })
+      const signature = Buffer.from(value.signature, 'base64')
+      if (signature.toString('base64') !== value.signature || !verify(null, reviewSigningPayload(value), publicKey, signature)) add(errors, 'invalid_review_signature', `${where}.signature`, 'review signature does not bind the canonical payload')
+    } catch { add(errors, 'invalid_review_signature', `${where}.signature`, 'review signature is invalid') }
+  }
   if (!same(value.reviewed_candidate_heads, expected.heads)) add(errors, 'review_head_mismatch', `${where}.reviewed_candidate_heads`, 'reviewed heads differ from the candidate')
   if (!same(value.diff_digests, expected.diffs)) add(errors, 'review_diff_mismatch', `${where}.diff_digests`, 'reviewed diffs differ from the candidate')
   if (value.plan_digest !== expected.planDigest || value.review_import_digest !== expected.reviewImportDigest) add(errors, 'review_input_mismatch', where, 'plan or review-import digest differs')
@@ -989,6 +1106,8 @@ function validateReviewValue(value: unknown, expectedRole: 'requirements' | 'sec
 
 export function validateReviewPair(requirementsReview: unknown, securityReview: unknown, expected: ReviewExpected): HarnessResult {
   const errors: HarnessErrorRecord[] = []
+  const registryValidation = validateTrustedReviewerRegistry(expected.reviewerRegistry)
+  if (!registryValidation.ok) errors.push(...registryValidation.errors)
   validateReviewValue(requirementsReview, 'requirements', expected, errors)
   validateReviewValue(securityReview, 'security_quality', expected, errors)
   if (isObject(requirementsReview) && isObject(securityReview) && typeof requirementsReview.reviewer_identity === 'string' && typeof securityReview.reviewer_identity === 'string'
@@ -1408,6 +1527,9 @@ function validateReviewArtifacts(options: { ccRoot: string; subRoot: string; req
   const security = readJsonAt<Record<string, unknown>>(ccRoot, securityRelative)
   const reviewImportObserved = readJsonArtifactAt(ccRoot, reviewImportRelative)
   const reviewImport = reviewImportObserved.value
+  const reviewerRegistry = readJsonAt<TrustedReviewerRegistry>(ccRoot, TRUSTED_REVIEWERS_PATH)
+  requireValidation(validateTrustedReviewerRegistry(reviewerRegistry))
+  validateAgainstCommittedSchema(ccRoot, gitText(ccRoot, 'rev-parse', 'HEAD'), SCHEMA_PATHS.trusted_reviewers_schema, reviewerRegistry)
   validateReviewEvidenceSchemas({ root: ccRoot, requirements, security, reviewImport, schemaCommit: gitText(ccRoot, 'rev-parse', 'HEAD') })
   const heads = isObject(requirements.reviewed_candidate_heads) ? requirements.reviewed_candidate_heads as ReviewExpected['heads'] : { cc_gateway: '', sub2api: '' }
   const expected: ReviewExpected = {
@@ -1416,6 +1538,7 @@ function validateReviewArtifacts(options: { ccRoot: string; subRoot: string; req
     planDigest: bindingAt(ccRoot, PLAN_PATH).digest,
     reviewImportDigest: reviewImportObserved.binding.digest,
     candidateCommitIdentities: readCandidateCommitIdentities({ ccRoot, ccHead: heads.cc_gateway, subRoot, subHead: heads.sub2api }),
+    reviewerRegistry,
   }
   requireValidation(validateReviewPair(requirements, security, expected))
   if (!isAncestor(ccRoot, BASE_HEADS.cc_gateway, heads.cc_gateway) || !isAncestor(subRoot, BASE_HEADS.sub2api, heads.sub2api)) fail('invalid_candidate_ancestry', 'reviewed candidates do not descend from frozen bases')
@@ -1870,14 +1993,33 @@ function expandCatalogString(value: string, roots: { CC_GATEWAY_ROOT: string; SU
 }
 
 function childEnvironment(entry: Record<string, unknown>, roots: { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string }): Record<string, string> {
-  const environment: Record<string, string> = {}
-  for (const name of entry.inherit_env as string[]) {
-    const inherited = process.env[name]
-    if (inherited !== undefined) environment[name] = inherited
+  const tools = activeReviewedCommandTools
+  if (!tools) fail('unsafe_startup_environment', 'reviewed command toolchain is not active')
+  const toolPath = [path.dirname(tools.go.realpath), path.dirname(tools.npm.realpath), path.dirname(REVIEWED_NODE_EXECUTABLE), path.dirname(REVIEWED_GIT_EXECUTABLE), '/usr/bin', '/bin'].filter((value, index, values) => values.indexOf(value) === index).join(path.delimiter)
+  const moduleMarker = `${path.sep}pkg${path.sep}mod${path.sep}`
+  const moduleIndex = tools.go.realpath.indexOf(moduleMarker)
+  if (moduleIndex < 0 && !tools.go.fixture) fail('unsafe_startup_environment', 'reviewed Go executable is not inside the frozen module cache')
+  const environment: Record<string, string> = {
+    HOME: '/dev/null',
+    TMPDIR: '/tmp',
+    PATH: toolPath,
+    npm_config_userconfig: '/dev/null',
+    npm_config_globalconfig: '/etc/oracle-p0-1-empty-npmrc',
+    npm_config_cache: '/tmp/oracle-p0-1-npm-cache',
+    GOENV: 'off',
+    GOCACHE: '/tmp/oracle-p0-1-go-build-cache',
+    GOMODCACHE: tools.go.fixture ? '/tmp/oracle-p0-1-fixture-go-mod-cache' : tools.go.realpath.slice(0, moduleIndex + moduleMarker.length - 1),
   }
-  if (!environment.PATH) fail('missing_tool_path', 'PATH is required to locate the cached local toolchain')
   for (const [name, value] of Object.entries(entry.env as Record<string, string>)) environment[name] = expandCatalogString(value, roots)
   return environment
+}
+
+function reviewedCommandArgv(argv: string[]): string[] {
+  const tools = activeReviewedCommandTools
+  if (!tools) fail('unsafe_startup_environment', 'reviewed command toolchain is not active')
+  const command = argv[0]
+  if (command !== 'npm' && command !== 'go') fail('unreviewed_command_tool', 'catalog command is not backed by the reviewed toolchain')
+  return [tools[command].realpath, ...argv.slice(1)]
 }
 
 function failureNames(excerpt: string): string[] {
@@ -2013,7 +2155,7 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     const policy = entry.ignored_output_policy as IgnoredOutputPolicy
     const beforeCc = rebindRepositorySnapshotPolicy(currentCc, 'none')
     const cwd = expandCatalogString(String(entry.cwd), roots)
-    const argv = (entry.argv as string[]).map((part) => expandCatalogString(part, roots)); const environment = childEnvironment(entry, roots)
+    const argv = reviewedCommandArgv((entry.argv as string[]).map((part) => expandCatalogString(part, roots))); const environment = childEnvironment(entry, roots)
     const commandStartedAt = new Date()
     const observed = runtime.runBoundedProcess({ argv, cwd, env: environment, timeoutMs: Number(entry.timeout_ms), maxOutputBytes: Number(entry.max_output_bytes) })
     const commandFinishedAt = new Date()
@@ -2084,6 +2226,11 @@ function validateReviewsForManifest(root: string, manifest: ExitValue, requireme
   if (!same(requirementsBinding, manifest.governance.requirements_review) || !same(securityBinding, manifest.governance.security_review)) fail('review_digest_mismatch', 'review bytes differ from the exit manifest')
   const requirements = requirementsObserved.value; const security = securityObserved.value
   const reviewImport = reviewImportObserved.value
+  const reviewerRegistryObserved = readJsonArtifactAt<TrustedReviewerRegistry>(root, TRUSTED_REVIEWERS_PATH)
+  const reviewerRegistry = reviewerRegistryObserved.value
+  requireValidation(validateTrustedReviewerRegistry(reviewerRegistry))
+  validateAgainstCommittedSchema(root, schemaCommit, SCHEMA_PATHS.trusted_reviewers_schema, reviewerRegistry)
+  if (!same(reviewerRegistryObserved.binding, manifest.capture_inputs.trusted_reviewers)) fail('reviewer_registry_binding_mismatch', 'trusted reviewer registry differs from the exit manifest')
   validateReviewEvidenceSchemas({ root, requirements, security, reviewImport, schemaCommit })
   if (!same(reviewImportObserved.binding, manifest.governance.review_import) || !same(manifest.governance.amendment, ADOPTED_AMENDMENT_BINDING)) fail('review_import_binding_mismatch', 'manifest review amendment bindings are not the fixed reviewed pair')
   const diffs = isObject(requirements.diff_digests) ? requirements.diff_digests as ReviewExpected['diffs'] : { cc_gateway: '', sub2api: '' }
@@ -2093,6 +2240,7 @@ function validateReviewsForManifest(root: string, manifest: ExitValue, requireme
     planDigest: manifest.governance.plan.digest,
     reviewImportDigest: manifest.governance.review_import.digest,
     candidateCommitIdentities: manifest.candidate_commit_identities,
+    reviewerRegistry,
   }))
   return { requirements, security }
 }
@@ -2615,6 +2763,7 @@ function runProductionCli(tokens: string[]): void {
     assertNoGitReplacementRefs(REPOSITORY_ROOT)
     const [command, ...argumentTokens] = tokens
     if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
+    activeReviewedCommandTools = command === 'capture-exit' || command === 'run' ? validateReviewedToolchain(REPOSITORY_ROOT) : undefined
     dispatch(command, argumentTokens, PRODUCTION_CLI_RUNTIME)
   })
 }

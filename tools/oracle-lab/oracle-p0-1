@@ -22,6 +22,7 @@ esac
 script_dir=${launcher%/*}
 repository_root=${script_dir%/tools/oracle-lab}
 repository_root=$(cd -P "$repository_root" 2>/dev/null && pwd -P) || fail_startup
+parent_path=${PATH-/usr/bin:/bin}
 
 select_tool() {
   for candidate in "$@"; do
@@ -33,16 +34,31 @@ select_tool() {
   return 1
 }
 
+select_path_tool() {
+  tool_name=$1
+  old_path_ifs=$IFS
+  IFS=:
+  for directory in $parent_path; do
+    [ -n "$directory" ] || directory=.
+    candidate=$directory/$tool_name
+    if [ -x "$candidate" ] && [ ! -d "$candidate" ]; then
+      IFS=$old_path_ifs
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  IFS=$old_path_ifs
+  return 1
+}
+
 node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
 git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
 codegraph_executable=$(select_tool /opt/homebrew/bin/codegraph /usr/local/bin/codegraph) || fail_startup
+npm_executable=$(select_path_tool npm) || fail_startup
+go_executable=$(select_path_tool go) || fail_startup
 tsx_cli=$repository_root/node_modules/tsx/dist/cli.mjs
 typescript_entry=$repository_root/tools/oracle-lab/governance-amendment-evidence.ts
 [ -f "$tsx_cli" ] && [ ! -L "$typescript_entry" ] && [ -f "$typescript_entry" ] || fail_startup
-
-parent_path=${PATH-/usr/bin:/bin}
-parent_home=${HOME-/tmp}
-parent_tmp=${TMPDIR-/tmp}
 
 old_ifs=$IFS
 IFS=:
@@ -62,16 +78,21 @@ done
 IFS=$old_ifs
 
 exec /usr/bin/env -i \
-  HOME="$parent_home" \
-  TMPDIR="$parent_tmp" \
+  HOME=/dev/null \
+  TMPDIR=/tmp \
   PATH="$parent_path" \
   CI="${CI-1}" \
   npm_config_offline=true \
   npm_config_audit=false \
   npm_config_fund=false \
+  npm_config_userconfig=/dev/null \
+  npm_config_globalconfig=/etc/oracle-p0-1-empty-npmrc \
+  npm_config_cache=/tmp/oracle-p0-1-npm-cache \
   GOPROXY=off \
   GOSUMDB=off \
   GOTOOLCHAIN=local \
+  GOENV=off \
+  GOCACHE=/tmp/oracle-p0-1-go-build-cache \
   HTTP_PROXY=http://127.0.0.1:9 \
   HTTPS_PROXY=http://127.0.0.1:9 \
   ALL_PROXY=http://127.0.0.1:9 \
@@ -80,4 +101,6 @@ exec /usr/bin/env -i \
   ORACLE_P0_1_NODE="$node_executable" \
   ORACLE_P0_1_GIT="$git_executable" \
   ORACLE_P0_1_CODEGRAPH="$codegraph_executable" \
+  ORACLE_P0_1_NPM="$npm_executable" \
+  ORACLE_P0_1_GO="$go_executable" \
   "$node_executable" "$tsx_cli" "$typescript_entry" "$@"

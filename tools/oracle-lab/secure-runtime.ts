@@ -145,6 +145,8 @@ export function assertProductionStartupEnvironment(): void {
     if (Object.hasOwn(process.env, name)) fail('unsafe_startup_environment', 'unsafe inherited startup state rejected')
   }
   if (realpathSync(process.execPath) !== REVIEWED_NODE_EXECUTABLE) fail('unsafe_startup_environment', 'production Node executable differs from the reviewed binding')
+  if (process.env.HOME !== '/dev/null' || process.env.TMPDIR !== '/tmp') fail('unsafe_startup_environment', 'production HOME and TMPDIR must be isolated')
+  if (process.env.npm_config_userconfig !== '/dev/null' || process.env.npm_config_globalconfig !== '/etc/oracle-p0-1-empty-npmrc' || process.env.GOENV !== 'off') fail('unsafe_startup_environment', 'user package and Go configuration must be disabled')
 }
 
 export function minimalToolEnvironment(): NodeJS.ProcessEnv {

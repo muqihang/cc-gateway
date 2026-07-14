@@ -743,7 +743,11 @@ CC Gateway ledger commit message: `docs(oracle): resolve joint fixture drift obs
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-report.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-p0-1-trusted-reviewers.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-p0-1-reviewed-toolchain.schema.json`
 - Create: `docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json`
+- Create: `docs/superpowers/registry/oracle-lab-p0-1-trusted-reviewers.json`
+- Create: `docs/superpowers/registry/oracle-lab-p0-1-reviewed-toolchain.json`
 - Create: `tools/oracle-lab/oracle-p0-1`
 - Create: `tools/oracle-lab/secure-runtime.ts`
 - Create: `tools/oracle-lab/bounded-file-read.ts`
@@ -771,7 +775,8 @@ Tests must reject:
 - uncommitted or unreviewed implementation heads;
 - missing amendment, Registry, Claims, Roadmap, observation ledger, schema, validator, plan, review-import, or review digest;
 - review-import bytes not generated from the named original/adopted amendment pair;
-- review attestations with wrong repository heads/diff digests, duplicate reviewer identity or role, a non-`approved` decision, or nonzero Critical/Important counts;
+- review attestations with wrong repository heads/diff digests, duplicate reviewer identity/role/key, an unregistered key, missing or invalid Ed25519 signature, a non-`approved` decision, or nonzero Critical/Important counts;
+- shadowed or byte/version/path-mismatched `npm` or `go`, inherited `PATH`/`HOME`, npm user/global configuration, or enabled `GOENV`;
 - a command catalog missing either joint test;
 - any catalog entry missing or overriding the exact npm-offline, Go-offline/local-toolchain, and proxy-deny `HERMETIC_NETWORK_ENV`;
 - a joint command without `CC_GATEWAY_REPO_ROOT=${CC_GATEWAY_ROOT}`;
@@ -819,6 +824,8 @@ The mandatory GREEN inventory has exactly these catalog IDs and argv:
 7. `p0-1-focused`: CC Gateway root, `npm run test:oracle:p0-1`.
 
 Every catalog entry uses the exact `HERMETIC_NETWORK_ENV` from Global Constraints, including `GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` for direct Go commands and Go children of npm tests. The catalog validator rejects omission or override, and a missing cached module/toolchain is an unexpected fail-closed result rather than permission to download.
+
+No formal catalog entry inherits `PATH` or `HOME`. The reviewed launcher resolves `npm` and `go`, and the production runner accepts them only when their canonical realpath digest, executable-byte digest, and version digest match `oracle-lab-p0-1-reviewed-toolchain.json`. It then replaces the catalog command name with that verified absolute executable, constructs the child `PATH` only from verified tool directories plus `/usr/bin:/bin`, sets `HOME=/dev/null`, disables npm user/global configuration and `GOENV`, and binds the toolchain registry and schema into `capture_inputs`. The separate `test_fixture_root_v1` trust mode exists only for sparse disposable acceptance repositories; its registry is committed into each fixture candidate and cannot satisfy the formal candidate's exact toolchain binding.
 
 `tests/run-p0-1.ts` imports exactly ten suites in this fixed order: `oracle-lab-hermetic-dependencies.test.ts`, `oracle-lab-governance-amendment-entry.test.ts`, `oracle-lab-review-overlay.test.ts`, `oracle-lab-traceability.test.ts`, `oracle-lab-claim-matrix.test.ts`, `oracle-lab-current-observations.test.ts`, `oracle-lab-harness.test.ts`, `oracle-lab-reviewed-snapshot-binding.test.ts`, `oracle-lab-ignored-path-inventory.test.ts`, and `oracle-lab-governance-amendment-evidence.test.ts`. It is not named `*.test.ts`, so the existing full `tests/run-all.ts` does not execute the focused suite twice. Add package script `test:oracle:p0-1` as `tsx tests/run-p0-1.ts`.
 
@@ -920,11 +927,11 @@ Dispatch two reviewers:
 
 Both reviewers inspect the exact candidate CC Gateway head, the exact Sub2API fix head, and the complete branch diffs from the frozen bases. Any Critical or Important finding blocks capture. Fix findings in a separate implementation commit, update the candidate bindings, and repeat both reviews from a new candidate head.
 
-Only after both reviewers approve, create the two schema-valid JSON approval files. Each approval binds reviewer identity/role, reviewed CC Gateway and Sub2API heads, frozen-base-to-head diff digests, plan digest, review-import digest, `decision: approved`, zero Critical/Important counts, and bounded verification evidence. Commit only the two approval attestations; no reviewed normative, Registry, Claim, observation, schema, tool, catalog, plan, Roadmap, review-import, or Sub2API file changes after approval.
+Before the final candidate is frozen, the two independent reviewers each generate an ephemeral Ed25519 keypair in their isolated agent context. Private keys never enter the repository, filesystem, controller messages, or evidence; only role-scoped SPKI public keys and their SHA-256 key IDs enter `oracle-lab-p0-1-trusted-reviewers.json`. Only after both reviewers approve, each reviewer signs the canonical JSON bytes of its own exact review payload. Each schema-valid approval binds reviewer identity/role/key ID, signature algorithm, reviewed CC Gateway and Sub2API heads, frozen-base-to-head diff digests, plan digest, review-import digest, `decision: approved`, zero Critical/Important counts, bounded verification evidence, and the Ed25519 signature. Commit only the two approval attestations; no reviewed normative, Registry, Claim, observation, schema, tool, catalog, plan, Roadmap, review-import, reviewer registry, toolchain registry, or Sub2API file changes after approval.
 
 Approval commit message: `docs(oracle): attest p0.1 governance approval`
 
-Run `validate-reviews` after this commit. It rejects duplicate identities or roles, verifies both approvals against the candidate heads/diffs and review-import, proves the approval commit's parent is the reviewed CC Gateway candidate, and proves the approval commit adds only the two attestation paths. The exit manifest records both `reviewed_candidate_heads` and the CC Gateway approval-attestation head. A later implementation or governance fix invalidates the approvals and restarts both reviews and final capture; only generated exit artifacts and the final receipt may be added afterward.
+Run `validate-reviews` after this commit. It rejects duplicate identities, roles, or keys; verifies each Ed25519 signature against the role-scoped trusted-reviewer registry; verifies both approvals against the candidate heads/diffs and review-import; proves the approval commit's parent is the reviewed CC Gateway candidate; and proves the approval commit adds only the two attestation paths. A self-declared reviewer string, a substituted public key, an unsigned review, or a one-byte payload change fails closed. The exit manifest records both `reviewed_candidate_heads` and the CC Gateway approval-attestation head. A later implementation or governance fix invalidates the approvals and restarts both reviews and final capture; only generated exit artifacts and the final receipt may be added afterward.
 
 - [ ] **Step 2: Sync both indexes and capture the clean reviewed exit**
 

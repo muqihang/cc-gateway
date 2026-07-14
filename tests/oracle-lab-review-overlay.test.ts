@@ -96,6 +96,15 @@ test('roadmap assigns boundary work and work-package slices to the owning phase'
   }
 })
 
+test('roadmap assigns AV-B4 evidence only to the CC Gateway direct-egress fixture', () => {
+  const roadmap = read(roadmapPath)
+  const avB4 = roadmap.split('\n').find((line) => line.startsWith('| AV-B4-001 |'))
+  assert.ok(avB4, 'missing AV-B4 decision row')
+  assert.match(avB4, /`cc-b4-b6-red` result/)
+  assert.match(avB4, /Local CC Gateway formal-pool direct-egress fixture/)
+  assert.doesNotMatch(avB4, /sidecar-b4-b6-red|sidecar-owner/)
+})
+
 test('Phase 1 owns only B1-B3 and the fail-closed listener startup boundary', () => {
   const roadmap = read(roadmapPath)
   const phase1 = section(roadmap, '## Phase 1:', '## Phase 2:')

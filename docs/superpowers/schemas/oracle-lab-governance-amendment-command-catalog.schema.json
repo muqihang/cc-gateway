@@ -262,11 +262,7 @@
         }
       },
       "inherit_env": {
-        "const": [
-          "PATH",
-          "HOME",
-          "TMPDIR"
-        ]
+        "const": []
       },
       "shell": {
         "const": false

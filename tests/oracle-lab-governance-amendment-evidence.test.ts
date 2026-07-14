@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto'
 import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -16,6 +16,8 @@ const boundedStateRelative = 'tools/oracle-lab/bounded-repository-state.ts'
 const boundedFileRelative = 'tools/oracle-lab/bounded-file-read.ts'
 const ignoredInventoryRelative = 'tools/oracle-lab/ignored-path-inventory.ts'
 const catalogRelative = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
+const trustedReviewersRelative = 'docs/superpowers/registry/oracle-lab-p0-1-trusted-reviewers.json'
+const reviewedToolchainRelative = 'docs/superpowers/registry/oracle-lab-p0-1-reviewed-toolchain.json'
 const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'
 const sub2apiSourceRoot = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1'
 const productionBranch = 'codex/oracle-p0-1-governance'
@@ -45,6 +47,8 @@ const CC_SPARSE_PATHS = [
   'docs/superpowers/registry/oracle-lab-claims.json',
   'docs/superpowers/registry/oracle-lab-current-observations.json',
   catalogRelative,
+  trustedReviewersRelative,
+  reviewedToolchainRelative,
   'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
   taskPlanRelative,
   'docs/superpowers/schemas/oracle-lab-requirement.schema.json',
@@ -57,6 +61,8 @@ const CC_SPARSE_PATHS = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-report.schema.json',
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json',
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
+  'docs/superpowers/schemas/oracle-lab-p0-1-trusted-reviewers.schema.json',
+  'docs/superpowers/schemas/oracle-lab-p0-1-reviewed-toolchain.schema.json',
 ] as const
 const SUB_SPARSE_PATHS = [
   '.gitignore',
@@ -80,7 +86,7 @@ const CC_GENERATED_SPARSE_PATTERNS = [
   'docs/superpowers/evidence/p0-1/p0-1-handoff.json',
   'docs/superpowers/evidence/p0-1/p0-1-successor-receipt.json',
 ] as const
-assert.equal(CC_SPARSE_PATHS.length, 34)
+assert.equal(CC_SPARSE_PATHS.length, 38)
 assert.equal(SUB_SPARSE_PATHS.length, 4)
 const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
@@ -92,9 +98,11 @@ const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-report.schema.json',
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json',
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
+  'docs/superpowers/schemas/oracle-lab-p0-1-trusted-reviewers.schema.json',
+  'docs/superpowers/schemas/oracle-lab-p0-1-reviewed-toolchain.schema.json',
 ]
 
-for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
+for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, toolRelative, ignoredInventoryRelative, catalogRelative, trustedReviewersRelative, reviewedToolchainRelative, ...schemaRelatives]) {
   assert.equal(existsSync(path.join(root, relative)), true, `${relative} must exist`)
 }
 const amendmentEntrySource = readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts'), 'utf8')
@@ -134,7 +142,7 @@ for (const entry of catalog) {
   assert.equal(entry.schema_version, 1)
   assert.deepEqual(Object.fromEntries(Object.entries(entry.env).filter(([key]) => key in HERMETIC_NETWORK_ENV)), HERMETIC_NETWORK_ENV)
   assert.equal(entry.env.CI, '1')
-  assert.deepEqual(entry.inherit_env, ['PATH', 'HOME', 'TMPDIR'])
+  assert.deepEqual(entry.inherit_env, [])
   assert.equal(entry.shell, false)
   assert.equal(entry.max_output_bytes, 8 * 1024 * 1024)
   assert.equal(entry.expected_exit, entry.group === 'green' ? 0 : 'nonzero')
@@ -351,6 +359,62 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 
+const testReviewerKeys = {
+  requirements: generateKeyPairSync('ed25519'),
+  security_quality: generateKeyPairSync('ed25519'),
+}
+
+function reviewerAuthority(role: 'requirements' | 'security_quality') {
+  const publicDer = testReviewerKeys[role].publicKey.export({ format: 'der', type: 'spki' }) as Buffer
+  return {
+    key_id: sha256(publicDer),
+    public_key_der_base64: publicDer.toString('base64'),
+    reviewer_identity: `test-${role.replace('_quality', '')}-reviewer`,
+    reviewer_role: role,
+  }
+}
+
+const testReviewerRegistry = {
+  schema_version: 1,
+  trust_model: 'ed25519_ephemeral_independent_reviewers_v1',
+  reviewers: [reviewerAuthority('requirements'), reviewerAuthority('security_quality')],
+}
+
+function signedReview(value: Record<string, unknown>, role: 'requirements' | 'security_quality'): any {
+  const authority = testReviewerRegistry.reviewers.find((entry) => entry.reviewer_role === role)!
+  const unsigned = {
+    ...structuredClone(value),
+    reviewer_identity: authority.reviewer_identity,
+    reviewer_role: role,
+    signing_key_id: authority.key_id,
+    signature_algorithm: 'ed25519_canonical_json_v1',
+  }
+  return { ...unsigned, signature: cryptoSign(null, Buffer.from(`${canonical(unsigned)}\n`), testReviewerKeys[role].privateKey).toString('base64') }
+}
+
+function installTestReviewerRegistry(repository: string): void {
+  writeFileSync(path.join(repository, trustedReviewersRelative), `${canonical(testReviewerRegistry)}\n`)
+}
+
+function testToolchainRegistry(shimBin: string) {
+  const tools = (['npm', 'go'] as const).map((name) => {
+    const executable = realpathSync(path.join(shimBin, name))
+    return {
+      executable_sha256: sha256(readFileSync(executable)),
+      name,
+      realpath_sha256: sha256(executable),
+      version_sha256: sha256('test-shim-v1'),
+    }
+  })
+  return {
+    environment: { goenv: 'off', home: '/dev/null', npm_global_config: '/etc/oracle-p0-1-empty-npmrc', npm_user_config: '/dev/null' },
+    fixture_root_sha256: sha256(realpathSync(path.dirname(shimBin))),
+    schema_version: 1,
+    tools,
+    trust_mode: 'test_fixture_root_v1',
+  }
+}
+
 function resolveRealExecutable(name: string): string {
   for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!directory) continue
@@ -416,7 +480,7 @@ function productionParentEnvironment(shimBin: string, fixtureTmp: string, extra:
     CI: '1',
     HOME: process.env.HOME ?? fixtureTmp,
     TMPDIR: fixtureTmp,
-    PATH: `${shimBin}${path.delimiter}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+    PATH: `${shimBin}${path.delimiter}/Users/muqihang/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
     ...extra,
   }
 }
@@ -490,22 +554,28 @@ function writeCatalogShims(options: {
     group: entry.group,
   }))
   const statePath = path.join(path.dirname(options.auditLog), `${path.basename(options.directory)}-mutation-state`)
+  const shimConfig = {
+    accepted,
+    auditLog: options.auditLog,
+    mutationState: statePath,
+    mutation: options.mutation ?? null,
+    unsafeCommandId: options.unsafeCommandId ?? null,
+    unsafeMarker: options.unsafeMarker ?? '',
+    earlyFailureCommandId: options.earlyFailureCommandId ?? null,
+    jointModeNode: options.jointModeNode ?? null,
+    subRoot: options.subRoot,
+  }
+  writeFileSync(path.join(options.directory, 'config.json'), JSON.stringify(shimConfig))
   const script = `#!${process.execPath}
-import { appendFileSync, chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-const accepted = ${JSON.stringify(accepted)}
-const auditLog = ${JSON.stringify(options.auditLog)}
-const mutationState = ${JSON.stringify(statePath)}
-const mutation = ${JSON.stringify(options.mutation ?? null)}
-const unsafeCommandId = ${JSON.stringify(options.unsafeCommandId ?? null)}
-const unsafeMarker = ${JSON.stringify(options.unsafeMarker ?? '')}
-const earlyFailureCommandId = ${JSON.stringify(options.earlyFailureCommandId ?? null)}
-const jointModeNode = ${JSON.stringify(options.jointModeNode ?? null)}
+const { accepted, auditLog, mutationState, mutation, unsafeCommandId, unsafeMarker, earlyFailureCommandId, jointModeNode, subRoot } = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'))
 const executable = path.basename(process.argv[1])
 const argv = process.argv.slice(2)
 const cwd = process.cwd()
+if (argv.length === 1 && (argv[0] === '--version' || argv[0] === 'version')) { process.stdout.write('test-shim-v1\\n'); process.exit(0) }
 const match = accepted.find((candidate) => candidate.executable === executable && candidate.cwd === cwd && JSON.stringify(candidate.argv) === JSON.stringify(argv))
-const selectedKeys = ['CI','npm_config_offline','npm_config_audit','npm_config_fund','GOPROXY','GOSUMDB','GOTOOLCHAIN','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','PATH','HOME','TMPDIR','SUB2API_ROOT','CC_GATEWAY_REPO_ROOT']
+const selectedKeys = ['CI','npm_config_offline','npm_config_audit','npm_config_fund','npm_config_userconfig','npm_config_globalconfig','npm_config_cache','GOPROXY','GOSUMDB','GOTOOLCHAIN','GOENV','GOCACHE','GOMODCACHE','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','PATH','HOME','TMPDIR','SUB2API_ROOT','CC_GATEWAY_REPO_ROOT']
 appendFileSync(auditLog, JSON.stringify({ executable, argv, cwd, env_keys: Object.keys(process.env).sort(), selected_env: Object.fromEntries(selectedKeys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])), platform_env: { __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING }, command_id: match?.id ?? null }) + '\\n')
 if (!match) process.exit(97)
 if (match.id === earlyFailureCommandId) process.exit(1)
@@ -521,7 +591,7 @@ if (mutation && !existsSync(mutationState)) {
 if (match.id === 'sub2api-joint-local-chain') {
   const now = new Date()
   const localDate = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + '-sub2api-cc-gateway-joint-local-capture'
-  const output = path.join(${JSON.stringify(options.subRoot)}, 'docs/anti-ban/captures/real-baseline', localDate, 'safe-deliverable')
+  const output = path.join(subRoot, 'docs/anti-ban/captures/real-baseline', localDate, 'safe-deliverable')
   mkdirSync(output, { recursive: true })
   writeFileSync(path.join(output, 'README.md'), 'safe local acceptance readme\\n')
   writeFileSync(path.join(output, 'joint_local_capture_summary.redacted.json'), '{"safe":true}\\n')
@@ -596,7 +666,13 @@ function cliFixture(label: string): string {
   writeFileSync(path.join(repository, 'tools/oracle-lab/governance-amendment-entry.ts'), readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts')))
   chmodSync(path.join(repository, launcherRelative), 0o755)
   writeFileSync(path.join(repository, ignoredInventoryRelative), readFileSync(path.join(root, ignoredInventoryRelative)))
+  writeFileSync(path.join(repository, catalogRelative), readFileSync(path.join(root, catalogRelative)))
+  writeFileSync(path.join(repository, reviewedToolchainRelative), readFileSync(path.join(root, reviewedToolchainRelative)))
+  for (const relative of schemaRelatives) writeFileSync(path.join(repository, relative), readFileSync(path.join(root, relative)))
   linkCloneDependencies(repository, path.join(root, 'node_modules'))
+  installTestReviewerRegistry(repository)
+  git(repository, 'add', toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts', catalogRelative, trustedReviewersRelative, reviewedToolchainRelative, ...schemaRelatives)
+  git(repository, 'commit', '-qm', 'fixture reviewed runtime inputs')
   return sparseRepository
 }
 
@@ -1153,11 +1229,9 @@ const descendant = Number(readFileSync(descendantPid, 'utf8'))
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
 assert.throws(() => process.kill(descendant, 0), /ESRCH/)
 
-const reviewBase = {
+const reviewUnsignedBase = {
   schema_version: 1,
   review_kind: 'governance_amendment_review',
-  reviewer_identity: 'reviewer-requirements',
-  reviewer_role: 'requirements',
   reviewed_candidate_heads: { cc_gateway: '1'.repeat(40), sub2api: '2'.repeat(40) },
   diff_digests: { cc_gateway: sha256('cc-diff'), sub2api: sha256('sub-diff') },
   plan_digest: sha256('plan'),
@@ -1166,16 +1240,19 @@ const reviewBase = {
   findings: { critical: 0, important: 0, summaries: ['all requirements represented'] },
   verification: ['focused suite passed'],
 }
-const securityReview = { ...structuredClone(reviewBase), reviewer_identity: 'reviewer-security', reviewer_role: 'security_quality' }
+const reviewBase = signedReview(reviewUnsignedBase, 'requirements')
+const securityReview = signedReview(reviewUnsignedBase, 'security_quality')
 const reviewExpected = {
   heads: reviewBase.reviewed_candidate_heads,
   diffs: reviewBase.diff_digests,
   planDigest: reviewBase.plan_digest,
   reviewImportDigest: reviewBase.review_import_digest,
   candidateCommitIdentities,
+  reviewerRegistry: testReviewerRegistry,
 }
 assert.equal(evidence.validateReviewPair(reviewBase, securityReview, reviewExpected).ok, true)
-evidence.validateReviewEvidenceSchemas({ root, requirements: reviewBase, security: securityReview, reviewImport, schemaCommit: 'HEAD' })
+assert.equal(evidence.validateReviewPair({ ...reviewUnsignedBase, reviewer_identity: 'forged-requirements', reviewer_role: 'requirements' }, { ...reviewUnsignedBase, reviewer_identity: 'forged-security', reviewer_role: 'security_quality' }, reviewExpected).ok, false)
+evidence.validateReviewEvidenceSchemas({ root, requirements: reviewBase, security: securityReview, reviewImport })
 const reviewWithUnknownNestedField = structuredClone(reviewBase) as any
 reviewWithUnknownNestedField.reviewed_candidate_heads.surprise = '3'.repeat(40)
 expectCode(() => evidence.validateReviewEvidenceSchemas({ root, requirements: reviewWithUnknownNestedField, security: securityReview, reviewImport, schemaCommit: 'HEAD' }), 'schema_validation_failed')
@@ -1193,8 +1270,8 @@ git(reviewCliRoot, 'add', reviewImportRelative)
 git(reviewCliRoot, 'commit', '-qm', 'candidate review import')
 const reviewCliCandidate = git(reviewCliRoot, 'rev-parse', 'HEAD')
 const reviewCliSubCandidate = git(reviewCliSubRoot, 'rev-parse', 'HEAD')
-const cliReviewBase = {
-  ...structuredClone(reviewBase),
+const cliReviewUnsigned = {
+  ...structuredClone(reviewUnsignedBase),
   reviewed_candidate_heads: { cc_gateway: reviewCliCandidate, sub2api: reviewCliSubCandidate },
   diff_digests: {
     cc_gateway: gitBinaryDiffDigest(reviewCliRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', reviewCliCandidate),
@@ -1203,9 +1280,10 @@ const cliReviewBase = {
   plan_digest: sha256(readFileSync(path.join(reviewCliRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
   review_import_digest: sha256(readFileSync(path.join(reviewCliRoot, reviewImportRelative))),
 }
+const cliReviewBase = signedReview(cliReviewUnsigned, 'requirements')
 const invalidCliRequirementsReview = structuredClone(cliReviewBase) as any
 invalidCliRequirementsReview.reviewed_candidate_heads.surprise = '4'.repeat(40)
-const cliSecurityReview = { ...structuredClone(cliReviewBase), reviewer_identity: 'reviewer-security', reviewer_role: 'security_quality' }
+const cliSecurityReview = signedReview(cliReviewUnsigned, 'security_quality')
 const cliRequirementsPath = path.join(reviewCliRoot, 'docs/superpowers/evidence/p0-1/requirements-review.json')
 const cliSecurityPath = path.join(reviewCliRoot, 'docs/superpowers/evidence/p0-1/security-quality-review.json')
 writeFileSync(cliRequirementsPath, `${canonical(invalidCliRequirementsReview)}\n`)
@@ -1240,8 +1318,8 @@ for (const [field, value] of [
   git(forgedCcRoot, 'commit', '-qm', `fixture forged ${field} candidate`)
   const forgedCandidate = git(forgedCcRoot, 'rev-parse', 'HEAD')
   const forgedSubCandidate = git(forgedSubRoot, 'rev-parse', 'HEAD')
-  const forgedReviewBase = {
-    ...structuredClone(reviewBase),
+  const forgedReviewUnsigned = {
+    ...structuredClone(reviewUnsignedBase),
     reviewed_candidate_heads: { cc_gateway: forgedCandidate, sub2api: forgedSubCandidate },
     diff_digests: {
       cc_gateway: gitBinaryDiffDigest(forgedCcRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', forgedCandidate),
@@ -1252,8 +1330,8 @@ for (const [field, value] of [
   }
   const forgedRequirementsPath = path.join(forgedCcRoot, 'docs/superpowers/evidence/p0-1/requirements-review.json')
   const forgedSecurityPath = path.join(forgedCcRoot, 'docs/superpowers/evidence/p0-1/security-quality-review.json')
-  writeFileSync(forgedRequirementsPath, `${canonical({ ...forgedReviewBase, reviewer_identity: `forged-${field}-requirements` })}\n`)
-  writeFileSync(forgedSecurityPath, `${canonical({ ...forgedReviewBase, reviewer_identity: `forged-${field}-security`, reviewer_role: 'security_quality' })}\n`)
+  writeFileSync(forgedRequirementsPath, `${canonical(signedReview(forgedReviewUnsigned, 'requirements'))}\n`)
+  writeFileSync(forgedSecurityPath, `${canonical(signedReview(forgedReviewUnsigned, 'security_quality'))}\n`)
   git(forgedCcRoot, 'add', 'docs/superpowers/evidence/p0-1/requirements-review.json', 'docs/superpowers/evidence/p0-1/security-quality-review.json')
   git(forgedCcRoot, 'commit', '-qm', `fixture forged ${field} approvals`)
   const forgedReviewArguments = [
@@ -1315,10 +1393,17 @@ const acceptanceCandidatePaths = [
   'tools/oracle-lab/governance-amendment-entry.ts',
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   taskPlanRelative,
+  catalogRelative,
+  trustedReviewersRelative,
+  reviewedToolchainRelative,
   schemaRelatives[0],
+  schemaRelatives[1],
   schemaRelatives[2],
   schemaRelatives[5],
   schemaRelatives[7],
+  schemaRelatives[8],
+  schemaRelatives[9],
+  schemaRelatives[10],
 ] as const
 for (const relative of acceptanceCandidatePaths) {
   writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
@@ -1335,6 +1420,8 @@ writeCatalogShims({
   ccRoot: acceptanceCcRoot,
   subRoot: acceptanceSubRoot,
 })
+writeFileSync(path.join(acceptanceCcRoot, trustedReviewersRelative), `${canonical(testReviewerRegistry)}\n`)
+writeFileSync(path.join(acceptanceCcRoot, reviewedToolchainRelative), `${canonical(testToolchainRegistry(acceptanceShimBin))}\n`)
 const acceptanceCommands: string[] = []
 let acceptancePeakBytes = directoryBytes(acceptanceFixtureRoot)
 function observeAcceptanceSize(): void {
@@ -1400,18 +1487,29 @@ assert.equal(existsSync(gitShadowMarker), false)
 assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), false)
 assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
 
+for (const tool of ['npm', 'go'] as const) {
+  const shadowDirectory = path.join(acceptanceFixtureRoot, `${tool}-shadow`)
+  const marker = path.join(acceptanceFixtureRoot, `${tool}-shadow.marker`)
+  mkdirSync(shadowDirectory)
+  writeFileSync(path.join(shadowDirectory, tool), `#!/bin/sh\nprintf executed > ${JSON.stringify(marker)}\nprintf 'test-shim-v1\\n'\n`)
+  chmodSync(path.join(shadowDirectory, tool), 0o755)
+  const observed = runProductionLauncherCli(acceptanceCcRoot, ['capture-exit'], `${shadowDirectory}${path.delimiter}${acceptanceShimBin}`, acceptanceTmp)
+  expectProductionCliCode(observed, 'unsafe_startup_environment')
+  assert.equal(existsSync(marker), false, `shadowed ${tool} must be rejected before execution`)
+}
+
 const replacementRoot = cloneSharedSparseRepository(
   acceptanceCcRoot,
   path.join(acceptanceFixtureRoot, 'replacement-repository'),
   [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS],
 )
-for (const relative of [toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
+for (const relative of [toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts', reviewedToolchainRelative, 'docs/superpowers/schemas/oracle-lab-p0-1-reviewed-toolchain.schema.json']) {
   writeFileSync(path.join(replacementRoot, relative), readFileSync(path.join(root, relative)))
 }
 chmodSync(path.join(replacementRoot, launcherRelative), 0o755)
 linkCloneDependencies(replacementRoot, dependencyRoot)
 git(replacementRoot, 'replace', git(replacementRoot, 'rev-parse', 'HEAD'), git(replacementRoot, 'rev-parse', 'HEAD^'))
-const replacementObserved = runProductionLauncherCli(replacementRoot, ['review-import'], acceptanceShimBin, acceptanceTmp)
+const replacementObserved = runProductionLauncherCli(replacementRoot, ['review-import'], '/usr/bin:/bin', acceptanceTmp)
 expectProductionCliCode(replacementObserved, 'git_replace_refs_present')
 assert.equal(existsSync(path.join(replacementRoot, '.git/oracle-p0-1-chain-state.json')), false)
 assert.equal(existsSync(path.join(replacementRoot, evidence.ARTIFACT_CHAIN.exit)), false)
@@ -1454,8 +1552,8 @@ git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review import')
 const acceptanceCandidate = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
 const acceptanceSubCandidate = git(acceptanceSubRoot, 'rev-parse', 'HEAD')
 const acceptanceReviewImport = readFileSync(path.join(acceptanceCcRoot, reviewImportRelative))
-const acceptanceReviewBase = {
-  ...structuredClone(reviewBase),
+const acceptanceReviewUnsigned = {
+  ...structuredClone(reviewUnsignedBase),
   reviewed_candidate_heads: { cc_gateway: acceptanceCandidate, sub2api: acceptanceSubCandidate },
   diff_digests: {
     cc_gateway: gitBinaryDiffDigest(acceptanceCcRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', acceptanceCandidate),
@@ -1464,15 +1562,8 @@ const acceptanceReviewBase = {
   plan_digest: sha256(readFileSync(path.join(acceptanceCcRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
   review_import_digest: sha256(acceptanceReviewImport),
 }
-const acceptanceRequirementsReview = {
-  ...structuredClone(acceptanceReviewBase),
-  reviewer_identity: 'acceptance-requirements',
-}
-const acceptanceSecurityReview = {
-  ...structuredClone(acceptanceReviewBase),
-  reviewer_identity: 'acceptance-security',
-  reviewer_role: 'security_quality',
-}
+const acceptanceRequirementsReview = signedReview(acceptanceReviewUnsigned, 'requirements')
+const acceptanceSecurityReview = signedReview(acceptanceReviewUnsigned, 'security_quality')
 writeFileSync(path.join(acceptanceCcRoot, 'docs/superpowers/evidence/p0-1/requirements-review.json'), `${canonical(acceptanceRequirementsReview)}\n`)
 writeFileSync(path.join(acceptanceCcRoot, 'docs/superpowers/evidence/p0-1/security-quality-review.json'), `${canonical(acceptanceSecurityReview)}\n`)
 git(acceptanceCcRoot, 'add', 'docs/superpowers/evidence/p0-1/requirements-review.json', 'docs/superpowers/evidence/p0-1/security-quality-review.json')
@@ -1810,15 +1901,18 @@ for (const [index, invocation] of acceptanceAudit.entries()) {
   assert.deepEqual(invocation.platform_env, { __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING })
   assert.deepEqual(Object.fromEntries(Object.entries(invocation.selected_env).filter(([key]) => key in HERMETIC_NETWORK_ENV)), HERMETIC_NETWORK_ENV)
   assert.equal(invocation.selected_env.CI, '1')
-  assert.equal(invocation.selected_env.HOME, process.env.HOME ?? acceptanceTmp)
-  assert.equal(invocation.selected_env.TMPDIR, acceptanceTmp)
-  assert.equal(String(invocation.selected_env.PATH).split(path.delimiter).includes(acceptanceShimBin), true)
+  assert.equal(invocation.selected_env.HOME, '/dev/null')
+  assert.equal(invocation.selected_env.TMPDIR, '/tmp')
+  assert.equal(invocation.selected_env.npm_config_userconfig, '/dev/null')
+  assert.equal(invocation.selected_env.npm_config_globalconfig, '/etc/oracle-p0-1-empty-npmrc')
+  assert.equal(invocation.selected_env.GOENV, 'off')
+  assert.equal(String(invocation.selected_env.PATH).split(path.delimiter).includes(realpathSync(acceptanceShimBin)), true)
   for (const [key, value] of Object.entries(extraEnv)) {
     assert.equal(invocation.selected_env[key], value.replace('${CC_GATEWAY_ROOT}', acceptanceCcRoot).replace('${SUB2API_ROOT}', acceptanceSubRoot))
   }
   const resultRecord = acceptanceResultRecords.find((record: any) => record.command_id === id)
   assert.equal(resultRecord.environment_digest, sha256(canonical(invocation.selected_env)))
-  assert.equal(resultRecord.argv_digest, sha256(canonical(argv)))
+  assert.equal(resultRecord.argv_digest, sha256(canonical([realpathSync(path.join(acceptanceShimBin, argv[0])), ...argv.slice(1)])))
 }
 
 const preReceiptArtifactPaths = Object.entries(evidence.ARTIFACT_CHAIN)
@@ -2790,7 +2884,7 @@ const exitValue = evidence.buildExitValue({
     amendment: 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md', requirements: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', roadmap: 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', observations: 'docs/superpowers/registry/oracle-lab-current-observations.json', requirement_schema: 'docs/superpowers/schemas/oracle-lab-requirement.schema.json', requirement_validator: 'tools/oracle-lab/validate-requirements.ts', plan: 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md', review_import: 'docs/superpowers/evidence/p0-1/p0-1-review-import.json', requirements_review: 'docs/superpowers/evidence/p0-1/requirements-review.json', security_review: 'docs/superpowers/evidence/p0-1/security-quality-review.json',
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   capture_inputs: Object.fromEntries(Object.entries({
-    launcher: launcherRelative, successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', secure_runtime: secureRuntimeRelative, bounded_file_read: boundedFileRelative, bounded_repository_state: boundedStateRelative, ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
+    launcher: launcherRelative, successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', secure_runtime: secureRuntimeRelative, bounded_file_read: boundedFileRelative, bounded_repository_state: boundedStateRelative, ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', trusted_reviewers: trustedReviewersRelative, reviewed_toolchain: reviewedToolchainRelative, exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8], trusted_reviewers_schema: schemaRelatives[9], reviewed_toolchain_schema: schemaRelatives[10],
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   codegraph: {
     cc_gateway: { version: '1.1.6', up_to_date: true, index_digest: sha256('cc-index'), file_count: 1, node_count: 1, edge_count: 1 },
