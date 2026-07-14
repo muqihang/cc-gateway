@@ -318,7 +318,7 @@ const CAPTURE_INPUT_PATHS = {
 } as const
 
 const COMMAND_IDS = {
-  green: ['cc-build', 'cc-tests', 'cc-cross-repo-baseline', 'sidecar-tests', 'sub2api-formal-pool', 'sub2api-joint-local-chain', 'p0-1-focused'],
+  green: ['cc-build', 'p0-1-focused', 'cc-tests', 'cc-cross-repo-baseline', 'sidecar-tests', 'sub2api-formal-pool', 'sub2api-joint-local-chain'],
   red: ['cc-boundary-red', 'sidecar-boundary-red', 'sub2api-boundary-red'],
 } as const
 const CC_EXECUTION_BINDINGS = ['cc_gateway_head', 'cc_gateway_before_snapshot', 'cc_gateway_after_snapshot'] as const
@@ -326,12 +326,12 @@ const SUB_EXECUTION_BINDINGS = ['sub2api_head', 'sub2api_before_snapshot', 'sub2
 const DUAL_EXECUTION_BINDINGS = ['cc_gateway_head', 'sub2api_head', 'cc_gateway_before_snapshot', 'cc_gateway_after_snapshot', 'sub2api_before_snapshot', 'sub2api_after_snapshot', 'shared_contract_digest'] as const
 const COMMAND_SPEC = [
   { id: 'cc-build', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'build'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
-  { id: 'cc-tests', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'test'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'p0-1-focused', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:p0-1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'cc-tests', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:non-p0-1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'cc-cross-repo-baseline', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:cross-repo'], extraEnv: { SUB2API_ROOT: '${SUB2API_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'sidecar-tests', group: 'green', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', './...', '-count=1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'sub2api-formal-pool', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', './internal/server/routes', '-run', 'FormalPool|FormalPoolOperations', '-count=1'], bindings: SUB_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'sub2api-joint-local-chain', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', '-run', '^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$', '-count=1', '-v'], extraEnv: { CC_GATEWAY_REPO_ROOT: '${CC_GATEWAY_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS, ignoredPolicy: 'sub2api_joint_safe_deliverable_v1' },
-  { id: 'p0-1-focused', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:p0-1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'cc-boundary-red', group: 'red', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'exec', 'tsx', 'tests/red/phase0-boundary.red.test.ts'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'sidecar-boundary-red', group: 'red', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', '-tags=phase0red', './internal/control', './internal/server', '-count=1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
   { id: 'sub2api-boundary-red', group: 'red', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', '-tags=phase0red', './internal/service', './internal/server/routes', '-run', 'FormalPoolOnboarding|FormalPoolOperations|Browser|Egress', '-count=1'], bindings: SUB_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
@@ -1928,6 +1928,21 @@ export function classifyBoundedProcess(observed: BoundedProcessResult, expectedE
   return classifyExit(observed.exitCode, expectedExit)
 }
 
+export function summarizeUnexpectedClassification(
+  commandId: string,
+  status: ResultRecord['status'],
+  observed: BoundedProcessResult,
+): string {
+  const safeCommandId = /^[a-z0-9][a-z0-9-]{2,63}$/.test(commandId) ? commandId : 'unknown-command'
+  const reason = observed.unsafeOutputDetected ? 'unsafe_output'
+    : observed.timedOut ? 'timeout'
+      : observed.outputOverflow ? 'output_overflow'
+        : observed.infrastructureFailure || infrastructureFailure(observed.outputExcerpt) ? 'infrastructure_failure'
+          : status === 'unexpected_pass' ? 'unexpected_zero_exit'
+            : Number.isInteger(observed.exitCode) ? `exit_code_${observed.exitCode}` : 'unknown_exit'
+  return `${safeCommandId}=${status}(${reason})`
+}
+
 function parseCommandArgs(tokens: string[], allowed: readonly string[]): ReturnType<typeof parseArgs> {
   const parsed = parseArgs(tokens)
   if (parsed.positionals.length > 0) fail('invalid_arguments', `unexpected positional arguments: ${parsed.positionals.join(',')}`)
@@ -2151,6 +2166,7 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
   let currentSub = prepared.sub
   const roots = { CC_GATEWAY_ROOT: ccRoot, SUB2API_ROOT: subRoot }
   const records: ResultRecord[] = []
+  const unexpectedClassifications: string[] = []
   for (const entry of catalog.value.filter((candidate) => candidate.group === group)) {
     const policy = entry.ignored_output_policy as IgnoredOutputPolicy
     const beforeCc = rebindRepositorySnapshotPolicy(currentCc, 'none')
@@ -2178,7 +2194,9 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     const ignoredOutputObservations: IgnoredOutputObservation[] = subTransition.ignored_output_observation
       ? [{ repository: 'sub2api', ...subTransition.ignored_output_observation }]
       : []
-    records.push(buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, ccTransition, subTransition, ignoredOutputObservations))
+    const record = buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, ccTransition, subTransition, ignoredOutputObservations)
+    records.push(record)
+    if (!['pass', 'expected_fail'].includes(record.status)) unexpectedClassifications.push(summarizeUnexpectedClassification(record.command_id, record.status, observed))
     currentCc = afterCc
     currentSub = afterSub
   }
@@ -2193,7 +2211,7 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     records,
   })
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); requireValidation(validateResultSetBindings(value, catalog.value, manifestLoaded.value, manifestLoaded.binding.digest, catalog.binding.digest)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.results_schema, value)
-  if (value.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'command group contains an unexpected result')
+  if (unexpectedClassifications.length > 0) fail('unexpected_classification', `command group contains unexpected results: ${unexpectedClassifications.join(', ')}`)
   writeExclusiveArtifact(out, value, path.join(ccRoot, EVIDENCE_ROOT_RELATIVE))
   completeArtifactChainStage(ccRoot, outputName, terminalIgnored)
 }

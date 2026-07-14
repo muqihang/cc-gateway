@@ -18,11 +18,21 @@
     },
     {
       "properties": {
+        "id": { "const": "p0-1-focused" },
+        "group": { "const": "green" },
+        "repository": { "const": "cc-gateway" },
+        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
+        "argv": { "const": ["npm", "run", "test:oracle:p0-1"] },
+        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
+      }
+    },
+    {
+      "properties": {
         "id": { "const": "cc-tests" },
         "group": { "const": "green" },
         "repository": { "const": "cc-gateway" },
         "cwd": { "const": "${CC_GATEWAY_ROOT}" },
-        "argv": { "const": ["npm", "test"] },
+        "argv": { "const": ["npm", "run", "test:oracle:non-p0-1"] },
         "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
       }
     },
@@ -66,16 +76,6 @@
         "argv": { "const": ["go", "test", "./internal/service", "-run", "^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$", "-count=1", "-v"] },
         "env": { "required": ["CC_GATEWAY_REPO_ROOT"] },
         "bindings": { "const": ["cc_gateway_head", "sub2api_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot", "sub2api_before_snapshot", "sub2api_after_snapshot", "shared_contract_digest"] }
-      }
-    },
-    {
-      "properties": {
-        "id": { "const": "p0-1-focused" },
-        "group": { "const": "green" },
-        "repository": { "const": "cc-gateway" },
-        "cwd": { "const": "${CC_GATEWAY_ROOT}" },
-        "argv": { "const": ["npm", "run", "test:oracle:p0-1"] },
-        "bindings": { "const": ["cc_gateway_head", "cc_gateway_before_snapshot", "cc_gateway_after_snapshot"] }
       }
     },
     {

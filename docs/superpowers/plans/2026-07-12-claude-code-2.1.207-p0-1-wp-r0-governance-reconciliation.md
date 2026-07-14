@@ -816,12 +816,14 @@ Nine catalog commands use closed policy `none`: every protected ignored record m
 The mandatory GREEN inventory has exactly these catalog IDs and argv:
 
 1. `cc-build`: CC Gateway root, `npm run build`;
-2. `cc-tests`: CC Gateway root, `npm test`;
-3. `cc-cross-repo-baseline`: CC Gateway root with `SUB2API_ROOT=${SUB2API_ROOT}`, `npm run test:oracle:cross-repo`;
-4. `sidecar-tests`: `sidecar/egress-tls-sidecar`, `go test ./... -count=1`;
-5. `sub2api-formal-pool`: Sub2API `backend`, `go test ./internal/service ./internal/server/routes -run FormalPool|FormalPoolOperations -count=1`;
-6. `sub2api-joint-local-chain`: Sub2API `backend` with `CC_GATEWAY_REPO_ROOT=${CC_GATEWAY_ROOT}`, `go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v`, with dual-repository binding;
-7. `p0-1-focused`: CC Gateway root, `npm run test:oracle:p0-1`.
+2. `p0-1-focused`: CC Gateway root, `npm run test:oracle:p0-1`;
+3. `cc-tests`: CC Gateway root, `npm run test:oracle:non-p0-1`;
+4. `cc-cross-repo-baseline`: CC Gateway root with `SUB2API_ROOT=${SUB2API_ROOT}`, `npm run test:oracle:cross-repo`;
+5. `sidecar-tests`: `sidecar/egress-tls-sidecar`, `go test ./... -count=1`;
+6. `sub2api-formal-pool`: Sub2API `backend`, `go test ./internal/service ./internal/server/routes -run FormalPool|FormalPoolOperations -count=1`;
+7. `sub2api-joint-local-chain`: Sub2API `backend` with `CC_GATEWAY_REPO_ROOT=${CC_GATEWAY_ROOT}`, `go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v`, with dual-repository binding.
+
+This order is fail-fast and mutation-last. The focused governance suite runs immediately after the build because it is the most likely long-running failure boundary. The only GREEN command allowed to change ignored output, `sub2api-joint-local-chain`, runs last, so an earlier failure cannot leave a permitted deliverable transition behind.
 
 The focused H0.1 entry alone has a 600,000 ms process timeout. The reviewed
 closed-environment suite completed in 459,296 ms on the reviewed host, so the
@@ -834,7 +836,9 @@ Every catalog entry uses the exact `HERMETIC_NETWORK_ENV` from Global Constraint
 
 No formal catalog entry inherits `PATH` or `HOME`. The reviewed launcher resolves `npm` and `go`, and the production runner accepts them only when their canonical realpath digest, executable-byte digest, and version digest match `oracle-lab-p0-1-reviewed-toolchain.json`. It then replaces the catalog command name with that verified canonical absolute executable, constructs the child `PATH` from the canonical directories of the verified launcher-selected tool paths plus `/usr/bin:/bin` (preserving package-manager self-resolution through a reviewed symlink directory), sets `HOME=/dev/null`, disables npm user/global configuration and `GOENV`, and binds the toolchain registry and schema into `capture_inputs`. The separate `test_fixture_root_v1` trust mode exists only for sparse disposable acceptance repositories; its registry is committed into each fixture candidate and cannot satisfy the formal candidate's exact toolchain binding.
 
-`tests/run-p0-1.ts` imports exactly ten suites in this fixed order: `oracle-lab-hermetic-dependencies.test.ts`, `oracle-lab-governance-amendment-entry.test.ts`, `oracle-lab-review-overlay.test.ts`, `oracle-lab-traceability.test.ts`, `oracle-lab-claim-matrix.test.ts`, `oracle-lab-current-observations.test.ts`, `oracle-lab-harness.test.ts`, `oracle-lab-reviewed-snapshot-binding.test.ts`, `oracle-lab-ignored-path-inventory.test.ts`, and `oracle-lab-governance-amendment-evidence.test.ts`. It is not named `*.test.ts`, so the existing full `tests/run-all.ts` does not execute the focused suite twice. Add package script `test:oracle:p0-1` as `tsx tests/run-p0-1.ts`.
+`tests/p0-1-suite-files.ts` is the single ordered inventory of the ten focused suites: `oracle-lab-hermetic-dependencies.test.ts`, `oracle-lab-governance-amendment-entry.test.ts`, `oracle-lab-review-overlay.test.ts`, `oracle-lab-traceability.test.ts`, `oracle-lab-claim-matrix.test.ts`, `oracle-lab-current-observations.test.ts`, `oracle-lab-harness.test.ts`, `oracle-lab-reviewed-snapshot-binding.test.ts`, `oracle-lab-ignored-path-inventory.test.ts`, and `oracle-lab-governance-amendment-evidence.test.ts`. `tests/run-p0-1.ts` imports that exact inventory. Ordinary `npm test` still runs every `*.test.ts` file for developer and CI regression semantics. Formal `cc-tests` uses `npm run test:oracle:non-p0-1`, which invokes `tests/run-all.ts --exclude-oracle-p0-1`; together with `p0-1-focused` this partitions the same full test inventory without executing those ten files twice.
+
+An unexpected child classification fails without persisting a result artifact and emits only a bounded safe diagnostic in the form `<catalog-command-id>=<classification>(<reason>)`. Reasons are fixed to `unsafe_output`, `timeout`, `output_overflow`, `infrastructure_failure`, `unexpected_zero_exit`, `exit_code_<integer>`, or `unknown_exit`; raw child output, paths, environment values, and failure payloads are never included.
 
 The mandatory expected-RED inventory remains CC Gateway B4-B6, sidecar B5-B6, and Sub2API B1-B3. The repaired joint tests are GREEN, never expected RED.
 
@@ -1055,12 +1059,12 @@ The H0.1 catalog is authoritative. The human-readable commands have explicit wor
 | Catalog ID | Classification | Working directory | Environment | Argv |
 | --- | --- | --- | --- | --- |
 | `cc-build` | GREEN | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm run build` |
-| `cc-tests` | GREEN | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm test` |
+| `p0-1-focused` | GREEN | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm run test:oracle:p0-1` |
+| `cc-tests` | GREEN | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm run test:oracle:non-p0-1` |
 | `cc-cross-repo-baseline` | GREEN | CC Gateway root | `CI=1`, `SUB2API_ROOT=/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1` + exact `HERMETIC_NETWORK_ENV` above | `npm run test:oracle:cross-repo` |
 | `sidecar-tests` | GREEN | `sidecar/egress-tls-sidecar` | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `go test ./... -count=1` |
 | `sub2api-formal-pool` | GREEN | Sub2API `backend` | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `go test ./internal/service ./internal/server/routes -run FormalPool\|FormalPoolOperations -count=1` |
 | `sub2api-joint-local-chain` | GREEN | Sub2API `backend` | `CI=1`, `CC_GATEWAY_REPO_ROOT=/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1` + exact `HERMETIC_NETWORK_ENV` above | `go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream\|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v` |
-| `p0-1-focused` | GREEN | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm run test:oracle:p0-1` |
 | `cc-boundary-red` | expected RED | CC Gateway root | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `npm exec tsx tests/red/phase0-boundary.red.test.ts` |
 | `sidecar-boundary-red` | expected RED | `sidecar/egress-tls-sidecar` | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `go test -tags=phase0red ./internal/control ./internal/server -count=1` |
 | `sub2api-boundary-red` | expected RED | Sub2API `backend` | `CI=1` + exact `HERMETIC_NETWORK_ENV` above | `go test -tags=phase0red ./internal/service ./internal/server/routes -run FormalPoolOnboarding\|FormalPoolOperations\|Browser\|Egress -count=1` |

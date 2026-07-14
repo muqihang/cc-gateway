@@ -123,12 +123,12 @@ const HERMETIC_NETWORK_ENV = {
 
 const expectedCatalog = [
   ['cc-build', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'run', 'build'], {}],
-  ['cc-tests', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'test'], {}],
+  ['p0-1-focused', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'run', 'test:oracle:p0-1'], {}],
+  ['cc-tests', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'run', 'test:oracle:non-p0-1'], {}],
   ['cc-cross-repo-baseline', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'run', 'test:oracle:cross-repo'], { SUB2API_ROOT: '${SUB2API_ROOT}' }],
   ['sidecar-tests', 'green', 'egress-tls-sidecar', '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', ['go', 'test', './...', '-count=1'], {}],
   ['sub2api-formal-pool', 'green', 'sub2api', '${SUB2API_ROOT}/backend', ['go', 'test', './internal/service', './internal/server/routes', '-run', 'FormalPool|FormalPoolOperations', '-count=1'], {}],
   ['sub2api-joint-local-chain', 'green', 'sub2api', '${SUB2API_ROOT}/backend', ['go', 'test', './internal/service', '-run', '^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$', '-count=1', '-v'], { CC_GATEWAY_REPO_ROOT: '${CC_GATEWAY_ROOT}' }],
-  ['p0-1-focused', 'green', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'run', 'test:oracle:p0-1'], {}],
   ['cc-boundary-red', 'red', 'cc-gateway', '${CC_GATEWAY_ROOT}', ['npm', 'exec', 'tsx', 'tests/red/phase0-boundary.red.test.ts'], {}],
   ['sidecar-boundary-red', 'red', 'egress-tls-sidecar', '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', ['go', 'test', '-tags=phase0red', './internal/control', './internal/server', '-count=1'], {}],
   ['sub2api-boundary-red', 'red', 'sub2api', '${SUB2API_ROOT}/backend', ['go', 'test', '-tags=phase0red', './internal/service', './internal/server/routes', '-run', 'FormalPoolOnboarding|FormalPoolOperations|Browser|Egress', '-count=1'], {}],
@@ -176,7 +176,7 @@ const wrongCwd = structuredClone(catalog)
 wrongCwd[4].cwd = '${CC_GATEWAY_ROOT}'
 assert.equal(validateCatalog(wrongCwd), false)
 const missingCrossBinding = structuredClone(catalog)
-missingCrossBinding[2].bindings = missingCrossBinding[2].bindings.filter((name: string) => name !== 'sub2api_after_snapshot')
+missingCrossBinding[3].bindings = missingCrossBinding[3].bindings.filter((name: string) => name !== 'sub2api_after_snapshot')
 assert.equal(validateCatalog(missingCrossBinding), false)
 const injectedAllowedDelta = structuredClone(catalog)
 injectedAllowedDelta[0].allowed_worktree_delta = ['docs/superpowers/evidence/p0-1/injected.json']
@@ -191,14 +191,17 @@ const misplacedIgnoredPolicy = structuredClone(catalog)
 misplacedIgnoredPolicy[0].ignored_output_policy = 'sub2api_joint_safe_deliverable_v1'
 assert.equal(validateCatalog(misplacedIgnoredPolicy), false)
 const freeFormIgnoredAllowance = structuredClone(catalog)
-freeFormIgnoredAllowance[5].ignored_output_paths = ['runtime/arbitrary']
+freeFormIgnoredAllowance[6].ignored_output_paths = ['runtime/arbitrary']
 assert.equal(validateCatalog(freeFormIgnoredAllowance), false)
 
 const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 assert.equal(packageJson.scripts['oracle:p0-1'], launcherRelative)
 assert.equal(packageJson.scripts['test:oracle:p0-1'], 'tsx tests/run-p0-1.ts')
-const focusedRunner = readFileSync(path.join(root, 'tests/run-p0-1.ts'), 'utf8')
-assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((match) => match[1]), [
+assert.equal(packageJson.scripts['test:oracle:non-p0-1'], 'tsx tests/run-all.ts --exclude-oracle-p0-1')
+const focusedSuiteFilesPath = path.join(root, 'tests/p0-1-suite-files.ts')
+assert.equal(existsSync(focusedSuiteFilesPath), true)
+const focusedSuiteFilesSource = readFileSync(focusedSuiteFilesPath, 'utf8')
+const expectedFocusedTestFiles = [
   'oracle-lab-hermetic-dependencies.test.ts',
   'oracle-lab-governance-amendment-entry.test.ts',
   'oracle-lab-review-overlay.test.ts',
@@ -209,7 +212,14 @@ assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((m
   'oracle-lab-reviewed-snapshot-binding.test.ts',
   'oracle-lab-ignored-path-inventory.test.ts',
   'oracle-lab-governance-amendment-evidence.test.ts',
-])
+]
+assert.deepEqual([...focusedSuiteFilesSource.matchAll(/['"]([^'"]+\.test\.ts)['"]/g)].map((match) => match[1]), expectedFocusedTestFiles)
+const focusedRunner = readFileSync(path.join(root, 'tests/run-p0-1.ts'), 'utf8')
+assert.match(focusedRunner, /P0_1_TEST_FILES/)
+assert.match(focusedRunner, /await import/)
+const allRunner = readFileSync(path.join(root, 'tests/run-all.ts'), 'utf8')
+assert.match(allRunner, /--exclude-oracle-p0-1/)
+assert.match(allRunner, /P0_1_TEST_FILES/)
 
 const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
 const ignoredInventory = await import(pathToFileURL(path.join(root, ignoredInventoryRelative)).href)
@@ -716,6 +726,23 @@ assert.equal(evidence.classifyExit(0, 0), 'pass')
 assert.equal(evidence.classifyExit(1, 0), 'unexpected_fail')
 assert.equal(evidence.classifyExit(1, 'nonzero'), 'expected_fail')
 assert.equal(evidence.classifyExit(0, 'nonzero'), 'unexpected_pass')
+const diagnosticObservation = {
+  exitCode: 1,
+  signal: null,
+  durationMs: 1,
+  stdoutDigest: sha256(''),
+  stderrDigest: sha256(''),
+  outputBytes: 0,
+  outputExcerpt: '',
+  outputOverflow: false,
+  timedOut: false,
+  failureNames: [],
+  infrastructureFailure: false,
+  unsafeOutputDetected: false,
+}
+assert.equal(evidence.summarizeUnexpectedClassification('cc-tests', 'unexpected_fail', { ...diagnosticObservation, timedOut: true }), 'cc-tests=unexpected_fail(timeout)')
+assert.equal(evidence.summarizeUnexpectedClassification('cc-build', 'unexpected_fail', { ...diagnosticObservation, unsafeOutputDetected: true }), 'cc-build=unexpected_fail(unsafe_output)')
+assert.equal(evidence.summarizeUnexpectedClassification('cc-boundary-red', 'unexpected_pass', { ...diagnosticObservation, exitCode: 0 }), 'cc-boundary-red=unexpected_pass(unexpected_zero_exit)')
 assert.equal(evidence.validateCommandCatalogValue(catalog).ok, true)
 assert.equal(evidence.validateCommandCatalogValue(missingEnv).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(wrongEnv).ok, false)
@@ -2099,6 +2126,8 @@ const unsafeCliResult = runProductionLauncherCli(unsafeCliRoot, [
   '--out', evidence.ARTIFACT_CHAIN.green,
 ], unsafeShimBin, acceptanceTmp)
 expectProductionCliCode(unsafeCliResult, 'unexpected_classification')
+const unsafeCliError = JSON.parse(String(unsafeCliResult.stderr).trim().split(/\r?\n/).at(-1) ?? '{}')
+assert.equal(unsafeCliError.message, 'command group contains unexpected results: cc-build=unexpected_fail(unsafe_output)')
 assert.equal(`${unsafeCliResult.stdout}${unsafeCliResult.stderr}`.includes(unsafeCliMarker), false, 'CLI process output leaked unsafe failure-name bytes')
 assert.equal(existsSync(path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.green)), false, 'unsafe result artifact must not be persisted')
 
@@ -2600,8 +2629,9 @@ const executionBindingValues = {
   sub2api_after_snapshot: sha256('sub-before'),
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
 }
-assert.deepEqual(evidence.buildExecutionBindings(catalog[5].bindings, executionBindingValues), executionBindingValues)
-expectCode(() => evidence.buildExecutionBindings(catalog[5].bindings, { ...executionBindingValues, shared_contract_digest: undefined }), 'incomplete_execution_binding')
+const jointCatalogEntry = catalog.find((entry: any) => entry.id === 'sub2api-joint-local-chain')
+assert.deepEqual(evidence.buildExecutionBindings(jointCatalogEntry.bindings, executionBindingValues), executionBindingValues)
+expectCode(() => evidence.buildExecutionBindings(jointCatalogEntry.bindings, { ...executionBindingValues, shared_contract_digest: undefined }), 'incomplete_execution_binding')
 
 function ignoredSummary(label: string, options: { endpoints: number; regular: number; directories: number; symlinks?: number; bytes: number }): Record<string, unknown> {
   return {

@@ -1,10 +1,5 @@
-import './oracle-lab-hermetic-dependencies.test.ts'
-import './oracle-lab-governance-amendment-entry.test.ts'
-import './oracle-lab-review-overlay.test.ts'
-import './oracle-lab-traceability.test.ts'
-import './oracle-lab-claim-matrix.test.ts'
-import './oracle-lab-current-observations.test.ts'
-import './oracle-lab-harness.test.ts'
-import './oracle-lab-reviewed-snapshot-binding.test.ts'
-import './oracle-lab-ignored-path-inventory.test.ts'
-import './oracle-lab-governance-amendment-evidence.test.ts'
+import { P0_1_TEST_FILES } from './p0-1-suite-files.js'
+
+for (const file of P0_1_TEST_FILES) {
+  await import(new URL(`./${file}`, import.meta.url).href)
+}

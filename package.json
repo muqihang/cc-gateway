@@ -27,7 +27,8 @@
     "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt",
     "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt",
     "oracle:p0-1": "tools/oracle-lab/oracle-p0-1",
-    "test:oracle:p0-1": "tsx tests/run-p0-1.ts"
+    "test:oracle:p0-1": "tsx tests/run-p0-1.ts",
+    "test:oracle:non-p0-1": "tsx tests/run-all.ts --exclude-oracle-p0-1"
   },
   "dependencies": {
     "https-proxy-agent": "^9.0.0",
