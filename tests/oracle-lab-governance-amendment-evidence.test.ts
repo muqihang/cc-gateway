@@ -918,6 +918,23 @@ assert.deepEqual(evidence.STAGE_TRANSITIONS, {
   handoff: { prior: ['exit', 'green', 'red', 'results', 'report', 'report_markdown', 'controller_report', 'controller_report_markdown', 'context'], produced: ['handoff'] },
   receipt: { prior: ['exit', 'green', 'red', 'results', 'report', 'report_markdown', 'controller_report', 'controller_report_markdown', 'context', 'handoff'], produced: ['receipt'] },
 })
+for (const stage of ['green', 'red', 'results', 'report', 'controller_report', 'context', 'handoff', 'receipt'] as const) {
+  for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
+    const ccFixture = snapshotFixture(`head-policy-${stage}-${changedRepository}-cc`)
+    const subFixture = snapshotFixture(`head-policy-${stage}-${changedRepository}-sub`)
+    git(subFixture.repository, 'add', priorRelative)
+    git(subFixture.repository, 'commit', '-qm', 'tracked Sub fixture baseline')
+    const prior = evidence.STAGE_TRANSITIONS[stage].prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+      const artifactPath = evidence.ARTIFACT_CHAIN[name]
+      const absolute = path.join(ccFixture.repository, artifactPath)
+      if (!existsSync(absolute)) writeFileSync(absolute, `${JSON.stringify({ stage: name })}\n`)
+      return { path: artifactPath, digest: sha256(readFileSync(absolute)) }
+    })
+    evidence.initializeChainState(ccFixture.repository, prior, subFixture.repository)
+    git(changedRepository === 'cc_gateway' ? ccFixture.repository : subFixture.repository, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} head`)
+    expectCode(() => evidence.prepareArtifactChainStage(ccFixture.repository, stage), 'wrong_repository_head')
+  }
+}
 const wiredChain = snapshotFixture('wired-chain')
 evidence.initializeArtifactChain(wiredChain.repository)
 const wiredGreen = path.join(wiredChain.repository, evidence.ARTIFACT_CHAIN.green)
@@ -1488,6 +1505,10 @@ runAcceptanceCli([
   '--receipt', evidence.ARTIFACT_CHAIN.receipt,
   '--artifact-commit', acceptanceArtifactCommit,
 ])
+const acceptanceChainState = JSON.parse(readFileSync(git(acceptanceCcRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json'), 'utf8'))
+assert.equal(Object.hasOwn(acceptanceChainState, 'repository_head_at_initialization'), false)
+assert.equal(acceptanceChainState.repositories.cc_gateway.accepted_head, acceptanceArtifactCommit)
+assert.equal(acceptanceChainState.repositories.sub2api.accepted_head, acceptanceSubCandidate)
 const acceptanceReceipt = JSON.parse(readFileSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.receipt), 'utf8'))
 git(acceptanceCcRoot, 'add', evidence.ARTIFACT_CHAIN.receipt)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture receipt only')
@@ -1498,6 +1519,9 @@ runAcceptanceCli([
   '--artifact-commit', acceptanceArtifactCommit,
   '--receipt-commit', 'HEAD',
 ])
+const postReceiptChainState = JSON.parse(readFileSync(git(acceptanceCcRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json'), 'utf8'))
+assert.equal(postReceiptChainState.repositories.cc_gateway.accepted_head, acceptanceArtifactCommit)
+assert.equal(postReceiptChainState.repositories.sub2api.accepted_head, acceptanceSubCandidate)
 assert.equal(git(acceptanceCcRoot, 'rev-parse', `${acceptanceReceiptCommit}^`), acceptanceArtifactCommit)
 assert.equal(git(acceptanceCcRoot, 'diff-tree', '--no-commit-id', '--name-status', '-r', acceptanceReceiptCommit), `A\t${evidence.ARTIFACT_CHAIN.receipt}`)
 assert.equal(git(acceptanceCcRoot, 'status', '--porcelain=v1', '--untracked-files=all'), '')
@@ -1679,6 +1703,123 @@ function materializePreReceiptOutputs(repository: string): void {
   }
 }
 
+function rehashResultSet(value: any): void {
+  for (const record of value.records) {
+    const { result_digest: _recordDigest, ...recordUnsigned } = record
+    record.result_digest = sha256(canonical(recordUnsigned))
+  }
+  const { result_set_digest: _setDigest, ...setUnsigned } = value
+  value.result_set_digest = sha256(canonical(setUnsigned))
+}
+
+const mergedConsumerArguments = {
+  report: [
+    'report', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--results', evidence.ARTIFACT_CHAIN.results,
+    '--requirements-review', 'docs/superpowers/evidence/p0-1/requirements-review.json',
+    '--security-review', 'docs/superpowers/evidence/p0-1/security-quality-review.json',
+    '--out', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+  ],
+  controller_report: [
+    'controller-report', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--results', evidence.ARTIFACT_CHAIN.results,
+    '--requirements-review', 'docs/superpowers/evidence/p0-1/requirements-review.json',
+    '--security-review', 'docs/superpowers/evidence/p0-1/security-quality-review.json',
+    '--report', evidence.ARTIFACT_CHAIN.report, '--report-markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+    '--out', evidence.ARTIFACT_CHAIN.controller_report, '--markdown', evidence.ARTIFACT_CHAIN.controller_report_markdown,
+  ],
+  context: [
+    'context', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--results', evidence.ARTIFACT_CHAIN.results,
+    '--review-import', reviewImportRelative,
+    '--requirements-review', 'docs/superpowers/evidence/p0-1/requirements-review.json',
+    '--security-review', 'docs/superpowers/evidence/p0-1/security-quality-review.json',
+    '--report', evidence.ARTIFACT_CHAIN.report, '--report-markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+    '--controller-report', evidence.ARTIFACT_CHAIN.controller_report, '--controller-report-markdown', evidence.ARTIFACT_CHAIN.controller_report_markdown,
+    '--out', evidence.ARTIFACT_CHAIN.context,
+  ],
+  handoff: [
+    'handoff', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--results', evidence.ARTIFACT_CHAIN.results,
+    '--context', evidence.ARTIFACT_CHAIN.context,
+    '--report', evidence.ARTIFACT_CHAIN.report, '--report-markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+    '--controller-report', evidence.ARTIFACT_CHAIN.controller_report, '--controller-report-markdown', evidence.ARTIFACT_CHAIN.controller_report_markdown,
+    '--out', evidence.ARTIFACT_CHAIN.handoff,
+  ],
+} as const
+
+for (const stage of ['report', 'controller_report', 'context', 'handoff'] as const) {
+  const stageRoot = cloneAcceptanceRef(`merged-consistency-${stage}`, acceptanceManifest.approval_attestation_head)
+  const stageSubRoot = cloneRepositoryRef(acceptanceSubRoot, `merged-consistency-${stage}-sub`, acceptanceSubCandidate)
+  const prior = evidence.STAGE_TRANSITIONS[stage].prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+    const artifactPath = evidence.ARTIFACT_CHAIN[name]
+    const absolute = path.join(stageRoot, artifactPath)
+    mkdirSync(path.dirname(absolute), { recursive: true })
+    writeFileSync(absolute, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${artifactPath}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
+    return { path: artifactPath, digest: sha256(readFileSync(absolute)) }
+  })
+  const mutatedResults = JSON.parse(readFileSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN.results), 'utf8')) as any
+  mutatedResults.records[0].duration_ms += 1
+  rehashResultSet(mutatedResults)
+  writeFileSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN.results), `${canonical(mutatedResults)}\n`)
+  const acceptedPrior = prior.map((binding: any) => binding.path === evidence.ARTIFACT_CHAIN.results
+    ? { path: binding.path, digest: sha256(readFileSync(path.join(stageRoot, binding.path))) }
+    : binding)
+  evidence.initializeChainState(stageRoot, acceptedPrior, stageSubRoot)
+  const observed = runProductionNpmCli(stageRoot, [...mergedConsumerArguments[stage]], acceptanceShimBin, acceptanceTmp)
+  expectProductionCliCode(observed, 'merged_result_mismatch')
+  for (const name of evidence.STAGE_TRANSITIONS[stage].produced) assert.equal(existsSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN[name])), false)
+  evidence.assertChainState(stageRoot, acceptedPrior)
+}
+
+const formalStageArguments = {
+  results: [
+    'merge', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--green', evidence.ARTIFACT_CHAIN.green,
+    '--red', evidence.ARTIFACT_CHAIN.red, '--out', evidence.ARTIFACT_CHAIN.results,
+  ],
+  ...mergedConsumerArguments,
+} as const
+
+for (const stage of ['results', 'report', 'controller_report', 'context', 'handoff'] as const) {
+  for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
+    const label = `cli-head-${stage}-${changedRepository}`
+    const stageRoot = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+    const stageSubRoot = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+    const prior = evidence.STAGE_TRANSITIONS[stage].prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+      const artifactPath = evidence.ARTIFACT_CHAIN[name]
+      const absolute = path.join(stageRoot, artifactPath)
+      mkdirSync(path.dirname(absolute), { recursive: true })
+      writeFileSync(absolute, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${artifactPath}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
+      return { path: artifactPath, digest: sha256(readFileSync(absolute)) }
+    })
+    evidence.initializeChainState(stageRoot, prior, stageSubRoot)
+    const chainStatePath = git(stageRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+    const chainStateBefore = readFileSync(chainStatePath)
+    git(changedRepository === 'cc_gateway' ? stageRoot : stageSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} head`)
+    expectProductionCliCode(runProductionNpmCli(stageRoot, [...formalStageArguments[stage]], acceptanceShimBin, acceptanceTmp), 'wrong_repository_head')
+    assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
+    for (const name of evidence.STAGE_TRANSITIONS[stage].produced) assert.equal(existsSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN[name])), false)
+  }
+}
+
+for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
+  const label = `cli-head-validate-report-${changedRepository}`
+  const stageRoot = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+  const stageSubRoot = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+  const acceptedNames = [...evidence.STAGE_TRANSITIONS.report.prior, ...evidence.STAGE_TRANSITIONS.report.produced] as Array<keyof typeof evidence.ARTIFACT_CHAIN>
+  const accepted = acceptedNames.map((name) => {
+    const artifactPath = evidence.ARTIFACT_CHAIN[name]
+    const absolute = path.join(stageRoot, artifactPath)
+    mkdirSync(path.dirname(absolute), { recursive: true })
+    writeFileSync(absolute, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${artifactPath}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
+    return { path: artifactPath, digest: sha256(readFileSync(absolute)) }
+  })
+  evidence.initializeChainState(stageRoot, accepted, stageSubRoot)
+  const chainStatePath = git(stageRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+  const chainStateBefore = readFileSync(chainStatePath)
+  git(changedRepository === 'cc_gateway' ? stageRoot : stageSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} head`)
+  expectProductionCliCode(runProductionNpmCli(stageRoot, [
+    'validate-report', '--report', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
+  ], acceptanceShimBin, acceptanceTmp), 'wrong_repository_head')
+  assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
+}
+
 function receiptArgumentsFor(artifactCommit: string): string[] {
   return [
     '--artifact-commit', artifactCommit,
@@ -1694,6 +1835,30 @@ function receiptArgumentsFor(artifactCommit: string): string[] {
   ]
 }
 
+for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
+  const label = `cli-head-receipt-${changedRepository}`
+  const receiptRoot = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+  const receiptSubRoot = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+  materializePreReceiptOutputs(receiptRoot)
+  const prior = evidence.STAGE_TRANSITIONS.receipt.prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+    const artifactPath = evidence.ARTIFACT_CHAIN[name]
+    return { path: artifactPath, digest: sha256(readFileSync(path.join(receiptRoot, artifactPath))) }
+  })
+  evidence.initializeChainState(receiptRoot, prior, receiptSubRoot)
+  git(receiptRoot, 'add', ...preReceiptArtifactPaths)
+  git(receiptRoot, 'commit', '-qm', 'fixture artifact chain for wrong-head receipt')
+  const artifactCommit = git(receiptRoot, 'rev-parse', 'HEAD')
+  const chainStatePath = git(receiptRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+  const chainStateBefore = readFileSync(chainStatePath)
+  git(changedRepository === 'cc_gateway' ? receiptRoot : receiptSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} receipt head`)
+  expectProductionCliCode(
+    runProductionNpmCli(receiptRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
+    changedRepository === 'cc_gateway' ? 'wrong_artifact_commit' : 'wrong_repository_head',
+  )
+  assert.equal(existsSync(path.join(receiptRoot, evidence.ARTIFACT_CHAIN.receipt)), false)
+  assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
+}
+
 function receiptForArtifact(repository: string, artifactCommit: string): unknown {
   const artifactDigests = Object.fromEntries(
     Object.keys(acceptanceReceipt.artifact_digests).map((artifactPath) => [artifactPath, sha256(readFileSync(path.join(repository, artifactPath)))]),
@@ -1706,6 +1871,46 @@ function receiptForArtifact(repository: string, artifactCommit: string): unknown
     artifactDigests,
     reviewAmendment: acceptanceReceipt.review_amendment,
   })
+}
+
+for (const [label, mutate] of [
+  ['stable-stdout-digest', (results: any) => { results.records[0].stdout_digest = sha256('merged-only stdout digest') }],
+  ['volatile-duration', (results: any) => { results.records[0].duration_ms += 1 }],
+] as const) {
+  const mutationRoot = cloneAcceptanceRef(`merged-commit-${label}`, acceptanceManifest.approval_attestation_head)
+  const mutationSubRoot = cloneRepositoryRef(acceptanceSubRoot, `merged-commit-${label}-sub`, acceptanceSubCandidate)
+  materializePreReceiptOutputs(mutationRoot)
+  const results = JSON.parse(readFileSync(path.join(mutationRoot, evidence.ARTIFACT_CHAIN.results), 'utf8')) as any
+  mutate(results)
+  rehashResultSet(results)
+  writeFileSync(path.join(mutationRoot, evidence.ARTIFACT_CHAIN.results), `${canonical(results)}\n`)
+  assert.equal(evidence.validateResultSetValue(results).ok, true)
+  const prior = evidence.STAGE_TRANSITIONS.receipt.prior.map((name: keyof typeof evidence.ARTIFACT_CHAIN) => {
+    const artifactPath = evidence.ARTIFACT_CHAIN[name]
+    return { path: artifactPath, digest: sha256(readFileSync(path.join(mutationRoot, artifactPath))) }
+  })
+  evidence.initializeChainState(mutationRoot, prior, mutationSubRoot)
+  git(mutationRoot, 'add', ...preReceiptArtifactPaths)
+  git(mutationRoot, 'commit', '-qm', `fixture merged-only ${label} artifact`)
+  const artifactCommit = git(mutationRoot, 'rev-parse', 'HEAD')
+  const chainStatePath = git(mutationRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+  const chainStateBefore = readFileSync(chainStatePath)
+  expectProductionCliCode(
+    runProductionNpmCli(mutationRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
+    'merged_result_mismatch',
+  )
+  assert.equal(existsSync(path.join(mutationRoot, evidence.ARTIFACT_CHAIN.receipt)), false)
+  assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
+
+  writeAcceptanceReceipt(mutationRoot, receiptForArtifact(mutationRoot, artifactCommit))
+  expectAcceptanceCliCode(mutationRoot, [
+    'validate-receipt', '--receipt', evidence.ARTIFACT_CHAIN.receipt, '--artifact-commit', artifactCommit,
+  ], 'merged_result_mismatch')
+  git(mutationRoot, 'add', evidence.ARTIFACT_CHAIN.receipt)
+  git(mutationRoot, 'commit', '-qm', 'fixture receipt only')
+  expectAcceptanceCliCode(mutationRoot, [
+    'validate-receipt', '--receipt', evidence.ARTIFACT_CHAIN.receipt, '--artifact-commit', artifactCommit, '--receipt-commit', 'HEAD',
+  ], 'merged_result_mismatch')
 }
 
 function expectArtifactCommitRejected(sourceRepository: string, label: string, artifactCommit: string, code: string): void {
@@ -1973,6 +2178,41 @@ assertCanonicalBytesEqual(merged, evidence.mergeResultSets(structuredClone(green
 assert.equal(merged.group, 'merged')
 assert.deepEqual(merged.records.map((record: any) => record.command_id), [...COMMAND_IDS_FOR_TEST('green'), ...COMMAND_IDS_FOR_TEST('red')].sort())
 assert.equal(evidence.validateResultSetValue(merged, Date.parse('2026-07-13T01:00:00.000Z')).ok, true)
+const mergedOnlyDurationMutation = structuredClone(merged) as any
+mergedOnlyDurationMutation.records[0].duration_ms += 1
+const { result_digest: _mergedOnlyRecordDigest, ...mergedOnlyRecordUnsigned } = mergedOnlyDurationMutation.records[0]
+mergedOnlyDurationMutation.records[0].result_digest = sha256(canonical(mergedOnlyRecordUnsigned))
+const { result_set_digest: _mergedOnlySetDigest, ...mergedOnlySetUnsigned } = mergedOnlyDurationMutation
+mergedOnlyDurationMutation.result_set_digest = sha256(canonical(mergedOnlySetUnsigned))
+assert.equal(evidence.validateResultSetValue(mergedOnlyDurationMutation, Date.parse('2026-07-13T01:00:00.000Z')).ok, true)
+expectCode(() => evidence.validateMergedResultSetConsistency(greenSet, redSet, mergedOnlyDurationMutation), 'merged_result_mismatch')
+for (const [label, mutate, rehash = true] of [
+  ['output bytes', (value: any) => { value.records[0].output_bytes += 1 }],
+  ['stdout digest', (value: any) => { value.records[0].stdout_digest = sha256('merged-only stdout') }],
+  ['stderr digest', (value: any) => { value.records[0].stderr_digest = sha256('merged-only stderr') }],
+  ['exit and status', (value: any) => { value.records[0].exit_code = 1; value.records[0].status = 'unexpected_fail' }],
+  ['failure names', (value: any) => { value.records[7].failure_names = [...value.records[7].failure_names, 'MergedOnlyFailure'] }],
+  ['argv digest', (value: any) => { value.records[0].argv_digest = sha256('merged-only argv') }],
+  ['environment digest', (value: any) => { value.records[0].environment_digest = sha256('merged-only environment') }],
+  ['catalog binding', (value: any) => { value.records[0].catalog_entry_digest = sha256('merged-only catalog') }],
+  ['repository binding', (value: any) => { value.records[0].repository = 'sub2api'; value.records[0].repository_commit = '2'.repeat(40) }],
+  ['execution snapshot binding', (value: any) => {
+    value.records[0].execution_bindings.cc_gateway_before_snapshot = sha256('merged-only snapshot')
+    value.records[0].execution_bindings.cc_gateway_after_snapshot = sha256('merged-only snapshot')
+  }],
+  ['ignored snapshot binding', (value: any) => {
+    value.records.find((record: any) => record.command_id === 'sub2api-joint-local-chain').ignored_output_observations[0].after.digest = sha256('merged-only ignored snapshot')
+  }],
+  ['record ordering', (value: any) => { value.records.reverse() }],
+  ['record inventory', (value: any) => { value.records.pop() }],
+  ['record self digest', (value: any) => { value.records[0].result_digest = sha256('merged-only record digest') }, false],
+  ['result-set self digest', (value: any) => { value.result_set_digest = sha256('merged-only result-set digest') }, false],
+] as const) {
+  const mutation = structuredClone(merged) as any
+  mutate(mutation)
+  if (rehash) rehashResultSet(mutation)
+  assert.throws(() => evidence.validateMergedResultSetConsistency(greenSet, redSet, mutation), `${label} mutation must fail closed`)
+}
 const validateResultsSchema = ajv.compile(JSON.parse(readFileSync(path.join(root, schemaRelatives[2]), 'utf8')))
 assert.equal(validateResultsSchema(merged), true, JSON.stringify(validateResultsSchema.errors))
 const unknownExecutionBindingSet = structuredClone(merged) as any

@@ -563,10 +563,9 @@ export function assertRepositorySnapshot(root: string, expected: RepositorySnaps
 type ChainState = {
   schema_version: 1
   state_kind: 'governance_amendment_chain_state'
-  repository_head_at_initialization: string
   repositories: {
-    cc_gateway: { root: string; terminal_ignored_inventory: IgnoredInventorySummary }
-    sub2api: { root: string; terminal_ignored_inventory: IgnoredInventorySummary }
+    cc_gateway: { root: string; accepted_head: string; terminal_ignored_inventory: IgnoredInventorySummary }
+    sub2api: { root: string; accepted_head: string; terminal_ignored_inventory: IgnoredInventorySummary }
   }
   artifacts: ArtifactBinding[]
   state_digest: string
@@ -635,7 +634,7 @@ function assertChainStateAbsent(root: string): void {
 }
 
 function buildChainState(
-  head: string,
+  heads: { cc_gateway: string; sub2api: string },
   artifacts: ArtifactBinding[],
   roots: { cc_gateway: string; sub2api: string },
   terminalIgnored: RepositoryIgnoredInventories,
@@ -643,10 +642,9 @@ function buildChainState(
   const unsigned = {
     schema_version: 1 as const,
     state_kind: 'governance_amendment_chain_state' as const,
-    repository_head_at_initialization: head,
     repositories: {
-      cc_gateway: { root: roots.cc_gateway, terminal_ignored_inventory: terminalIgnored.cc_gateway },
-      sub2api: { root: roots.sub2api, terminal_ignored_inventory: terminalIgnored.sub2api },
+      cc_gateway: { root: roots.cc_gateway, accepted_head: heads.cc_gateway, terminal_ignored_inventory: terminalIgnored.cc_gateway },
+      sub2api: { root: roots.sub2api, accepted_head: heads.sub2api, terminal_ignored_inventory: terminalIgnored.sub2api },
     },
     artifacts: [...artifacts].sort((left, right) => left.path.localeCompare(right.path)),
   }
@@ -655,15 +653,16 @@ function buildChainState(
 
 function validateChainState(value: unknown): ChainState {
   const errors: HarnessErrorRecord[] = []
-  if (!exactKeys(value, ['schema_version', 'state_kind', 'repository_head_at_initialization', 'repositories', 'artifacts', 'state_digest'], '$', errors)
-    || value.schema_version !== 1 || value.state_kind !== 'governance_amendment_chain_state' || !/^[0-9a-f]{40,64}$/.test(String(value.repository_head_at_initialization))
+  if (!exactKeys(value, ['schema_version', 'state_kind', 'repositories', 'artifacts', 'state_digest'], '$', errors)
+    || value.schema_version !== 1 || value.state_kind !== 'governance_amendment_chain_state'
     || !Array.isArray(value.artifacts) || value.artifacts.some((binding) => !validArtifact(binding)) || !DIGEST_RE.test(String(value.state_digest))
     || value.state_digest !== digestUnsigned(value, 'state_digest')) fail('invalid_chain_state', 'P0.1 chain state is invalid')
   if (!isObject(value.repositories) || !exactKeys(value.repositories, ['cc_gateway', 'sub2api'], '$.repositories', errors)) fail('invalid_chain_state', 'P0.1 chain repositories are invalid')
   for (const name of ['cc_gateway', 'sub2api'] as const) {
     const repository = value.repositories[name]
-    if (!exactKeys(repository, ['root', 'terminal_ignored_inventory'], `$.repositories.${name}`, errors)
+    if (!exactKeys(repository, ['root', 'accepted_head', 'terminal_ignored_inventory'], `$.repositories.${name}`, errors)
       || typeof repository.root !== 'string' || !path.isAbsolute(repository.root)
+      || !/^[0-9a-f]{40,64}$/.test(String(repository.accepted_head))
       || !validFullIgnoredSummary(repository.terminal_ignored_inventory)) fail('invalid_chain_state', 'P0.1 chain repository state is invalid')
   }
   return value as unknown as ChainState
@@ -698,7 +697,10 @@ export function initializeChainState(
     sub2api: subRoot === root ? computeIgnoredPathInventory(root).summary : computeIgnoredPathInventory(subRoot).summary,
   }
   if (expectedIgnored && !same(actualIgnored, expectedIgnored)) fail('repository_mutation', 'initial ignored repository state differs from exit evidence')
-  writeChainState(root, buildChainState(gitText(root, 'rev-parse', 'HEAD'), artifacts, { cc_gateway: root, sub2api: subRoot }, actualIgnored), true)
+  writeChainState(root, buildChainState({
+    cc_gateway: gitText(root, 'rev-parse', 'HEAD'),
+    sub2api: gitText(subRoot, 'rev-parse', 'HEAD'),
+  }, artifacts, { cc_gateway: root, sub2api: subRoot }, actualIgnored), true)
 }
 
 function verifiedChainState(root: string): ChainState {
@@ -718,16 +720,28 @@ function verifiedChainState(root: string): ChainState {
       if (realpathSync(state.repositories[name].root) !== state.repositories[name].root) fail('chain_repository_drift', `chain ${name} root identity changed`)
     } catch { fail('chain_repository_drift', `chain ${name} root is unavailable`) }
   }
-  if (!isAncestor(root, state.repository_head_at_initialization, gitText(root, 'rev-parse', 'HEAD'))) fail('chain_repository_drift', 'current HEAD does not descend from chain initialization')
   for (const binding of state.artifacts) if (!same(bindingAt(root, binding.path), binding)) fail('prior_output_mutated', `${binding.path} bytes changed after the producing stage`)
   return state
+}
+
+function assertAcceptedRepositoryHeads(state: ChainState): void {
+  for (const name of ['cc_gateway', 'sub2api'] as const) {
+    if (gitText(state.repositories[name].root, 'rev-parse', 'HEAD') !== state.repositories[name].accepted_head) {
+      fail('wrong_repository_head', `${name} HEAD differs from the accepted chain head`)
+    }
+  }
+}
+
+function assertChainArtifacts(state: ChainState, expectedArtifacts: ArtifactBinding[]): void {
+  const expected = [...expectedArtifacts].sort((left, right) => left.path.localeCompare(right.path))
+  if (!same(state.artifacts, expected)) fail('prior_output_mutated', 'prior artifact inventory or digest differs from immutable chain state')
 }
 
 export function assertChainState(rootInput: string, expectedArtifacts: ArtifactBinding[]): ChainState {
   const root = realpathSync(rootInput)
   const state = verifiedChainState(root)
-  const expected = [...expectedArtifacts].sort((left, right) => left.path.localeCompare(right.path))
-  if (!same(state.artifacts, expected)) fail('prior_output_mutated', 'prior artifact inventory or digest differs from immutable chain state')
+  assertAcceptedRepositoryHeads(state)
+  assertChainArtifacts(state, expectedArtifacts)
   return state
 }
 
@@ -794,7 +808,10 @@ function advanceChainState(root: string, expectedArtifacts: ArtifactBinding[], n
     paths.add(binding.path)
   }
   writeChainState(root, buildChainState(
-    state.repository_head_at_initialization,
+    {
+      cc_gateway: state.repositories.cc_gateway.accepted_head,
+      sub2api: state.repositories.sub2api.accepted_head,
+    },
     [...state.artifacts, ...newArtifacts],
     { cc_gateway: state.repositories.cc_gateway.root, sub2api: state.repositories.sub2api.root },
     terminalIgnored,
@@ -804,6 +821,7 @@ function advanceChainState(root: string, expectedArtifacts: ArtifactBinding[], n
 function assertCurrentChainContinuity(rootInput: string): ChainState {
   const root = realpathSync(rootInput)
   const state = verifiedChainState(root)
+  assertAcceptedRepositoryHeads(state)
   const cc = captureRepositorySnapshot(root, state.artifacts)
   const sub = state.repositories.sub2api.root === root ? cc : captureRepositorySnapshot(state.repositories.sub2api.root)
   if (!same(ignoredInventoriesFromSnapshots(cc, sub), chainIgnoredInventories(state))) fail('repository_mutation', 'ignored repository state differs from the accepted chain terminal')
@@ -1127,6 +1145,13 @@ export function mergeResultSets(green: ResultSet, red: ResultSet, generatedAt?: 
     terminal_ignored_inventories: red.terminal_ignored_inventories,
     records: [...green.records, ...red.records],
   })
+}
+
+export function validateMergedResultSetConsistency(green: ResultSet, red: ResultSet, merged: ResultSet): void {
+  const mergedValidation = validateResultSetValue(merged, Date.parse(merged.generated_at))
+  if (!mergedValidation.ok) fail(mergedValidation.errors[0].code, JSON.stringify(mergedValidation.errors))
+  const rebuilt = mergeResultSets(green, red, merged.generated_at)
+  if (!same(merged, rebuilt)) fail('merged_result_mismatch', 'merged results differ from the exact deterministic GREEN and RED merge')
 }
 
 export function validateIgnoredEvidenceContinuity(manifest: ExitValue, green: ResultSet, red: ResultSet, merged?: ResultSet): void {
@@ -1967,6 +1992,7 @@ function commandMerge(args: ReturnType<typeof parseArgs>, root: string): void {
   validateIgnoredEvidenceContinuity(manifest.value, green, red)
   const value = mergeResultSets(green, red, green.generated_at)
   validateIgnoredEvidenceContinuity(manifest.value, green, red, value)
+  validateMergedResultSetConsistency(green, red, value)
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); validateAgainstSchema(root, SCHEMA_PATHS.results_schema, value)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
   completeArtifactChainStage(root, 'results')
@@ -2108,6 +2134,20 @@ function commandValidateReviews(args: ReturnType<typeof parseArgs>): void {
   })
 }
 
+function loadValidatedMergedResultArtifacts(root: string, manifest: { value: ExitValue; binding: ArtifactBinding }, now = Date.now()): ResultSet {
+  const green = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.green)
+  const red = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.red)
+  const results = readJsonAt<ResultSet>(root, ARTIFACT_CHAIN.results)
+  for (const value of [green, red, results]) requireValidation(validateResultSetValue(value, now))
+  const catalog = validateCatalogAt(root, path.join(root, COMMAND_CATALOG_PATH), manifest.value)
+  for (const value of [green, red, results]) {
+    requireValidation(validateResultSetBindings(value, catalog.value, manifest.value, manifest.binding.digest, catalog.binding.digest))
+  }
+  validateIgnoredEvidenceContinuity(manifest.value, green, red, results)
+  validateMergedResultSetConsistency(green, red, results)
+  return results
+}
+
 function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 'controller', root: string): void {
   const manifest = loadManifest(root, String(one(args, 'manifest')))
   const resultsRelative = relativeArtifact(root, String(one(args, 'results')))
@@ -2116,8 +2156,7 @@ function commandReport(args: ReturnType<typeof parseArgs>, reportType: 'exit' | 
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN[reportKey]); const markdownOut = exactArgumentPath(root, String(one(args, 'markdown')), ARTIFACT_CHAIN[markdownKey])
   const stage = reportType === 'exit' ? 'report' : 'controller_report'
   prepareArtifactChainStage(root, stage)
-  const results = readJsonAt<ResultSet>(root, resultsRelative); requireValidation(validateResultSetValue(results))
-  const catalog = validateCatalogAt(root, path.join(root, COMMAND_CATALOG_PATH), manifest.value); requireValidation(validateResultSetBindings(results, catalog.value, manifest.value, manifest.binding.digest, catalog.binding.digest))
+  const results = loadValidatedMergedResultArtifacts(root, manifest)
   if (results.group !== 'merged' || results.manifest_digest !== manifest.binding.digest || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'report requires accepted merged results')
   if (reportType === 'controller') {
     exactArgumentPath(root, String(one(args, 'report')), ARTIFACT_CHAIN.report); exactArgumentPath(root, String(one(args, 'report-markdown')), ARTIFACT_CHAIN.report_markdown)
@@ -2168,7 +2207,7 @@ function commandContext(args: ReturnType<typeof parseArgs>, root: string): void 
   if (resultsRelative !== ARTIFACT_CHAIN.results) fail('results_path_mismatch', 'merged results path is not fixed')
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.context)
   prepareArtifactChainStage(root, 'context')
-  const results = readJsonAt<ResultSet>(root, resultsRelative); requireValidation(validateResultSetValue(results)); if (results.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'context results differ from manifest')
+  const results = loadValidatedMergedResultArtifacts(root, manifest); if (results.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'context results differ from manifest')
   const reviewImportRelative = relativeArtifact(root, String(one(args, 'review-import'))); if (reviewImportRelative !== REVIEW_IMPORT_PATH) fail('review_import_path_mismatch', 'review import path is not fixed')
   const reviews = validateReviewsForManifest(root, manifest.value, String(one(args, 'requirements-review')), String(one(args, 'security-review')))
   const reportBindings = verifiedReports(root, args)
@@ -2190,7 +2229,7 @@ function commandHandoff(args: ReturnType<typeof parseArgs>, root: string): void 
   if (resultsRelative !== ARTIFACT_CHAIN.results || contextRelative !== ARTIFACT_CHAIN.context) fail('artifact_path_mismatch', 'handoff inputs are not fixed')
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.handoff)
   prepareArtifactChainStage(root, 'handoff')
-  const results = readJsonAt<ResultSet>(root, resultsRelative); requireValidation(validateResultSetValue(results)); if (results.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'handoff results differ from manifest')
+  const results = loadValidatedMergedResultArtifacts(root, manifest); if (results.manifest_digest !== manifest.binding.digest) fail('cross_manifest_results', 'handoff results differ from manifest')
   const context = readJsonAt<ContextValue>(root, contextRelative); requireValidation(validateContextValue(context))
   const reportBindings = verifiedReports(root, args)
   validateReviewsForManifest(root, manifest.value, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH))
@@ -2309,6 +2348,50 @@ function assertReceiptInputs(root: string, args: ReturnType<typeof parseArgs>): 
   for (const [name, relative] of Object.entries(expected)) if (relativeArtifact(root, String(one(args, name))) !== relative) fail('artifact_path_mismatch', `--${name} does not name the fixed artifact`)
 }
 
+function assertReceiptRepositoryHeads(state: ChainState, manifest: ExitValue, artifactCommit: string): void {
+  if (state.repositories.cc_gateway.accepted_head !== manifest.approval_attestation_head
+    || state.repositories.sub2api.accepted_head !== manifest.repositories.sub2api.head
+    || gitText(state.repositories.cc_gateway.root, 'rev-parse', 'HEAD') !== artifactCommit
+    || gitText(state.repositories.sub2api.root, 'rev-parse', 'HEAD') !== manifest.repositories.sub2api.head) {
+    fail('wrong_repository_head', 'receipt repository heads differ from the reviewed approval, artifact, or Sub2API heads')
+  }
+}
+
+function prepareReceiptArtifactChainStage(rootInput: string, manifest: ExitValue, artifactCommit: string): void {
+  const root = realpathSync(rootInput)
+  const prior = stageBindings(root, STAGE_TRANSITIONS.receipt.prior)
+  const state = verifiedChainState(root)
+  assertChainArtifacts(state, prior)
+  assertReceiptRepositoryHeads(state, manifest, artifactCommit)
+  const cc = captureRepositorySnapshot(root, prior)
+  const sub = state.repositories.sub2api.root === root ? cc : captureRepositorySnapshot(state.repositories.sub2api.root)
+  if (!same(ignoredInventoriesFromSnapshots(cc, sub), chainIgnoredInventories(state))) fail('repository_mutation', 'ignored repository state differs before receipt construction')
+}
+
+function completeReceiptArtifactChainStage(rootInput: string, manifest: ExitValue, artifactCommit: string): void {
+  const root = realpathSync(rootInput)
+  const prior = stageBindings(root, STAGE_TRANSITIONS.receipt.prior)
+  const produced = stageBindings(root, STAGE_TRANSITIONS.receipt.produced)
+  const state = verifiedChainState(root)
+  assertChainArtifacts(state, prior)
+  assertReceiptRepositoryHeads(state, manifest, artifactCommit)
+  const cc = captureRepositorySnapshot(root, [...prior, ...produced])
+  const sub = state.repositories.sub2api.root === root ? cc : captureRepositorySnapshot(state.repositories.sub2api.root)
+  const terminalIgnored = ignoredInventoriesFromSnapshots(cc, sub)
+  if (!same(terminalIgnored, chainIgnoredInventories(state))) fail('repository_mutation', 'ignored repository state differs after receipt construction')
+  const paths = new Set(state.artifacts.map((binding) => binding.path))
+  for (const binding of produced) {
+    if (paths.has(binding.path) || !same(bindingAt(root, binding.path), binding)) fail('invalid_chain_advance', `${binding.path} cannot advance the chain`)
+    paths.add(binding.path)
+  }
+  writeChainState(root, buildChainState(
+    { cc_gateway: artifactCommit, sub2api: state.repositories.sub2api.accepted_head },
+    [...state.artifacts, ...produced],
+    { cc_gateway: state.repositories.cc_gateway.root, sub2api: state.repositories.sub2api.root },
+    terminalIgnored,
+  ), false)
+}
+
 function validateReceiptChainValues(root: string, manifest: ExitValue, now = Date.now(), schemaCommit = gitText(root, 'rev-parse', 'HEAD')): void {
   const reviewImport = readJsonAt<ReviewImport>(root, REVIEW_IMPORT_PATH)
   validateReviewsForManifest(root, manifest, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH), schemaCommit)
@@ -2320,6 +2403,7 @@ function validateReceiptChainValues(root: string, manifest: ExitValue, now = Dat
   requireValidation(validateResultSetBindings(red, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
   requireValidation(validateResultSetBindings(results, catalog.value, manifest, manifestBinding.digest, catalog.binding.digest))
   validateIgnoredEvidenceContinuity(manifest, green, red, results)
+  validateMergedResultSetConsistency(green, red, results)
   if (results.group !== 'merged' || results.records.some((record) => !['pass', 'expected_fail'].includes(record.status))) fail('unexpected_classification', 'receipt requires accepted merged results')
   const context = readJsonAt<ContextValue>(root, ARTIFACT_CHAIN.context); requireValidation(validateContextValue(context, now))
   const handoff = readJsonAt<HandoffValue>(root, ARTIFACT_CHAIN.handoff); requireValidation(validateHandoffValue(handoff, now))
@@ -2351,7 +2435,7 @@ function commandReceipt(args: ReturnType<typeof parseArgs>, root: string): void 
   const manifest = loadManifest(root, String(one(args, 'manifest')))
   assertReceiptInputs(root, args)
   validateArtifactCommit(root, manifest.value, artifactCommit)
-  prepareArtifactChainStage(root, 'receipt')
+  prepareReceiptArtifactChainStage(root, manifest.value, artifactCommit)
   validateReceiptChainValues(root, manifest.value, Date.now(), artifactCommit)
   const artifactPaths = receiptArtifactPaths(manifest.value)
   const artifactDigests: Record<string, string> = {}
@@ -2373,7 +2457,7 @@ function commandReceipt(args: ReturnType<typeof parseArgs>, root: string): void 
   requireValidation(validateReceiptValue(value)); validateAgainstCommittedSchema(root, artifactCommit, SCHEMA_PATHS.receipt_schema, value)
   const out = exactArgumentPath(root, String(one(args, 'out')), ARTIFACT_CHAIN.receipt)
   writeExclusiveArtifact(out, value, path.join(root, EVIDENCE_ROOT_RELATIVE))
-  completeArtifactChainStage(root, 'receipt')
+  completeReceiptArtifactChainStage(root, manifest.value, artifactCommit)
 }
 
 export function validateReceiptArtifact(options: { root: string; receiptPath: string; artifactCommit: string; receiptCommit?: string; now?: number }): void {
