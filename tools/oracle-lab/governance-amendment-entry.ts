@@ -32,6 +32,11 @@ import {
   type HarnessErrorRecord,
   type HarnessResult,
 } from './harness-core.js'
+import {
+  REVIEWED_CODEGRAPH_EXECUTABLE,
+  minimalToolEnvironment,
+  runReviewedGit,
+} from './secure-runtime.js'
 
 const CLEAN_DIGEST = sha256(Buffer.alloc(0))
 const RFC3339_UTC_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{3}))?Z$/
@@ -202,8 +207,17 @@ function fail(code: string, message: string): never {
 
 function git(root: string, ...args: string[]): string {
   try {
-    return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-  } catch {
+    return runReviewedGit(root, args).stdout.toString('utf8').trim()
+  } catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_command_failed') throw error
+    fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`)
+  }
+}
+
+function gitBuffer(root: string, ...args: string[]): Buffer {
+  try { return runReviewedGit(root, args).stdout }
+  catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_command_failed') throw error
     fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`)
   }
 }
@@ -472,17 +486,24 @@ export function inspectGovernanceRepository(options: {
 }): RepositoryEntryBinding {
   const root = realpathSync(options.root)
   let remoteCommit: string
-  try { remoteCommit = git(root, 'rev-parse', '--verify', options.remoteRef) } catch { fail('wrong_base_main_head', `${options.remoteRef} is unavailable`) }
+  try { remoteCommit = git(root, 'rev-parse', '--verify', options.remoteRef) } catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+    fail('wrong_base_main_head', `${options.remoteRef} is unavailable`)
+  }
   if (remoteCommit !== options.baseMainHead) fail('wrong_base_main_head', 'user-fork main no longer equals the frozen base')
   const head = git(root, 'rev-parse', 'HEAD')
-  try { execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', options.baseMainHead, head], { stdio: 'ignore' }) }
-  catch { fail('invalid_base_ancestry', 'working branch does not descend from frozen user-fork main') }
+  if (runReviewedGit(root, ['merge-base', '--is-ancestor', options.baseMainHead, head], { allowedExitCodes: [0, 1] }).status !== 0) {
+    fail('invalid_base_ancestry', 'working branch does not descend from frozen user-fork main')
+  }
   const branch = git(root, 'rev-parse', '--abbrev-ref', 'HEAD')
   if (branch !== options.branch) fail('wrong_repository_branch', `repository branch is ${branch}`)
   let remoteUrl: string
-  try { remoteUrl = git(root, 'remote', 'get-url', options.remoteName) } catch { fail('wrong_remote_ref', 'user-fork remote is missing') }
+  try { remoteUrl = git(root, 'remote', 'get-url', options.remoteName) } catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+    fail('wrong_remote_ref', 'user-fork remote is missing')
+  }
   if (sha256(remoteUrl) !== options.remoteUrlDigest) fail('wrong_remote_ref', 'user-fork remote URL digest drifted')
-  const status = execFileSync('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'buffer' })
+  const status = gitBuffer(root, 'status', '--porcelain=v1', '-z', '--untracked-files=all')
   if (status.length !== 0) fail('dirty_repository', 'repository has tracked or untracked inputs outside ignored local state')
   return {
     head,
@@ -533,11 +554,17 @@ export function parseCodeGraphStatus(value: unknown, indexDigest: string): CodeG
   }
 }
 
-export function inspectCodeGraphIndex(rootInput: string): CodeGraphBinding {
+export function inspectCodeGraphIndex(rootInput: string, executable = REVIEWED_CODEGRAPH_EXECUTABLE, environment: NodeJS.ProcessEnv = minimalToolEnvironment()): CodeGraphBinding {
   const root = realpathSync(rootInput)
   let status: unknown
   try {
-    status = JSON.parse(execFileSync('codegraph', ['status', '--json'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) as unknown
+    status = JSON.parse(execFileSync(executable, ['status', '--json'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: environment,
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })) as unknown
   } catch {
     fail('missing_codegraph_index', 'CodeGraph status is unavailable')
   }
@@ -552,8 +579,11 @@ function reviewedCaptureInputs(root: string, head: string): Record<keyof typeof 
   return Object.fromEntries(Object.entries(CAPTURE_INPUT_PATHS).map(([name, relative]) => {
     const worktreeBytes = readBoundBytes(root, relative, relative)
     let committedBytes: Buffer
-    try { committedBytes = execFileSync('git', ['-C', root, 'show', `${head}:${relative}`], { encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] }) }
-    catch { fail('missing_reviewed_capture_input', `${relative} is absent from reviewed tool head`) }
+    try { committedBytes = gitBuffer(root, 'show', `${head}:${relative}`) }
+    catch (error) {
+      if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+      fail('missing_reviewed_capture_input', `${relative} is absent from reviewed tool head`)
+    }
     const digest = sha256(committedBytes)
     if (sha256(worktreeBytes) !== digest) fail('capture_input_drift', `${relative} differs from reviewed tool head`)
     return [name, { path: relative, digest }]
@@ -570,14 +600,18 @@ export function validateGovernanceAmendmentCaptureInputsAtToolCommit(options: {
   const root = realpathSync(options.ccGatewayRoot)
   const toolCommit = git(root, 'rev-parse', `${options.toolCommit}^{commit}`)
   if (options.entry.reviewed_tool_head !== toolCommit) fail('reviewed_tool_head_mismatch', 'entry reviewed_tool_head differs from the supplied tool commit')
-  try { execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', bindings.ccGatewayBaseMainHead, toolCommit], { stdio: 'ignore' }) }
-  catch { fail('invalid_reviewed_tool_ancestry', 'reviewed tool commit does not descend from frozen CC Gateway main') }
+  if (runReviewedGit(root, ['merge-base', '--is-ancestor', bindings.ccGatewayBaseMainHead, toolCommit], { allowedExitCodes: [0, 1] }).status !== 0) {
+    fail('invalid_reviewed_tool_ancestry', 'reviewed tool commit does not descend from frozen CC Gateway main')
+  }
   for (const [name, relative] of Object.entries(CAPTURE_INPUT_PATHS) as Array<[keyof typeof CAPTURE_INPUT_PATHS, string]>) {
     const binding = options.entry.capture_inputs[name]
     if (binding.path !== relative) fail('capture_input_drift', `${name} path differs from the reviewed tool binding`)
     let committedBytes: Buffer
-    try { committedBytes = execFileSync('git', ['-C', root, 'show', `${toolCommit}:${relative}`], { encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] }) }
-    catch { fail('missing_reviewed_capture_input', `${relative} is absent from the reviewed tool commit`) }
+    try { committedBytes = gitBuffer(root, 'show', `${toolCommit}:${relative}`) }
+    catch (error) {
+      if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+      fail('missing_reviewed_capture_input', `${relative} is absent from the reviewed tool commit`)
+    }
     if (sha256(committedBytes) !== binding.digest) fail('capture_input_drift', `${relative} digest differs from the reviewed tool commit`)
   }
 }
@@ -674,7 +708,7 @@ export function captureGovernanceAmendmentEntry(options: {
     runtime: {
       node: versionDigest('node', ['--version']),
       npm: versionDigest('npm', ['--version']),
-      git: versionDigest('git', ['--version']),
+      git: sha256(git(ccGatewayRoot, '--version')),
       go: versionDigest('go', ['version']),
       codegraph: sha256(bindings.codegraphVersion),
       network_policy: sha256(canonicalJson(HERMETIC_NETWORK_ENV)),
@@ -821,16 +855,19 @@ export function validateGovernanceAmendmentEntryCommit(options: {
     entry: options.entry as GovernanceAmendmentEntry,
     bindings,
   })
-  const delta = execFileSync('git', ['-C', root, 'diff-tree', '--root', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', entryCommit], { encoding: 'buffer' })
+  const delta = gitBuffer(root, 'diff-tree', '--root', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', entryCommit)
     .toString('utf8').split('\0').filter(Boolean).sort()
   const expectedDelta = [options.entryPath, options.receiptPath].sort()
   if (!same(delta, expectedDelta)) fail('entry_commit_delta_mismatch', 'entry commit delta is not exactly the reviewed pair')
   let committedEntry: Buffer
   let committedReceipt: Buffer
   try {
-    committedEntry = execFileSync('git', ['-C', root, 'show', `${entryCommit}:${options.entryPath}`], { encoding: 'buffer' })
-    committedReceipt = execFileSync('git', ['-C', root, 'show', `${entryCommit}:${options.receiptPath}`], { encoding: 'buffer' })
-  } catch { fail('entry_commit_delta_mismatch', 'entry commit does not contain the reviewed pair') }
+    committedEntry = gitBuffer(root, 'show', `${entryCommit}:${options.entryPath}`)
+    committedReceipt = gitBuffer(root, 'show', `${entryCommit}:${options.receiptPath}`)
+  } catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+    fail('entry_commit_delta_mismatch', 'entry commit does not contain the reviewed pair')
+  }
   if (!committedEntry.equals(entryBytes) || !committedReceipt.equals(receiptBytes)) fail('entry_commit_bytes_mismatch', 'committed pair differs from the pre-commit validated bytes')
 }
 
@@ -843,7 +880,10 @@ function argument(args: ReturnType<typeof parseArgs>, name: string, required = t
 
 function repositoryRootFromCwd(): string {
   try { return realpathSync(git(process.cwd(), 'rev-parse', '--show-toplevel')) }
-  catch { fail('invalid_repository_root', 'current directory is not the CC Gateway repository') }
+  catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_inspection_failed') throw error
+    fail('invalid_repository_root', 'current directory is not the CC Gateway repository')
+  }
 }
 
 export function runGovernanceAmendmentEntryCli(argv: string[]): void {

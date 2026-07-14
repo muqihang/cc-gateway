@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -10,6 +10,9 @@ import Ajv2020 from 'ajv/dist/2020.js'
 
 const root = path.resolve(new URL('..', import.meta.url).pathname)
 const toolRelative = 'tools/oracle-lab/governance-amendment-evidence.ts'
+const launcherRelative = 'tools/oracle-lab/oracle-p0-1'
+const secureRuntimeRelative = 'tools/oracle-lab/secure-runtime.ts'
+const boundedStateRelative = 'tools/oracle-lab/bounded-repository-state.ts'
 const ignoredInventoryRelative = 'tools/oracle-lab/ignored-path-inventory.ts'
 const catalogRelative = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
 const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'
@@ -21,6 +24,9 @@ const PRODUCTION_CLI_MAX_BUFFER = 16 * MiB
 const CC_SPARSE_PATHS = [
   '.gitignore',
   'package.json',
+  launcherRelative,
+  secureRuntimeRelative,
+  boundedStateRelative,
   'sidecar/egress-tls-sidecar/go.mod',
   'tools/oracle-lab/governance-amendment-evidence.ts',
   'tools/oracle-lab/harness-core.ts',
@@ -72,7 +78,7 @@ const CC_GENERATED_SPARSE_PATTERNS = [
   'docs/superpowers/evidence/p0-1/p0-1-handoff.json',
   'docs/superpowers/evidence/p0-1/p0-1-successor-receipt.json',
 ] as const
-assert.equal(CC_SPARSE_PATHS.length, 30)
+assert.equal(CC_SPARSE_PATHS.length, 33)
 assert.equal(SUB_SPARSE_PATHS.length, 4)
 const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
@@ -86,9 +92,11 @@ const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
 ]
 
-for (const relative of [toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
+for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
   assert.equal(existsSync(path.join(root, relative)), true, `${relative} must exist`)
 }
+const amendmentEntrySource = readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts'), 'utf8')
+assert.doesNotMatch(amendmentEntrySource, /(?:execFileSync|spawnSync)\(\s*['"]git['"]/)
 
 const HERMETIC_NETWORK_ENV = {
   npm_config_offline: 'true',
@@ -175,7 +183,7 @@ freeFormIgnoredAllowance[5].ignored_output_paths = ['runtime/arbitrary']
 assert.equal(validateCatalog(freeFormIgnoredAllowance), false)
 
 const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
-assert.equal(packageJson.scripts['oracle:p0-1'], 'tsx tools/oracle-lab/governance-amendment-evidence.ts')
+assert.equal(packageJson.scripts['oracle:p0-1'], launcherRelative)
 assert.equal(packageJson.scripts['test:oracle:p0-1'], 'tsx tests/run-p0-1.ts')
 const focusedRunner = readFileSync(path.join(root, 'tests/run-p0-1.ts'), 'utf8')
 assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((match) => match[1]), [
@@ -193,6 +201,8 @@ assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((m
 
 const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
 const ignoredInventory = await import(pathToFileURL(path.join(root, ignoredInventoryRelative)).href)
+const secureRuntime = await import(pathToFileURL(path.join(root, secureRuntimeRelative)).href)
+const boundedState = await import(pathToFileURL(path.join(root, boundedStateRelative)).href)
 
 const productionNamespace = evidence as Record<string, unknown>
 for (const runtimeSelector of ['runCliEntry', 'dispatch', 'PRODUCTION_CLI_RUNTIME']) {
@@ -301,9 +311,7 @@ function resolveRealExecutable(name: string): string {
   throw new Error(`required executable ${name} is unavailable`)
 }
 
-const realNpmExecutable = resolveRealExecutable('npm')
 const realCodeGraphExecutable = resolveRealExecutable('codegraph')
-assert.equal(path.isAbsolute(realNpmExecutable), true)
 assert.equal(path.isAbsolute(realCodeGraphExecutable), true)
 
 function cloneSharedSparseRepository(sourceRepository: string, destination: string, sparsePaths: readonly string[], branch = productionBranch): string {
@@ -344,20 +352,24 @@ function directoryBytes(directory: string): number {
 
 type ProductionCliResult = ReturnType<typeof spawnSync>
 
-function runProductionNpmCli(repository: string, args: string[], shimBin: string, fixtureTmp: string): ProductionCliResult {
-  return spawnSync(realNpmExecutable, ['run', 'oracle:p0-1', '--', ...args], {
+function productionParentEnvironment(shimBin: string, fixtureTmp: string, extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    ...HERMETIC_NETWORK_ENV,
+    CI: '1',
+    HOME: process.env.HOME ?? fixtureTmp,
+    TMPDIR: fixtureTmp,
+    PATH: `${shimBin}${path.delimiter}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+    ...extra,
+  }
+}
+
+function runProductionLauncherCli(repository: string, args: string[], shimBin: string, fixtureTmp: string, extraEnv: Record<string, string> = {}): ProductionCliResult {
+  return spawnSync(path.join(repository, launcherRelative), args, {
     cwd: repository,
     encoding: 'utf8',
     timeout: PRODUCTION_CLI_TIMEOUT_MS,
     maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
-    env: {
-      ...process.env,
-      ...HERMETIC_NETWORK_ENV,
-      CI: '1',
-      HOME: process.env.HOME ?? fixtureTmp,
-      TMPDIR: fixtureTmp,
-      PATH: `${shimBin}${path.delimiter}${process.env.PATH ?? ''}`,
-    },
+    env: productionParentEnvironment(shimBin, fixtureTmp, extraEnv),
   })
 }
 
@@ -484,7 +496,7 @@ process.exit(0)
 }
 
 function initializeRealCodeGraph(repository: string, fixtureTmp: string): Record<string, unknown> {
-  const environment = { ...process.env, ...HERMETIC_NETWORK_ENV, CI: '1', TMPDIR: fixtureTmp }
+  const environment = productionParentEnvironment('/usr/bin:/bin', fixtureTmp)
   execFileSync(realCodeGraphExecutable, ['init', repository], {
     cwd: repository, env: environment, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
   })
@@ -514,16 +526,25 @@ function cliFixture(label: string): string {
   const repository = path.join(parent, 'repository')
   const sparseRepository = cloneSharedSparseRepository(root, repository, [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS])
   writeFileSync(path.join(repository, toolRelative), readFileSync(path.join(root, toolRelative)))
+  writeFileSync(path.join(repository, launcherRelative), readFileSync(path.join(root, launcherRelative)))
+  writeFileSync(path.join(repository, secureRuntimeRelative), readFileSync(path.join(root, secureRuntimeRelative)))
+  writeFileSync(path.join(repository, boundedStateRelative), readFileSync(path.join(root, boundedStateRelative)))
+  writeFileSync(path.join(repository, 'tools/oracle-lab/governance-amendment-entry.ts'), readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts')))
+  chmodSync(path.join(repository, launcherRelative), 0o755)
   writeFileSync(path.join(repository, ignoredInventoryRelative), readFileSync(path.join(root, ignoredInventoryRelative)))
   linkCloneDependencies(repository, path.join(root, 'node_modules'))
   return sparseRepository
 }
 
 function runCli(repository: string, args: string[], env: Record<string, string> = {}): ReturnType<typeof spawnSync> {
-  return spawnSync(path.join(root, 'node_modules/.bin/tsx'), [path.join(repository, toolRelative), ...args], {
+  for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
+    writeFileSync(path.join(repository, relative), readFileSync(path.join(root, relative)))
+  }
+  chmodSync(path.join(repository, launcherRelative), 0o755)
+  return spawnSync(path.join(repository, launcherRelative), args, {
     cwd: repository,
     encoding: 'utf8',
-    env: { ...process.env, ...HERMETIC_NETWORK_ENV, ...env },
+    env: productionParentEnvironment('/usr/bin:/bin', tmpdir(), env),
   })
 }
 
@@ -540,6 +561,14 @@ function expectCliCode(result: ReturnType<typeof spawnSync>, code: string): void
 }
 
 assert.equal(evidence.MAX_OUTPUT_BYTES, 8 * 1024 * 1024)
+assert.equal(path.isAbsolute(secureRuntime.REVIEWED_GIT_EXECUTABLE), true)
+assert.equal(Object.isFrozen(secureRuntime.REVIEWED_GIT_ENVIRONMENT), true)
+assert.deepEqual(Object.keys(secureRuntime.REVIEWED_GIT_ENVIRONMENT).sort(), [
+  'GIT_CONFIG_COUNT', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_SYSTEM',
+  'GIT_NO_REPLACE_OBJECTS', 'GIT_OPTIONAL_LOCKS', 'GIT_PAGER', 'GIT_TERMINAL_PROMPT',
+  'HOME', 'LANG', 'LC_ALL', 'PAGER', 'PATH',
+].sort())
+expectCode(() => secureRuntime.runReviewedGit(root, ['rev-parse', 'HEAD'], { maxOutputBytes: 1 }), 'git_output_limit_exceeded')
 assert.deepEqual(evidence.HERMETIC_NETWORK_ENV, HERMETIC_NETWORK_ENV)
 assert.equal(evidence.classifyExit(0, 0), 'pass')
 assert.equal(evidence.classifyExit(1, 0), 'unexpected_fail')
@@ -862,6 +891,40 @@ function snapshotFixture(label: string): { repository: string; priorAbsolute: st
   return { repository, priorAbsolute, priorBinding: { path: priorRelative, digest: sha256(readFileSync(priorAbsolute)) } }
 }
 
+function sparseFile(file: string, bytes: number): void {
+  writeFileSync(file, '')
+  const descriptor = openSync(file, 'r+')
+  try { ftruncateSync(descriptor, bytes) } finally { closeSync(descriptor) }
+}
+
+assert.equal(Object.isFrozen(boundedState.VISIBLE_STATE_LIMITS), true)
+for (const value of Object.values(boundedState.VISIBLE_STATE_LIMITS) as number[]) assert.equal(Number.isSafeInteger(value) && value > 0, true)
+const perFileBoundCase = snapshotFixture('visible-per-file-bound')
+sparseFile(path.join(perFileBoundCase.repository, 'huge-untracked.bin'), 2048)
+expectCode(() => boundedState.captureBoundedRepositoryState(perFileBoundCase.repository, { ...boundedState.VISIBLE_STATE_LIMITS, maxFileBytes: 1024 }), 'visible_state_file_limit_exceeded')
+const aggregateBoundCase = snapshotFixture('visible-aggregate-bound')
+sparseFile(path.join(aggregateBoundCase.repository, 'aggregate-a.bin'), 800)
+sparseFile(path.join(aggregateBoundCase.repository, 'aggregate-b.bin'), 800)
+expectCode(() => boundedState.captureBoundedRepositoryState(aggregateBoundCase.repository, { ...boundedState.VISIBLE_STATE_LIMITS, maxFileBytes: 1024, maxAggregateBytes: 1200 }), 'visible_state_aggregate_limit_exceeded')
+const entryBoundCase = snapshotFixture('visible-entry-bound')
+writeFileSync(path.join(entryBoundCase.repository, 'entry-a.txt'), 'a\n')
+writeFileSync(path.join(entryBoundCase.repository, 'entry-b.txt'), 'b\n')
+expectCode(() => boundedState.captureBoundedRepositoryState(entryBoundCase.repository, { ...boundedState.VISIBLE_STATE_LIMITS, maxEntries: 1 }), 'visible_state_entry_limit_exceeded')
+const trackedBoundCase = snapshotFixture('visible-tracked-bound')
+sparseFile(path.join(trackedBoundCase.repository, 'tracked.txt'), 2048)
+expectCode(() => boundedState.captureBoundedRepositoryState(trackedBoundCase.repository, { ...boundedState.VISIBLE_STATE_LIMITS, maxFileBytes: 1024 }), 'visible_state_file_limit_exceeded')
+const symlinkVisibleCase = snapshotFixture('visible-symlink')
+symlinkSync('tracked.txt', path.join(symlinkVisibleCase.repository, 'visible-link'))
+expectCode(() => boundedState.captureBoundedRepositoryState(symlinkVisibleCase.repository), 'visible_state_unsupported_entry')
+const visibleCoverageCase = snapshotFixture('visible-coverage')
+writeFileSync(path.join(visibleCoverageCase.repository, 'tracked.txt'), 'staged bytes\n')
+git(visibleCoverageCase.repository, 'add', 'tracked.txt')
+writeFileSync(path.join(visibleCoverageCase.repository, 'tracked.txt'), 'staged and unstaged bytes\n')
+writeFileSync(path.join(visibleCoverageCase.repository, 'untracked.txt'), 'untracked bytes\n')
+const visibleCoverage = boundedState.captureBoundedRepositoryState(visibleCoverageCase.repository)
+assert.equal(visibleCoverage.dirty_records.some((record: any) => record.status === 'MM'), true)
+assert.equal(visibleCoverage.dirty_records.some((record: any) => record.status === '??'), true)
+
 const snapshotCase = snapshotFixture('snapshot')
 const snapshotRoot = snapshotCase.repository
 const priorAbsolute = path.join(snapshotRoot, priorRelative)
@@ -1150,7 +1213,8 @@ assert.equal(evidence.validateReviewPair({ ...reviewBase, decision: 'blocked' },
 assert.equal(evidence.validateReviewPair({ ...reviewBase, findings: { ...reviewBase.findings, important: 1 } }, securityReview, reviewExpected).ok, false)
 assert.equal(evidence.validateReviewPair({ ...reviewBase, reviewed_candidate_heads: { ...reviewBase.reviewed_candidate_heads, cc_gateway: '3'.repeat(40) } }, securityReview, reviewExpected).ok, false)
 
-// Drive every formal operation through absolute npm, clone-local tsx, cli(main),
+// Drive every formal operation through the reviewed non-Node controller,
+// absolute Node and clone-local tsx, cli(main),
 // and the private frozen production runtime. Only reviewed catalog children use shims.
 const acceptanceStartedAt = Date.now()
 const acceptanceFixtureRoot = mkdtempSync('/tmp/op01-cli-')
@@ -1166,10 +1230,21 @@ assert.equal(existsSync(path.join(dependencyRoot, '.bin/tsx')), true)
 assert.equal(existsSync(path.join(dependencyRoot, 'ajv')), true)
 linkCloneDependencies(acceptanceCcRoot, dependencyRoot)
 linkCloneDependencies(acceptanceSubRoot, dependencyRoot)
-const acceptanceCandidatePaths = [toolRelative, ignoredInventoryRelative, taskPlanRelative, schemaRelatives[0], schemaRelatives[2]] as const
+const acceptanceCandidatePaths = [
+  toolRelative,
+  launcherRelative,
+  secureRuntimeRelative,
+  boundedStateRelative,
+  ignoredInventoryRelative,
+  'tools/oracle-lab/governance-amendment-entry.ts',
+  taskPlanRelative,
+  schemaRelatives[0],
+  schemaRelatives[2],
+] as const
 for (const relative of acceptanceCandidatePaths) {
   writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
 }
+chmodSync(path.join(acceptanceCcRoot, launcherRelative), 0o755)
 git(acceptanceCcRoot, 'config', 'user.name', 'Acceptance Candidate')
 git(acceptanceCcRoot, 'config', 'user.email', 'acceptance-candidate@example.invalid')
 
@@ -1187,11 +1262,80 @@ function observeAcceptanceSize(): void {
   acceptancePeakBytes = Math.max(acceptancePeakBytes, directoryBytes(acceptanceFixtureRoot))
 }
 function runAcceptanceCli(args: string[]): void {
-  const result = runProductionNpmCli(acceptanceCcRoot, args, acceptanceShimBin, acceptanceTmp)
+  const result = runProductionLauncherCli(acceptanceCcRoot, args, acceptanceShimBin, acceptanceTmp)
   expectProductionCliOk(result, args[0])
   acceptanceCommands.push(args[0])
   observeAcceptanceSize()
 }
+
+const startupAttackDirectory = path.join(acceptanceFixtureRoot, 'startup-attacks')
+mkdirSync(startupAttackDirectory)
+for (const [label, option] of [
+  ['preload', `--require=${path.join(startupAttackDirectory, 'preload.cjs')}`],
+  ['loader', `--experimental-loader=${path.join(startupAttackDirectory, 'loader.mjs')}`],
+] as const) {
+  const marker = path.join(startupAttackDirectory, `${label}.marker`)
+  const payload = label === 'preload'
+    ? `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')\n`
+    : `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'executed'); export async function resolve(s,c,n){return n(s,c)}\n`
+  writeFileSync(path.join(startupAttackDirectory, label === 'preload' ? 'preload.cjs' : 'loader.mjs'), payload)
+  const beforeJournal = existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json'))
+  const observed = runProductionLauncherCli(acceptanceCcRoot, ['review-import'], acceptanceShimBin, acceptanceTmp, { NODE_OPTIONS: option })
+  expectProductionCliCode(observed, 'unsafe_startup_environment')
+  assert.equal(existsSync(marker), false, `${label} startup payload must not execute`)
+  assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), beforeJournal)
+  assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+}
+
+const redirectedGitRepository = path.join(startupAttackDirectory, 'redirected-repository')
+mkdirSync(redirectedGitRepository)
+git(redirectedGitRepository, 'init', '-q')
+git(redirectedGitRepository, 'config', 'user.name', 'Redirect Decoy')
+git(redirectedGitRepository, 'config', 'user.email', 'redirect@example.invalid')
+writeFileSync(path.join(redirectedGitRepository, 'decoy.txt'), 'decoy\n')
+git(redirectedGitRepository, 'add', 'decoy.txt')
+git(redirectedGitRepository, 'commit', '-qm', 'decoy')
+const redirectedGitHead = git(redirectedGitRepository, 'rev-parse', 'HEAD')
+for (const [name, value] of [
+  ['GIT_DIR', path.join(redirectedGitRepository, '.git')],
+  ['GIT_WORK_TREE', redirectedGitRepository],
+  ['GIT_INDEX_FILE', path.join(redirectedGitRepository, '.git/index')],
+  ['GIT_OBJECT_DIRECTORY', path.join(redirectedGitRepository, '.git/objects')],
+  ['GIT_ALTERNATE_OBJECT_DIRECTORIES', path.join(redirectedGitRepository, '.git/objects')],
+] as const) {
+  const observed = runProductionLauncherCli(acceptanceCcRoot, ['review-import'], acceptanceShimBin, acceptanceTmp, { [name]: value })
+  expectProductionCliCode(observed, 'unsafe_startup_environment')
+  assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), false)
+  assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+  assert.equal(git(redirectedGitRepository, 'rev-parse', 'HEAD'), redirectedGitHead)
+}
+
+const gitShadowDirectory = path.join(acceptanceFixtureRoot, 'git-shadow')
+const gitShadowMarker = path.join(acceptanceFixtureRoot, 'git-shadow.marker')
+mkdirSync(gitShadowDirectory)
+writeFileSync(path.join(gitShadowDirectory, 'git'), `#!/bin/sh\nprintf executed > ${JSON.stringify(gitShadowMarker)}\nexit 0\n`)
+chmodSync(path.join(gitShadowDirectory, 'git'), 0o755)
+const shadowedGit = runProductionLauncherCli(acceptanceCcRoot, ['review-import'], `${gitShadowDirectory}${path.delimiter}${acceptanceShimBin}`, acceptanceTmp)
+expectProductionCliCode(shadowedGit, 'unsafe_startup_environment')
+assert.equal(existsSync(gitShadowMarker), false)
+assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+
+const replacementRoot = cloneSharedSparseRepository(
+  acceptanceCcRoot,
+  path.join(acceptanceFixtureRoot, 'replacement-repository'),
+  [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS],
+)
+for (const relative of [toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
+  writeFileSync(path.join(replacementRoot, relative), readFileSync(path.join(root, relative)))
+}
+chmodSync(path.join(replacementRoot, launcherRelative), 0o755)
+linkCloneDependencies(replacementRoot, dependencyRoot)
+git(replacementRoot, 'replace', git(replacementRoot, 'rev-parse', 'HEAD'), git(replacementRoot, 'rev-parse', 'HEAD^'))
+const replacementObserved = runProductionLauncherCli(replacementRoot, ['review-import'], acceptanceShimBin, acceptanceTmp)
+expectProductionCliCode(replacementObserved, 'git_replace_refs_present')
+assert.equal(existsSync(path.join(replacementRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(existsSync(path.join(replacementRoot, evidence.ARTIFACT_CHAIN.exit)), false)
 
 runAcceptanceCli([
   'review-import',
@@ -1247,6 +1391,23 @@ const acceptanceSubCodeGraph = initializeRealCodeGraph(acceptanceSubRoot, accept
 symlinkSync('codegraph.db', path.join(acceptanceCcRoot, '.codegraph/continuity-link'))
 symlinkSync('codegraph.db', path.join(acceptanceSubRoot, '.codegraph/continuity-link'))
 observeAcceptanceSize()
+
+const codeGraphShadowDirectory = path.join(acceptanceFixtureRoot, 'codegraph-shadow')
+const codeGraphShadowMarker = path.join(acceptanceFixtureRoot, 'codegraph-shadow.marker')
+mkdirSync(codeGraphShadowDirectory)
+writeFileSync(path.join(codeGraphShadowDirectory, 'codegraph'), `#!/bin/sh\nprintf executed > ${JSON.stringify(codeGraphShadowMarker)}\nprintf '%s\\n' '{"initialized":true,"upToDate":true}'\n`)
+chmodSync(path.join(codeGraphShadowDirectory, 'codegraph'), 0o755)
+const shadowedCodeGraph = runProductionLauncherCli(
+  acceptanceCcRoot,
+  ['capture-exit'],
+  `${codeGraphShadowDirectory}${path.delimiter}${acceptanceShimBin}`,
+  acceptanceTmp,
+)
+expectProductionCliCode(shadowedCodeGraph, 'unsafe_startup_environment')
+assert.equal(existsSync(codeGraphShadowMarker), false)
+assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+
 runAcceptanceCli([
   'capture-exit',
   '--entry', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
@@ -1279,6 +1440,26 @@ function initializeCaptureExitCheckpoint(ccCheckpoint: string, subCheckpoint: st
     cc_gateway: acceptanceManifest.repositories.cc_gateway.initial_ignored_inventory,
     sub2api: acceptanceManifest.repositories.sub2api.initial_ignored_inventory,
   })
+}
+
+for (const kind of ['untracked', 'tracked'] as const) {
+  const label = `visible-state-${kind}-sparse`
+  const ccCheckpoint = cloneAcceptanceRef(label, acceptanceManifest.approval_attestation_head)
+  const subCheckpoint = cloneRepositoryRef(acceptanceSubRoot, `${label}-sub`, acceptanceSubCandidate)
+  initializeCaptureExitCheckpoint(ccCheckpoint, subCheckpoint)
+  const target = path.join(ccCheckpoint, kind === 'tracked' ? taskPlanRelative : 'huge-visible-state.bin')
+  sparseFile(target, boundedState.VISIBLE_STATE_LIMITS.maxFileBytes + 1)
+  const statePath = git(ccCheckpoint, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+  const stateBefore = readFileSync(statePath)
+  const observed = runProductionLauncherCli(ccCheckpoint, [
+    'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+    '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.green,
+  ], acceptanceShimBin, acceptanceTmp)
+  expectProductionCliCode(observed, 'visible_state_file_limit_exceeded')
+  assert.equal(observed.signal, null)
+  assert.deepEqual(readFileSync(statePath), stateBefore)
+  assert.equal(existsSync(path.join(ccCheckpoint, evidence.ARTIFACT_CHAIN.green)), false)
+  assert.equal(lstatSync(target).size, boundedState.VISIBLE_STATE_LIMITS.maxFileBytes + 1)
 }
 
 type PersistentIgnoredDrift = 'create' | 'modify' | 'delete' | 'type' | 'mode' | 'symlink-target'
@@ -1324,7 +1505,7 @@ function expectCaptureExitToGreenIgnoredDriftRejected(repository: 'cc' | 'sub', 
     ccRoot: ccCheckpoint,
     subRoot: subCheckpoint,
   })
-  const observed = runProductionNpmCli(ccCheckpoint, [
+  const observed = runProductionLauncherCli(ccCheckpoint, [
     'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
     '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.green,
   ], shimBin, acceptanceTmp)
@@ -1352,7 +1533,7 @@ for (const node of ['date-directory', 'safe-directory', 'readme', 'summary'] as 
     subRoot: subCheckpoint,
     jointModeNode: node,
   })
-  const observed = runProductionNpmCli(ccCheckpoint, [
+  const observed = runProductionLauncherCli(ccCheckpoint, [
     'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
     '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.green,
   ], shimBin, acceptanceTmp)
@@ -1534,7 +1715,7 @@ assert.equal(acceptanceCommands.filter((command) => command === 'validate-receip
 const acceptanceElapsedMs = Date.now() - acceptanceStartedAt
 const acceptanceSteadyBytes = directoryBytes(acceptanceFixtureRoot)
 acceptancePeakBytes = Math.max(acceptancePeakBytes, acceptanceSteadyBytes)
-assert.equal(acceptanceElapsedMs <= PRODUCTION_CLI_TIMEOUT_MS, true, `production CLI fixture exceeded ${PRODUCTION_CLI_TIMEOUT_MS} ms`)
+assert.equal(acceptanceElapsedMs <= PRODUCTION_CLI_TIMEOUT_MS, true, `production CLI fixture ${acceptanceElapsedMs} ms exceeded ${PRODUCTION_CLI_TIMEOUT_MS} ms`)
 assert.equal(acceptanceSteadyBytes < 30 * MiB, true, `production CLI fixture steady bytes ${acceptanceSteadyBytes} exceeded 30 MiB`)
 assert.equal(acceptancePeakBytes < 60 * MiB, true, `production CLI fixture observed peak bytes ${acceptancePeakBytes} exceeded 60 MiB`)
 console.log(canonical({
@@ -1581,7 +1762,7 @@ for (const repository of ['cc', 'sub'] as const) {
       ccRoot: ccCheckpoint,
       subRoot: subCheckpoint,
     })
-    const observed = runProductionNpmCli(ccCheckpoint, [
+    const observed = runProductionLauncherCli(ccCheckpoint, [
       'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'red',
       '--cc-gateway-root', ccCheckpoint, '--sub2api-root', subCheckpoint, '--out', evidence.ARTIFACT_CHAIN.red,
     ], shimBin, acceptanceTmp)
@@ -1616,7 +1797,7 @@ function cloneAcceptanceRef(label: string, commit: string): string {
 }
 
 function expectAcceptanceCliCode(repository: string, args: string[], code: string): void {
-  expectProductionCliCode(runProductionNpmCli(repository, args, acceptanceShimBin, acceptanceTmp), code)
+  expectProductionCliCode(runProductionLauncherCli(repository, args, acceptanceShimBin, acceptanceTmp), code)
 }
 
 const unsafeCliRoot = cloneAcceptanceRef('unsafe-cli-persistence', acceptanceManifest.approval_attestation_head)
@@ -1632,7 +1813,7 @@ writeCatalogShims({
   unsafeCommandId: 'cc-build',
   unsafeMarker: unsafeCliMarker,
 })
-const unsafeCliResult = runProductionNpmCli(unsafeCliRoot, [
+const unsafeCliResult = runProductionLauncherCli(unsafeCliRoot, [
   'run',
   '--manifest', evidence.ARTIFACT_CHAIN.exit,
   '--catalog', catalogRelative,
@@ -1663,7 +1844,7 @@ function expectIgnoredMutationRejected(
     subRoot: subRepository,
     mutation,
   })
-  const observed = runProductionNpmCli(ccRepository, [
+  const observed = runProductionLauncherCli(ccRepository, [
     'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
     '--cc-gateway-root', ccRepository, '--sub2api-root', subRepository, '--out', evidence.ARTIFACT_CHAIN.green,
   ], mutationShimBin, acceptanceTmp)
@@ -1762,7 +1943,7 @@ for (const stage of ['report', 'controller_report', 'context', 'handoff'] as con
     ? { path: binding.path, digest: sha256(readFileSync(path.join(stageRoot, binding.path))) }
     : binding)
   evidence.initializeChainState(stageRoot, acceptedPrior, stageSubRoot)
-  const observed = runProductionNpmCli(stageRoot, [...mergedConsumerArguments[stage]], acceptanceShimBin, acceptanceTmp)
+  const observed = runProductionLauncherCli(stageRoot, [...mergedConsumerArguments[stage]], acceptanceShimBin, acceptanceTmp)
   expectProductionCliCode(observed, 'merged_result_mismatch')
   for (const name of evidence.STAGE_TRANSITIONS[stage].produced) assert.equal(existsSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN[name])), false)
   evidence.assertChainState(stageRoot, acceptedPrior)
@@ -1792,7 +1973,7 @@ for (const stage of ['results', 'report', 'controller_report', 'context', 'hando
     const chainStatePath = git(stageRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
     const chainStateBefore = readFileSync(chainStatePath)
     git(changedRepository === 'cc_gateway' ? stageRoot : stageSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} head`)
-    expectProductionCliCode(runProductionNpmCli(stageRoot, [...formalStageArguments[stage]], acceptanceShimBin, acceptanceTmp), 'wrong_repository_head')
+    expectProductionCliCode(runProductionLauncherCli(stageRoot, [...formalStageArguments[stage]], acceptanceShimBin, acceptanceTmp), 'wrong_repository_head')
     assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
     for (const name of evidence.STAGE_TRANSITIONS[stage].produced) assert.equal(existsSync(path.join(stageRoot, evidence.ARTIFACT_CHAIN[name])), false)
   }
@@ -1814,7 +1995,7 @@ for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
   const chainStatePath = git(stageRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
   const chainStateBefore = readFileSync(chainStatePath)
   git(changedRepository === 'cc_gateway' ? stageRoot : stageSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} head`)
-  expectProductionCliCode(runProductionNpmCli(stageRoot, [
+  expectProductionCliCode(runProductionLauncherCli(stageRoot, [
     'validate-report', '--report', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
   ], acceptanceShimBin, acceptanceTmp), 'wrong_repository_head')
   assert.equal(readFileSync(chainStatePath).equals(chainStateBefore), true)
@@ -1852,7 +2033,7 @@ for (const changedRepository of ['cc_gateway', 'sub2api'] as const) {
   const chainStateBefore = readFileSync(chainStatePath)
   git(changedRepository === 'cc_gateway' ? receiptRoot : receiptSubRoot, 'commit', '--allow-empty', '-qm', `wrong ${changedRepository} receipt head`)
   expectProductionCliCode(
-    runProductionNpmCli(receiptRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
+    runProductionLauncherCli(receiptRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
     changedRepository === 'cc_gateway' ? 'wrong_artifact_commit' : 'wrong_repository_head',
   )
   assert.equal(existsSync(path.join(receiptRoot, evidence.ARTIFACT_CHAIN.receipt)), false)
@@ -1896,7 +2077,7 @@ for (const [label, mutate] of [
   const chainStatePath = git(mutationRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
   const chainStateBefore = readFileSync(chainStatePath)
   expectProductionCliCode(
-    runProductionNpmCli(mutationRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
+    runProductionLauncherCli(mutationRoot, ['receipt', ...receiptArgumentsFor(artifactCommit)], acceptanceShimBin, acceptanceTmp),
     'merged_result_mismatch',
   )
   assert.equal(existsSync(path.join(mutationRoot, evidence.ARTIFACT_CHAIN.receipt)), false)
@@ -2381,7 +2562,7 @@ const exitValue = evidence.buildExitValue({
     amendment: 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md', requirements: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', roadmap: 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', observations: 'docs/superpowers/registry/oracle-lab-current-observations.json', requirement_schema: 'docs/superpowers/schemas/oracle-lab-requirement.schema.json', requirement_validator: 'tools/oracle-lab/validate-requirements.ts', plan: 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md', review_import: 'docs/superpowers/evidence/p0-1/p0-1-review-import.json', requirements_review: 'docs/superpowers/evidence/p0-1/requirements-review.json', security_review: 'docs/superpowers/evidence/p0-1/security-quality-review.json',
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   capture_inputs: Object.fromEntries(Object.entries({
-    successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
+    launcher: launcherRelative, successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', secure_runtime: secureRuntimeRelative, bounded_repository_state: boundedStateRelative, ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   codegraph: {
     cc_gateway: { version: '1.1.6', up_to_date: true, index_digest: sha256('cc-index'), file_count: 1, node_count: 1, edge_count: 1 },

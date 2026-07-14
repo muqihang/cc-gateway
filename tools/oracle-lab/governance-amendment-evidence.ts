@@ -30,7 +30,10 @@ import {
   type HarnessErrorRecord,
   type HarnessResult,
 } from './harness-core.js'
-import { computeRepositoryState } from './freeze-baseline.js'
+import {
+  captureBoundedRepositoryState,
+  visibleFileDigest,
+} from './bounded-repository-state.js'
 import {
   DEFAULT_IGNORED_INVENTORY_LIMITS,
   IGNORED_INVENTORY_ALGORITHM,
@@ -48,6 +51,13 @@ import {
   type GovernanceAmendmentEntryReceipt,
 } from './governance-amendment-entry.js'
 import Ajv2020 from 'ajv/dist/2020.js'
+import {
+  REVIEWED_CODEGRAPH_EXECUTABLE,
+  assertNoGitReplacementRefs,
+  assertProductionStartupEnvironment,
+  minimalToolEnvironment,
+  runReviewedGit,
+} from './secure-runtime.js'
 
 type JsonSchemaValidator = ((value: unknown) => boolean) & { errors?: unknown }
 const Ajv2020Constructor = Ajv2020 as unknown as new (options: Record<string, unknown>) => { compile(schema: unknown): JsonSchemaValidator }
@@ -209,7 +219,10 @@ const SCHEMA_PATHS = {
 } as const
 const COMMAND_CATALOG_PATH = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
 const CAPTURE_INPUT_PATHS = {
+  launcher: 'tools/oracle-lab/oracle-p0-1',
   successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts',
+  secure_runtime: 'tools/oracle-lab/secure-runtime.ts',
+  bounded_repository_state: 'tools/oracle-lab/bounded-repository-state.ts',
   ignored_path_inventory: 'tools/oracle-lab/ignored-path-inventory.ts',
   command_catalog: COMMAND_CATALOG_PATH,
   ...SCHEMA_PATHS,
@@ -446,14 +459,11 @@ function normalizedRepositoryPath(value: string): boolean {
   return value.length > 0 && !path.isAbsolute(value) && !value.includes('\\') && path.posix.normalize(value) === value && !value.split('/').includes('..')
 }
 
-function inspectAllowedArtifact(root: string, binding: ArtifactBinding): void {
+function inspectAllowedArtifact(state: ReturnType<typeof captureBoundedRepositoryState>, binding: ArtifactBinding): void {
   if (!normalizedRepositoryPath(binding.path) || !DIGEST_RE.test(binding.digest)) fail('invalid_allowed_artifact', 'allowed artifact binding is invalid')
-  const absolute = path.join(root, binding.path)
-  let stat
-  try { stat = lstatSync(absolute) } catch { fail('missing_prior_output', `${binding.path} is missing`) }
-  if (stat.isSymbolicLink()) fail('artifact_symlink', `${binding.path} is a symlink`)
-  if (!stat.isFile()) fail('invalid_allowed_artifact', `${binding.path} is not a regular file`)
-  if (sha256(readFileSync(absolute)) !== binding.digest) fail('prior_output_mutated', `${binding.path} bytes differ from the binding`)
+  const digest = visibleFileDigest(state, binding.path)
+  if (!digest) fail('missing_prior_output', `${binding.path} is missing`)
+  if (`sha256:${digest}` !== binding.digest) fail('prior_output_mutated', `${binding.path} bytes differ from the binding`)
 }
 
 function snapshotUnsigned(snapshot: Omit<RepositorySnapshot, 'snapshot_digest'>, ignoredInventory = snapshot.ignored_inventory): Omit<RepositorySnapshot, 'snapshot_digest'> {
@@ -488,15 +498,26 @@ export function captureRepositorySnapshot(
   const root = realpathSync(rootInput)
   const sortedArtifacts = [...allowedArtifacts].sort((left, right) => left.path.localeCompare(right.path))
   if (new Set(sortedArtifacts.map((binding) => binding.path)).size !== sortedArtifacts.length) fail('duplicate_allowed_artifact', 'allowed artifact paths must be unique')
-  for (const binding of sortedArtifacts) inspectAllowedArtifact(root, binding)
-  const state = computeRepositoryState(root, undefined, true)
+  let state: ReturnType<typeof captureBoundedRepositoryState>
+  try { state = captureBoundedRepositoryState(root, undefined, sortedArtifacts.map((binding) => binding.path)) }
+  catch (error) {
+    if ((error as Error & { code?: string }).code === 'visible_state_missing_entry') fail('missing_prior_output', 'an allowed artifact is missing')
+    if ((error as Error & { code?: string }).code === 'visible_state_unsupported_entry') {
+      for (const binding of sortedArtifacts) {
+        try { if (lstatSync(path.join(root, binding.path)).isSymbolicLink()) fail('artifact_symlink', `${binding.path} is a symlink`) } catch (inspectionError) {
+          if ((inspectionError as Error & { code?: string }).code === 'artifact_symlink') throw inspectionError
+        }
+      }
+    }
+    throw error
+  }
+  for (const binding of sortedArtifacts) inspectAllowedArtifact(state, binding)
   const allowedPaths = new Set(sortedArtifacts.map((binding) => binding.path))
   for (const record of state.dirty_records) {
     const destination = Buffer.from(record.destination_path_base64url, 'base64url').toString('utf8')
     const source = record.source_path_base64url ? Buffer.from(record.source_path_base64url, 'base64url').toString('utf8') : undefined
     if (!allowedPaths.has(destination)) fail('undeclared_dirty_path', `${destination} is not an exact allowed artifact path`)
     if (source && source !== destination && !allowedPaths.has(source)) fail('undeclared_dirty_path', `${source} is an undeclared rename or copy source`)
-    if (record.object_type === 'symlink') fail('artifact_symlink', `${destination} is a symlink`)
   }
   const ignoredInventory = computeIgnoredPathInventory(root)
   const unsigned = {
@@ -1189,33 +1210,35 @@ export type ExitValue = {
 const EXIT_FIELDS = ['schema_version', 'exit_kind', 'generated_at', 'entry', 'entry_receipt', 'repositories', 'reviewed_candidate_heads', 'candidate_commit_identities', 'approval_attestation_head', 'shared_contract', 'parent_receipts', 'governance', 'capture_inputs', 'codegraph', 'artifact_chain', 'disabled_capabilities', 'exit_digest'] as const
 
 function gitText(root: string, ...args: string[]): string {
-  try { return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }
-  catch { fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`) }
+  try { return runReviewedGit(root, args).stdout.toString('utf8').trim() }
+  catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_command_failed') throw error
+    fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`)
+  }
 }
 
 export function resolveCommitish(root: string, revision: string, errorCode: string): string {
   try {
-    const resolved = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`], {
-      cwd: realpathSync(root),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim()
+    const resolved = runReviewedGit(realpathSync(root), ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`]).stdout.toString('utf8').trim()
     if (!/^[0-9a-f]{40,64}$/.test(resolved)) fail(errorCode, `${revision} did not resolve to a full commit object ID`)
     return resolved
   } catch (error) {
     if ((error as Error & { code?: string }).code === errorCode) throw error
+    if ((error as Error & { code?: string }).code !== 'git_command_failed') throw error
     fail(errorCode, `${revision} is not a valid commit-ish`)
   }
 }
 
 function gitBuffer(root: string, ...args: string[]): Buffer {
-  try { return execFileSync('git', args, { cwd: root, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 }) }
-  catch { fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`) }
+  try { return runReviewedGit(root, args).stdout }
+  catch (error) {
+    if ((error as Error & { code?: string }).code !== 'git_command_failed') throw error
+    fail('git_inspection_failed', `Git inspection failed for ${args[0] ?? 'command'}`)
+  }
 }
 
 function isAncestor(root: string, ancestor: string, descendant: string): boolean {
-  const outcome = spawnSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], { cwd: root, stdio: 'ignore', shell: false })
-  return outcome.status === 0
+  return runReviewedGit(root, ['merge-base', '--is-ancestor', ancestor, descendant], { allowedExitCodes: [0, 1] }).status === 0
 }
 
 function relativeArtifact(rootInput: string, fileInput: string): string {
@@ -1729,7 +1752,7 @@ type CliRuntime = Readonly<{
 const PRODUCTION_CLI_RUNTIME: CliRuntime = Object.freeze({
   repositoryRoot: REPOSITORY_ROOT,
   runBoundedProcess,
-  inspectCodeGraphIndex,
+  inspectCodeGraphIndex: (root: string) => inspectCodeGraphIndex(root, REVIEWED_CODEGRAPH_EXECUTABLE, minimalToolEnvironment()),
   writeStdout: (value: string) => process.stdout.write(value),
 })
 
@@ -2531,6 +2554,8 @@ function dispatch(command: string, tokens: string[], runtime: CliRuntime): void 
 }
 
 function runProductionCli(tokens: string[]): void {
+  assertProductionStartupEnvironment()
+  assertNoGitReplacementRefs(REPOSITORY_ROOT)
   const [command, ...argumentTokens] = tokens
   if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
   dispatch(command, argumentTokens, PRODUCTION_CLI_RUNTIME)

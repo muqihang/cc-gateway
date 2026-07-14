@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   closeSync,
@@ -12,6 +11,7 @@ import {
   realpathSync,
 } from 'node:fs'
 import path from 'node:path'
+import { runReviewedGit } from './secure-runtime.js'
 
 export const IGNORED_INVENTORY_ALGORITHM = 'git_exclude_standard_recursive_v1' as const
 
@@ -142,13 +142,9 @@ function validRawRepositoryPath(relative: Buffer): boolean {
 
 function gitBuffer(root: string, args: string[]): Buffer {
   try {
-    return execFileSync('git', args, {
-      cwd: root,
-      encoding: 'buffer',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer: GIT_OUTPUT_LIMIT,
-    })
-  } catch {
+    return runReviewedGit(root, args, { maxOutputBytes: GIT_OUTPUT_LIMIT }).stdout
+  } catch (error) {
+    if ((error as Error & { code?: string }).code?.startsWith('git_')) throw error
     fail('ignored_inventory_discovery_failed', 'ignored inventory Git discovery failed')
   }
 }

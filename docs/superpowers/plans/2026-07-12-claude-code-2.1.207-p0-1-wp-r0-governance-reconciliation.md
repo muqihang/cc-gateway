@@ -784,7 +784,7 @@ Expected before implementation: FAIL.
 
 - [ ] **Step 2: Implement a narrow, bounded successor tool**
 
-Reuse `harness-core.ts` and `computeRepositoryState`. Add package script `oracle:p0-1` that invokes `tsx tools/oracle-lab/governance-amendment-evidence.ts`.
+Reuse `harness-core.ts`, but use a successor-owned bounded repository-state implementation. The authoritative entry is the reviewed POSIX controller at `tools/oracle-lab/oracle-p0-1`; the `oracle:p0-1` package script is compatibility-only and rejects unsafe inherited startup state at the controller boundary without claiming npm itself was protected from pre-script Node injection.
 
 Commands execute with argv arrays and `shell: false`; inherited environment is allowlisted. Hash stdout/stderr incrementally without retaining the full stream. Retain at most 8 MiB of bounded output for redaction/failure-name extraction; exceeding the bound is an unexpected failure. On timeout or overflow terminate the child process group, wait a bounded grace period, then force termination. Tests prove descendants do not survive.
 
@@ -823,21 +823,21 @@ The mandatory expected-RED inventory remains CC Gateway B4-B6, sidecar B4-B6, an
 Every subcommand returns `0` only for a schema-valid artifact and accepted classifications:
 
 ```bash
-npm run oracle:p0-1 -- capture-exit --entry <entry> --entry-receipt <receipt> --cc-gateway-root <root> --sub2api-root <root> --out <exit>
-npm run oracle:p0-1 -- run --manifest <exit> --catalog <catalog> --group green --cc-gateway-root <root> --sub2api-root <root> --out <green>
-npm run oracle:p0-1 -- run --manifest <exit> --catalog <catalog> --group red --cc-gateway-root <root> --sub2api-root <root> --out <red>
-npm run oracle:p0-1 -- merge --manifest <exit> --green <green> --red <red> --out <results>
-npm run oracle:p0-1 -- review-import --review-source <source> --adopted-amendment <adopted> --out <import>
-npm run oracle:p0-1 -- validate-review-import --review-import <import> --review-source <source> --adopted-amendment <adopted>
-npm run oracle:p0-1 -- validate-reviews --requirements-review <review> --security-review <review> --review-import <import> --cc-gateway-root <root> --sub2api-root <root>
-npm run oracle:p0-1 -- report --manifest <exit> --results <results> --requirements-review <review> --security-review <review> --out <report-json> --markdown <report-md>
-npm run oracle:p0-1 -- controller-report --manifest <exit> --results <results> --requirements-review <review> --security-review <review> --report <report-json> --report-markdown <report-md> --out <controller-json> --markdown <controller-md>
-npm run oracle:p0-1 -- validate-report --report <report-json> --markdown <report-md>
-npm run oracle:p0-1 -- context --manifest <exit> --results <results> --review-import <import> --requirements-review <review> --security-review <review> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <context>
-npm run oracle:p0-1 -- handoff --manifest <exit> --results <results> --context <context> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <handoff>
-npm run oracle:p0-1 -- receipt --artifact-commit <commit> --manifest <exit> --results <results> --context <context> --handoff <handoff> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <receipt>
-npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <commit>
-npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <commit> --receipt-commit <receipt-commit>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 capture-exit --entry <entry> --entry-receipt <receipt> --cc-gateway-root <root> --sub2api-root <root> --out <exit>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 run --manifest <exit> --catalog <catalog> --group green --cc-gateway-root <root> --sub2api-root <root> --out <green>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 run --manifest <exit> --catalog <catalog> --group red --cc-gateway-root <root> --sub2api-root <root> --out <red>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 merge --manifest <exit> --green <green> --red <red> --out <results>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 review-import --review-source <source> --adopted-amendment <adopted> --out <import>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 validate-review-import --review-import <import> --review-source <source> --adopted-amendment <adopted>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 validate-reviews --requirements-review <review> --security-review <review> --review-import <import> --cc-gateway-root <root> --sub2api-root <root>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 report --manifest <exit> --results <results> --requirements-review <review> --security-review <review> --out <report-json> --markdown <report-md>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 controller-report --manifest <exit> --results <results> --requirements-review <review> --security-review <review> --report <report-json> --report-markdown <report-md> --out <controller-json> --markdown <controller-md>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 validate-report --report <report-json> --markdown <report-md>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 context --manifest <exit> --results <results> --review-import <import> --requirements-review <review> --security-review <review> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <context>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 handoff --manifest <exit> --results <results> --context <context> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <handoff>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 receipt --artifact-commit <commit> --manifest <exit> --results <results> --context <context> --handoff <handoff> --report <report-json> --report-markdown <report-md> --controller-report <controller-json> --controller-report-markdown <controller-md> --out <receipt>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 validate-receipt --receipt <receipt> --artifact-commit <commit>
+/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 validate-receipt --receipt <receipt> --artifact-commit <commit> --receipt-commit <receipt-commit>
 ```
 
 Formal artifact dispatch is module-private. The executable `main` path always
@@ -849,11 +849,11 @@ Tests must prove that `runCliEntry`, `dispatch`, and
 a native ESM named import of `runCliEntry` fails to link.
 
 The complete positive chain is accepted only through 16 separate OS processes
-using an absolute real npm executable and
-`npm run oracle:p0-1 -- <subcommand> ...`. The sequence covers all 13 distinct
+using the absolute reviewed POSIX controller
+`/Users/muqihang/chelingxi_workspace/cc-gateway-oracle-p0-1/tools/oracle-lab/oracle-p0-1 <subcommand> ...`. The sequence covers all 13 distinct
 subcommands, including both `run` groups, both report validations, and receipt
 validation before and after the receipt-only commit. Its disposable topology
-uses shared no-checkout sparse clones, 30 exact materialized CC Gateway tracked
+uses shared no-checkout sparse clones, 33 exact materialized CC Gateway tracked
 inputs (including the statically imported
 `tools/oracle-lab/ignored-path-inventory.ts`), four exact Sub2API tracked
 inputs, and fixed sparse patterns for generated evidence. Both clone-local
@@ -862,7 +862,7 @@ positive counts and no pending/mismatch/reindex state, and bind the SHA-256 of
 their own regular SQLite database.
 
 Only the ten reviewed catalog child `npm`/`go` executables may be shortened by
-external PATH shims. The outer npm, clone-local tsx, `cli(main)`, Git, CodeGraph,
+external PATH shims. The outer POSIX controller, absolute Node, clone-local tsx, `cli(main)`, Git, CodeGraph,
 schemas, snapshots, stage journal, artifact commit, receipt commit, and receipt
 validation remain real. Shims fail closed on unknown argv/cwd, write an
 external audit that binds exact argv, cwd, environment keys/values, and command
