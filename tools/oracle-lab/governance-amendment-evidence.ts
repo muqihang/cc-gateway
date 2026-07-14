@@ -1099,11 +1099,12 @@ function validateIgnoredObservations(record: Record<string, unknown>, where: str
     return
   }
   const joint = record.command_id === 'sub2api-joint-local-chain'
-  if (record.ignored_output_observations.length !== (joint ? 1 : 0)) {
+  const jointPassed = joint && record.status === 'pass'
+  if (record.ignored_output_observations.length !== (jointPassed ? 1 : 0)) {
     add(errors, 'invalid_ignored_output_observation', `${where}.ignored_output_observations`, 'ignored-output observation inventory differs from the fixed catalog policy')
     return
   }
-  if (!joint) return
+  if (!jointPassed) return
   const observation = record.ignored_output_observations[0]
   if (!exactKeys(observation, IGNORED_OBSERVATION_FIELDS, `${where}.ignored_output_observations[0]`, errors)) return
   if (observation.repository !== 'sub2api' || observation.policy !== 'sub2api_joint_safe_deliverable_v1'
@@ -1171,7 +1172,7 @@ export function validateResultSetBindings(value: ResultSet, catalog: Array<Recor
     if ('shared_contract_digest' in bindings && bindings.shared_contract_digest !== manifest.shared_contract.digest) add(errors, 'contract_drift', `${where}.execution_bindings.shared_contract_digest`, 'shared contract binding differs')
     if ('cc_gateway_before_snapshot' in bindings && bindings.cc_gateway_before_snapshot !== bindings.cc_gateway_after_snapshot) add(errors, 'repository_mutation', `${where}.execution_bindings`, 'CC Gateway snapshots differ')
     if ('sub2api_before_snapshot' in bindings && bindings.sub2api_before_snapshot !== bindings.sub2api_after_snapshot) add(errors, 'repository_mutation', `${where}.execution_bindings`, 'Sub2API snapshots differ')
-    const expectedIgnoredPolicy = entry.ignored_output_policy === 'sub2api_joint_safe_deliverable_v1' ? 1 : 0
+    const expectedIgnoredPolicy = entry.ignored_output_policy === 'sub2api_joint_safe_deliverable_v1' && record.status === 'pass' ? 1 : 0
     if (record.ignored_output_observations.length !== expectedIgnoredPolicy
       || expectedIgnoredPolicy === 1 && (record.command_id !== 'sub2api-joint-local-chain' || record.repository !== 'sub2api'
         || record.ignored_output_observations[0]?.policy_digest !== IGNORED_OUTPUT_POLICY_DIGESTS.sub2api_joint_safe_deliverable_v1)) {
@@ -2011,21 +2012,26 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
   for (const entry of catalog.value.filter((candidate) => candidate.group === group)) {
     const policy = entry.ignored_output_policy as IgnoredOutputPolicy
     const beforeCc = rebindRepositorySnapshotPolicy(currentCc, 'none')
-    const beforeSub = rebindRepositorySnapshotPolicy(currentSub, policy)
     const cwd = expandCatalogString(String(entry.cwd), roots)
     const argv = (entry.argv as string[]).map((part) => expandCatalogString(part, roots)); const environment = childEnvironment(entry, roots)
     const commandStartedAt = new Date()
     const observed = runtime.runBoundedProcess({ argv, cwd, env: environment, timeoutMs: Number(entry.timeout_ms), maxOutputBytes: Number(entry.max_output_bytes) })
     const commandFinishedAt = new Date()
+    // A failed child cannot authorize an ignored-output transition.
+    const appliedPolicy = observed.exitCode === 0 && !observed.timedOut && !observed.outputOverflow
+      && !observed.unsafeOutputDetected && !observed.infrastructureFailure && !infrastructureFailure(observed.outputExcerpt)
+      ? policy
+      : 'none'
+    const beforeSub = rebindRepositorySnapshotPolicy(currentSub, appliedPolicy)
     let afterCc: RepositorySnapshot
     let afterSub: RepositorySnapshot
     let ccTransition: RepositorySnapshotTransition
     let subTransition: RepositorySnapshotTransition
     try {
       afterCc = captureRepositorySnapshot(ccRoot, prior, 'none')
-      afterSub = captureRepositorySnapshot(subRoot, [], policy)
+      afterSub = captureRepositorySnapshot(subRoot, [], appliedPolicy)
       ccTransition = compareRepositorySnapshots(beforeCc, afterCc, 'none', commandStartedAt, commandFinishedAt)
-      subTransition = compareRepositorySnapshots(beforeSub, afterSub, policy, commandStartedAt, commandFinishedAt)
+      subTransition = compareRepositorySnapshots(beforeSub, afterSub, appliedPolicy, commandStartedAt, commandFinishedAt)
     } catch { fail('repository_mutation', 'repository state changed across the child command') }
     const ignoredOutputObservations: IgnoredOutputObservation[] = subTransition.ignored_output_observation
       ? [{ repository: 'sub2api', ...subTransition.ignored_output_observation }]

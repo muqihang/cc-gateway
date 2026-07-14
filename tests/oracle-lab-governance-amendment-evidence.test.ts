@@ -477,6 +477,7 @@ function writeCatalogShims(options: {
   subRoot: string
   unsafeCommandId?: string
   unsafeMarker?: string
+  earlyFailureCommandId?: string
   mutation?: ShimMutation
   jointModeNode?: 'date-directory' | 'safe-directory' | 'readme' | 'summary'
 }): void {
@@ -498,6 +499,7 @@ const mutationState = ${JSON.stringify(statePath)}
 const mutation = ${JSON.stringify(options.mutation ?? null)}
 const unsafeCommandId = ${JSON.stringify(options.unsafeCommandId ?? null)}
 const unsafeMarker = ${JSON.stringify(options.unsafeMarker ?? '')}
+const earlyFailureCommandId = ${JSON.stringify(options.earlyFailureCommandId ?? null)}
 const jointModeNode = ${JSON.stringify(options.jointModeNode ?? null)}
 const executable = path.basename(process.argv[1])
 const argv = process.argv.slice(2)
@@ -506,6 +508,7 @@ const match = accepted.find((candidate) => candidate.executable === executable &
 const selectedKeys = ['CI','npm_config_offline','npm_config_audit','npm_config_fund','GOPROXY','GOSUMDB','GOTOOLCHAIN','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','PATH','HOME','TMPDIR','SUB2API_ROOT','CC_GATEWAY_REPO_ROOT']
 appendFileSync(auditLog, JSON.stringify({ executable, argv, cwd, env_keys: Object.keys(process.env).sort(), selected_env: Object.fromEntries(selectedKeys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])), platform_env: { __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING }, command_id: match?.id ?? null }) + '\\n')
 if (!match) process.exit(97)
+if (match.id === earlyFailureCommandId) process.exit(1)
 if (mutation && !existsSync(mutationState)) {
   const target = path.join(mutation.repositoryRoot, mutation.relativePath)
   mkdirSync(path.dirname(target), { recursive: true })
@@ -1994,6 +1997,31 @@ const unsafeCliResult = runProductionLauncherCli(unsafeCliRoot, [
 expectProductionCliCode(unsafeCliResult, 'unexpected_classification')
 assert.equal(`${unsafeCliResult.stdout}${unsafeCliResult.stderr}`.includes(unsafeCliMarker), false, 'CLI process output leaked unsafe failure-name bytes')
 assert.equal(existsSync(path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.green)), false, 'unsafe result artifact must not be persisted')
+
+const earlyJointFailureRoot = cloneAcceptanceRef('early-joint-failure', acceptanceManifest.approval_attestation_head)
+const earlyJointFailureSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'early-joint-failure-sub', acceptanceSubCandidate)
+initializeCaptureExitCheckpoint(earlyJointFailureRoot, earlyJointFailureSubRoot)
+const earlyJointFailureBefore = ignoredInventory.computeIgnoredPathInventory(earlyJointFailureSubRoot).summary
+const earlyJointFailureShimBin = path.join(acceptanceFixtureRoot, 'early-joint-failure-shim-bin')
+writeCatalogShims({
+  directory: earlyJointFailureShimBin,
+  auditLog: path.join(acceptanceFixtureRoot, 'early-joint-failure-audit.jsonl'),
+  ccRoot: earlyJointFailureRoot,
+  subRoot: earlyJointFailureSubRoot,
+  earlyFailureCommandId: 'sub2api-joint-local-chain',
+})
+const earlyJointFailureResult = runProductionLauncherCli(earlyJointFailureRoot, [
+  'run',
+  '--manifest', evidence.ARTIFACT_CHAIN.exit,
+  '--catalog', catalogRelative,
+  '--group', 'green',
+  '--cc-gateway-root', earlyJointFailureRoot,
+  '--sub2api-root', earlyJointFailureSubRoot,
+  '--out', evidence.ARTIFACT_CHAIN.green,
+], earlyJointFailureShimBin, acceptanceTmp)
+expectProductionCliCode(earlyJointFailureResult, 'unexpected_classification')
+assert.deepEqual(ignoredInventory.computeIgnoredPathInventory(earlyJointFailureSubRoot).summary, earlyJointFailureBefore)
+assert.equal(existsSync(path.join(earlyJointFailureRoot, evidence.ARTIFACT_CHAIN.green)), false)
 
 function expectIgnoredMutationRejected(
   label: string,
