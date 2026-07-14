@@ -732,6 +732,7 @@ CC Gateway ledger commit message: `docs(oracle): resolve joint fixture drift obs
 
 ### Files
 
+- Modify: `docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md`
 - Modify: `package.json`
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-command-catalog.schema.json`
@@ -744,6 +745,8 @@ CC Gateway ledger commit message: `docs(oracle): resolve joint fixture drift obs
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json`
 - Create: `docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json`
 - Create: `tools/oracle-lab/governance-amendment-evidence.ts`
+- Modify: `tests/oracle-lab-post-integration-entry.test.ts`
+- Modify: `tests/oracle-lab-post-integration-handoff.test.ts`
 - Create: `tests/run-p0-1.ts`
 - Create: `tests/oracle-lab-governance-amendment-evidence.test.ts`
 
@@ -825,9 +828,9 @@ GREEN/RED/merged results share one strict results schema. Exit and controller re
 
 The two review inputs are strict JSON attestations under `oracle-lab-governance-amendment-review.schema.json`, not free-form Markdown. The tool requires two distinct reviewer identities and the exact roles `requirements` and `security_quality`; both must bind the reviewed candidate heads/diffs, declare `decision: approved`, and contain `critical: 0` plus `important: 0`. Human reasoning may appear only in bounded safe summary arrays covered by the schema.
 
-- [ ] **Step 4: Sync, review, and commit tooling only**
+- [ ] **Step 4: Sync, review, and commit the complete Task 6 prerequisite scope**
 
-Run `codegraph sync && codegraph status`. H0 reviewer checks command completeness, dual-repository mutation detection, bounded process/output handling, safe output, schemas, and deterministic digests. Requirements reviewer checks every P0.1 exit item is representable.
+Run `codegraph sync && codegraph status`. Commit the successor tooling, schemas, catalog, focused runner/tests, the Task 7 plan prerequisite, and the two freshness-sensitive post-integration test corrections listed above as one reviewed Task 6 scope. H0 reviewer checks command completeness, dual-repository mutation detection, bounded process/output handling, safe output, schemas, and deterministic digests. Requirements reviewer checks every P0.1 exit item is representable. This step still creates no formal Task 7 exit/result/report/context/handoff/receipt artifact.
 
 Commit message: `feat(oracle): add p0.1 successor evidence tooling`
 

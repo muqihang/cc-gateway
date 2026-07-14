@@ -180,6 +180,12 @@ export const ADOPTED_AMENDMENT_BINDING = {
   path: GOVERNANCE_PATHS.amendment,
   digest: 'sha256:997eb373ba8342fbe678e01b13dd25507bdede6e915e9e5a6a9de4d90d8e8819',
 } as const
+export const REVIEW_IMPORT_TRANSFORMATION = {
+  algorithm: 'sha256_exact_bytes_v1',
+  source_bytes: 41_663,
+  adopted_bytes: 47_547,
+  pair_digest: 'sha256:30e04d6e7a67d97379bd642ee9ba7111064e3cce30c36779c9b4d88a300db55a',
+} as const
 const SCHEMA_PATHS = {
   exit_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
   catalog_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-command-catalog.schema.json',
@@ -360,18 +366,20 @@ export function buildReviewImport(options: { reviewSource: string; adoptedAmendm
   if (!same(adoptedBinding, ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment bytes differ from the fixed reviewed digest')
   const adopted = readFileSync(path.join(repositoryRoot, adoptedRelative))
   if (source.length === 0 || adopted.length === 0 || source.length > MAX_OUTPUT_BYTES || adopted.length > MAX_OUTPUT_BYTES) fail('invalid_review_import_bytes', 'review inputs must be nonempty and at most 8 MiB')
+  const transformation = {
+    algorithm: 'sha256_exact_bytes_v1' as const,
+    source_bytes: source.length,
+    adopted_bytes: adopted.length,
+    pair_digest: sha256(Buffer.concat([Buffer.from(source.length.toString(10)), Buffer.from([0]), source, Buffer.from(adopted.length.toString(10)), Buffer.from([0]), adopted])),
+  }
+  if (!same(transformation, REVIEW_IMPORT_TRANSFORMATION)) fail('review_import_bytes_mismatch', 'review import bytes differ from the fixed source/adopted transformation')
   const value: ReviewImport = {
     schema_version: 1,
     import_kind: 'governance_amendment_review_import',
     generated_at: new Date(options.generatedAt ?? new Date().toISOString()).toISOString(),
     source: { path: safeLeaf(options.reviewSource), digest: TASK_0B_REVIEW_SOURCE_DIGEST },
     adopted: { ...ADOPTED_AMENDMENT_BINDING },
-    transformation: {
-      algorithm: 'sha256_exact_bytes_v1',
-      source_bytes: source.length,
-      adopted_bytes: adopted.length,
-      pair_digest: sha256(Buffer.concat([Buffer.from(source.length.toString(10)), Buffer.from([0]), source, Buffer.from(adopted.length.toString(10)), Buffer.from([0]), adopted])),
-    },
+    transformation: { ...REVIEW_IMPORT_TRANSFORMATION },
   }
   assertSafeArtifact(value)
   return value
@@ -384,10 +392,7 @@ export function validateReviewImportValue(value: unknown): HarnessResult {
   if (value.schema_version !== 1 || value.import_kind !== 'governance_amendment_review_import' || !validUtcTimestamp(value.generated_at)) add(errors, 'invalid_review_import', '$', 'review import header is invalid')
   if (!validArtifact(value.source) || !validArtifact(value.adopted)) add(errors, 'invalid_review_import', '$', 'source and adopted bindings are invalid')
   if (!exactKeys(value.transformation, ['algorithm', 'source_bytes', 'adopted_bytes', 'pair_digest'], '$.transformation', errors)) return result(errors)
-  if (value.transformation.algorithm !== 'sha256_exact_bytes_v1'
-    || typeof value.transformation.source_bytes !== 'number' || !Number.isInteger(value.transformation.source_bytes) || value.transformation.source_bytes < 1 || value.transformation.source_bytes > MAX_OUTPUT_BYTES
-    || typeof value.transformation.adopted_bytes !== 'number' || !Number.isInteger(value.transformation.adopted_bytes) || value.transformation.adopted_bytes < 1 || value.transformation.adopted_bytes > MAX_OUTPUT_BYTES
-    || !DIGEST_RE.test(String(value.transformation.pair_digest))) add(errors, 'invalid_review_import', '$.transformation', 'transformation is invalid')
+  if (!same(value.transformation, REVIEW_IMPORT_TRANSFORMATION)) add(errors, 'invalid_review_import', '$.transformation', 'transformation does not match the fixed source/adopted byte pair')
   if (!same(value.source, { path: TASK_0B_REVIEW_SOURCE_LEAF, digest: TASK_0B_REVIEW_SOURCE_DIGEST }) || !same(value.adopted, ADOPTED_AMENDMENT_BINDING)) add(errors, 'review_import_binding_mismatch', '$', 'review import does not bind the fixed Task 0B source and adopted amendment')
   return result(errors)
 }
@@ -1330,7 +1335,7 @@ function redact(text) {
 }
 function emit() {
   if (emitted || !closeState || (terminating && !forceKillDone)) return; emitted = true;
-  process.stdout.write(JSON.stringify({ exitCode: closeState.code === null ? 128 : closeState.code, signal: closeState.signal, durationMs: Date.now() - started, stdoutDigest: 'sha256:' + stdoutHash.digest('hex'), stderrDigest: 'sha256:' + stderrHash.digest('hex'), outputBytes: total, outputExcerpt: unsafeOutputDetected ? '[REDACTED]' : redact(retained.toString('utf8')).slice(0, 2048), outputOverflow: overflow, timedOut, failureNames: [...failureNames].sort(), infrastructureFailure, unsafeOutputDetected }));
+  process.stdout.write(JSON.stringify({ exitCode: closeState.code === null ? 128 : closeState.code, signal: closeState.signal, durationMs: Date.now() - started, stdoutDigest: 'sha256:' + stdoutHash.digest('hex'), stderrDigest: 'sha256:' + stderrHash.digest('hex'), outputBytes: total, outputExcerpt: unsafeOutputDetected ? '[REDACTED]' : redact(retained.toString('utf8')).slice(0, 2048), outputOverflow: overflow, timedOut, failureNames: unsafeOutputDetected ? [] : [...failureNames].sort(), infrastructureFailure, unsafeOutputDetected }));
 }
 function terminate(reason) {
   if (terminating) return; terminating = true;
@@ -1378,6 +1383,7 @@ export function runBoundedProcess(options: { argv: string[]; cwd: string; env: R
   let parsed: BoundedProcessResult & { helperError?: string }
   try { parsed = JSON.parse(helper.stdout) as BoundedProcessResult & { helperError?: string } } catch { fail('bounded_runner_failed', 'bounded process helper returned invalid output') }
   if (parsed.helperError) fail('child_spawn_failed', parsed.helperError)
+  if (parsed.unsafeOutputDetected) parsed.failureNames = []
   return parsed
 }
 
@@ -1502,7 +1508,9 @@ function buildResultRecord(
   afterSub: RepositorySnapshot,
 ): ResultRecord {
   const expected = entry.expected_exit as 0 | 'nonzero'
-  const names = [...new Set([...observed.failureNames, ...failureNames(observed.outputExcerpt)])].filter((name) => /^[A-Za-z0-9 _.:()/-]{1,256}$/.test(name)).sort().slice(0, 64)
+  const names = observed.unsafeOutputDetected
+    ? []
+    : [...new Set([...observed.failureNames, ...failureNames(observed.outputExcerpt)])].filter((name) => /^[A-Za-z0-9 _.:()/-]{1,256}$/.test(name)).sort().slice(0, 64)
   const infra = observed.infrastructureFailure || infrastructureFailure(observed.outputExcerpt)
   let status = classifyBoundedProcess({ ...observed, infrastructureFailure: infra }, expected)
   const expectedFamilies = EXPECTED_RED_FAILURE_FAMILIES[String(entry.id)]
@@ -1902,6 +1910,49 @@ function receiptArtifactPaths(manifest: ExitValue): string[] {
   return [...paths].sort()
 }
 
+function preReceiptArtifactPaths(manifest: ExitValue): string[] {
+  return Object.entries(manifest.artifact_chain)
+    .filter(([name]) => name !== 'receipt')
+    .map(([, relative]) => relative)
+    .sort()
+}
+
+function manifestInputBindings(manifest: ExitValue): ArtifactBinding[] {
+  const bindings = [
+    manifest.entry,
+    manifest.entry_receipt,
+    manifest.parent_receipts.phase_zero,
+    manifest.parent_receipts.post_integration_v2,
+    ...Object.values(manifest.governance),
+    ...Object.values(manifest.capture_inputs),
+  ]
+  const byPath = new Map<string, ArtifactBinding>()
+  for (const binding of bindings) {
+    const existing = byPath.get(binding.path)
+    if (existing && existing.digest !== binding.digest) fail('manifest_artifact_digest_mismatch', `${binding.path} has conflicting manifest bindings`)
+    byPath.set(binding.path, binding)
+  }
+  return [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path))
+}
+
+export function validateArtifactCommit(rootInput: string, manifest: ExitValue, revision: string): string {
+  const root = realpathSync(rootInput)
+  const artifactCommit = resolveCommitish(root, revision, 'invalid_artifact_commit')
+  const ancestry = gitText(root, 'rev-list', '--parents', '-n', '1', artifactCommit).split(/\s+/)
+  if (ancestry.length !== 2 || ancestry[1] !== manifest.approval_attestation_head) {
+    fail('invalid_artifact_commit_parent', 'artifact commit must be the sole direct child of the approval-attestation head')
+  }
+  const delta = gitText(root, 'diff-tree', '--no-commit-id', '--name-status', '--no-renames', '-r', artifactCommit).split('\n').filter(Boolean).sort()
+  const expectedDelta = preReceiptArtifactPaths(manifest).map((relative) => `A\t${relative}`).sort()
+  if (!same(delta, expectedDelta)) fail('invalid_artifact_commit_delta', 'artifact commit must add exactly the ten pre-receipt output paths')
+  for (const binding of manifestInputBindings(manifest)) {
+    if (committedDigest(root, artifactCommit, binding.path) !== binding.digest) {
+      fail('manifest_artifact_digest_mismatch', `${binding.path} differs from the digest captured in the exit manifest`)
+    }
+  }
+  return artifactCommit
+}
+
 function assertReceiptInputs(root: string, args: ReturnType<typeof parseArgs>): void {
   const expected: Record<string, string> = {
     manifest: ARTIFACT_CHAIN.exit,
@@ -1948,10 +1999,11 @@ function validateReceiptChainValues(root: string, manifest: ExitValue, now = Dat
 }
 
 function commandReceipt(args: ReturnType<typeof parseArgs>, root: string): void {
-  const artifactCommit = String(one(args, 'artifact-commit'))
-  if (!/^[0-9a-f]{40,64}$/.test(artifactCommit) || gitText(root, 'rev-parse', 'HEAD') !== artifactCommit) fail('wrong_artifact_commit', 'receipt must be built at the exact artifact commit')
+  const artifactCommit = resolveCommitish(root, String(one(args, 'artifact-commit')), 'invalid_artifact_commit')
+  if (gitText(root, 'rev-parse', 'HEAD') !== artifactCommit) fail('wrong_artifact_commit', 'receipt must be built at the exact artifact commit')
   const manifest = loadManifest(root, String(one(args, 'manifest')))
   assertReceiptInputs(root, args)
+  validateArtifactCommit(root, manifest.value, artifactCommit)
   prepareArtifactChainStage(root, 'receipt')
   validateReceiptChainValues(root, manifest.value, Date.now(), artifactCommit)
   const artifactPaths = receiptArtifactPaths(manifest.value)
@@ -1979,36 +2031,39 @@ function commandReceipt(args: ReturnType<typeof parseArgs>, root: string): void 
 
 export function validateReceiptArtifact(options: { root: string; receiptPath: string; artifactCommit: string; receiptCommit?: string; now?: number }): void {
   const root = realpathSync(options.root)
+  const artifactCommit = resolveCommitish(root, options.artifactCommit, 'invalid_artifact_commit')
   const receiptCommit = options.receiptCommit ? resolveCommitish(root, options.receiptCommit, 'invalid_receipt_commit') : undefined
   const receiptRelative = relativeArtifact(root, options.receiptPath)
   if (receiptRelative !== ARTIFACT_CHAIN.receipt) fail('receipt_path_mismatch', 'receipt path is not fixed')
   const receipt = readJsonAt<ReceiptValue>(root, receiptRelative)
   requireValidation(validateReceiptValue(receipt))
-  if (receipt.artifact_commit !== options.artifactCommit) fail('wrong_artifact_commit', 'receipt artifact commit differs from the requested commit')
-  validateAgainstCommittedSchema(root, options.artifactCommit, SCHEMA_PATHS.receipt_schema, receipt)
-  const manifestBytes = committedBytes(root, options.artifactCommit, ARTIFACT_CHAIN.exit)
+  if (receipt.artifact_commit !== artifactCommit) fail('wrong_artifact_commit', 'receipt artifact commit differs from the requested commit')
+  validateAgainstCommittedSchema(root, artifactCommit, SCHEMA_PATHS.receipt_schema, receipt)
+  const manifestBytes = committedBytes(root, artifactCommit, ARTIFACT_CHAIN.exit)
   let manifest: ExitValue
   try { manifest = JSON.parse(manifestBytes.toString('utf8')) as ExitValue } catch { fail('invalid_committed_manifest', 'artifact commit manifest is invalid JSON') }
   requireValidation(validateExitValue(manifest))
+  validateArtifactCommit(root, manifest, artifactCommit)
+  validateReviewsForManifest(root, manifest, path.join(root, REQUIREMENTS_REVIEW_PATH), path.join(root, SECURITY_REVIEW_PATH), artifactCommit)
   const expectedPaths = receiptArtifactPaths(manifest)
   if (!same(Object.keys(receipt.artifact_digests).sort(), expectedPaths)) fail('artifact_inventory_mismatch', 'receipt artifact inventory is not exact')
   for (const relative of expectedPaths) {
-    const current = bindingAt(root, relative).digest; const committed = committedDigest(root, options.artifactCommit, relative)
+    const current = bindingAt(root, relative).digest; const committed = committedDigest(root, artifactCommit, relative)
     if (receipt.artifact_digests[relative] !== current || current !== committed) fail('artifact_digest_mismatch', `${relative} differs from receipt or artifact commit`)
   }
   if (!same(receipt.reviewed_heads, { cc_gateway: manifest.repositories.cc_gateway.head, sub2api: manifest.repositories.sub2api.head }) || !same(receipt.parent_receipts, manifest.parent_receipts)) fail('receipt_binding_mismatch', 'receipt heads or parent receipts differ from the manifest')
   const reviewImport = readJsonAt<ReviewImport>(root, REVIEW_IMPORT_PATH)
   if (!same(receipt.review_amendment, { source_digest: reviewImport.source.digest, adopted_digest: reviewImport.adopted.digest })) fail('review_import_bytes_mismatch', 'receipt review-amendment digests differ from review import')
-  validateReceiptChainValues(root, manifest, options.now, options.artifactCommit)
+  validateReceiptChainValues(root, manifest, options.now, artifactCommit)
   if (receiptCommit) {
     if (gitText(root, 'rev-parse', 'HEAD') !== receiptCommit) fail('wrong_receipt_commit', 'worktree HEAD is not the receipt commit')
-    if (gitText(root, 'rev-parse', `${receiptCommit}^`) !== options.artifactCommit) fail('invalid_receipt_commit_parent', 'receipt commit parent is not the artifact commit')
+    if (gitText(root, 'rev-parse', `${receiptCommit}^`) !== artifactCommit) fail('invalid_receipt_commit_parent', 'receipt commit parent is not the artifact commit')
     const delta = gitText(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', receiptCommit).split('\n').filter(Boolean)
     if (!same(delta, [`A\t${ARTIFACT_CHAIN.receipt}`])) fail('invalid_receipt_commit_delta', 'receipt commit must add exactly one receipt path')
     if (!readFileSync(path.join(root, receiptRelative)).equals(committedBytes(root, receiptCommit, receiptRelative))) fail('receipt_commit_bytes_mismatch', 'committed receipt differs from validated worktree bytes')
     captureRepositorySnapshot(root)
   } else {
-    if (gitText(root, 'rev-parse', 'HEAD') !== options.artifactCommit) fail('wrong_artifact_commit', 'pre-commit validation must run at the artifact commit')
+    if (gitText(root, 'rev-parse', 'HEAD') !== artifactCommit) fail('wrong_artifact_commit', 'pre-commit validation must run at the artifact commit')
     captureRepositorySnapshot(root, [bindingAt(root, receiptRelative)])
   }
 }
