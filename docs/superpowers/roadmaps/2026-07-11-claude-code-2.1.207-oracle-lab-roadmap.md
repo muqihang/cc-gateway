@@ -13,8 +13,7 @@
 - Registry adoption state: Registry v2 and RA adoption remain pending reviewed gates through Task 2 and Task 3; this Status does not claim those migrations are complete
 - Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly by the reviewed Task 2/3 migration, which remains pending; no conflict may be silently replaced or superseded
 - Delivery state: Phase 0 complete; `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json` (`sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6`) is the immutable reviewed-input baseline, and `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json` binds the final roadmap bytes and Phase 0 handoff commit. Phase 1 remains gated on that receipt and the Phase 0 exit contract.
-- P0.1 governance state: the review amendment is adopted as a planning overlay; P0.1 is not
-  complete until its successor receipt, and P1 remains blocked by the integrated-main entry gates
+- P0.1 governance state: P0.1 implementation candidate; completion is controlled exclusively by the successor receipt; P1 remains blocked by the integrated-main entry gates.
 - Current worktree: CC Gateway repository; Sub2API and other sibling repositories are separate
   implementation surfaces
 
