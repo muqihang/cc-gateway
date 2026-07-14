@@ -836,6 +836,37 @@ npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <c
 npm run oracle:p0-1 -- validate-receipt --receipt <receipt> --artifact-commit <commit> --receipt-commit <receipt-commit>
 ```
 
+Formal artifact dispatch is module-private. The executable `main` path always
+uses one frozen production runtime; no exported TypeScript API, CLI flag,
+environment variable, import hook, or optional callback may replace the
+repository root, bounded process runner, CodeGraph inspector, or output sink.
+Tests must prove that `runCliEntry`, `dispatch`, and
+`PRODUCTION_CLI_RUNTIME` are absent from the runtime module namespace and that
+a native ESM named import of `runCliEntry` fails to link.
+
+The complete positive chain is accepted only through 16 separate OS processes
+using an absolute real npm executable and
+`npm run oracle:p0-1 -- <subcommand> ...`. The sequence covers all 13 distinct
+subcommands, including both `run` groups, both report validations, and receipt
+validation before and after the receipt-only commit. Its disposable topology
+uses shared no-checkout sparse clones, 30 exact materialized CC Gateway tracked
+inputs (including the statically imported
+`tools/oracle-lab/ignored-path-inventory.ts`), four exact Sub2API tracked
+inputs, and fixed sparse patterns for generated evidence. Both clone-local
+CodeGraph indexes are created and queried by the real CodeGraph CLI, have
+positive counts and no pending/mismatch/reindex state, and bind the SHA-256 of
+their own regular SQLite database.
+
+Only the ten reviewed catalog child `npm`/`go` executables may be shortened by
+external PATH shims. The outer npm, clone-local tsx, `cli(main)`, Git, CodeGraph,
+schemas, snapshots, stage journal, artifact commit, receipt commit, and receipt
+validation remain real. Shims fail closed on unknown argv/cwd, write an
+external audit that binds exact argv, cwd, environment keys/values, and command
+order, and cannot provide `git`, `codegraph`, `node`, or `tsx`. The fixture must
+observe 16/16 accepted outer process exits, 13/13 supported subcommands, 10/10
+audited catalog children, both CodeGraph statuses, steady disk below 30 MiB,
+observed peak below 60 MiB, and elapsed time no greater than 90 seconds.
+
 GREEN/RED/merged results share one strict results schema. Exit and controller reports share one strict report schema with a `report_type` discriminator. Each report command stages and exclusively publishes a canonical JSON artifact and its exact deterministic Markdown rendering with no-follow path checks, then accepts the pair as a completed stage only after both on-disk files pass exact schema/semantic/render validation and one chain-state transition binds both digests. `validate-report` regenerates the Markdown from JSON, requires byte equality, and requires that accepted chain binding. A crash can leave one or both exclusive output paths as an incomplete residue that blocks validation and later stages until operator-approved cleanup; the contract does not claim simultaneous physical visibility of two POSIX pathnames. Every other persisted component has its own schema and version.
 
 The two review inputs are strict JSON attestations under `oracle-lab-governance-amendment-review.schema.json`, not free-form Markdown. The tool requires two distinct reviewer identities and the exact roles `requirements` and `security_quality`; both must bind the reviewed candidate heads/diffs, declare `decision: approved`, and contain `critical: 0` plus `important: 0`. Human reasoning may appear only in bounded safe summary arrays covered by the schema.

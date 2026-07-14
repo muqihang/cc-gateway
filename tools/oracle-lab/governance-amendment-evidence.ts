@@ -1547,7 +1547,7 @@ export function runBoundedProcess(options: { argv: string[]; cwd: string; env: R
   return parsed
 }
 
-export type CliRuntime = Readonly<{
+type CliRuntime = Readonly<{
   repositoryRoot: string
   runBoundedProcess: typeof runBoundedProcess
   inspectCodeGraphIndex: typeof inspectCodeGraphIndex
@@ -2278,15 +2278,15 @@ function dispatch(command: string, tokens: string[], runtime: CliRuntime): void 
   runtime.writeStdout(`${canonicalJson({ ok: true, command: invocation.command })}\n`)
 }
 
-export function runCliEntry(tokens: string[], runtime: CliRuntime): void {
+function runProductionCli(tokens: string[]): void {
   const [command, ...argumentTokens] = tokens
   if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
-  dispatch(command, argumentTokens, runtime)
+  dispatch(command, argumentTokens, PRODUCTION_CLI_RUNTIME)
 }
 
 function main(): void {
   if (process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) !== realpathSync(process.argv[1])) return
-  runCliEntry(process.argv.slice(2), PRODUCTION_CLI_RUNTIME)
+  runProductionCli(process.argv.slice(2))
 }
 
 cli(main)

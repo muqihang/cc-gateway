@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,68 @@ const root = path.resolve(new URL('..', import.meta.url).pathname)
 const toolRelative = 'tools/oracle-lab/governance-amendment-evidence.ts'
 const ignoredInventoryRelative = 'tools/oracle-lab/ignored-path-inventory.ts'
 const catalogRelative = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
+const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'
+const sub2apiSourceRoot = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1'
+const productionBranch = 'codex/oracle-p0-1-governance'
+const MiB = 1024 * 1024
+const PRODUCTION_CLI_TIMEOUT_MS = 90_000
+const PRODUCTION_CLI_MAX_BUFFER = 16 * MiB
+const CC_SPARSE_PATHS = [
+  '.gitignore',
+  'package.json',
+  'sidecar/egress-tls-sidecar/go.mod',
+  'tools/oracle-lab/governance-amendment-evidence.ts',
+  'tools/oracle-lab/harness-core.ts',
+  'tools/oracle-lab/freeze-baseline.ts',
+  'tools/oracle-lab/governance-amendment-entry.ts',
+  'tools/oracle-lab/ignored-path-inventory.ts',
+  'tools/oracle-lab/validate-requirements.ts',
+  'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
+  'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.receipt.json',
+  'docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json',
+  'docs/superpowers/evidence/post-integration-v2/post-integration-receipt.json',
+  'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
+  'docs/superpowers/registry/oracle-lab-requirements.json',
+  'docs/superpowers/registry/oracle-lab-claims.json',
+  'docs/superpowers/registry/oracle-lab-current-observations.json',
+  catalogRelative,
+  'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md',
+  taskPlanRelative,
+  'docs/superpowers/schemas/oracle-lab-requirement.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-command-catalog.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-command-results.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-context.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-handoff.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-receipt.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-report.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json',
+  'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
+] as const
+const SUB_SPARSE_PATHS = [
+  '.gitignore',
+  'backend/go.mod',
+  'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json',
+  'backend/internal/service/sse_scanner_buffer_pool.go',
+] as const
+const CC_GENERATED_SPARSE_PATTERNS = [
+  'docs/superpowers/evidence/p0-1/p0-1-review-import.json',
+  'docs/superpowers/evidence/p0-1/requirements-review.json',
+  'docs/superpowers/evidence/p0-1/security-quality-review.json',
+  'docs/superpowers/evidence/p0-1/p0-1-exit-baseline.json',
+  'docs/superpowers/evidence/p0-1/p0-1-green-results.json',
+  'docs/superpowers/evidence/p0-1/p0-1-red-results.json',
+  'docs/superpowers/evidence/p0-1/p0-1-command-results.json',
+  'docs/superpowers/evidence/p0-1/p0-1-exit-report.json',
+  'docs/superpowers/evidence/p0-1/p0-1-exit-report.md',
+  'docs/superpowers/evidence/p0-1/controller-final-report.json',
+  'docs/superpowers/evidence/p0-1/controller-final-report.md',
+  'docs/superpowers/evidence/p0-1/p0-1-context.json',
+  'docs/superpowers/evidence/p0-1/p0-1-handoff.json',
+  'docs/superpowers/evidence/p0-1/p0-1-successor-receipt.json',
+] as const
+assert.equal(CC_SPARSE_PATHS.length, 30)
+assert.equal(SUB_SPARSE_PATHS.length, 4)
 const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
   'docs/superpowers/schemas/oracle-lab-governance-amendment-command-catalog.schema.json',
@@ -132,6 +194,21 @@ assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((m
 const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
 const ignoredInventory = await import(pathToFileURL(path.join(root, ignoredInventoryRelative)).href)
 
+const productionNamespace = evidence as Record<string, unknown>
+for (const runtimeSelector of ['runCliEntry', 'dispatch', 'PRODUCTION_CLI_RUNTIME']) {
+  assert.equal(Object.hasOwn(productionNamespace, runtimeSelector), false, `${runtimeSelector} must not be exported`)
+}
+const namedRuntimeImportProbeRoot = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-runtime-import-probe-'))
+const namedRuntimeImportProbePath = path.join(namedRuntimeImportProbeRoot, 'probe.mjs')
+writeFileSync(namedRuntimeImportProbePath, `import { runCliEntry } from ${JSON.stringify(pathToFileURL(path.join(root, toolRelative)).href)}; void runCliEntry\n`)
+const namedRuntimeImportProbe = spawnSync(process.execPath, ['--import', 'tsx', namedRuntimeImportProbePath], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { ...process.env, ...HERMETIC_NETWORK_ENV },
+})
+assert.notEqual(namedRuntimeImportProbe.status, 0, 'named runCliEntry import must fail to link')
+assert.match(namedRuntimeImportProbe.stderr, /does not provide an export named ['"]runCliEntry['"]|has no exported member named ['"]runCliEntry['"]|No matching export.*runCliEntry/i)
+
 const cliCases = [
   ['capture-exit', ['entry', 'entry-receipt', 'cc-gateway-root', 'sub2api-root', 'out']],
   ['run', ['manifest', 'catalog', 'group', 'cc-gateway-root', 'sub2api-root', 'out']],
@@ -215,6 +292,208 @@ function canonical(value: unknown): string {
   return JSON.stringify(value)
 }
 
+function resolveRealExecutable(name: string): string {
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!directory) continue
+    const candidate = path.join(directory, name)
+    if (existsSync(candidate)) return realpathSync(candidate)
+  }
+  throw new Error(`required executable ${name} is unavailable`)
+}
+
+const realNpmExecutable = resolveRealExecutable('npm')
+const realCodeGraphExecutable = resolveRealExecutable('codegraph')
+assert.equal(path.isAbsolute(realNpmExecutable), true)
+assert.equal(path.isAbsolute(realCodeGraphExecutable), true)
+
+function cloneSharedSparseRepository(sourceRepository: string, destination: string, sparsePaths: readonly string[], branch = productionBranch): string {
+  mkdirSync(path.dirname(destination), { recursive: true })
+  execFileSync('git', [
+    'clone', '-q', '--shared', '--no-checkout', '--single-branch', '--branch', branch,
+    sourceRepository, destination,
+  ], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER })
+  execFileSync('git', ['-C', destination, 'sparse-checkout', 'init', '--no-cone'], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  execFileSync('git', ['-C', destination, 'sparse-checkout', 'set', '--no-cone', '--stdin'], {
+    input: `${[...sparsePaths].join('\n')}\n`, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  execFileSync('git', ['-C', destination, 'checkout', '-q', branch], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  const repository = realpathSync(destination)
+  const alternates = path.join(repository, '.git/objects/info/alternates')
+  assert.equal(lstatSync(alternates).isFile(), true, 'shared clone must use a regular alternates file')
+  assert.equal(readFileSync(alternates, 'utf8').trim().length > 0, true)
+  return repository
+}
+
+function linkCloneDependencies(repository: string, dependencyRoot: string): void {
+  const exclude = path.join(repository, '.git/info/exclude')
+  const existing = readFileSync(exclude, 'utf8')
+  writeFileSync(exclude, `${existing}${existing.endsWith('\n') ? '' : '\n'}node_modules\n`)
+  symlinkSync(dependencyRoot, path.join(repository, 'node_modules'), 'dir')
+  assert.equal(git(repository, 'check-ignore', '-q', 'node_modules'), '')
+}
+
+function directoryBytes(directory: string): number {
+  const stat = lstatSync(directory)
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return stat.size
+  return stat.size + readdirSync(directory).reduce((total, name) => total + directoryBytes(path.join(directory, name)), 0)
+}
+
+type ProductionCliResult = ReturnType<typeof spawnSync>
+
+function runProductionNpmCli(repository: string, args: string[], shimBin: string, fixtureTmp: string): ProductionCliResult {
+  return spawnSync(realNpmExecutable, ['run', 'oracle:p0-1', '--', ...args], {
+    cwd: repository,
+    encoding: 'utf8',
+    timeout: PRODUCTION_CLI_TIMEOUT_MS,
+    maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+    env: {
+      ...process.env,
+      ...HERMETIC_NETWORK_ENV,
+      CI: '1',
+      HOME: process.env.HOME ?? fixtureTmp,
+      TMPDIR: fixtureTmp,
+      PATH: `${shimBin}${path.delimiter}${process.env.PATH ?? ''}`,
+    },
+  })
+}
+
+function successRecords(result: ProductionCliResult, command: string): string[] {
+  const expected = canonical({ command, ok: true })
+  return String(result.stdout).split(/\r?\n/).filter((line) => line === expected)
+}
+
+function expectProductionCliOk(result: ProductionCliResult, command: string): void {
+  assert.equal(result.error, undefined, `${command} process error: ${result.error?.message}`)
+  assert.equal(result.signal, null, `${command} terminated by ${result.signal}`)
+  assert.equal(result.status, 0, `${command} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`)
+  assert.deepEqual(successRecords(result, command), [canonical({ command, ok: true })], `${command} must emit exactly one success record`)
+}
+
+function productionCliErrorCode(result: ProductionCliResult): string | undefined {
+  for (const line of String(result.stderr).split(/\r?\n/).reverse()) {
+    try {
+      const value = JSON.parse(line) as { code?: unknown }
+      if (typeof value.code === 'string') return value.code
+    } catch {}
+  }
+  return undefined
+}
+
+function expectProductionCliCode(result: ProductionCliResult, code: string): void {
+  assert.equal(result.error, undefined, `CLI process error: ${result.error?.message}`)
+  assert.notEqual(result.status, 0, `CLI unexpectedly succeeded: ${result.stdout}`)
+  assert.equal(productionCliErrorCode(result), code, String(result.stderr))
+}
+
+type ShimMutation = Readonly<{
+  kind: 'create' | 'modify' | 'rename' | 'symlink'
+  repositoryRoot: string
+  relativePath: string
+  renameTarget?: string
+}>
+
+function expandedCatalogValue(value: string, ccRoot: string, subRoot: string): string {
+  return value.replaceAll('${CC_GATEWAY_ROOT}', ccRoot).replaceAll('${SUB2API_ROOT}', subRoot)
+}
+
+function writeCatalogShims(options: {
+  directory: string
+  auditLog: string
+  ccRoot: string
+  subRoot: string
+  unsafeCommandId?: string
+  unsafeMarker?: string
+  mutation?: ShimMutation
+}): void {
+  mkdirSync(options.directory, { recursive: true })
+  const accepted = catalog.map((entry: any) => ({
+    id: entry.id,
+    executable: entry.argv[0],
+    argv: entry.argv.slice(1).map((value: string) => expandedCatalogValue(value, options.ccRoot, options.subRoot)),
+    cwd: expandedCatalogValue(entry.cwd, options.ccRoot, options.subRoot),
+    group: entry.group,
+  }))
+  const statePath = path.join(path.dirname(options.auditLog), `${path.basename(options.directory)}-mutation-state`)
+  const script = `#!${process.execPath}
+import { appendFileSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+const accepted = ${JSON.stringify(accepted)}
+const auditLog = ${JSON.stringify(options.auditLog)}
+const mutationState = ${JSON.stringify(statePath)}
+const mutation = ${JSON.stringify(options.mutation ?? null)}
+const unsafeCommandId = ${JSON.stringify(options.unsafeCommandId ?? null)}
+const unsafeMarker = ${JSON.stringify(options.unsafeMarker ?? '')}
+const executable = path.basename(process.argv[1])
+const argv = process.argv.slice(2)
+const cwd = process.cwd()
+const match = accepted.find((candidate) => candidate.executable === executable && candidate.cwd === cwd && JSON.stringify(candidate.argv) === JSON.stringify(argv))
+const selectedKeys = ['CI','npm_config_offline','npm_config_audit','npm_config_fund','GOPROXY','GOSUMDB','GOTOOLCHAIN','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','PATH','HOME','TMPDIR','SUB2API_ROOT','CC_GATEWAY_REPO_ROOT']
+appendFileSync(auditLog, JSON.stringify({ executable, argv, cwd, env_keys: Object.keys(process.env).sort(), selected_env: Object.fromEntries(selectedKeys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]])), platform_env: { __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING }, command_id: match?.id ?? null }) + '\\n')
+if (!match) process.exit(97)
+if (mutation && !existsSync(mutationState)) {
+  const target = path.join(mutation.repositoryRoot, mutation.relativePath)
+  mkdirSync(path.dirname(target), { recursive: true })
+  if (mutation.kind === 'create') writeFileSync(target, 'created ignored bytes\\n')
+  if (mutation.kind === 'modify') writeFileSync(target, 'modified ignored bytes\\n')
+  if (mutation.kind === 'rename') renameSync(target, mutation.renameTarget)
+  if (mutation.kind === 'symlink') symlinkSync(path.join(mutation.repositoryRoot, '.gitignore'), target)
+  writeFileSync(mutationState, 'done\\n')
+}
+if (match.id === 'sub2api-joint-local-chain') {
+  const now = new Date()
+  const localDate = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + '-sub2api-cc-gateway-joint-local-capture'
+  const output = path.join(${JSON.stringify(options.subRoot)}, 'docs/anti-ban/captures/real-baseline', localDate, 'safe-deliverable')
+  mkdirSync(output, { recursive: true })
+  writeFileSync(path.join(output, 'README.md'), 'safe local acceptance readme\\n')
+  writeFileSync(path.join(output, 'joint_local_capture_summary.redacted.json'), '{"safe":true}\\n')
+}
+if (match.id === unsafeCommandId) {
+  process.stderr.write('\\u2716 ' + unsafeMarker + '\\n')
+  process.exit(1)
+}
+if (match.group === 'red') {
+  const output = match.id === 'sub2api-boundary-red'
+    ? '--- FAIL: TestFormalPoolOnboardingBoundary\\n--- FAIL: TestBrowserBoundary\\n--- FAIL: TestEgressBoundary\\n'
+    : '--- FAIL: TestPhase0B4Boundary\\n--- FAIL: TestPhase0B5Boundary\\n--- FAIL: TestPhase0B6Boundary\\n'
+  process.stdout.write(output)
+  process.exit(1)
+}
+process.exit(0)
+`
+  for (const executable of ['npm', 'go']) {
+    const shim = path.join(options.directory, executable)
+    writeFileSync(shim, script)
+    chmodSync(shim, 0o755)
+  }
+  for (const forbidden of ['codegraph', 'git', 'node', 'tsx']) assert.equal(existsSync(path.join(options.directory, forbidden)), false)
+}
+
+function initializeRealCodeGraph(repository: string, fixtureTmp: string): Record<string, unknown> {
+  const environment = { ...process.env, ...HERMETIC_NETWORK_ENV, CI: '1', TMPDIR: fixtureTmp }
+  execFileSync(realCodeGraphExecutable, ['init', repository], {
+    cwd: repository, env: environment, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  const status = JSON.parse(execFileSync(realCodeGraphExecutable, ['status', '--json', repository], {
+    cwd: repository, env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })) as Record<string, any>
+  assert.equal(status.initialized, true)
+  assert.equal(status.projectPath, repository)
+  for (const field of ['fileCount', 'nodeCount', 'edgeCount']) assert.equal(Number.isInteger(status[field]) && status[field] > 0, true, `${field} must be positive`)
+  assert.deepEqual(status.pendingChanges, { added: 0, modified: 0, removed: 0 })
+  assert.equal(status.worktreeMismatch, null)
+  assert.equal(status.index.reindexRecommended, false)
+  const database = path.join(repository, '.codegraph/codegraph.db')
+  const databaseStat = lstatSync(database)
+  assert.equal(databaseStat.isFile(), true)
+  assert.equal(databaseStat.isSymbolicLink(), false)
+  status.database_digest = sha256(readFileSync(database))
+  return status
+}
+
 function assertCanonicalBytesEqual(left: unknown, right: unknown, label: string): void {
   assert.equal(`${canonical(left)}\n`, `${canonical(right)}\n`, `${label} canonical JSON bytes drifted`)
 }
@@ -222,11 +501,11 @@ function assertCanonicalBytesEqual(left: unknown, right: unknown, label: string)
 function cliFixture(label: string): string {
   const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-cli-${label}-`))
   const repository = path.join(parent, 'repository')
-  execFileSync('git', ['clone', '-q', '--shared', root, repository])
+  const sparseRepository = cloneSharedSparseRepository(root, repository, [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS])
   writeFileSync(path.join(repository, toolRelative), readFileSync(path.join(root, toolRelative)))
   writeFileSync(path.join(repository, ignoredInventoryRelative), readFileSync(path.join(root, ignoredInventoryRelative)))
-  symlinkSync(path.join(root, 'node_modules'), path.join(repository, 'node_modules'), 'dir')
-  return realpathSync(repository)
+  linkCloneDependencies(repository, path.join(root, 'node_modules'))
+  return sparseRepository
 }
 
 function runCli(repository: string, args: string[], env: Record<string, string> = {}): ReturnType<typeof spawnSync> {
@@ -549,6 +828,12 @@ function git(repository: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: repository, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 }
 
+function gitBinaryDiffDigest(repository: string, base: string, head: string): string {
+  return sha256(execFileSync('git', ['-C', repository, 'diff', '--binary', `${base}...${head}`, '--'], {
+    maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  }))
+}
+
 const priorRelative = 'docs/superpowers/evidence/p0-1/p0-1-exit-baseline.json'
 function snapshotFixture(label: string): { repository: string; priorAbsolute: string; priorBinding: { path: string; digest: string } } {
   const repository = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-${label}-`))
@@ -752,8 +1037,8 @@ const cliReviewBase = {
   ...structuredClone(reviewBase),
   reviewed_candidate_heads: { cc_gateway: reviewCliCandidate, sub2api: reviewCliSubCandidate },
   diff_digests: {
-    cc_gateway: sha256(execFileSync('git', ['-C', reviewCliRoot, 'diff', '--binary', `9ca9ea72d881fccd2cfb3fd1b939a2f56db69516...${reviewCliCandidate}`, '--'])),
-    sub2api: sha256(execFileSync('git', ['-C', reviewCliSubRoot, 'diff', '--binary', `d5a42bbd24d15af2ce7646d050a5ae5c77911d4f...${reviewCliSubCandidate}`, '--'])),
+    cc_gateway: gitBinaryDiffDigest(reviewCliRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', reviewCliCandidate),
+    sub2api: gitBinaryDiffDigest(reviewCliSubRoot, 'd5a42bbd24d15af2ce7646d050a5ae5c77911d4f', reviewCliSubCandidate),
   },
   plan_digest: sha256(readFileSync(path.join(reviewCliRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
   review_import_digest: sha256(readFileSync(path.join(reviewCliRoot, reviewImportRelative))),
@@ -799,8 +1084,8 @@ for (const [field, value] of [
     ...structuredClone(reviewBase),
     reviewed_candidate_heads: { cc_gateway: forgedCandidate, sub2api: forgedSubCandidate },
     diff_digests: {
-      cc_gateway: sha256(execFileSync('git', ['-C', forgedCcRoot, 'diff', '--binary', `9ca9ea72d881fccd2cfb3fd1b939a2f56db69516...${forgedCandidate}`, '--'])),
-      sub2api: sha256(execFileSync('git', ['-C', forgedSubRoot, 'diff', '--binary', `d5a42bbd24d15af2ce7646d050a5ae5c77911d4f...${forgedSubCandidate}`, '--'])),
+      cc_gateway: gitBinaryDiffDigest(forgedCcRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', forgedCandidate),
+      sub2api: gitBinaryDiffDigest(forgedSubRoot, 'd5a42bbd24d15af2ce7646d050a5ae5c77911d4f', forgedSubCandidate),
     },
     plan_digest: sha256(readFileSync(path.join(forgedCcRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
     review_import_digest: sha256(readFileSync(path.join(forgedCcRoot, reviewImportRelative))),
@@ -837,74 +1122,45 @@ assert.equal(evidence.validateReviewPair({ ...reviewBase, decision: 'blocked' },
 assert.equal(evidence.validateReviewPair({ ...reviewBase, findings: { ...reviewBase.findings, important: 1 } }, securityReview, reviewExpected).ok, false)
 assert.equal(evidence.validateReviewPair({ ...reviewBase, reviewed_candidate_heads: { ...reviewBase.reviewed_candidate_heads, cc_gateway: '3'.repeat(40) } }, securityReview, reviewExpected).ok, false)
 
-// Drive the production CLI entry through a real reviewed two-repository Git topology.
-// Command execution is shortened later with PATH shims, but dispatch, handlers, Git,
-// schemas, repository snapshots, and the chain journal remain the production path.
-const acceptanceCcParent = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-acceptance-cc-'))
-const acceptanceCcPath = path.join(acceptanceCcParent, 'repository')
-execFileSync('git', ['clone', '-q', '--shared', root, acceptanceCcPath])
-const acceptanceCcRoot = realpathSync(acceptanceCcPath)
-const acceptanceUpdatedInputs = [toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]
-for (const relative of acceptanceUpdatedInputs) {
-  mkdirSync(path.dirname(path.join(acceptanceCcRoot, relative)), { recursive: true })
+// Drive every formal operation through absolute npm, clone-local tsx, cli(main),
+// and the private frozen production runtime. Only reviewed catalog children use shims.
+const acceptanceStartedAt = Date.now()
+const acceptanceFixtureRoot = mkdtempSync('/tmp/op01-cli-')
+const acceptanceTmp = path.join(acceptanceFixtureRoot, 'tmp')
+const acceptanceCcPath = path.join(acceptanceFixtureRoot, 'cc-gateway')
+const acceptanceSubPath = path.join(acceptanceFixtureRoot, 'sub2api')
+mkdirSync(acceptanceTmp, { recursive: true })
+const acceptanceCcRoot = cloneSharedSparseRepository(root, acceptanceCcPath, [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS])
+const acceptanceSubRoot = cloneSharedSparseRepository(sub2apiSourceRoot, acceptanceSubPath, SUB_SPARSE_PATHS)
+const dependencyRoot = path.join(root, 'node_modules')
+assert.equal(lstatSync(dependencyRoot).isDirectory(), true)
+assert.equal(existsSync(path.join(dependencyRoot, '.bin/tsx')), true)
+assert.equal(existsSync(path.join(dependencyRoot, 'ajv')), true)
+linkCloneDependencies(acceptanceCcRoot, dependencyRoot)
+for (const relative of [toolRelative, taskPlanRelative]) {
   writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
 }
-const acceptanceSubParent = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-acceptance-sub-'))
-const acceptanceSubPath = path.join(acceptanceSubParent, 'repository')
-execFileSync('git', ['clone', '-q', '--shared', '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1', acceptanceSubPath])
-const acceptanceSubRoot = realpathSync(acceptanceSubPath)
 git(acceptanceCcRoot, 'config', 'user.name', 'Acceptance Candidate')
 git(acceptanceCcRoot, 'config', 'user.email', 'acceptance-candidate@example.invalid')
-const acceptanceStdout: string[] = []
-const acceptanceCommands: string[] = []
-const acceptanceInvocations: Array<{ argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }> = []
-function localDateDirectory(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-sub2api-cc-gateway-joint-local-capture`
-}
-function writeJointSafeDeliverable(repository: string): void {
-  const directory = path.join(repository, 'docs/anti-ban/captures/real-baseline', localDateDirectory(), 'safe-deliverable')
-  mkdirSync(directory, { recursive: true })
-  writeFileSync(path.join(directory, 'README.md'), 'safe local acceptance readme\n')
-  writeFileSync(path.join(directory, 'joint_local_capture_summary.redacted.json'), '{"safe":true}\n')
-}
-const acceptanceRuntime = {
-  repositoryRoot: acceptanceCcRoot,
-  inspectCodeGraphIndex(repository: string) {
-    return {
-      version: '1.1.6',
-      up_to_date: true,
-      index_digest: sha256(`fixture-index:${realpathSync(repository)}`),
-      file_count: 1,
-      node_count: 1,
-      edge_count: 1,
-    }
-  },
-  runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }) {
-    acceptanceInvocations.push({ argv: [...options.argv], cwd: options.cwd, env: { ...options.env }, timeoutMs: options.timeoutMs, maxOutputBytes: options.maxOutputBytes })
-    const joined = options.argv.join(' ')
-    if (joined.includes('TestJointLocalCaptureAcceptanceArtifact')) writeJointSafeDeliverable(acceptanceSubRoot)
-    const output = joined.includes('tests/red/phase0-boundary.red.test.ts')
-      ? '--- FAIL: TestPhase0B4Boundary\n--- FAIL: TestPhase0B5Boundary\n--- FAIL: TestPhase0B6Boundary\n'
-      : joined.includes('-tags=phase0red') && options.cwd.includes('egress-tls-sidecar')
-        ? '--- FAIL: TestPhase0B4Boundary\n--- FAIL: TestPhase0B5Boundary\n--- FAIL: TestPhase0B6Boundary\n'
-        : joined.includes('-tags=phase0red')
-          ? '--- FAIL: TestFormalPoolOnboardingBoundary\n--- FAIL: TestBrowserBoundary\n--- FAIL: TestEgressBoundary\n'
-          : ''
-    return evidence.runBoundedProcess({
-      ...options,
-      argv: [process.execPath, '-e', `process.stdout.write(${JSON.stringify(output)});process.exit(${output ? 1 : 0})`],
-    })
-  },
-  writeStdout(value: string) {
-    acceptanceStdout.push(value)
-  },
-}
 
+const acceptanceShimBin = path.join(acceptanceFixtureRoot, 'shim-bin')
+const acceptanceAuditLog = path.join(acceptanceFixtureRoot, 'catalog-audit.jsonl')
+writeCatalogShims({
+  directory: acceptanceShimBin,
+  auditLog: acceptanceAuditLog,
+  ccRoot: acceptanceCcRoot,
+  subRoot: acceptanceSubRoot,
+})
+const acceptanceCommands: string[] = []
+let acceptancePeakBytes = directoryBytes(acceptanceFixtureRoot)
+function observeAcceptanceSize(): void {
+  acceptancePeakBytes = Math.max(acceptancePeakBytes, directoryBytes(acceptanceFixtureRoot))
+}
 function runAcceptanceCli(args: string[]): void {
-  acceptanceStdout.length = 0
-  evidence.runCliEntry(args, acceptanceRuntime)
-  assert.deepEqual(JSON.parse(acceptanceStdout.join('').trim()), { command: args[0], ok: true })
+  const result = runProductionNpmCli(acceptanceCcRoot, args, acceptanceShimBin, acceptanceTmp)
+  expectProductionCliOk(result, args[0])
   acceptanceCommands.push(args[0])
+  observeAcceptanceSize()
 }
 
 runAcceptanceCli([
@@ -919,7 +1175,7 @@ runAcceptanceCli([
   '--review-source', source,
   '--adopted-amendment', path.join(acceptanceCcRoot, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'),
 ])
-git(acceptanceCcRoot, 'add', ...acceptanceUpdatedInputs, reviewImportRelative)
+git(acceptanceCcRoot, 'add', toolRelative, taskPlanRelative, reviewImportRelative)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review import')
 const acceptanceCandidate = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
 const acceptanceSubCandidate = git(acceptanceSubRoot, 'rev-parse', 'HEAD')
@@ -928,8 +1184,8 @@ const acceptanceReviewBase = {
   ...structuredClone(reviewBase),
   reviewed_candidate_heads: { cc_gateway: acceptanceCandidate, sub2api: acceptanceSubCandidate },
   diff_digests: {
-    cc_gateway: sha256(execFileSync('git', ['-C', acceptanceCcRoot, 'diff', '--binary', `9ca9ea72d881fccd2cfb3fd1b939a2f56db69516...${acceptanceCandidate}`, '--'])),
-    sub2api: sha256(execFileSync('git', ['-C', acceptanceSubRoot, 'diff', '--binary', `d5a42bbd24d15af2ce7646d050a5ae5c77911d4f...${acceptanceSubCandidate}`, '--'])),
+    cc_gateway: gitBinaryDiffDigest(acceptanceCcRoot, '9ca9ea72d881fccd2cfb3fd1b939a2f56db69516', acceptanceCandidate),
+    sub2api: gitBinaryDiffDigest(acceptanceSubRoot, 'd5a42bbd24d15af2ce7646d050a5ae5c77911d4f', acceptanceSubCandidate),
   },
   plan_digest: sha256(readFileSync(path.join(acceptanceCcRoot, 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'))),
   review_import_digest: sha256(acceptanceReviewImport),
@@ -956,6 +1212,9 @@ runAcceptanceCli([
   '--sub2api-root', acceptanceSubRoot,
 ])
 
+const acceptanceCcCodeGraph = initializeRealCodeGraph(acceptanceCcRoot, acceptanceTmp)
+const acceptanceSubCodeGraph = initializeRealCodeGraph(acceptanceSubRoot, acceptanceTmp)
+observeAcceptanceSize()
 runAcceptanceCli([
   'capture-exit',
   '--entry', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
@@ -968,6 +1227,14 @@ const acceptanceManifest = JSON.parse(readFileSync(path.join(acceptanceCcRoot, e
 assert.equal(acceptanceManifest.repositories.cc_gateway.head, git(acceptanceCcRoot, 'rev-parse', 'HEAD'))
 assert.equal(acceptanceManifest.repositories.sub2api.head, acceptanceSubCandidate)
 assert.deepEqual(acceptanceManifest.reviewed_candidate_heads, { cc_gateway: acceptanceCandidate, sub2api: acceptanceSubCandidate })
+for (const [name, status] of [['cc_gateway', acceptanceCcCodeGraph], ['sub2api', acceptanceSubCodeGraph]] as const) {
+  const binding = acceptanceManifest.codegraph[name]
+  assert.equal(binding.version, status.version)
+  assert.equal(binding.file_count, status.fileCount)
+  assert.equal(binding.node_count, status.nodeCount)
+  assert.equal(binding.edge_count, status.edgeCount)
+  assert.equal(binding.index_digest, sha256(readFileSync(path.join(name === 'cc_gateway' ? acceptanceCcRoot : acceptanceSubRoot, '.codegraph/codegraph.db'))))
+}
 
 runAcceptanceCli([
   'run',
@@ -1062,19 +1329,29 @@ runAcceptanceCli([
   '--out', evidence.ARTIFACT_CHAIN.handoff,
 ])
 
-assert.equal(acceptanceInvocations.length, 10)
-for (const [index, invocation] of acceptanceInvocations.entries()) {
-  const [, , , cwdTemplate, argv, extraEnv] = expectedCatalog[index]
+const acceptanceAudit = readFileSync(acceptanceAuditLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as any)
+assert.equal(acceptanceAudit.length, 10)
+const acceptanceResultRecords = [...acceptanceGreenResults.records, ...JSON.parse(readFileSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.red), 'utf8')).records]
+for (const [index, invocation] of acceptanceAudit.entries()) {
+  const [id, , , cwdTemplate, argv, extraEnv] = expectedCatalog[index]
   const expectedCwd = cwdTemplate.replace('${CC_GATEWAY_ROOT}', acceptanceCcRoot).replace('${SUB2API_ROOT}', acceptanceSubRoot)
-  assert.deepEqual(invocation.argv, argv)
+  assert.equal(invocation.command_id, id)
+  assert.equal(invocation.executable, argv[0])
+  assert.deepEqual(invocation.argv, argv.slice(1))
   assert.equal(invocation.cwd, expectedCwd)
-  assert.equal(invocation.timeoutMs, 360_000)
-  assert.equal(invocation.maxOutputBytes, evidence.MAX_OUTPUT_BYTES)
-  assert.deepEqual(Object.fromEntries(Object.entries(invocation.env).filter(([key]) => key in HERMETIC_NETWORK_ENV)), HERMETIC_NETWORK_ENV)
-  assert.equal(invocation.env.CI, '1')
+  assert.deepEqual(invocation.env_keys, [...Object.keys(invocation.selected_env), '__CF_USER_TEXT_ENCODING'].sort())
+  assert.deepEqual(invocation.platform_env, { __CF_USER_TEXT_ENCODING: process.env.__CF_USER_TEXT_ENCODING })
+  assert.deepEqual(Object.fromEntries(Object.entries(invocation.selected_env).filter(([key]) => key in HERMETIC_NETWORK_ENV)), HERMETIC_NETWORK_ENV)
+  assert.equal(invocation.selected_env.CI, '1')
+  assert.equal(invocation.selected_env.HOME, process.env.HOME ?? acceptanceTmp)
+  assert.equal(invocation.selected_env.TMPDIR, acceptanceTmp)
+  assert.equal(String(invocation.selected_env.PATH).split(path.delimiter).includes(acceptanceShimBin), true)
   for (const [key, value] of Object.entries(extraEnv)) {
-    assert.equal(invocation.env[key], value.replace('${CC_GATEWAY_ROOT}', acceptanceCcRoot).replace('${SUB2API_ROOT}', acceptanceSubRoot))
+    assert.equal(invocation.selected_env[key], value.replace('${CC_GATEWAY_ROOT}', acceptanceCcRoot).replace('${SUB2API_ROOT}', acceptanceSubRoot))
   }
+  const resultRecord = acceptanceResultRecords.find((record: any) => record.command_id === id)
+  assert.equal(resultRecord.environment_digest, sha256(canonical(invocation.selected_env)))
+  assert.equal(resultRecord.argv_digest, sha256(canonical(argv)))
 }
 
 const preReceiptArtifactPaths = Object.entries(evidence.ARTIFACT_CHAIN)
@@ -1083,44 +1360,7 @@ const preReceiptArtifactPaths = Object.entries(evidence.ARTIFACT_CHAIN)
 git(acceptanceCcRoot, 'add', ...preReceiptArtifactPaths)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture artifact chain')
 const acceptanceArtifactCommit = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
-assert.deepEqual(git(acceptanceCcRoot, 'diff-tree', '--no-commit-id', '--name-only', '-r', acceptanceArtifactCommit).split('\n').sort(), [...preReceiptArtifactPaths].sort())
-
-const unsafeCliRoot = cloneAcceptanceRef('unsafe-cli-persistence', acceptanceManifest.approval_attestation_head)
-const unsafeCliExit = path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.exit)
-mkdirSync(path.dirname(unsafeCliExit), { recursive: true })
-writeFileSync(unsafeCliExit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
-evidence.initializeArtifactChain(unsafeCliRoot)
-const unsafeCliMarker = 'Bearer unsafe-cli-failure-name'
-const unsafeCliStdout: string[] = []
-const unsafeCliRuntime = {
-  ...acceptanceRuntime,
-  repositoryRoot: unsafeCliRoot,
-  runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }) {
-    return evidence.runBoundedProcess({
-      ...options,
-      argv: [process.execPath, '-e', `process.stderr.write(${JSON.stringify(`\u2716 ${unsafeCliMarker}\n`)});process.exit(1)`],
-    })
-  },
-  writeStdout(value: string) { unsafeCliStdout.push(value) },
-}
-let unsafeCliError: unknown
-try {
-  evidence.runCliEntry([
-    'run',
-    '--manifest', evidence.ARTIFACT_CHAIN.exit,
-    '--catalog', catalogRelative,
-    '--group', 'green',
-    '--cc-gateway-root', unsafeCliRoot,
-    '--sub2api-root', acceptanceSubRoot,
-    '--out', evidence.ARTIFACT_CHAIN.green,
-  ], unsafeCliRuntime)
-} catch (error) {
-  unsafeCliError = error
-}
-assert.equal((unsafeCliError as { code?: string }).code, 'unexpected_classification')
-assert.equal(JSON.stringify(unsafeCliError).includes(unsafeCliMarker), false, 'CLI error leaked unsafe failure-name bytes')
-assert.equal(unsafeCliStdout.join('').includes(unsafeCliMarker), false, 'CLI output leaked unsafe failure-name bytes')
-assert.equal(existsSync(path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.green)), false, 'unsafe result artifact must not be persisted')
+assert.deepEqual(git(acceptanceCcRoot, 'diff-tree', '--no-commit-id', '--name-status', '-r', acceptanceArtifactCommit).split('\n').sort(), preReceiptArtifactPaths.map((artifactPath) => `A\t${artifactPath}`).sort())
 
 const receiptArguments = [
   '--artifact-commit', acceptanceArtifactCommit,
@@ -1154,36 +1394,91 @@ assert.equal(git(acceptanceCcRoot, 'rev-parse', `${acceptanceReceiptCommit}^`), 
 assert.equal(git(acceptanceCcRoot, 'diff-tree', '--no-commit-id', '--name-status', '-r', acceptanceReceiptCommit), `A\t${evidence.ARTIFACT_CHAIN.receipt}`)
 assert.equal(git(acceptanceCcRoot, 'status', '--porcelain=v1', '--untracked-files=all'), '')
 assert.equal(git(acceptanceSubRoot, 'status', '--porcelain=v1', '--untracked-files=all'), '')
+assert.equal(acceptanceCommands.length, 16)
 assert.deepEqual([...new Set(acceptanceCommands)].sort(), [...evidence.SUPPORTED_SUBCOMMANDS].sort())
+assert.equal(acceptanceCommands.filter((command) => command === 'run').length, 2)
+assert.equal(acceptanceCommands.filter((command) => command === 'validate-report').length, 2)
 assert.equal(acceptanceCommands.filter((command) => command === 'validate-receipt').length, 2)
+const acceptanceElapsedMs = Date.now() - acceptanceStartedAt
+const acceptanceSteadyBytes = directoryBytes(acceptanceFixtureRoot)
+acceptancePeakBytes = Math.max(acceptancePeakBytes, acceptanceSteadyBytes)
+assert.equal(acceptanceElapsedMs <= PRODUCTION_CLI_TIMEOUT_MS, true, `production CLI fixture exceeded ${PRODUCTION_CLI_TIMEOUT_MS} ms`)
+assert.equal(acceptanceSteadyBytes < 30 * MiB, true, `production CLI fixture steady bytes ${acceptanceSteadyBytes} exceeded 30 MiB`)
+assert.equal(acceptancePeakBytes < 60 * MiB, true, `production CLI fixture observed peak bytes ${acceptancePeakBytes} exceeded 60 MiB`)
+console.log(canonical({
+  production_cli_acceptance: {
+    catalog_children: '10/10',
+    codegraph: {
+      cc_gateway: { edges: acceptanceCcCodeGraph.edgeCount, files: acceptanceCcCodeGraph.fileCount, nodes: acceptanceCcCodeGraph.nodeCount },
+      sub2api: { edges: acceptanceSubCodeGraph.edgeCount, files: acceptanceSubCodeGraph.fileCount, nodes: acceptanceSubCodeGraph.nodeCount },
+    },
+    distinct_subcommands: '13/13',
+    elapsed_ms: acceptanceElapsedMs,
+    outer_processes: '16/16',
+    peak_bytes_observed: acceptancePeakBytes,
+    steady_bytes: acceptanceSteadyBytes,
+  },
+}))
 
 function cloneRepositoryRef(sourceRepository: string, label: string, commit: string): string {
   const branch = `fixture-${label}`
   git(sourceRepository, 'branch', branch, commit)
   const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-${label}-`))
   const repository = path.join(parent, 'repository')
-  execFileSync('git', ['clone', '-q', '--shared', '--single-branch', '--branch', branch, sourceRepository, repository])
+  const isCcGateway = existsSync(path.join(sourceRepository, 'package.json'))
+  const cloned = cloneSharedSparseRepository(
+    sourceRepository,
+    repository,
+    isCcGateway ? [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS] : SUB_SPARSE_PATHS,
+    branch,
+  )
+  if (isCcGateway) linkCloneDependencies(cloned, dependencyRoot)
   git(repository, 'config', 'user.name', 'Acceptance Topology')
   git(repository, 'config', 'user.email', 'acceptance-topology@example.invalid')
-  return realpathSync(repository)
+  return cloned
 }
 
 function cloneAcceptanceRef(label: string, commit: string): string {
   return cloneRepositoryRef(acceptanceCcRoot, label, commit)
 }
 
-function acceptanceRuntimeAt(repository: string): typeof acceptanceRuntime {
-  return { ...acceptanceRuntime, repositoryRoot: repository, writeStdout() {} }
+function expectAcceptanceCliCode(repository: string, args: string[], code: string): void {
+  expectProductionCliCode(runProductionNpmCli(repository, args, acceptanceShimBin, acceptanceTmp), code)
 }
 
-function expectAcceptanceCliCode(repository: string, args: string[], code: string): void {
-  expectCode(() => evidence.runCliEntry(args, acceptanceRuntimeAt(repository)), code)
-}
+const unsafeCliRoot = cloneAcceptanceRef('unsafe-cli-persistence', acceptanceManifest.approval_attestation_head)
+const unsafeCliSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'unsafe-cli-sub', acceptanceSubCandidate)
+const unsafeCliExit = path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.exit)
+mkdirSync(path.dirname(unsafeCliExit), { recursive: true })
+writeFileSync(unsafeCliExit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
+evidence.initializeArtifactChain(unsafeCliRoot)
+const unsafeCliMarker = 'Bearer unsafe-cli-failure-name'
+const unsafeShimBin = path.join(acceptanceFixtureRoot, 'unsafe-shim-bin')
+writeCatalogShims({
+  directory: unsafeShimBin,
+  auditLog: path.join(acceptanceFixtureRoot, 'unsafe-catalog-audit.jsonl'),
+  ccRoot: unsafeCliRoot,
+  subRoot: unsafeCliSubRoot,
+  unsafeCommandId: 'cc-build',
+  unsafeMarker: unsafeCliMarker,
+})
+const unsafeCliResult = runProductionNpmCli(unsafeCliRoot, [
+  'run',
+  '--manifest', evidence.ARTIFACT_CHAIN.exit,
+  '--catalog', catalogRelative,
+  '--group', 'green',
+  '--cc-gateway-root', unsafeCliRoot,
+  '--sub2api-root', unsafeCliSubRoot,
+  '--out', evidence.ARTIFACT_CHAIN.green,
+], unsafeShimBin, acceptanceTmp)
+expectProductionCliCode(unsafeCliResult, 'unexpected_classification')
+assert.equal(`${unsafeCliResult.stdout}${unsafeCliResult.stderr}`.includes(unsafeCliMarker), false, 'CLI process output leaked unsafe failure-name bytes')
+assert.equal(existsSync(path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.green)), false, 'unsafe result artifact must not be persisted')
 
 function expectIgnoredMutationRejected(
   label: string,
   setup: (ccRoot: string, subRoot: string) => void,
-  mutate: (ccRoot: string, subRoot: string) => void,
+  mutate: (ccRoot: string, subRoot: string) => ShimMutation,
 ): void {
   const ccRepository = cloneAcceptanceRef(`ignored-mutation-${label}`, acceptanceManifest.approval_attestation_head)
   const subRepository = cloneRepositoryRef(acceptanceSubRoot, `ignored-mutation-sub-${label}`, acceptanceSubCandidate)
@@ -1193,38 +1488,35 @@ function expectIgnoredMutationRejected(
   writeFileSync(exit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
   evidence.initializeArtifactChain(ccRepository)
   setup(ccRepository, subRepository)
-  let invocation = 0
-  const runtime = {
-    ...acceptanceRuntimeAt(ccRepository),
-    runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }) {
-      if (invocation++ === 0) mutate(ccRepository, subRepository)
-      return evidence.runBoundedProcess({ ...options, argv: [process.execPath, '-e', 'process.exit(0)'] })
-    },
-  }
-  let observed: unknown
-  try {
-    evidence.runCliEntry([
-      'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
-      '--cc-gateway-root', ccRepository, '--sub2api-root', subRepository, '--out', evidence.ARTIFACT_CHAIN.green,
-    ], runtime)
-  } catch (error) { observed = error }
-  assert.equal((observed as { code?: string }).code, 'repository_mutation', (observed as Error)?.message)
-  assert.equal(JSON.stringify(observed).includes('mutation-secret'), false)
+  const mutation = mutate(ccRepository, subRepository)
+  const mutationShimBin = path.join(acceptanceFixtureRoot, `mutation-shim-${label}`)
+  writeCatalogShims({
+    directory: mutationShimBin,
+    auditLog: path.join(acceptanceFixtureRoot, `mutation-audit-${label}.jsonl`),
+    ccRoot: ccRepository,
+    subRoot: subRepository,
+    mutation,
+  })
+  const observed = runProductionNpmCli(ccRepository, [
+    'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+    '--cc-gateway-root', ccRepository, '--sub2api-root', subRepository, '--out', evidence.ARTIFACT_CHAIN.green,
+  ], mutationShimBin, acceptanceTmp)
+  expectProductionCliCode(observed, 'repository_mutation')
+  assert.equal(`${observed.stdout}${observed.stderr}`.includes('mutation-secret'), false)
 }
 
 for (const repository of ['cc', 'sub'] as const) {
   const ignoredRelative = repository === 'cc' ? 'runtime/mutation-secret.txt' : '.superpowers/mutation-secret.txt'
   expectIgnoredMutationRejected(`${repository}-create`, () => {}, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
-    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
-    writeFileSync(path.join(root, ignoredRelative), 'created ignored bytes\n')
+    return { kind: 'create', repositoryRoot: root, relativePath: ignoredRelative }
   })
   expectIgnoredMutationRejected(`${repository}-modify`, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
     mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
     writeFileSync(path.join(root, ignoredRelative), 'before ignored bytes\n')
   }, (ccRoot, subRoot) => {
-    writeFileSync(path.join(repository === 'cc' ? ccRoot : subRoot, ignoredRelative), 'modified ignored bytes\n')
+    return { kind: 'modify', repositoryRoot: repository === 'cc' ? ccRoot : subRoot, relativePath: ignoredRelative }
   })
   expectIgnoredMutationRejected(`${repository}-delete`, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
@@ -1232,12 +1524,11 @@ for (const repository of ['cc', 'sub'] as const) {
     writeFileSync(path.join(root, ignoredRelative), 'retained ignored bytes\n')
   }, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
-    renameSync(path.join(root, ignoredRelative), path.join(path.dirname(root), `${path.basename(root)}-${repository}-retained-mutation-secret.txt`))
+    return { kind: 'rename', repositoryRoot: root, relativePath: ignoredRelative, renameTarget: path.join(acceptanceFixtureRoot, `${repository}-retained-mutation-secret.txt`) }
   })
   expectIgnoredMutationRejected(`${repository}-symlink`, () => {}, (ccRoot, subRoot) => {
     const root = repository === 'cc' ? ccRoot : subRoot
-    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
-    symlinkSync(path.join(root, 'README.md'), path.join(root, ignoredRelative))
+    return { kind: 'symlink', repositoryRoot: root, relativePath: ignoredRelative }
   })
 }
 
@@ -1315,7 +1606,7 @@ expectArtifactCommitRejected(acceptanceCcRoot, 'intermediate-artifact-parent', i
 const extraArtifactRoot = cloneAcceptanceRef('artifact-extra-source', approvalHead)
 materializePreReceiptOutputs(extraArtifactRoot)
 writeFileSync(path.join(extraArtifactRoot, 'artifact-extra.txt'), 'extra artifact commit path\n')
-git(extraArtifactRoot, 'add', ...preReceiptArtifactPaths, 'artifact-extra.txt')
+git(extraArtifactRoot, 'add', '--sparse', ...preReceiptArtifactPaths, 'artifact-extra.txt')
 git(extraArtifactRoot, 'commit', '-qm', 'fixture artifact plus extra path')
 const extraArtifactCommit = git(extraArtifactRoot, 'rev-parse', 'HEAD')
 expectArtifactCommitRejected(extraArtifactRoot, 'artifact-extra', extraArtifactCommit, 'invalid_artifact_commit_delta')
@@ -1430,7 +1721,7 @@ expectAcceptanceCliCode(wrongParentRoot, [
 const extraDeltaRoot = cloneAcceptanceRef('receipt-extra-delta', acceptanceArtifactCommit)
 writeAcceptanceReceipt(extraDeltaRoot)
 writeFileSync(path.join(extraDeltaRoot, 'receipt-extra.txt'), 'extra receipt commit path\n')
-git(extraDeltaRoot, 'add', evidence.ARTIFACT_CHAIN.receipt, 'receipt-extra.txt')
+git(extraDeltaRoot, 'add', '--sparse', evidence.ARTIFACT_CHAIN.receipt, 'receipt-extra.txt')
 git(extraDeltaRoot, 'commit', '-qm', 'fixture receipt plus extra path')
 expectAcceptanceCliCode(extraDeltaRoot, [
   'validate-receipt', '--receipt', evidence.ARTIFACT_CHAIN.receipt, '--artifact-commit', acceptanceArtifactCommit, '--receipt-commit', 'HEAD',
