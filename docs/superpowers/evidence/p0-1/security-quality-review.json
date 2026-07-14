@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "review_kind": "governance_amendment_review",
+  "reviewer_identity": "codex-security-quality-reviewer-868a446",
+  "reviewer_role": "security_quality",
+  "reviewed_candidate_heads": {
+    "cc_gateway": "868a446c799bae2df65320f9c57bca67e9e8cd0d",
+    "sub2api": "0a97b3f3b84b5c679788b3694d5840e235031f07"
+  },
+  "diff_digests": {
+    "cc_gateway": "sha256:5920023e60a582dd13c0116fd03d87d64ae195c125af8695c87427fe39c38ab5",
+    "sub2api": "sha256:e52795208eb1d30a91430f9dd84581e93b929091b833f71856243a8fb8f88ff4"
+  },
+  "plan_digest": "sha256:b31e3f534cd3ef2c27c4bbce1dbb1422d431d76b59ea252466d2bfc2ae7c3049",
+  "review_import_digest": "sha256:c8849e572728ba66ce9cb73b73185130eab47160df48c7ac01b25cd75467e020",
+  "decision": "approved",
+  "findings": {
+    "critical": 0,
+    "important": 0,
+    "summaries": [
+      "Whole-branch security and code-quality re-review approved with no Critical, Important, or Minor findings.",
+      "Approval is limited to the reviewed P0.1 governance candidate and does not authorize production capabilities."
+    ]
+  },
+  "verification": [
+    "exact_heads:cc=868a446c799bae2df65320f9c57bca67e9e8cd0d,sub=0a97b3f3b84b5c679788b3694d5840e235031f07",
+    "raw_diff_sha256:cc=5920023e60a582dd13c0116fd03d87d64ae195c125af8695c87427fe39c38ab5,sub=e52795208eb1d30a91430f9dd84581e93b929091b833f71856243a8fb8f88ff4",
+    "input_sha256:plan=b31e3f534cd3ef2c27c4bbce1dbb1422d431d76b59ea252466d2bfc2ae7c3049,review_import=c8849e572728ba66ce9cb73b73185130eab47160df48c7ac01b25cd75467e020",
+    "registry:41_schema_v2,23_preserved_v1,18_ra_deferred,ra_runtime_authority=none",
+    "adopted_binding:bytes=47748,digest=6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2,pair=c50bd89681f898b0ec9e712f718ff523c6dc8eade99583f56f12bd208d86b7c2",
+    "acceptance_fixture:fixed_parent=a9c1959a06fa8f836b47f0dbc20799802beda869,exclusive_review_import=true,committed_schema=true,timeout_ms=90000",
+    "transient_timeout:4d8976a_120s_neutralized=true,d086cc4_tree_equals_868a446_tree=true",
+    "git_status:cc_clean=true,sub_clean=true,replacement_refs=absent",
+    "historical_evidence:phase0_postintegration_postintegrationv2_diff_from_cc_base=empty",
+    "codegraph:cc=117_files_4687_nodes_18330_edges_pending0,sub=3042_files_98075_nodes_328727_edges_pending0",
+    "task7_pre_capture:journal=absent,formal_outputs=entry_pair_plus_review_import_only",
+    "static_security:startup_git_bounded_reads_execution_evidence_topology_receipt_schema=approved",
+    "external_capability:requests_credentials_deployment_canary_promotion=not_performed_or_authorized",
+    "test_execution:this_review_reran_no_tests_or_builds;committed_results_and_fix_report_reviewed"
+  ]
+}
