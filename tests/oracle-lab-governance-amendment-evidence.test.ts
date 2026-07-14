@@ -138,6 +138,8 @@ const catalog = JSON.parse(readFileSync(path.join(root, catalogRelative), 'utf8'
 assert.equal(Array.isArray(catalog), true)
 assert.equal(catalog.length, 10)
 assert.deepEqual(catalog.map((entry: any) => [entry.id, entry.group, entry.repository, entry.cwd, entry.argv, Object.fromEntries(Object.entries(entry.env).filter(([key]) => !(key in HERMETIC_NETWORK_ENV) && key !== 'CI'))]), expectedCatalog)
+assert.equal(catalog.find((entry: any) => entry.id === 'p0-1-focused').timeout_ms, 600_000)
+assert.deepEqual(catalog.filter((entry: any) => entry.id !== 'p0-1-focused').map((entry: any) => entry.timeout_ms), Array(9).fill(360_000))
 for (const entry of catalog) {
   assert.equal(entry.schema_version, 1)
   assert.deepEqual(Object.fromEntries(Object.entries(entry.env).filter(([key]) => key in HERMETIC_NETWORK_ENV)), HERMETIC_NETWORK_ENV)

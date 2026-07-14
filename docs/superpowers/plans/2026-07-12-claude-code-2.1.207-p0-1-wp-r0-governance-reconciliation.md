@@ -823,6 +823,13 @@ The mandatory GREEN inventory has exactly these catalog IDs and argv:
 6. `sub2api-joint-local-chain`: Sub2API `backend` with `CC_GATEWAY_REPO_ROOT=${CC_GATEWAY_ROOT}`, `go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v`, with dual-repository binding;
 7. `p0-1-focused`: CC Gateway root, `npm run test:oracle:p0-1`.
 
+The focused H0.1 entry alone has a 600,000 ms process timeout. The reviewed
+closed-environment suite completed in 459,296 ms on the reviewed host, so the
+bound preserves the complete negative matrix with bounded headroom instead of
+misclassifying a passing suite at the former 360,000 ms limit. Every other
+catalog entry retains its 360,000 ms timeout; output, memory, environment,
+network, and repository-mutation bounds are unchanged.
+
 Every catalog entry uses the exact `HERMETIC_NETWORK_ENV` from Global Constraints, including `GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` for direct Go commands and Go children of npm tests. The catalog validator rejects omission or override, and a missing cached module/toolchain is an unexpected fail-closed result rather than permission to download.
 
 No formal catalog entry inherits `PATH` or `HOME`. The reviewed launcher resolves `npm` and `go`, and the production runner accepts them only when their canonical realpath digest, executable-byte digest, and version digest match `oracle-lab-p0-1-reviewed-toolchain.json`. It then replaces the catalog command name with that verified canonical absolute executable, constructs the child `PATH` from the canonical directories of the verified launcher-selected tool paths plus `/usr/bin:/bin` (preserving package-manager self-resolution through a reviewed symlink directory), sets `HOME=/dev/null`, disables npm user/global configuration and `GOENV`, and binds the toolchain registry and schema into `capture_inputs`. The separate `test_fixture_root_v1` trust mode exists only for sparse disposable acceptance repositories; its registry is committed into each fixture candidate and cannot satisfy the formal candidate's exact toolchain binding.
