@@ -231,13 +231,13 @@ export const TASK_0B_REVIEW_SOURCE_DIGEST = 'sha256:76e662ede1e113018eb5bf8cb835
 const TASK_0B_REVIEW_SOURCE_LEAF = '2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
 export const ADOPTED_AMENDMENT_BINDING = {
   path: GOVERNANCE_PATHS.amendment,
-  digest: 'sha256:997eb373ba8342fbe678e01b13dd25507bdede6e915e9e5a6a9de4d90d8e8819',
+  digest: 'sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2',
 } as const
 export const REVIEW_IMPORT_TRANSFORMATION = {
   algorithm: 'sha256_exact_bytes_v1',
   source_bytes: 41_663,
-  adopted_bytes: 47_547,
-  pair_digest: 'sha256:30e04d6e7a67d97379bd642ee9ba7111064e3cce30c36779c9b4d88a300db55a',
+  adopted_bytes: 47_748,
+  pair_digest: 'sha256:c50bd89681f898b0ec9e712f718ff523c6dc8eade99583f56f12bd208d86b7c2',
 } as const
 const SCHEMA_PATHS = {
   exit_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',

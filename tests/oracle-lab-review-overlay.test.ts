@@ -24,6 +24,7 @@ const authoritativeDag = [
   'P0 -> P1 --------------------------+',
   '  \\-> P2 -> P3A -> P3B/3.5 -------+-> P4 -> P5 -> P6A -> approval -> P6B',
 ].join('\n')
+const staleRegistryStatus = /pending[^\n]*Task 2[^\n]*Task 3|canonical (?:requirement )?registry[^\n]*(?:schema )?v1/i
 
 function read(relativePath: string): string {
   return readFileSync(path.resolve(relativePath), 'utf8')
@@ -52,17 +53,23 @@ function assertInOrder(haystack: string, needles: readonly string[], message: st
   }
 }
 
-test('every specification Status overlay names authorities and the in-place Registry migration contract', () => {
+function assertCompletedRegistryAdoption(name: string, overlay: string): void {
+  for (const requiredPath of [...precedence, canonicalRegistry, preservedRegistryV1]) {
+    assert.ok(overlay.includes(requiredPath), `${name} Status overlay missing ${requiredPath}`)
+  }
+  assert.ok(!overlay.includes(forbiddenVersionedRegistryV2), `${name} invents a versioned Registry v2 path`)
+  assertInOrder(overlay, precedence, `${name} precedence`)
+  assert.match(overlay, /schema v2[^\n]*exactly 41 homogeneous records/i, `${name} must bind the canonical 41-record Registry v2`)
+  assert.match(overlay, /immutable 23-row migration source and evidence/i, `${name} must preserve the immutable Registry v1 migration source`)
+  assert.match(overlay, /Tasks 2 and 3 completed[^\n]*Registry v2 migration[^\n]*explicit conflict registration[^\n]*exact 18 RA records/i, `${name} must record completed reviewed adoption`)
+  assert.match(overlay, /all 18 RA records remain `deferred`[^\n]*does not imply implementation, production verification, canary approval, or runtime authority/i, `${name} must keep RA authority deferred`)
+  assert.match(overlay, /no conflict, requirement, or authority statement may be silently replaced or superseded/i, `${name} must prohibit silent replacement`)
+  assert.doesNotMatch(overlay, staleRegistryStatus, `${name} retains stale pending or canonical-v1 wording`)
+}
+
+test('every specification Status overlay records completed Registry v2 governance adoption', () => {
   for (const [name, relativePath] of Object.entries(documents)) {
-    const overlay = statusOverlay(read(relativePath))
-    for (const requiredPath of [...precedence, canonicalRegistry, preservedRegistryV1]) {
-      assert.ok(overlay.includes(requiredPath), `${name} Status overlay missing ${requiredPath}`)
-    }
-    assert.ok(!overlay.includes(forbiddenVersionedRegistryV2), `${name} invents a versioned Registry v2 path`)
-    assertInOrder(overlay, precedence, `${name} precedence`)
-    assert.match(overlay, /conflict[^\n]*(?:register|registry)/i, `${name} must register conflicts explicitly`)
-    assert.match(overlay, /(?:no|never)[^\n]*silently/i, `${name} must prohibit silent replacement`)
-    assert.match(overlay, /pending[^\n]*Task 2[^\n]*Task 3/i, `${name} must keep Registry v2 and RA adoption pending`)
+    assertCompletedRegistryAdoption(name, statusOverlay(read(relativePath)))
   }
 })
 
@@ -131,13 +138,14 @@ test('protected Gateway consumes an independently issued transport capability wi
   assert.match(amendment, /broker and sidecar produce independently verifiable transport-authorization/i)
 })
 
-test('conflict registration and Registry v2 RA adoption remain reviewed pending gates', () => {
+test('roadmap records completed conflict registration and Registry v2 RA governance adoption', () => {
   const roadmap = read(roadmapPath)
   const overlay = statusOverlay(roadmap)
-  assert.ok(overlay.includes(canonicalRegistry))
-  assert.ok(overlay.includes(preservedRegistryV1))
-  assert.ok(!overlay.includes(forbiddenVersionedRegistryV2))
-  assert.ok(!roadmap.includes('Every conflict is registered explicitly'))
-  assert.match(roadmap, /Every conflict MUST be registered/i)
-  assert.match(roadmap, /Registry v2[^\n]*RA adoption[^\n]*pending[^\n]*Task 2[^\n]*Task 3/i)
+  const relationship = section(roadmap, '## Normative Relationship', '## Delivery Rules')
+  assertCompletedRegistryAdoption('roadmap', overlay)
+  assert.match(relationship, /Tasks 2 and 3 completed[^\n]*Registry v2 migration[^\n]*explicit conflict registration[^\n]*exact 18 RA records/i)
+  assert.match(relationship, /all 18 RA records remain `deferred`[^\n]*does not imply implementation, production verification, canary approval, or runtime authority/i)
+  assert.match(relationship, /no conflict, requirement, or authority statement may be silently replaced or superseded/i)
+  assert.doesNotMatch(relationship, staleRegistryStatus)
+  assert.ok(overlay.includes('P0.1 implementation candidate; completion is controlled exclusively by the successor receipt; P1 remains blocked by the integrated-main entry gates.'))
 })

@@ -8,10 +8,11 @@
   2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
   3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
   4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
-- Canonical requirement registry (Task 1/2 schema v1; Task 3 migrates this path in place to v2): `docs/superpowers/registry/oracle-lab-requirements.json`
-- Preserved Registry v1 snapshot (created by Task 2): `docs/superpowers/registry/oracle-lab-requirements-v1.json`
-- Registry adoption state: Registry v2 and RA adoption remain pending reviewed gates through Task 2 and Task 3; this Status does not claim those migrations are complete
-- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; every conflict MUST be registered explicitly by the reviewed Task 2/3 migration, which remains pending; no conflict may be silently replaced or superseded
+- Canonical in-place requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json` is schema v2 and contains exactly 41 homogeneous records
+- Preserved Registry v1 snapshot: `docs/superpowers/registry/oracle-lab-requirements-v1.json` remains the immutable 23-row migration source and evidence
+- Reviewed governance adoption: Tasks 2 and 3 completed the in-place Registry v2 migration, explicit conflict registration, and adoption of the exact 18 RA records
+- RA authority boundary: all 18 RA records remain `deferred`; governance adoption does not imply implementation, production verification, canary approval, or runtime authority
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; no conflict, requirement, or authority statement may be silently replaced or superseded
 - Delivery state: Phase 0 complete; `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json` (`sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6`) is the immutable reviewed-input baseline, and `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json` binds the final roadmap bytes and Phase 0 handoff commit. Phase 1 remains gated on that receipt and the Phase 0 exit contract.
 - P0.1 governance state: P0.1 implementation candidate; completion is controlled exclusively by the successor receipt; P1 remains blocked by the integrated-main entry gates.
 - Current worktree: CC Gateway repository; Sub2API and other sibling repositories are separate
@@ -36,12 +37,9 @@ Conflicts resolve in this order:
 Review Amendments > Hardening Amendments > Adversarial Validation v2 > Oracle Lab Design
 ```
 
-Every conflict MUST be registered explicitly by the reviewed Task 2/3 migration with original
-source references and linked Claim Matrix authority. Registry v2 and RA adoption remain pending
-reviewed gates through Task 2 and Task 3. Until those gates pass, the canonical registry remains
-schema v1 and no conflict, requirement, or authority statement is treated as migrated or silently
-replaced. Registry `implementation_status` and Claim Matrix authority remain separate fields; the
-in-place v2 migration does not create a second authority lattice.
+Reviewed Tasks 2 and 3 completed the in-place Registry v2 migration, explicit conflict registration with original source references and linked Claim Matrix authority, and adoption of the exact 18 RA records.
+All 18 RA records remain `deferred`; governance adoption does not imply implementation, production verification, canary approval, or runtime authority.
+No conflict, requirement, or authority statement may be silently replaced or superseded. Registry `implementation_status` and Claim Matrix authority remain separate fields; the in-place v2 migration does not create a second authority lattice.
 
 ## Delivery Rules
 

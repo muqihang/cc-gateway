@@ -646,8 +646,8 @@ assert.deepEqual(reviewImport.adopted, evidence.ADOPTED_AMENDMENT_BINDING)
 assert.deepEqual(reviewImport.transformation, {
   algorithm: 'sha256_exact_bytes_v1',
   source_bytes: 41_663,
-  adopted_bytes: 47_547,
-  pair_digest: 'sha256:30e04d6e7a67d97379bd642ee9ba7111064e3cce30c36779c9b4d88a300db55a',
+  adopted_bytes: 47_748,
+  pair_digest: 'sha256:c50bd89681f898b0ec9e712f718ff523c6dc8eade99583f56f12bd208d86b7c2',
 })
 assert.equal(evidence.validateReviewImportBytes(reviewImport, source, adopted).ok, true)
 const validateReviewImportSchema = ajv.compile(JSON.parse(readFileSync(path.join(root, schemaRelatives[7]), 'utf8')))
