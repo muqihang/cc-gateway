@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "review_kind": "governance_amendment_review",
+  "reviewer_identity": "codex-security-quality-reviewer-01c775a",
+  "reviewer_role": "security_quality",
+  "reviewed_candidate_heads": {
+    "cc_gateway": "01c775a3d823048873d972e5dd42ec2b95797b07",
+    "sub2api": "0a97b3f3b84b5c679788b3694d5840e235031f07"
+  },
+  "diff_digests": {
+    "cc_gateway": "sha256:3652116e4a6a0dd72eaeea22526e55bdbb3177b0b79545c4a0ffeb3c82d9f53d",
+    "sub2api": "sha256:e52795208eb1d30a91430f9dd84581e93b929091b833f71856243a8fb8f88ff4"
+  },
+  "plan_digest": "sha256:b31e3f534cd3ef2c27c4bbce1dbb1422d431d76b59ea252466d2bfc2ae7c3049",
+  "review_import_digest": "sha256:c8849e572728ba66ce9cb73b73185130eab47160df48c7ac01b25cd75467e020",
+  "decision": "approved",
+  "findings": {
+    "critical": 0,
+    "important": 0,
+    "summaries": []
+  },
+  "verification": [
+    "exact_heads:cc=01c775a3d823048873d972e5dd42ec2b95797b07,sub=0a97b3f3b84b5c679788b3694d5840e235031f07",
+    "raw_diff_sha256:cc=3652116e4a6a0dd72eaeea22526e55bdbb3177b0b79545c4a0ffeb3c82d9f53d,sub=e52795208eb1d30a91430f9dd84581e93b929091b833f71856243a8fb8f88ff4",
+    "input_sha256:plan=b31e3f534cd3ef2c27c4bbce1dbb1422d431d76b59ea252466d2bfc2ae7c3049,review_import=c8849e572728ba66ce9cb73b73185130eab47160df48c7ac01b25cd75467e020",
+    "failed_child_policy:exit_nonzero_timeout_overflow_unsafe_infrastructure=none",
+    "failed_joint_no_output:cli_error=unexpected_classification,formal_result=absent",
+    "failed_joint_valid_deliverable:cli_error=repository_mutation,ignored_allowance=false",
+    "failed_joint_atomicity:child_marker_redacted,green_absent,journal_byte_identical",
+    "successful_joint:policy=sub2api_joint_safe_deliverable_v1,observations=exactly_one",
+    "result_integrity:schema_catalog_manifest_snapshots_record_digest_set_digest=bound",
+    "git_status:cc_clean=true,sub_clean=true,replacement_refs=absent",
+    "historical_evidence:phase0_postintegration_postintegrationv2_diff_from_cc_base=empty",
+    "candidate_tree:stale_reviews=absent,formal_chain_outputs=absent,journal=absent",
+    "codegraph:cc=117_files_4699_nodes_18378_edges_pending0,sub=3042_files_98075_nodes_328727_edges_pending0",
+    "external_capability:requests_credentials_deployment_canary_promotion=not_performed_or_authorized",
+    "test_evidence:targeted_production_cli_regression=reported_pass,review_reran_no_tests_or_builds"
+  ]
+}
