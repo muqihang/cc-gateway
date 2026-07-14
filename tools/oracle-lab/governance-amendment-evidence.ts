@@ -1995,7 +1995,7 @@ function expandCatalogString(value: string, roots: { CC_GATEWAY_ROOT: string; SU
 function childEnvironment(entry: Record<string, unknown>, roots: { CC_GATEWAY_ROOT: string; SUB2API_ROOT: string }): Record<string, string> {
   const tools = activeReviewedCommandTools
   if (!tools) fail('unsafe_startup_environment', 'reviewed command toolchain is not active')
-  const toolPath = [path.dirname(tools.go.realpath), path.dirname(tools.npm.realpath), path.dirname(REVIEWED_NODE_EXECUTABLE), path.dirname(REVIEWED_GIT_EXECUTABLE), '/usr/bin', '/bin'].filter((value, index, values) => values.indexOf(value) === index).join(path.delimiter)
+  const toolPath = [path.dirname(tools.go.executable), path.dirname(tools.npm.executable), path.dirname(REVIEWED_NODE_EXECUTABLE), path.dirname(REVIEWED_GIT_EXECUTABLE), '/usr/bin', '/bin'].map((directory) => realpathSync(directory)).filter((value, index, values) => values.indexOf(value) === index).join(path.delimiter)
   const moduleMarker = `${path.sep}pkg${path.sep}mod${path.sep}`
   const moduleIndex = tools.go.realpath.indexOf(moduleMarker)
   if (moduleIndex < 0 && !tools.go.fixture) fail('unsafe_startup_environment', 'reviewed Go executable is not inside the frozen module cache')

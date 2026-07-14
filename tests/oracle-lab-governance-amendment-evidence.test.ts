@@ -1907,6 +1907,7 @@ for (const [index, invocation] of acceptanceAudit.entries()) {
   assert.equal(invocation.selected_env.npm_config_globalconfig, '/etc/oracle-p0-1-empty-npmrc')
   assert.equal(invocation.selected_env.GOENV, 'off')
   assert.equal(String(invocation.selected_env.PATH).split(path.delimiter).includes(realpathSync(acceptanceShimBin)), true)
+  assert.equal(String(invocation.selected_env.PATH).split(path.delimiter)[0], realpathSync(acceptanceShimBin))
   for (const [key, value] of Object.entries(extraEnv)) {
     assert.equal(invocation.selected_env[key], value.replace('${CC_GATEWAY_ROOT}', acceptanceCcRoot).replace('${SUB2API_ROOT}', acceptanceSubRoot))
   }
