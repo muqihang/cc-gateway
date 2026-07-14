@@ -542,6 +542,8 @@ if (match.id === unsafeCommandId) {
 if (match.group === 'red') {
   const output = match.id === 'sub2api-boundary-red'
     ? '--- FAIL: TestFormalPoolOnboardingBoundary\\n--- FAIL: TestBrowserBoundary\\n--- FAIL: TestEgressBoundary\\n'
+    : match.id === 'sidecar-boundary-red'
+      ? '--- FAIL: TestPhase0B5Boundary\\n--- FAIL: TestPhase0B6Boundary\\n'
     : '--- FAIL: TestPhase0B4Boundary\\n--- FAIL: TestPhase0B5Boundary\\n--- FAIL: TestPhase0B6Boundary\\n'
   process.stdout.write(output)
   process.exit(1)

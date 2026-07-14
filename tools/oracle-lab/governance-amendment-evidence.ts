@@ -283,7 +283,7 @@ const COMMAND_SPEC = [
 ] as const
 const EXPECTED_RED_FAILURE_FAMILIES: Record<string, RegExp[]> = {
   'cc-boundary-red': [/B4/i, /B5/i, /B6/i],
-  'sidecar-boundary-red': [/B4/i, /B5/i, /B6/i],
+  'sidecar-boundary-red': [/B5/i, /B6/i],
   'sub2api-boundary-red': [/FormalPoolOnboarding/i, /Browser/i, /(?:Egress|FormalPoolOperations)/i],
 }
 

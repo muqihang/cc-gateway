@@ -822,7 +822,7 @@ Every catalog entry uses the exact `HERMETIC_NETWORK_ENV` from Global Constraint
 
 `tests/run-p0-1.ts` imports exactly ten suites in this fixed order: `oracle-lab-hermetic-dependencies.test.ts`, `oracle-lab-governance-amendment-entry.test.ts`, `oracle-lab-review-overlay.test.ts`, `oracle-lab-traceability.test.ts`, `oracle-lab-claim-matrix.test.ts`, `oracle-lab-current-observations.test.ts`, `oracle-lab-harness.test.ts`, `oracle-lab-reviewed-snapshot-binding.test.ts`, `oracle-lab-ignored-path-inventory.test.ts`, and `oracle-lab-governance-amendment-evidence.test.ts`. It is not named `*.test.ts`, so the existing full `tests/run-all.ts` does not execute the focused suite twice. Add package script `test:oracle:p0-1` as `tsx tests/run-p0-1.ts`.
 
-The mandatory expected-RED inventory remains CC Gateway B4-B6, sidecar B4-B6, and Sub2API B1-B3. The repaired joint tests are GREEN, never expected RED.
+The mandatory expected-RED inventory remains CC Gateway B4-B6, sidecar B5-B6, and Sub2API B1-B3. The repaired joint tests are GREEN, never expected RED.
 
 - [ ] **Step 3: Define and test the CLI contract**
 
