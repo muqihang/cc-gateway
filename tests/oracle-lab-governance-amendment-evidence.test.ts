@@ -20,7 +20,7 @@ const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-
 const sub2apiSourceRoot = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1'
 const productionBranch = 'codex/oracle-p0-1-governance'
 const MiB = 1024 * 1024
-const PRODUCTION_CLI_TIMEOUT_MS = 120_000
+const PRODUCTION_CLI_TIMEOUT_MS = 90_000
 const PRODUCTION_CLI_MAX_BUFFER = 16 * MiB
 const CC_SPARSE_PATHS = [
   '.gitignore',
