@@ -75,18 +75,22 @@ export type ReviewedGitOptions = Readonly<{
 type ReplacementStorage = Readonly<{ commonDirectory: string; signature: string }>
 const replacementStorageCache = new Map<string, ReplacementStorage>()
 
-function statSignature(file: string): string {
+function storageSignature(file: string, expected: 'directory' | 'regular_file', typeErrorCode: string): string {
   try {
     const stat = lstatSync(file, { bigint: true })
-    return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(':')
+    if ((expected === 'directory' && !stat.isDirectory()) || (expected === 'regular_file' && !stat.isFile()) || stat.isSymbolicLink()) {
+      fail(typeErrorCode, `Git replacement storage must be a real ${expected === 'directory' ? 'directory' : 'regular file'}`)
+    }
+    return [expected, stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(':')
   } catch (error) {
+    if ((error as Error & { code?: string }).code === typeErrorCode) throw error
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent'
     fail('git_inspection_failed', 'Git replacement storage is unavailable')
   }
 }
 
 function replacementStorageSignature(commonDirectory: string): string {
-  return `${statSignature(path.join(commonDirectory, 'refs/replace'))}|${statSignature(path.join(commonDirectory, 'packed-refs'))}`
+  return `${storageSignature(path.join(commonDirectory, 'refs/replace'), 'directory', 'git_replace_refs_storage_type')}|${storageSignature(path.join(commonDirectory, 'packed-refs'), 'regular_file', 'git_packed_refs_storage_type')}`
 }
 
 function runReviewedGitRaw(rootInput: string, args: readonly string[], options: ReviewedGitOptions = {}): ReviewedGitResult {

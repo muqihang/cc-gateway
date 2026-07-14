@@ -18,6 +18,7 @@ for (const relative of [toolRelative, entrySchemaRelative, receiptSchemaRelative
 }
 
 const entryTool = await import(pathToFileURL(path.join(repositoryRoot, toolRelative)).href)
+type CodeGraphBinding = import('../tools/oracle-lab/governance-amendment-entry.js').CodeGraphBinding
 const BRANCH = 'codex/oracle-p0-1-governance'
 const HERMETIC_ENVIRONMENT = {
   npm_config_offline: 'true',
@@ -205,7 +206,7 @@ function fixture(): Fixture {
 
 function capture(
   current: Fixture,
-  inspectCodeGraph = (root: string) => current.graph[root],
+  inspectCodeGraph: (root: string) => CodeGraphBinding = (root: string) => current.graph[root],
   environment: Record<string, string | undefined> = HERMETIC_ENVIRONMENT,
 ): { entry: Record<string, unknown>; receipt: Record<string, unknown> } {
   return entryTool.captureGovernanceAmendmentEntry({

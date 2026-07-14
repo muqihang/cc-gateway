@@ -6,7 +6,6 @@ import {
   linkSync,
   lstatSync,
   openSync,
-  readFileSync,
   realpathSync,
   renameSync,
   unlinkSync,
@@ -24,7 +23,6 @@ import {
   isObject,
   one,
   parseArgs,
-  readJson,
   result,
   sha256,
   type HarnessErrorRecord,
@@ -34,6 +32,15 @@ import {
   captureBoundedRepositoryState,
   visibleFileDigest,
 } from './bounded-repository-state.js'
+import {
+  MAX_CODEGRAPH_AGGREGATE_BYTES,
+  MAX_EVIDENCE_AGGREGATE_BYTES,
+  MAX_EVIDENCE_FILE_BYTES,
+  createBoundedReadBudget,
+  readBoundedRegularFile,
+  type BoundedFileRead,
+  type BoundedReadBudget,
+} from './bounded-file-read.js'
 import {
   DEFAULT_IGNORED_INVENTORY_LIMITS,
   IGNORED_INVENTORY_ALGORITHM,
@@ -61,6 +68,32 @@ import {
 
 type JsonSchemaValidator = ((value: unknown) => boolean) & { errors?: unknown }
 const Ajv2020Constructor = Ajv2020 as unknown as new (options: Record<string, unknown>) => { compile(schema: unknown): JsonSchemaValidator }
+
+let activeEvidenceReadBudget: BoundedReadBudget | undefined
+let activeCodeGraphReadBudget: BoundedReadBudget | undefined
+
+function evidenceReadBudget(): BoundedReadBudget {
+  return activeEvidenceReadBudget ?? createBoundedReadBudget(MAX_EVIDENCE_AGGREGATE_BYTES)
+}
+
+function codeGraphReadBudget(): BoundedReadBudget {
+  return activeCodeGraphReadBudget ?? createBoundedReadBudget(MAX_CODEGRAPH_AGGREGATE_BYTES)
+}
+
+function withProductionReadBudgets<T>(action: () => T): T {
+  const previousEvidence = activeEvidenceReadBudget
+  const previousCodeGraph = activeCodeGraphReadBudget
+  activeEvidenceReadBudget = createBoundedReadBudget(MAX_EVIDENCE_AGGREGATE_BYTES)
+  activeCodeGraphReadBudget = createBoundedReadBudget(MAX_CODEGRAPH_AGGREGATE_BYTES)
+  try { return action() } finally {
+    activeEvidenceReadBudget = previousEvidence
+    activeCodeGraphReadBudget = previousCodeGraph
+  }
+}
+
+function readEvidenceFile(file: string): BoundedFileRead {
+  return readBoundedRegularFile(file, { maxBytes: MAX_EVIDENCE_FILE_BYTES, budget: evidenceReadBudget() })
+}
 
 export const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 export const HERMETIC_NETWORK_ENV = {
@@ -222,6 +255,7 @@ const CAPTURE_INPUT_PATHS = {
   launcher: 'tools/oracle-lab/oracle-p0-1',
   successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts',
   secure_runtime: 'tools/oracle-lab/secure-runtime.ts',
+  bounded_file_read: 'tools/oracle-lab/bounded-file-read.ts',
   bounded_repository_state: 'tools/oracle-lab/bounded-repository-state.ts',
   ignored_path_inventory: 'tools/oracle-lab/ignored-path-inventory.ts',
   command_catalog: COMMAND_CATALOG_PATH,
@@ -387,19 +421,18 @@ function safeLeaf(file: string): string {
 
 export function buildReviewImport(options: { reviewSource: string; adoptedAmendment: string; generatedAt?: string; repositoryRoot?: string }): ReviewImport {
   const repositoryRoot = realpathSync(options.repositoryRoot ?? REPOSITORY_ROOT)
-  const source = readFileSync(options.reviewSource)
-  if (sha256(source) !== TASK_0B_REVIEW_SOURCE_DIGEST) fail('review_source_digest_mismatch', 'review source differs from the immutable Task 0B digest')
+  const source = readEvidenceFile(options.reviewSource)
+  if (source.digest !== TASK_0B_REVIEW_SOURCE_DIGEST) fail('review_source_digest_mismatch', 'review source differs from the immutable Task 0B digest')
   const adoptedRelative = relativeArtifact(repositoryRoot, options.adoptedAmendment)
   if (adoptedRelative !== ADOPTED_AMENDMENT_BINDING.path) fail('adopted_amendment_path_mismatch', 'adopted amendment path is not fixed')
-  const adoptedBinding = bindingAt(repositoryRoot, adoptedRelative)
-  if (!same(adoptedBinding, ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment bytes differ from the fixed reviewed digest')
-  const adopted = readFileSync(path.join(repositoryRoot, adoptedRelative))
-  if (source.length === 0 || adopted.length === 0 || source.length > MAX_OUTPUT_BYTES || adopted.length > MAX_OUTPUT_BYTES) fail('invalid_review_import_bytes', 'review inputs must be nonempty and at most 8 MiB')
+  const adopted = readArtifactAt(repositoryRoot, adoptedRelative)
+  if (!same(adopted.binding, ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment bytes differ from the fixed reviewed digest')
+  if (source.size === 0 || adopted.read.size === 0) fail('invalid_review_import_bytes', 'review inputs must be nonempty and at most 8 MiB')
   const transformation = {
     algorithm: 'sha256_exact_bytes_v1' as const,
-    source_bytes: source.length,
-    adopted_bytes: adopted.length,
-    pair_digest: sha256(Buffer.concat([Buffer.from(source.length.toString(10)), Buffer.from([0]), source, Buffer.from(adopted.length.toString(10)), Buffer.from([0]), adopted])),
+    source_bytes: source.size,
+    adopted_bytes: adopted.read.size,
+    pair_digest: sha256(Buffer.concat([Buffer.from(source.size.toString(10)), Buffer.from([0]), source.bytes, Buffer.from(adopted.read.size.toString(10)), Buffer.from([0]), adopted.read.bytes])),
   }
   if (!same(transformation, REVIEW_IMPORT_TRANSFORMATION)) fail('review_import_bytes_mismatch', 'review import bytes differ from the fixed source/adopted transformation')
   const value: ReviewImport = {
@@ -728,10 +761,10 @@ function verifiedChainState(root: string): ChainState {
   let parsed: unknown
   const statePath = chainStatePath(root)
   try {
-    if (lstatSync(statePath).isSymbolicLink()) fail('artifact_symlink', 'P0.1 chain state is a symlink')
-    parsed = JSON.parse(readFileSync(statePath, 'utf8')) as unknown
+    parsed = JSON.parse(readEvidenceFile(statePath).bytes.toString('utf8')) as unknown
   } catch (error) {
-    if ((error as Error & { code?: string }).code === 'artifact_symlink') throw error
+    const code = (error as Error & { code?: string }).code
+    if (code?.startsWith('bounded_file_') && code !== 'bounded_file_missing') throw error
     fail('missing_chain_state', 'P0.1 chain state is missing')
   }
   const state = validateChainState(parsed)
@@ -1249,7 +1282,7 @@ function relativeArtifact(rootInput: string, fileInput: string): string {
   return relative
 }
 
-function bindingAt(root: string, relative: string): ArtifactBinding {
+function readArtifactAt(root: string, relative: string): { read: BoundedFileRead; binding: ArtifactBinding } {
   if (!normalizedRepositoryPath(relative)) fail('invalid_artifact_path', `${relative} is not repository-relative`)
   const components = relative.split('/')
   let absolute = root
@@ -1261,7 +1294,12 @@ function bindingAt(root: string, relative: string): ArtifactBinding {
     if (index < components.length - 1 && !stat.isDirectory()) fail('invalid_artifact', `${relative} has a non-directory parent`)
   }
   if (!stat?.isFile()) fail('invalid_artifact', `${relative} is not a regular file`)
-  return { path: relative, digest: sha256(readFileSync(absolute)) }
+  const read = readEvidenceFile(absolute)
+  return { read, binding: { path: relative, digest: read.digest } }
+}
+
+function bindingAt(root: string, relative: string): ArtifactBinding {
+  return readArtifactAt(root, relative).binding
 }
 
 function bindingsAt<T extends Record<string, string>>(root: string, paths: T): { [K in keyof T]: ArtifactBinding } {
@@ -1269,13 +1307,17 @@ function bindingsAt<T extends Record<string, string>>(root: string, paths: T): {
 }
 
 function readJsonAt<T>(root: string, relative: string): T {
-  bindingAt(root, relative)
-  try { return readJson(path.join(root, relative)) as T } catch { fail('invalid_json', `${relative} is not valid JSON`) }
+  return readJsonArtifactAt<T>(root, relative).value
+}
+
+function readJsonArtifactAt<T>(root: string, relative: string): { value: T; binding: ArtifactBinding } {
+  const observed = readArtifactAt(root, relative)
+  try { return { value: JSON.parse(observed.read.bytes.toString('utf8')) as T, binding: observed.binding } }
+  catch { fail('invalid_json', `${relative} is not valid JSON`) }
 }
 
 function readTextAt(root: string, relative: string): string {
-  bindingAt(root, relative)
-  return readFileSync(path.join(root, relative), 'utf8')
+  return readArtifactAt(root, relative).read.bytes.toString('utf8')
 }
 
 function requireValidation(validation: HarnessResult): void {
@@ -1363,14 +1405,15 @@ function validateReviewArtifacts(options: { ccRoot: string; subRoot: string; req
   const reviewImportRelative = options.reviewImportPath ? relativeArtifact(ccRoot, options.reviewImportPath) : REVIEW_IMPORT_PATH
   const requirements = readJsonAt<Record<string, unknown>>(ccRoot, requirementsRelative)
   const security = readJsonAt<Record<string, unknown>>(ccRoot, securityRelative)
-  const reviewImport = readJsonAt(ccRoot, reviewImportRelative)
+  const reviewImportObserved = readJsonArtifactAt(ccRoot, reviewImportRelative)
+  const reviewImport = reviewImportObserved.value
   validateReviewEvidenceSchemas({ root: ccRoot, requirements, security, reviewImport, schemaCommit: gitText(ccRoot, 'rev-parse', 'HEAD') })
   const heads = isObject(requirements.reviewed_candidate_heads) ? requirements.reviewed_candidate_heads as ReviewExpected['heads'] : { cc_gateway: '', sub2api: '' }
   const expected: ReviewExpected = {
     heads,
     diffs: { cc_gateway: diffDigest(ccRoot, BASE_HEADS.cc_gateway, heads.cc_gateway), sub2api: diffDigest(subRoot, BASE_HEADS.sub2api, heads.sub2api) },
     planDigest: bindingAt(ccRoot, PLAN_PATH).digest,
-    reviewImportDigest: bindingAt(ccRoot, reviewImportRelative).digest,
+    reviewImportDigest: reviewImportObserved.binding.digest,
     candidateCommitIdentities: readCandidateCommitIdentities({ ccRoot, ccHead: heads.cc_gateway, subRoot, subHead: heads.sub2api }),
   }
   requireValidation(validateReviewPair(requirements, security, expected))
@@ -1752,7 +1795,7 @@ type CliRuntime = Readonly<{
 const PRODUCTION_CLI_RUNTIME: CliRuntime = Object.freeze({
   repositoryRoot: REPOSITORY_ROOT,
   runBoundedProcess,
-  inspectCodeGraphIndex: (root: string) => inspectCodeGraphIndex(root, REVIEWED_CODEGRAPH_EXECUTABLE, minimalToolEnvironment()),
+  inspectCodeGraphIndex: (root: string) => inspectCodeGraphIndex(root, REVIEWED_CODEGRAPH_EXECUTABLE, minimalToolEnvironment(), codeGraphReadBudget()),
   writeStdout: (value: string) => process.stdout.write(value),
 })
 
@@ -1785,10 +1828,11 @@ function exactArgumentPath(root: string, input: string, expected: string): strin
 
 function loadManifest(root: string, input: string): { value: ExitValue; path: string; binding: ArtifactBinding } {
   const file = exactArgumentPath(root, input, ARTIFACT_CHAIN.exit)
-  const value = readJson(file) as ExitValue
+  const observed = readJsonArtifactAt<ExitValue>(root, ARTIFACT_CHAIN.exit)
+  const value = observed.value
   requireValidation(validateExitValue(value))
   validateAgainstSchema(root, SCHEMA_PATHS.exit_schema, value)
-  return { value, path: file, binding: bindingAt(root, ARTIFACT_CHAIN.exit) }
+  return { value, path: file, binding: observed.binding }
 }
 
 function allowedBindings(root: string, names: Array<keyof typeof ARTIFACT_CHAIN>): ArtifactBinding[] {
@@ -1809,9 +1853,10 @@ function assertManifestHeads(manifest: ExitValue, ccRoot: string, subRoot: strin
 function validateCatalogAt(root: string, fileInput: string, manifest: ExitValue): { value: Array<Record<string, unknown>>; binding: ArtifactBinding } {
   const relative = relativeArtifact(root, fileInput)
   if (relative !== COMMAND_CATALOG_PATH) fail('catalog_path_mismatch', 'catalog is not the reviewed command catalog')
-  const binding = bindingAt(root, relative)
+  const observed = readJsonArtifactAt<Array<Record<string, unknown>>>(root, relative)
+  const binding = observed.binding
   if (binding.digest !== manifest.capture_inputs.command_catalog.digest) fail('catalog_digest_mismatch', 'catalog bytes differ from the exit binding')
-  const value = readJsonAt<Array<Record<string, unknown>>>(root, relative)
+  const value = observed.value
   requireValidation(validateCommandCatalogValue(value))
   validateAgainstSchema(root, SCHEMA_PATHS.catalog_schema, value)
   return { value, binding }
@@ -1907,9 +1952,11 @@ function commandCaptureExit(args: ReturnType<typeof parseArgs>, runtime: CliRunt
   assertChainStateAbsent(ccRoot)
   const entryRelative = relativeArtifact(ccRoot, String(one(args, 'entry'))); const receiptRelative = relativeArtifact(ccRoot, String(one(args, 'entry-receipt')))
   if (entryRelative !== ENTRY_PATH || receiptRelative !== ENTRY_RECEIPT_PATH) fail('entry_path_mismatch', 'capture requires the immutable P0.1 entry pair')
-  const entry = readJsonAt<GovernanceAmendmentEntry>(ccRoot, entryRelative); const entryReceipt = readJsonAt<GovernanceAmendmentEntryReceipt>(ccRoot, receiptRelative)
+  const entryObserved = readJsonArtifactAt<GovernanceAmendmentEntry>(ccRoot, entryRelative)
+  const receiptObserved = readJsonArtifactAt<GovernanceAmendmentEntryReceipt>(ccRoot, receiptRelative)
+  const entry = entryObserved.value; const entryReceipt = receiptObserved.value
   validateGovernanceAmendmentEntryPair(entry, entryReceipt)
-  if (!same(bindingAt(ccRoot, entryRelative), IMMUTABLE_ENTRY_BINDINGS.entry) || !same(bindingAt(ccRoot, receiptRelative), IMMUTABLE_ENTRY_BINDINGS.receipt)
+  if (!same(entryObserved.binding, IMMUTABLE_ENTRY_BINDINGS.entry) || !same(receiptObserved.binding, IMMUTABLE_ENTRY_BINDINGS.receipt)
     || committedDigest(ccRoot, ENTRY_CAPTURE_COMMIT, entryRelative) !== IMMUTABLE_ENTRY_BINDINGS.entry.digest
     || committedDigest(ccRoot, ENTRY_CAPTURE_COMMIT, receiptRelative) !== IMMUTABLE_ENTRY_BINDINGS.receipt.digest
     || !isAncestor(ccRoot, ENTRY_CAPTURE_COMMIT, gitText(ccRoot, 'rev-parse', 'HEAD'))) fail('changed_entry_baseline', 'P0.1 entry pair differs from immutable Task 0B bytes')
@@ -1921,8 +1968,8 @@ function commandCaptureExit(args: ReturnType<typeof parseArgs>, runtime: CliRunt
   if (contract.digest !== SHARED_CONTRACT_DIGEST) fail('contract_drift', 'shared contract digest drifted')
   const value = buildExitValue({
     generated_at: new Date().toISOString(),
-    entry: bindingAt(ccRoot, entryRelative),
-    entry_receipt: bindingAt(ccRoot, receiptRelative),
+    entry: entryObserved.binding,
+    entry_receipt: receiptObserved.binding,
     repositories: {
       cc_gateway: { head: ccSnapshot.head, branch: ccSnapshot.branch, clean: true, snapshot_digest: ccSnapshot.snapshot_digest, initial_ignored_inventory: ccSnapshot.ignored_inventory },
       sub2api: { head: subSnapshot.head, branch: subSnapshot.branch, clean: true, snapshot_digest: subSnapshot.snapshot_digest, initial_ignored_inventory: subSnapshot.ignored_inventory },
@@ -2024,12 +2071,15 @@ function commandMerge(args: ReturnType<typeof parseArgs>, root: string): void {
 function validateReviewsForManifest(root: string, manifest: ExitValue, requirementsInput: string, securityInput: string, schemaCommit = gitText(root, 'rev-parse', 'HEAD')): { requirements: Record<string, unknown>; security: Record<string, unknown> } {
   const requirementsRelative = relativeArtifact(root, requirementsInput); const securityRelative = relativeArtifact(root, securityInput)
   if (requirementsRelative !== REQUIREMENTS_REVIEW_PATH || securityRelative !== SECURITY_REVIEW_PATH) fail('review_path_mismatch', 'review paths differ from the fixed attestations')
-  const requirementsBinding = bindingAt(root, requirementsRelative); const securityBinding = bindingAt(root, securityRelative)
+  const requirementsObserved = readJsonArtifactAt<Record<string, unknown>>(root, requirementsRelative)
+  const securityObserved = readJsonArtifactAt<Record<string, unknown>>(root, securityRelative)
+  const reviewImportObserved = readJsonArtifactAt(root, REVIEW_IMPORT_PATH)
+  const requirementsBinding = requirementsObserved.binding; const securityBinding = securityObserved.binding
   if (!same(requirementsBinding, manifest.governance.requirements_review) || !same(securityBinding, manifest.governance.security_review)) fail('review_digest_mismatch', 'review bytes differ from the exit manifest')
-  const requirements = readJsonAt<Record<string, unknown>>(root, requirementsRelative); const security = readJsonAt<Record<string, unknown>>(root, securityRelative)
-  const reviewImport = readJsonAt(root, REVIEW_IMPORT_PATH)
+  const requirements = requirementsObserved.value; const security = securityObserved.value
+  const reviewImport = reviewImportObserved.value
   validateReviewEvidenceSchemas({ root, requirements, security, reviewImport, schemaCommit })
-  if (!same(bindingAt(root, REVIEW_IMPORT_PATH), manifest.governance.review_import) || !same(manifest.governance.amendment, ADOPTED_AMENDMENT_BINDING)) fail('review_import_binding_mismatch', 'manifest review amendment bindings are not the fixed reviewed pair')
+  if (!same(reviewImportObserved.binding, manifest.governance.review_import) || !same(manifest.governance.amendment, ADOPTED_AMENDMENT_BINDING)) fail('review_import_binding_mismatch', 'manifest review amendment bindings are not the fixed reviewed pair')
   const diffs = isObject(requirements.diff_digests) ? requirements.diff_digests as ReviewExpected['diffs'] : { cc_gateway: '', sub2api: '' }
   requireValidation(validateReviewPair(requirements, security, {
     heads: manifest.reviewed_candidate_heads,
@@ -2514,7 +2564,7 @@ export function validateReceiptArtifact(options: { root: string; receiptPath: st
     if (gitText(root, 'rev-parse', `${receiptCommit}^`) !== artifactCommit) fail('invalid_receipt_commit_parent', 'receipt commit parent is not the artifact commit')
     const delta = gitText(root, 'diff-tree', '--no-commit-id', '--name-status', '-r', receiptCommit).split('\n').filter(Boolean)
     if (!same(delta, [`A\t${ARTIFACT_CHAIN.receipt}`])) fail('invalid_receipt_commit_delta', 'receipt commit must add exactly one receipt path')
-    if (!readFileSync(path.join(root, receiptRelative)).equals(committedBytes(root, receiptCommit, receiptRelative))) fail('receipt_commit_bytes_mismatch', 'committed receipt differs from validated worktree bytes')
+    if (!readArtifactAt(root, receiptRelative).read.bytes.equals(committedBytes(root, receiptCommit, receiptRelative))) fail('receipt_commit_bytes_mismatch', 'committed receipt differs from validated worktree bytes')
     captureRepositorySnapshot(root)
   } else {
     if (gitText(root, 'rev-parse', 'HEAD') !== artifactCommit) fail('wrong_artifact_commit', 'pre-commit validation must run at the artifact commit')
@@ -2555,10 +2605,12 @@ function dispatch(command: string, tokens: string[], runtime: CliRuntime): void 
 
 function runProductionCli(tokens: string[]): void {
   assertProductionStartupEnvironment()
-  assertNoGitReplacementRefs(REPOSITORY_ROOT)
-  const [command, ...argumentTokens] = tokens
-  if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
-  dispatch(command, argumentTokens, PRODUCTION_CLI_RUNTIME)
+  withProductionReadBudgets(() => {
+    assertNoGitReplacementRefs(REPOSITORY_ROOT)
+    const [command, ...argumentTokens] = tokens
+    if (!command) fail('invalid_arguments', 'a supported P0.1 subcommand is required')
+    dispatch(command, argumentTokens, PRODUCTION_CLI_RUNTIME)
+  })
 }
 
 function main(): void {

@@ -744,6 +744,11 @@ CC Gateway ledger commit message: `docs(oracle): resolve joint fixture drift obs
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-review-import.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json`
 - Create: `docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json`
+- Create: `tools/oracle-lab/oracle-p0-1`
+- Create: `tools/oracle-lab/secure-runtime.ts`
+- Create: `tools/oracle-lab/bounded-file-read.ts`
+- Create: `tools/oracle-lab/bounded-repository-state.ts`
+- Modify: `tools/oracle-lab/governance-amendment-entry.ts`
 - Create: `tools/oracle-lab/governance-amendment-evidence.ts` (including the local cross-stage two-repository journal)
 - Create: `tools/oracle-lab/ignored-path-inventory.ts` (including fixed joint-surface modes)
 - Modify: `tests/oracle-lab-post-integration-entry.test.ts`
@@ -814,7 +819,7 @@ The mandatory GREEN inventory has exactly these catalog IDs and argv:
 
 Every catalog entry uses the exact `HERMETIC_NETWORK_ENV` from Global Constraints, including `GOPROXY=off`, `GOSUMDB=off`, and `GOTOOLCHAIN=local` for direct Go commands and Go children of npm tests. The catalog validator rejects omission or override, and a missing cached module/toolchain is an unexpected fail-closed result rather than permission to download.
 
-`tests/run-p0-1.ts` imports exactly the hermetic-dependency, entry, overlay, traceability, claim-matrix, current-observation, harness, reviewed-snapshot-binding, and successor-evidence test files in a fixed order. It is not named `*.test.ts`, so the existing full `tests/run-all.ts` does not execute the focused suite twice. Add package script `test:oracle:p0-1` as `tsx tests/run-p0-1.ts`.
+`tests/run-p0-1.ts` imports exactly ten suites in this fixed order: `oracle-lab-hermetic-dependencies.test.ts`, `oracle-lab-governance-amendment-entry.test.ts`, `oracle-lab-review-overlay.test.ts`, `oracle-lab-traceability.test.ts`, `oracle-lab-claim-matrix.test.ts`, `oracle-lab-current-observations.test.ts`, `oracle-lab-harness.test.ts`, `oracle-lab-reviewed-snapshot-binding.test.ts`, `oracle-lab-ignored-path-inventory.test.ts`, and `oracle-lab-governance-amendment-evidence.test.ts`. It is not named `*.test.ts`, so the existing full `tests/run-all.ts` does not execute the focused suite twice. Add package script `test:oracle:p0-1` as `tsx tests/run-p0-1.ts`.
 
 The mandatory expected-RED inventory remains CC Gateway B4-B6, sidecar B4-B6, and Sub2API B1-B3. The repaired joint tests are GREEN, never expected RED.
 

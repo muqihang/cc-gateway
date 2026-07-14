@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, cpSync, existsSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,6 +13,7 @@ const toolRelative = 'tools/oracle-lab/governance-amendment-evidence.ts'
 const launcherRelative = 'tools/oracle-lab/oracle-p0-1'
 const secureRuntimeRelative = 'tools/oracle-lab/secure-runtime.ts'
 const boundedStateRelative = 'tools/oracle-lab/bounded-repository-state.ts'
+const boundedFileRelative = 'tools/oracle-lab/bounded-file-read.ts'
 const ignoredInventoryRelative = 'tools/oracle-lab/ignored-path-inventory.ts'
 const catalogRelative = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
 const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'
@@ -27,6 +28,7 @@ const CC_SPARSE_PATHS = [
   launcherRelative,
   secureRuntimeRelative,
   boundedStateRelative,
+  boundedFileRelative,
   'sidecar/egress-tls-sidecar/go.mod',
   'tools/oracle-lab/governance-amendment-evidence.ts',
   'tools/oracle-lab/harness-core.ts',
@@ -78,7 +80,7 @@ const CC_GENERATED_SPARSE_PATTERNS = [
   'docs/superpowers/evidence/p0-1/p0-1-handoff.json',
   'docs/superpowers/evidence/p0-1/p0-1-successor-receipt.json',
 ] as const
-assert.equal(CC_SPARSE_PATHS.length, 33)
+assert.equal(CC_SPARSE_PATHS.length, 34)
 assert.equal(SUB_SPARSE_PATHS.length, 4)
 const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
@@ -92,7 +94,7 @@ const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
 ]
 
-for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
+for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
   assert.equal(existsSync(path.join(root, relative)), true, `${relative} must exist`)
 }
 const amendmentEntrySource = readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts'), 'utf8')
@@ -203,6 +205,53 @@ const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
 const ignoredInventory = await import(pathToFileURL(path.join(root, ignoredInventoryRelative)).href)
 const secureRuntime = await import(pathToFileURL(path.join(root, secureRuntimeRelative)).href)
 const boundedState = await import(pathToFileURL(path.join(root, boundedStateRelative)).href)
+assert.equal(existsSync(path.join(root, boundedFileRelative)), true, `${boundedFileRelative} must exist`)
+const boundedFile = await import(pathToFileURL(path.join(root, boundedFileRelative)).href)
+assert.equal(Object.isFrozen(boundedFile.BOUNDED_FILE_LIMITS), true)
+
+const boundedFileFixture = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-bounded-file-'))
+const exactBoundedFile = path.join(boundedFileFixture, 'exact.bin')
+writeFileSync(exactBoundedFile, Buffer.from('0123456789abcdef'))
+const exactBudget = boundedFile.createBoundedReadBudget(16)
+const exactRead = boundedFile.readBoundedRegularFile(exactBoundedFile, { maxBytes: 16, budget: exactBudget })
+assert.equal(exactRead.bytes.toString('ascii'), '0123456789abcdef')
+assert.equal(exactRead.digest, sha256('0123456789abcdef'))
+assert.equal(exactBudget.bytes, 16)
+const oversizedBoundedFile = path.join(boundedFileFixture, 'oversized.bin')
+sparseFile(oversizedBoundedFile, 17)
+expectCode(() => boundedFile.readBoundedRegularFile(oversizedBoundedFile, {
+  maxBytes: 16,
+  budget: boundedFile.createBoundedReadBudget(32),
+}), 'bounded_file_size_limit_exceeded')
+const boundedSymlinkTarget = path.join(boundedFileFixture, 'target.bin')
+writeFileSync(boundedSymlinkTarget, 'target')
+const boundedSymlink = path.join(boundedFileFixture, 'symlink.bin')
+symlinkSync('target.bin', boundedSymlink)
+expectCode(() => boundedFile.readBoundedRegularFile(boundedSymlink, {
+  maxBytes: 16,
+  budget: boundedFile.createBoundedReadBudget(32),
+}), 'bounded_file_type_invalid')
+const boundedSpecial = path.join(boundedFileFixture, 'special')
+mkdirSync(boundedSpecial)
+expectCode(() => boundedFile.hashBoundedRegularFile(boundedSpecial, {
+  maxBytes: 16,
+  budget: boundedFile.createBoundedReadBudget(32),
+}), 'bounded_file_type_invalid')
+const aggregateFirst = path.join(boundedFileFixture, 'aggregate-first.bin')
+const aggregateSecond = path.join(boundedFileFixture, 'aggregate-second.bin')
+writeFileSync(aggregateFirst, '123456')
+writeFileSync(aggregateSecond, 'abcdef')
+const aggregateBudget = boundedFile.createBoundedReadBudget(10)
+boundedFile.hashBoundedRegularFile(aggregateFirst, { maxBytes: 16, budget: aggregateBudget })
+expectCode(() => boundedFile.hashBoundedRegularFile(aggregateSecond, { maxBytes: 16, budget: aggregateBudget }), 'bounded_file_aggregate_limit_exceeded')
+const driftingBoundedFile = path.join(boundedFileFixture, 'drifting.bin')
+sparseFile(driftingBoundedFile, boundedFile.MAX_CODEGRAPH_DATABASE_BYTES)
+spawn('/usr/bin/env', ['sh', '-c', 'sleep 0.01; truncate -s 1 "$1"', 'sh', driftingBoundedFile], { stdio: 'ignore' })
+expectCode(() => boundedFile.hashBoundedRegularFile(driftingBoundedFile, {
+  maxBytes: boundedFile.MAX_CODEGRAPH_DATABASE_BYTES,
+  budget: boundedFile.createBoundedReadBudget(boundedFile.MAX_CODEGRAPH_AGGREGATE_BYTES),
+}), 'bounded_file_race_detected')
+assert.equal(lstatSync(driftingBoundedFile).size, 1)
 
 const productionNamespace = evidence as Record<string, unknown>
 for (const runtimeSelector of ['runCliEntry', 'dispatch', 'PRODUCTION_CLI_RUNTIME']) {
@@ -529,6 +578,7 @@ function cliFixture(label: string): string {
   writeFileSync(path.join(repository, launcherRelative), readFileSync(path.join(root, launcherRelative)))
   writeFileSync(path.join(repository, secureRuntimeRelative), readFileSync(path.join(root, secureRuntimeRelative)))
   writeFileSync(path.join(repository, boundedStateRelative), readFileSync(path.join(root, boundedStateRelative)))
+  writeFileSync(path.join(repository, boundedFileRelative), readFileSync(path.join(root, boundedFileRelative)))
   writeFileSync(path.join(repository, 'tools/oracle-lab/governance-amendment-entry.ts'), readFileSync(path.join(root, 'tools/oracle-lab/governance-amendment-entry.ts')))
   chmodSync(path.join(repository, launcherRelative), 0o755)
   writeFileSync(path.join(repository, ignoredInventoryRelative), readFileSync(path.join(root, ignoredInventoryRelative)))
@@ -537,7 +587,7 @@ function cliFixture(label: string): string {
 }
 
 function runCli(repository: string, args: string[], env: Record<string, string> = {}): ReturnType<typeof spawnSync> {
-  for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
+  for (const relative of [launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
     writeFileSync(path.join(repository, relative), readFileSync(path.join(root, relative)))
   }
   chmodSync(path.join(repository, launcherRelative), 0o755)
@@ -897,6 +947,11 @@ function sparseFile(file: string, bytes: number): void {
   try { ftruncateSync(descriptor, bytes) } finally { closeSync(descriptor) }
 }
 
+function extendSparseFile(file: string, bytes: number): void {
+  const descriptor = openSync(file, 'r+')
+  try { ftruncateSync(descriptor, bytes) } finally { closeSync(descriptor) }
+}
+
 assert.equal(Object.isFrozen(boundedState.VISIBLE_STATE_LIMITS), true)
 for (const value of Object.values(boundedState.VISIBLE_STATE_LIMITS) as number[]) assert.equal(Number.isSafeInteger(value) && value > 0, true)
 const perFileBoundCase = snapshotFixture('visible-per-file-bound')
@@ -1235,6 +1290,7 @@ const acceptanceCandidatePaths = [
   launcherRelative,
   secureRuntimeRelative,
   boundedStateRelative,
+  boundedFileRelative,
   ignoredInventoryRelative,
   'tools/oracle-lab/governance-amendment-entry.ts',
   taskPlanRelative,
@@ -1326,7 +1382,7 @@ const replacementRoot = cloneSharedSparseRepository(
   path.join(acceptanceFixtureRoot, 'replacement-repository'),
   [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS],
 )
-for (const relative of [toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
+for (const relative of [toolRelative, launcherRelative, secureRuntimeRelative, boundedStateRelative, boundedFileRelative, ignoredInventoryRelative, 'tools/oracle-lab/governance-amendment-entry.ts']) {
   writeFileSync(path.join(replacementRoot, relative), readFileSync(path.join(root, relative)))
 }
 chmodSync(path.join(replacementRoot, launcherRelative), 0o755)
@@ -1336,6 +1392,25 @@ const replacementObserved = runProductionLauncherCli(replacementRoot, ['review-i
 expectProductionCliCode(replacementObserved, 'git_replace_refs_present')
 assert.equal(existsSync(path.join(replacementRoot, '.git/oracle-p0-1-chain-state.json')), false)
 assert.equal(existsSync(path.join(replacementRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+
+const replacementSymlinkRoot = candidateIdentityFixture('replacement-symlink', 'Replacement Symlink', 'replacement-symlink@example.invalid').repository
+const replacementExternalTarget = path.join(acceptanceFixtureRoot, 'replacement-external-target')
+mkdirSync(replacementExternalTarget)
+symlinkSync(replacementExternalTarget, path.join(replacementSymlinkRoot, '.git/refs/replace'), 'dir')
+expectCode(() => secureRuntime.assertNoGitReplacementRefs(replacementSymlinkRoot), 'git_replace_refs_storage_type')
+assert.equal(existsSync(path.join(replacementSymlinkRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(existsSync(path.join(replacementSymlinkRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+git(replacementSymlinkRoot, 'replace', git(replacementSymlinkRoot, 'rev-parse', 'HEAD'), git(replacementSymlinkRoot, 'rev-parse', 'HEAD^'))
+expectCode(() => secureRuntime.runReviewedGit(replacementSymlinkRoot, ['rev-parse', 'HEAD']), 'git_replace_refs_storage_type')
+assert.equal(existsSync(path.join(replacementSymlinkRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(existsSync(path.join(replacementSymlinkRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+
+const replacementWrongTypeRoot = candidateIdentityFixture('replacement-wrong-type', 'Replacement Wrong Type', 'replacement-wrong-type@example.invalid').repository
+writeFileSync(path.join(replacementWrongTypeRoot, '.git/refs/replace'), 'not a directory\n')
+expectCode(() => secureRuntime.assertNoGitReplacementRefs(replacementWrongTypeRoot), 'git_replace_refs_storage_type')
+const packedRefsWrongTypeRoot = candidateIdentityFixture('packed-refs-wrong-type', 'Packed Refs Wrong Type', 'packed-refs-wrong-type@example.invalid').repository
+mkdirSync(path.join(packedRefsWrongTypeRoot, '.git/packed-refs'))
+expectCode(() => secureRuntime.assertNoGitReplacementRefs(packedRefsWrongTypeRoot), 'git_packed_refs_storage_type')
 
 runAcceptanceCli([
   'review-import',
@@ -1408,6 +1483,50 @@ assert.equal(existsSync(codeGraphShadowMarker), false)
 assert.equal(existsSync(path.join(acceptanceCcRoot, '.git/oracle-p0-1-chain-state.json')), false)
 assert.equal(existsSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.exit)), false)
 
+const oversizedEntryRoot = cloneAcceptanceProductionBranch('oversized-fixed-entry')
+cpSync(path.join(acceptanceCcRoot, '.codegraph'), path.join(oversizedEntryRoot, '.codegraph'), { recursive: true, verbatimSymlinks: true })
+const oversizedEntryPath = path.join(oversizedEntryRoot, 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json')
+sparseFile(oversizedEntryPath, boundedFile.MAX_EVIDENCE_FILE_BYTES + 1)
+const oversizedEntryObserved = runProductionLauncherCli(oversizedEntryRoot, [
+  'capture-exit',
+  '--entry', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
+  '--entry-receipt', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.receipt.json',
+  '--cc-gateway-root', oversizedEntryRoot,
+  '--sub2api-root', acceptanceSubRoot,
+  '--out', evidence.ARTIFACT_CHAIN.exit,
+], acceptanceShimBin, acceptanceTmp)
+expectProductionCliCode(oversizedEntryObserved, 'bounded_file_size_limit_exceeded')
+assert.equal(oversizedEntryObserved.signal, null)
+assert.equal(existsSync(path.join(oversizedEntryRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+assert.equal(existsSync(path.join(oversizedEntryRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(lstatSync(oversizedEntryPath).size, boundedFile.MAX_EVIDENCE_FILE_BYTES + 1)
+
+const oversizedCodeGraphRoot = cloneAcceptanceProductionBranch('oversized-codegraph-db')
+cpSync(path.join(acceptanceCcRoot, '.codegraph'), path.join(oversizedCodeGraphRoot, '.codegraph'), { recursive: true, verbatimSymlinks: true })
+const oversizedCodeGraphPath = path.join(oversizedCodeGraphRoot, '.codegraph/codegraph.db')
+extendSparseFile(oversizedCodeGraphPath, boundedFile.MAX_CODEGRAPH_DATABASE_BYTES + 1)
+const oversizedCodeGraphStatus = JSON.parse(execFileSync(realCodeGraphExecutable, ['status', '--json', oversizedCodeGraphRoot], {
+  cwd: oversizedCodeGraphRoot,
+  env: productionParentEnvironment('/usr/bin:/bin', acceptanceTmp),
+  encoding: 'utf8',
+  stdio: ['ignore', 'pipe', 'pipe'],
+  maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+}))
+assert.equal(oversizedCodeGraphStatus.initialized, true)
+const oversizedCodeGraphObserved = runProductionLauncherCli(oversizedCodeGraphRoot, [
+  'capture-exit',
+  '--entry', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
+  '--entry-receipt', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.receipt.json',
+  '--cc-gateway-root', oversizedCodeGraphRoot,
+  '--sub2api-root', acceptanceSubRoot,
+  '--out', evidence.ARTIFACT_CHAIN.exit,
+], acceptanceShimBin, acceptanceTmp)
+expectProductionCliCode(oversizedCodeGraphObserved, 'bounded_file_size_limit_exceeded')
+assert.equal(oversizedCodeGraphObserved.signal, null)
+assert.equal(existsSync(path.join(oversizedCodeGraphRoot, evidence.ARTIFACT_CHAIN.exit)), false)
+assert.equal(existsSync(path.join(oversizedCodeGraphRoot, '.git/oracle-p0-1-chain-state.json')), false)
+assert.equal(lstatSync(oversizedCodeGraphPath).size, boundedFile.MAX_CODEGRAPH_DATABASE_BYTES + 1)
+
 runAcceptanceCli([
   'capture-exit',
   '--entry', 'docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json',
@@ -1441,6 +1560,23 @@ function initializeCaptureExitCheckpoint(ccCheckpoint: string, subCheckpoint: st
     sub2api: acceptanceManifest.repositories.sub2api.initial_ignored_inventory,
   })
 }
+
+const oversizedPriorRoot = cloneAcceptanceRef('oversized-prior-artifact', acceptanceManifest.approval_attestation_head)
+const oversizedPriorSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'oversized-prior-artifact-sub', acceptanceSubCandidate)
+initializeCaptureExitCheckpoint(oversizedPriorRoot, oversizedPriorSubRoot)
+const oversizedPriorPath = path.join(oversizedPriorRoot, evidence.ARTIFACT_CHAIN.exit)
+sparseFile(oversizedPriorPath, boundedFile.MAX_EVIDENCE_FILE_BYTES + 1)
+const oversizedPriorStatePath = git(oversizedPriorRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+const oversizedPriorStateBefore = readFileSync(oversizedPriorStatePath)
+const oversizedPriorObserved = runProductionLauncherCli(oversizedPriorRoot, [
+  'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+  '--cc-gateway-root', oversizedPriorRoot, '--sub2api-root', oversizedPriorSubRoot, '--out', evidence.ARTIFACT_CHAIN.green,
+], acceptanceShimBin, acceptanceTmp)
+expectProductionCliCode(oversizedPriorObserved, 'bounded_file_size_limit_exceeded')
+assert.equal(oversizedPriorObserved.signal, null)
+assert.deepEqual(readFileSync(oversizedPriorStatePath), oversizedPriorStateBefore)
+assert.equal(existsSync(path.join(oversizedPriorRoot, evidence.ARTIFACT_CHAIN.green)), false)
+assert.equal(lstatSync(oversizedPriorPath).size, boundedFile.MAX_EVIDENCE_FILE_BYTES + 1)
 
 for (const kind of ['untracked', 'tracked'] as const) {
   const label = `visible-state-${kind}-sparse`
@@ -1794,6 +1930,19 @@ function cloneRepositoryRef(sourceRepository: string, label: string, commit: str
 
 function cloneAcceptanceRef(label: string, commit: string): string {
   return cloneRepositoryRef(acceptanceCcRoot, label, commit)
+}
+
+function cloneAcceptanceProductionBranch(label: string): string {
+  const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-${label}-`))
+  const repository = cloneSharedSparseRepository(
+    acceptanceCcRoot,
+    path.join(parent, 'repository'),
+    [...CC_SPARSE_PATHS, ...CC_GENERATED_SPARSE_PATTERNS],
+  )
+  linkCloneDependencies(repository, dependencyRoot)
+  git(repository, 'config', 'user.name', 'Acceptance Bounded Read')
+  git(repository, 'config', 'user.email', 'acceptance-bounded-read@example.invalid')
+  return repository
 }
 
 function expectAcceptanceCliCode(repository: string, args: string[], code: string): void {
@@ -2562,7 +2711,7 @@ const exitValue = evidence.buildExitValue({
     amendment: 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md', requirements: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', roadmap: 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', observations: 'docs/superpowers/registry/oracle-lab-current-observations.json', requirement_schema: 'docs/superpowers/schemas/oracle-lab-requirement.schema.json', requirement_validator: 'tools/oracle-lab/validate-requirements.ts', plan: 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md', review_import: 'docs/superpowers/evidence/p0-1/p0-1-review-import.json', requirements_review: 'docs/superpowers/evidence/p0-1/requirements-review.json', security_review: 'docs/superpowers/evidence/p0-1/security-quality-review.json',
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   capture_inputs: Object.fromEntries(Object.entries({
-    launcher: launcherRelative, successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', secure_runtime: secureRuntimeRelative, bounded_repository_state: boundedStateRelative, ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
+    launcher: launcherRelative, successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', secure_runtime: secureRuntimeRelative, bounded_file_read: boundedFileRelative, bounded_repository_state: boundedStateRelative, ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   codegraph: {
     cc_gateway: { version: '1.1.6', up_to_date: true, index_digest: sha256('cc-index'), file_count: 1, node_count: 1, edge_count: 1 },

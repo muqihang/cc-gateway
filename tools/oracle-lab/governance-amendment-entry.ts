@@ -7,7 +7,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   realpathSync,
   rmdirSync,
   unlinkSync,
@@ -33,6 +32,16 @@ import {
   type HarnessResult,
 } from './harness-core.js'
 import {
+  MAX_CODEGRAPH_AGGREGATE_BYTES,
+  MAX_CODEGRAPH_DATABASE_BYTES,
+  MAX_EVIDENCE_AGGREGATE_BYTES,
+  MAX_EVIDENCE_FILE_BYTES,
+  createBoundedReadBudget,
+  hashBoundedRegularFile,
+  readBoundedRegularFile,
+  type BoundedReadBudget,
+} from './bounded-file-read.js'
+import {
   REVIEWED_CODEGRAPH_EXECUTABLE,
   minimalToolEnvironment,
   runReviewedGit,
@@ -45,6 +54,31 @@ const CAPTURE_INPUT_PATHS = {
   entry_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-entry.schema.json',
   receipt_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-entry-receipt.schema.json',
 } as const
+
+let activeEntryEvidenceBudget: BoundedReadBudget | undefined
+let activeEntryCodeGraphBudget: BoundedReadBudget | undefined
+
+function entryEvidenceBudget(): BoundedReadBudget {
+  return activeEntryEvidenceBudget ?? createBoundedReadBudget(MAX_EVIDENCE_AGGREGATE_BYTES)
+}
+
+function entryCodeGraphBudget(): BoundedReadBudget {
+  return activeEntryCodeGraphBudget ?? createBoundedReadBudget(MAX_CODEGRAPH_AGGREGATE_BYTES)
+}
+
+function withEntryReadBudgets<T>(action: () => T): T {
+  if (activeEntryEvidenceBudget && activeEntryCodeGraphBudget) return action()
+  activeEntryEvidenceBudget = createBoundedReadBudget(MAX_EVIDENCE_AGGREGATE_BYTES)
+  activeEntryCodeGraphBudget = createBoundedReadBudget(MAX_CODEGRAPH_AGGREGATE_BYTES)
+  try { return action() } finally {
+    activeEntryEvidenceBudget = undefined
+    activeEntryCodeGraphBudget = undefined
+  }
+}
+
+function readEntryFile(file: string): Buffer {
+  return readBoundedRegularFile(file, { maxBytes: MAX_EVIDENCE_FILE_BYTES, budget: entryEvidenceBudget() }).bytes
+}
 
 export type PathDigest = { path: string; digest: string }
 export type CodeGraphBinding = {
@@ -457,7 +491,7 @@ function readBoundBytes(root: string, relative: string, label: string): Buffer {
   const real = realpathSync(absolute)
   const rel = path.relative(root, real)
   if (rel.startsWith('..') || path.isAbsolute(rel)) fail('capture_input_escape', `${label} escapes its repository`)
-  return readFileSync(real)
+  return readEntryFile(absolute)
 }
 
 function assertImmutableInputs(options: {
@@ -470,10 +504,12 @@ function assertImmutableInputs(options: {
   if (sha256(readBoundBytes(sub2apiRoot, bindings.sharedContractPath, 'shared contract')) !== bindings.sharedContractDigest) fail('contract_drift', 'shared-contract bytes drifted')
   if (sha256(readBoundBytes(ccGatewayRoot, bindings.phaseZeroReceiptPath, 'Phase 0 receipt')) !== bindings.phaseZeroReceiptDigest) fail('parent_receipt_drift', 'historical Phase 0 receipt bytes drifted')
   if (sha256(readBoundBytes(ccGatewayRoot, bindings.postIntegrationV2ReceiptPath, 'post-integration V2 receipt')) !== bindings.postIntegrationV2ReceiptDigest) fail('parent_receipt_drift', 'historical post-integration V2 receipt bytes drifted')
-  let sourceStat
-  try { sourceStat = lstatSync(reviewSourcePath) } catch { fail('missing_review_amendment', 'review amendment source is missing') }
-  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) fail('review_amendment_symlink', 'review amendment source must be a regular non-symlink file')
-  if (sha256(readFileSync(realpathSync(reviewSourcePath))) !== bindings.reviewSourceDigest) fail('review_amendment_drift', 'unadopted review-amendment source bytes drifted')
+  let sourceBytes: Buffer
+  try { sourceBytes = readEntryFile(reviewSourcePath) } catch (error) {
+    if ((error as Error & { code?: string }).code === 'bounded_file_missing') fail('missing_review_amendment', 'review amendment source is missing')
+    throw error
+  }
+  if (sha256(sourceBytes) !== bindings.reviewSourceDigest) fail('review_amendment_drift', 'unadopted review-amendment source bytes drifted')
 }
 
 export function inspectGovernanceRepository(options: {
@@ -554,7 +590,12 @@ export function parseCodeGraphStatus(value: unknown, indexDigest: string): CodeG
   }
 }
 
-export function inspectCodeGraphIndex(rootInput: string, executable = REVIEWED_CODEGRAPH_EXECUTABLE, environment: NodeJS.ProcessEnv = minimalToolEnvironment()): CodeGraphBinding {
+export function inspectCodeGraphIndex(
+  rootInput: string,
+  executable = REVIEWED_CODEGRAPH_EXECUTABLE,
+  environment: NodeJS.ProcessEnv = minimalToolEnvironment(),
+  budget: BoundedReadBudget = createBoundedReadBudget(MAX_CODEGRAPH_AGGREGATE_BYTES),
+): CodeGraphBinding {
   const root = realpathSync(rootInput)
   let status: unknown
   try {
@@ -569,10 +610,8 @@ export function inspectCodeGraphIndex(rootInput: string, executable = REVIEWED_C
     fail('missing_codegraph_index', 'CodeGraph status is unavailable')
   }
   const dbPath = path.join(root, '.codegraph/codegraph.db')
-  let dbStat
-  try { dbStat = lstatSync(dbPath) } catch { fail('missing_codegraph_index', 'CodeGraph database is missing') }
-  if (!dbStat.isFile() || dbStat.isSymbolicLink()) fail('missing_codegraph_index', 'CodeGraph database must be a regular non-symlink file')
-  return parseCodeGraphStatus(status, sha256(readFileSync(dbPath)))
+  const database = hashBoundedRegularFile(dbPath, { maxBytes: MAX_CODEGRAPH_DATABASE_BYTES, budget })
+  return parseCodeGraphStatus(status, database.digest)
 }
 
 function reviewedCaptureInputs(root: string, head: string): Record<keyof typeof CAPTURE_INPUT_PATHS, PathDigest> {
@@ -651,7 +690,7 @@ export function assertHermeticNetworkEnvironment(environment: Record<string, str
   }
 }
 
-export function captureGovernanceAmendmentEntry(options: {
+export type GovernanceAmendmentEntryCaptureOptions = {
   ccGatewayRoot: string
   sub2apiRoot: string
   reviewSourcePath: string
@@ -659,7 +698,9 @@ export function captureGovernanceAmendmentEntry(options: {
   bindings?: GovernanceAmendmentBindings
   inspectCodeGraph?: (root: string) => CodeGraphBinding
   environment?: Record<string, string | undefined>
-}): { entry: GovernanceAmendmentEntry; receipt: GovernanceAmendmentEntryReceipt } {
+}
+
+function captureGovernanceAmendmentEntryWithActiveBudgets(options: GovernanceAmendmentEntryCaptureOptions): { entry: GovernanceAmendmentEntry; receipt: GovernanceAmendmentEntryReceipt } {
   const bindings = options.bindings ?? GOVERNANCE_AMENDMENT_BINDINGS
   assertHermeticNetworkEnvironment(options.environment ?? process.env)
   const ccGatewayRoot = realpathSync(options.ccGatewayRoot)
@@ -684,7 +725,7 @@ export function captureGovernanceAmendmentEntry(options: {
   if (sub.head !== bindings.sub2apiBaseMainHead) fail('wrong_repository_head', 'Sub2API must remain at its frozen base for entry capture')
   const reviewedToolHead = cc.head
   const captureInputs = reviewedCaptureInputs(ccGatewayRoot, reviewedToolHead)
-  const inspector = options.inspectCodeGraph ?? inspectCodeGraphIndex
+  const inspector = options.inspectCodeGraph ?? ((root: string) => inspectCodeGraphIndex(root, REVIEWED_CODEGRAPH_EXECUTABLE, minimalToolEnvironment(), entryCodeGraphBudget()))
   const ccGraph = checkedCodeGraph(inspector(ccGatewayRoot), bindings)
   const subGraph = checkedCodeGraph(inspector(sub2apiRoot), bindings)
   const generated = new Date(options.generatedAt ?? new Date().toISOString())
@@ -738,6 +779,10 @@ export function captureGovernanceAmendmentEntry(options: {
   }
   validateGovernanceAmendmentEntryPair(entry, receipt, { bindings })
   return { entry, receipt }
+}
+
+export function captureGovernanceAmendmentEntry(options: GovernanceAmendmentEntryCaptureOptions): { entry: GovernanceAmendmentEntry; receipt: GovernanceAmendmentEntryReceipt } {
+  return withEntryReadBudgets(() => captureGovernanceAmendmentEntryWithActiveBudgets(options))
 }
 
 function writeStagedArtifact(file: string, value: unknown, evidenceRoot: string): void {
@@ -840,8 +885,8 @@ export function validateGovernanceAmendmentEntryCommit(options: {
   const root = realpathSync(options.ccGatewayRoot)
   const entryBytes = artifactBytes(options.entry)
   const receiptBytes = artifactBytes(options.receipt)
-  if (!readFileSync(confinedFile(root, options.entryPath, 'entry path')).equals(entryBytes)
-    || !readFileSync(confinedFile(root, options.receiptPath, 'receipt path')).equals(receiptBytes)) {
+  if (!readEntryFile(confinedFile(root, options.entryPath, 'entry path')).equals(entryBytes)
+    || !readEntryFile(confinedFile(root, options.receiptPath, 'receipt path')).equals(receiptBytes)) {
     fail('entry_commit_bytes_mismatch', 'worktree pair differs from the pre-commit validated bytes')
   }
   const entryCommit = git(root, 'rev-parse', `${options.entryCommit}^{commit}`)
@@ -886,7 +931,7 @@ function repositoryRootFromCwd(): string {
   }
 }
 
-export function runGovernanceAmendmentEntryCli(argv: string[]): void {
+function runGovernanceAmendmentEntryCliWithActiveBudgets(argv: string[]): void {
   assertHermeticNetworkEnvironment(process.env)
   const args = parseArgs(argv)
   if (args.positionals.length !== 1 || !['capture', 'validate'].includes(args.positionals[0])) fail('invalid_arguments', 'exactly one capture or validate command is required')
@@ -907,8 +952,15 @@ export function runGovernanceAmendmentEntryCli(argv: string[]): void {
   const manifestRelative = argument(args, 'manifest') as string
   const receiptRelative = argument(args, 'receipt') as string
   if (manifestRelative !== GOVERNANCE_AMENDMENT_BINDINGS.entryPath || receiptRelative !== GOVERNANCE_AMENDMENT_BINDINGS.receiptPath) fail('artifact_path_drift', 'validation paths must use the reviewed P0.1 pair paths')
-  const entry = JSON.parse(readFileSync(confinedFile(root, manifestRelative, 'manifest path'), 'utf8')) as unknown
-  const receipt = JSON.parse(readFileSync(confinedFile(root, receiptRelative, 'receipt path'), 'utf8')) as unknown
+  let entry: unknown
+  let receipt: unknown
+  try {
+    entry = JSON.parse(readEntryFile(confinedFile(root, manifestRelative, 'manifest path')).toString('utf8')) as unknown
+    receipt = JSON.parse(readEntryFile(confinedFile(root, receiptRelative, 'receipt path')).toString('utf8')) as unknown
+  } catch (error) {
+    if ((error as Error & { code?: string }).code?.startsWith('bounded_file_')) throw error
+    fail('invalid_json', 'entry pair is not valid JSON')
+  }
   validateGovernanceAmendmentEntryPair(entry, receipt)
   const entryCommit = argument(args, 'entry-commit', false)
   const toolCommit = argument(args, 'tool-commit', false)
@@ -928,6 +980,10 @@ export function runGovernanceAmendmentEntryCli(argv: string[]): void {
     entry: entry as GovernanceAmendmentEntry,
   })
   process.stdout.write(`${canonicalJson({ valid: true, commit_validated: Boolean(entryCommit) })}\n`)
+}
+
+export function runGovernanceAmendmentEntryCli(argv: string[]): void {
+  withEntryReadBudgets(() => runGovernanceAmendmentEntryCliWithActiveBudgets(argv))
 }
 
 const invokedPath = process.argv[1]
