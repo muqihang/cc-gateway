@@ -10,6 +10,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 
 const root = path.resolve(new URL('..', import.meta.url).pathname)
 const toolRelative = 'tools/oracle-lab/governance-amendment-evidence.ts'
+const ignoredInventoryRelative = 'tools/oracle-lab/ignored-path-inventory.ts'
 const catalogRelative = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
 const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-exit.schema.json',
@@ -23,7 +24,7 @@ const schemaRelatives = [
   'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
 ]
 
-for (const relative of [toolRelative, catalogRelative, ...schemaRelatives]) {
+for (const relative of [toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]) {
   assert.equal(existsSync(path.join(root, relative)), true, `${relative} must exist`)
 }
 
@@ -65,6 +66,7 @@ for (const entry of catalog) {
   assert.equal(entry.shell, false)
   assert.equal(entry.max_output_bytes, 8 * 1024 * 1024)
   assert.equal(entry.expected_exit, entry.group === 'green' ? 0 : 'nonzero')
+  assert.equal(entry.ignored_output_policy, entry.id === 'sub2api-joint-local-chain' ? 'sub2api_joint_safe_deliverable_v1' : 'none')
 }
 assert.deepEqual(catalog.find((entry: any) => entry.id === 'sub2api-joint-local-chain').bindings, ['cc_gateway_head', 'sub2api_head', 'cc_gateway_before_snapshot', 'cc_gateway_after_snapshot', 'sub2api_before_snapshot', 'sub2api_after_snapshot', 'shared_contract_digest'])
 
@@ -97,6 +99,18 @@ assert.equal(validateCatalog(missingCrossBinding), false)
 const injectedAllowedDelta = structuredClone(catalog)
 injectedAllowedDelta[0].allowed_worktree_delta = ['docs/superpowers/evidence/p0-1/injected.json']
 assert.equal(validateCatalog(injectedAllowedDelta), false)
+const missingIgnoredPolicy = structuredClone(catalog)
+delete missingIgnoredPolicy[0].ignored_output_policy
+assert.equal(validateCatalog(missingIgnoredPolicy), false)
+const unknownIgnoredPolicy = structuredClone(catalog)
+unknownIgnoredPolicy[0].ignored_output_policy = 'free_form_paths'
+assert.equal(validateCatalog(unknownIgnoredPolicy), false)
+const misplacedIgnoredPolicy = structuredClone(catalog)
+misplacedIgnoredPolicy[0].ignored_output_policy = 'sub2api_joint_safe_deliverable_v1'
+assert.equal(validateCatalog(misplacedIgnoredPolicy), false)
+const freeFormIgnoredAllowance = structuredClone(catalog)
+freeFormIgnoredAllowance[5].ignored_output_paths = ['runtime/arbitrary']
+assert.equal(validateCatalog(freeFormIgnoredAllowance), false)
 
 const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 assert.equal(packageJson.scripts['oracle:p0-1'], 'tsx tools/oracle-lab/governance-amendment-evidence.ts')
@@ -111,10 +125,12 @@ assert.deepEqual([...focusedRunner.matchAll(/import ['"]\.\/(.+?)['"]/g)].map((m
   'oracle-lab-current-observations.test.ts',
   'oracle-lab-harness.test.ts',
   'oracle-lab-reviewed-snapshot-binding.test.ts',
+  'oracle-lab-ignored-path-inventory.test.ts',
   'oracle-lab-governance-amendment-evidence.test.ts',
 ])
 
 const evidence = await import(pathToFileURL(path.join(root, toolRelative)).href)
+const ignoredInventory = await import(pathToFileURL(path.join(root, ignoredInventoryRelative)).href)
 
 const cliCases = [
   ['capture-exit', ['entry', 'entry-receipt', 'cc-gateway-root', 'sub2api-root', 'out']],
@@ -208,6 +224,7 @@ function cliFixture(label: string): string {
   const repository = path.join(parent, 'repository')
   execFileSync('git', ['clone', '-q', '--shared', root, repository])
   writeFileSync(path.join(repository, toolRelative), readFileSync(path.join(root, toolRelative)))
+  writeFileSync(path.join(repository, ignoredInventoryRelative), readFileSync(path.join(root, ignoredInventoryRelative)))
   symlinkSync(path.join(root, 'node_modules'), path.join(repository, 'node_modules'), 'dir')
   return realpathSync(repository)
 }
@@ -245,6 +262,10 @@ assert.equal(evidence.validateCommandCatalogValue(wrongArgv).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(wrongCwd).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(missingCrossBinding).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(injectedAllowedDelta).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(missingIgnoredPolicy).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(unknownIgnoredPolicy).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(misplacedIgnoredPolicy).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(freeFormIgnoredAllowance).ok, false)
 
 const source = '/Users/muqihang/chelingxi_workspace/cc-gateway-claude-code-2.1.207-oracle-lab/docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
 const adopted = path.join(root, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md')
@@ -535,8 +556,9 @@ function snapshotFixture(label: string): { repository: string; priorAbsolute: st
   git(repository, 'config', 'user.email', 'oracle@example.invalid')
   git(repository, 'config', 'user.name', 'Oracle Test')
   git(repository, 'branch', '-m', 'codex/oracle-p0-1-governance')
+  writeFileSync(path.join(repository, '.gitignore'), 'ignored/\n')
   writeFileSync(path.join(repository, 'tracked.txt'), 'tracked\n')
-  git(repository, 'add', 'tracked.txt')
+  git(repository, 'add', '.gitignore', 'tracked.txt')
   git(repository, 'commit', '-qm', 'base')
   mkdirSync(path.join(repository, 'docs/superpowers/evidence/p0-1'), { recursive: true })
   const priorAbsolute = path.join(repository, priorRelative)
@@ -551,7 +573,19 @@ const priorBinding = snapshotCase.priorBinding
 const snapshot = evidence.captureRepositorySnapshot(snapshotRoot, [priorBinding])
 assert.equal(snapshot.head, git(snapshotRoot, 'rev-parse', 'HEAD'))
 assert.deepEqual(snapshot.allowed_artifacts, [priorBinding])
+assert.match(snapshot.ignored_exclusion_rules_digest, /^sha256:[0-9a-f]{64}$/)
+assert.equal(snapshot.ignored_inventory.algorithm, 'git_exclude_standard_recursive_v1')
+assert.match(snapshot.ignored_inventory.digest, /^sha256:[0-9a-f]{64}$/)
+assert.equal(snapshot.ignored_output_policy_digest, ignoredInventory.IGNORED_OUTPUT_POLICY_DIGESTS.none)
 evidence.assertRepositorySnapshot(snapshotRoot, snapshot, [priorBinding])
+const reboundJointSnapshot = evidence.rebindRepositorySnapshotPolicy(snapshot, 'sub2api_joint_safe_deliverable_v1')
+assert.notEqual(reboundJointSnapshot.snapshot_digest, snapshot.snapshot_digest)
+const reboundNoneSnapshot = evidence.rebindRepositorySnapshotPolicy(reboundJointSnapshot, 'none')
+assert.equal(reboundNoneSnapshot.snapshot_digest, snapshot.snapshot_digest)
+assert.deepEqual(
+  evidence.compareRepositorySnapshots(snapshot, reboundNoneSnapshot, 'none', new Date('2026-07-13T00:00:00'), new Date('2026-07-13T00:01:00')),
+  { before_snapshot_digest: snapshot.snapshot_digest, after_snapshot_digest: snapshot.snapshot_digest },
+)
 writeFileSync(path.join(snapshotRoot, `${priorRelative}.extra`), 'same-prefix extra\n')
 expectCode(() => evidence.captureRepositorySnapshot(snapshotRoot, [priorBinding]), 'undeclared_dirty_path')
 const priorMutationCase = snapshotFixture('prior-mutation')
@@ -561,6 +595,16 @@ const trackedMutationCase = snapshotFixture('tracked-mutation')
 const trackedSnapshot = evidence.captureRepositorySnapshot(trackedMutationCase.repository, [trackedMutationCase.priorBinding])
 writeFileSync(path.join(trackedMutationCase.repository, 'tracked.txt'), 'mutated tracked\n')
 expectCode(() => evidence.assertRepositorySnapshot(trackedMutationCase.repository, trackedSnapshot, [trackedMutationCase.priorBinding]), 'repository_mutation')
+const ignoredMutationCase = snapshotFixture('ignored-mutation')
+mkdirSync(path.join(ignoredMutationCase.repository, 'ignored'))
+writeFileSync(path.join(ignoredMutationCase.repository, 'ignored/seed.txt'), 'seed\n')
+const ignoredSnapshot = evidence.captureRepositorySnapshot(ignoredMutationCase.repository, [ignoredMutationCase.priorBinding])
+writeFileSync(path.join(ignoredMutationCase.repository, 'ignored/seed.txt'), 'mutated ignored bytes\n')
+expectCode(() => evidence.assertRepositorySnapshot(ignoredMutationCase.repository, ignoredSnapshot, [ignoredMutationCase.priorBinding]), 'repository_mutation')
+const exclusionMutationCase = snapshotFixture('ignored-exclusion-rule')
+const exclusionSnapshot = evidence.captureRepositorySnapshot(exclusionMutationCase.repository, [exclusionMutationCase.priorBinding])
+writeFileSync(path.join(exclusionMutationCase.repository, '.git/info/exclude'), 'runtime-private/\n')
+expectCode(() => evidence.assertRepositorySnapshot(exclusionMutationCase.repository, exclusionSnapshot, [exclusionMutationCase.priorBinding]), 'repository_mutation')
 const chainStateCase = snapshotFixture('chain-state')
 evidence.initializeChainState(chainStateCase.repository, [chainStateCase.priorBinding])
 evidence.assertChainState(chainStateCase.repository, [chainStateCase.priorBinding])
@@ -800,7 +844,11 @@ const acceptanceCcParent = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-acceptan
 const acceptanceCcPath = path.join(acceptanceCcParent, 'repository')
 execFileSync('git', ['clone', '-q', '--shared', root, acceptanceCcPath])
 const acceptanceCcRoot = realpathSync(acceptanceCcPath)
-writeFileSync(path.join(acceptanceCcRoot, toolRelative), readFileSync(path.join(root, toolRelative)))
+const acceptanceUpdatedInputs = [toolRelative, ignoredInventoryRelative, catalogRelative, ...schemaRelatives]
+for (const relative of acceptanceUpdatedInputs) {
+  mkdirSync(path.dirname(path.join(acceptanceCcRoot, relative)), { recursive: true })
+  writeFileSync(path.join(acceptanceCcRoot, relative), readFileSync(path.join(root, relative)))
+}
 const acceptanceSubParent = mkdtempSync(path.join(tmpdir(), 'oracle-p0-1-acceptance-sub-'))
 const acceptanceSubPath = path.join(acceptanceSubParent, 'repository')
 execFileSync('git', ['clone', '-q', '--shared', '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1', acceptanceSubPath])
@@ -810,6 +858,15 @@ git(acceptanceCcRoot, 'config', 'user.email', 'acceptance-candidate@example.inva
 const acceptanceStdout: string[] = []
 const acceptanceCommands: string[] = []
 const acceptanceInvocations: Array<{ argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }> = []
+function localDateDirectory(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-sub2api-cc-gateway-joint-local-capture`
+}
+function writeJointSafeDeliverable(repository: string): void {
+  const directory = path.join(repository, 'docs/anti-ban/captures/real-baseline', localDateDirectory(), 'safe-deliverable')
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(path.join(directory, 'README.md'), 'safe local acceptance readme\n')
+  writeFileSync(path.join(directory, 'joint_local_capture_summary.redacted.json'), '{"safe":true}\n')
+}
 const acceptanceRuntime = {
   repositoryRoot: acceptanceCcRoot,
   inspectCodeGraphIndex(repository: string) {
@@ -825,6 +882,7 @@ const acceptanceRuntime = {
   runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }) {
     acceptanceInvocations.push({ argv: [...options.argv], cwd: options.cwd, env: { ...options.env }, timeoutMs: options.timeoutMs, maxOutputBytes: options.maxOutputBytes })
     const joined = options.argv.join(' ')
+    if (joined.includes('TestJointLocalCaptureAcceptanceArtifact')) writeJointSafeDeliverable(acceptanceSubRoot)
     const output = joined.includes('tests/red/phase0-boundary.red.test.ts')
       ? '--- FAIL: TestPhase0B4Boundary\n--- FAIL: TestPhase0B5Boundary\n--- FAIL: TestPhase0B6Boundary\n'
       : joined.includes('-tags=phase0red') && options.cwd.includes('egress-tls-sidecar')
@@ -861,7 +919,7 @@ runAcceptanceCli([
   '--review-source', source,
   '--adopted-amendment', path.join(acceptanceCcRoot, 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'),
 ])
-git(acceptanceCcRoot, 'add', toolRelative, reviewImportRelative)
+git(acceptanceCcRoot, 'add', ...acceptanceUpdatedInputs, reviewImportRelative)
 git(acceptanceCcRoot, 'commit', '-qm', 'fixture candidate review import')
 const acceptanceCandidate = git(acceptanceCcRoot, 'rev-parse', 'HEAD')
 const acceptanceSubCandidate = git(acceptanceSubRoot, 'rev-parse', 'HEAD')
@@ -929,6 +987,19 @@ runAcceptanceCli([
   '--sub2api-root', acceptanceSubRoot,
   '--out', evidence.ARTIFACT_CHAIN.red,
 ])
+const acceptanceGreenResults = JSON.parse(readFileSync(path.join(acceptanceCcRoot, evidence.ARTIFACT_CHAIN.green), 'utf8'))
+for (const record of acceptanceGreenResults.records) {
+  if (record.command_id === 'sub2api-joint-local-chain') {
+    assert.equal(record.ignored_output_observations.length, 1)
+    assert.deepEqual(Object.keys(record.ignored_output_observations[0]).sort(), ['after', 'before', 'policy', 'policy_digest', 'repository'])
+    assert.equal(record.ignored_output_observations[0].repository, 'sub2api')
+    assert.equal(record.ignored_output_observations[0].policy, 'sub2api_joint_safe_deliverable_v1')
+    assert.equal(record.ignored_output_observations[0].policy_digest, ignoredInventory.IGNORED_OUTPUT_POLICY_DIGESTS.sub2api_joint_safe_deliverable_v1)
+    assert.equal(JSON.stringify(record.ignored_output_observations[0]).includes('safe-deliverable'), false)
+  } else {
+    assert.deepEqual(record.ignored_output_observations, [])
+  }
+}
 runAcceptanceCli([
   'merge',
   '--manifest', evidence.ARTIFACT_CHAIN.exit,
@@ -1107,6 +1178,67 @@ function acceptanceRuntimeAt(repository: string): typeof acceptanceRuntime {
 
 function expectAcceptanceCliCode(repository: string, args: string[], code: string): void {
   expectCode(() => evidence.runCliEntry(args, acceptanceRuntimeAt(repository)), code)
+}
+
+function expectIgnoredMutationRejected(
+  label: string,
+  setup: (ccRoot: string, subRoot: string) => void,
+  mutate: (ccRoot: string, subRoot: string) => void,
+): void {
+  const ccRepository = cloneAcceptanceRef(`ignored-mutation-${label}`, acceptanceManifest.approval_attestation_head)
+  const subRepository = cloneRepositoryRef(acceptanceSubRoot, `ignored-mutation-sub-${label}`, acceptanceSubCandidate)
+  writeFileSync(path.join(subRepository, '.git/info/exclude'), '.superpowers/\n')
+  const exit = path.join(ccRepository, evidence.ARTIFACT_CHAIN.exit)
+  mkdirSync(path.dirname(exit), { recursive: true })
+  writeFileSync(exit, execFileSync('git', ['show', `${acceptanceArtifactCommit}:${evidence.ARTIFACT_CHAIN.exit}`], { cwd: acceptanceCcRoot, encoding: 'buffer' }))
+  evidence.initializeArtifactChain(ccRepository)
+  setup(ccRepository, subRepository)
+  let invocation = 0
+  const runtime = {
+    ...acceptanceRuntimeAt(ccRepository),
+    runBoundedProcess(options: { argv: string[]; cwd: string; env: Record<string, string>; timeoutMs: number; maxOutputBytes?: number }) {
+      if (invocation++ === 0) mutate(ccRepository, subRepository)
+      return evidence.runBoundedProcess({ ...options, argv: [process.execPath, '-e', 'process.exit(0)'] })
+    },
+  }
+  let observed: unknown
+  try {
+    evidence.runCliEntry([
+      'run', '--manifest', evidence.ARTIFACT_CHAIN.exit, '--catalog', catalogRelative, '--group', 'green',
+      '--cc-gateway-root', ccRepository, '--sub2api-root', subRepository, '--out', evidence.ARTIFACT_CHAIN.green,
+    ], runtime)
+  } catch (error) { observed = error }
+  assert.equal((observed as { code?: string }).code, 'repository_mutation', (observed as Error)?.message)
+  assert.equal(JSON.stringify(observed).includes('mutation-secret'), false)
+}
+
+for (const repository of ['cc', 'sub'] as const) {
+  const ignoredRelative = repository === 'cc' ? 'runtime/mutation-secret.txt' : '.superpowers/mutation-secret.txt'
+  expectIgnoredMutationRejected(`${repository}-create`, () => {}, (ccRoot, subRoot) => {
+    const root = repository === 'cc' ? ccRoot : subRoot
+    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
+    writeFileSync(path.join(root, ignoredRelative), 'created ignored bytes\n')
+  })
+  expectIgnoredMutationRejected(`${repository}-modify`, (ccRoot, subRoot) => {
+    const root = repository === 'cc' ? ccRoot : subRoot
+    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
+    writeFileSync(path.join(root, ignoredRelative), 'before ignored bytes\n')
+  }, (ccRoot, subRoot) => {
+    writeFileSync(path.join(repository === 'cc' ? ccRoot : subRoot, ignoredRelative), 'modified ignored bytes\n')
+  })
+  expectIgnoredMutationRejected(`${repository}-delete`, (ccRoot, subRoot) => {
+    const root = repository === 'cc' ? ccRoot : subRoot
+    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
+    writeFileSync(path.join(root, ignoredRelative), 'retained ignored bytes\n')
+  }, (ccRoot, subRoot) => {
+    const root = repository === 'cc' ? ccRoot : subRoot
+    renameSync(path.join(root, ignoredRelative), path.join(path.dirname(root), `${path.basename(root)}-${repository}-retained-mutation-secret.txt`))
+  })
+  expectIgnoredMutationRejected(`${repository}-symlink`, () => {}, (ccRoot, subRoot) => {
+    const root = repository === 'cc' ? ccRoot : subRoot
+    mkdirSync(path.dirname(path.join(root, ignoredRelative)), { recursive: true })
+    symlinkSync(path.join(root, 'README.md'), path.join(root, ignoredRelative))
+  })
 }
 
 function writeAcceptanceReceipt(repository: string, value: unknown = acceptanceReceipt): void {
@@ -1329,6 +1461,19 @@ const executionBindingValues = {
 assert.deepEqual(evidence.buildExecutionBindings(catalog[5].bindings, executionBindingValues), executionBindingValues)
 expectCode(() => evidence.buildExecutionBindings(catalog[5].bindings, { ...executionBindingValues, shared_contract_digest: undefined }), 'incomplete_execution_binding')
 
+function ignoredSummary(label: string, options: { endpoints: number; regular: number; directories: number; symlinks?: number; bytes: number }): Record<string, unknown> {
+  return {
+    algorithm: 'git_exclude_standard_recursive_v1',
+    endpoint_count: options.endpoints,
+    entry_count: options.regular + options.directories + (options.symlinks ?? 0),
+    regular_file_count: options.regular,
+    directory_count: options.directories,
+    symlink_count: options.symlinks ?? 0,
+    regular_file_bytes: options.bytes,
+    digest: sha256(label),
+  }
+}
+
 function resultRecord(commandId: string, status: string, expectedExit: 0 | 'nonzero'): Record<string, unknown> {
   const catalogEntry = catalog.find((entry: any) => entry.id === commandId)
   const execution_bindings = evidence.buildExecutionBindings(catalogEntry.bindings, executionBindingValues)
@@ -1355,6 +1500,15 @@ function resultRecord(commandId: string, status: string, expectedExit: 0 | 'nonz
     argv_digest: sha256(JSON.stringify(catalogEntry.argv)),
     environment_digest: sha256(JSON.stringify(catalogEntry.env)),
     execution_bindings,
+    ignored_output_observations: commandId === 'sub2api-joint-local-chain'
+      ? [{
+          repository: 'sub2api',
+          policy: 'sub2api_joint_safe_deliverable_v1',
+          policy_digest: ignoredInventory.IGNORED_OUTPUT_POLICY_DIGESTS.sub2api_joint_safe_deliverable_v1,
+          before: ignoredSummary('ignored-before-empty', { endpoints: 0, regular: 0, directories: 0, bytes: 0 }),
+          after: ignoredSummary('ignored-after-pair', { endpoints: 1, regular: 2, directories: 2, bytes: 1_024 }),
+        }]
+      : [],
   }
   return { ...unsigned, result_digest: sha256(canonical(unsigned)) }
 }
@@ -1390,6 +1544,37 @@ assert.equal(validateResultsSchema(merged), true, JSON.stringify(validateResults
 const unknownExecutionBindingSet = structuredClone(merged) as any
 unknownExecutionBindingSet.records[0].execution_bindings.surprise = sha256('surprise')
 assert.equal(validateResultsSchema(unknownExecutionBindingSet), false)
+const missingIgnoredObservationSet = structuredClone(merged) as any
+delete missingIgnoredObservationSet.records[0].ignored_output_observations
+assert.equal(validateResultsSchema(missingIgnoredObservationSet), false)
+const jointObservation = (merged.records as any[]).find((record) => record.command_id === 'sub2api-joint-local-chain').ignored_output_observations[0]
+for (const mutate of [
+  (value: any) => { value.repository = 'cc-gateway' },
+  (value: any) => { value.policy = 'none' },
+  (value: any) => { value.policy_digest = sha256('wrong-policy') },
+  (value: any) => { value.before.algorithm = 'wrong' },
+  (value: any) => { value.before.endpoint_count += 1 },
+  (value: any) => { value.before.entry_count += 1 },
+  (value: any) => { value.before.regular_file_count += 1 },
+  (value: any) => { value.before.directory_count += 1 },
+  (value: any) => { value.before.symlink_count += 1 },
+  (value: any) => { value.before.regular_file_bytes += 1 },
+  (value: any) => { value.before.digest = sha256('mutated-before') },
+  (value: any) => { value.after.algorithm = 'wrong' },
+  (value: any) => { value.after.endpoint_count += 1 },
+  (value: any) => { value.after.entry_count += 1 },
+  (value: any) => { value.after.regular_file_count += 1 },
+  (value: any) => { value.after.directory_count += 1 },
+  (value: any) => { value.after.symlink_count += 1 },
+  (value: any) => { value.after.regular_file_bytes += 1 },
+  (value: any) => { value.after.digest = sha256('mutated-after') },
+]) {
+  const mutated = structuredClone(merged) as any
+  const record = mutated.records.find((candidate: any) => candidate.command_id === 'sub2api-joint-local-chain')
+  mutate(record.ignored_output_observations[0])
+  assert.equal(evidence.validateResultSetValue(mutated, Date.parse('2026-07-13T01:00:00.000Z')).ok, false)
+}
+assert.equal(jointObservation.after.entry_count, 4)
 expectCode(() => evidence.mergeResultSets(evidence.buildResultSet({ ...resultBase, group: 'green', records: greenRecords.slice(1) }), redSet), 'incomplete_result_set')
 
 assert.deepEqual(evidence.ARTIFACT_CHAIN, {
@@ -1522,7 +1707,7 @@ const exitValue = evidence.buildExitValue({
     amendment: 'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md', requirements: 'docs/superpowers/registry/oracle-lab-requirements.json', claims: 'docs/superpowers/registry/oracle-lab-claims.json', roadmap: 'docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', observations: 'docs/superpowers/registry/oracle-lab-current-observations.json', requirement_schema: 'docs/superpowers/schemas/oracle-lab-requirement.schema.json', requirement_validator: 'tools/oracle-lab/validate-requirements.ts', plan: 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md', review_import: 'docs/superpowers/evidence/p0-1/p0-1-review-import.json', requirements_review: 'docs/superpowers/evidence/p0-1/requirements-review.json', security_review: 'docs/superpowers/evidence/p0-1/security-quality-review.json',
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   capture_inputs: Object.fromEntries(Object.entries({
-    successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
+    successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', ignored_path_inventory: ignoredInventoryRelative, command_catalog: 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json', exit_schema: schemaRelatives[0], catalog_schema: schemaRelatives[1], results_schema: schemaRelatives[2], context_schema: schemaRelatives[3], handoff_schema: schemaRelatives[4], receipt_schema: schemaRelatives[5], report_schema: schemaRelatives[6], review_import_schema: schemaRelatives[7], review_schema: schemaRelatives[8],
   }).map(([name, artifactPath]) => [name, artifact(artifactPath)])),
   codegraph: {
     cc_gateway: { version: '1.1.6', up_to_date: true, index_digest: sha256('cc-index'), file_count: 1, node_count: 1, edge_count: 1 },

@@ -112,6 +112,20 @@
   "allOf": [
     {
       "items": { "$ref": "#/items" }
+    },
+    {
+      "items": {
+        "if": {
+          "properties": { "id": { "const": "sub2api-joint-local-chain" } },
+          "required": ["id"]
+        },
+        "then": {
+          "properties": { "ignored_output_policy": { "const": "sub2api_joint_safe_deliverable_v1" } }
+        },
+        "else": {
+          "properties": { "ignored_output_policy": { "const": "none" } }
+        }
+      }
     }
   ],
   "items": {
@@ -131,6 +145,7 @@
       "shell",
       "bindings",
       "allowed_worktree_delta",
+      "ignored_output_policy",
       "timeout_ms",
       "max_output_bytes",
       "expected_exit",
@@ -274,6 +289,12 @@
       },
       "allowed_worktree_delta": {
         "const": []
+      },
+      "ignored_output_policy": {
+        "enum": [
+          "none",
+          "sub2api_joint_safe_deliverable_v1"
+        ]
       },
       "timeout_ms": {
         "type": "integer",

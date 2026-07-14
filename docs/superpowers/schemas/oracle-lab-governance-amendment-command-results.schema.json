@@ -85,6 +85,7 @@
         "argv_digest",
         "environment_digest",
         "execution_bindings",
+        "ignored_output_observations",
         "result_digest"
       ],
       "properties": {
@@ -174,6 +175,13 @@
             "shared_contract_digest": { "$ref": "#/$defs/digest" }
           }
         },
+        "ignored_output_observations": {
+          "type": "array",
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/ignored_output_observation"
+          }
+        },
         "result_digest": {
           "$ref": "#/$defs/digest"
         }
@@ -189,6 +197,48 @@
           }
         }
       ]
+    },
+    "ignored_output_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "policy",
+        "policy_digest",
+        "before",
+        "after"
+      ],
+      "properties": {
+        "repository": { "const": "sub2api" },
+        "policy": { "const": "sub2api_joint_safe_deliverable_v1" },
+        "policy_digest": { "const": "sha256:daad32022b14228f7575212a00a5e80d33f119a2cc047d63d1f21c59bb65391e" },
+        "before": { "$ref": "#/$defs/ignored_inventory_summary" },
+        "after": { "$ref": "#/$defs/ignored_inventory_summary" }
+      }
+    },
+    "ignored_inventory_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "endpoint_count",
+        "entry_count",
+        "regular_file_count",
+        "directory_count",
+        "symlink_count",
+        "regular_file_bytes",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": { "const": "git_exclude_standard_recursive_v1" },
+        "endpoint_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "entry_count": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "regular_file_count": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "directory_count": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "symlink_count": { "const": 0 },
+        "regular_file_bytes": { "type": "integer", "minimum": 0, "maximum": 393216 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
     }
   }
 }

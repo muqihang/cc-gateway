@@ -32,6 +32,15 @@ import {
 } from './harness-core.js'
 import { computeRepositoryState } from './freeze-baseline.js'
 import {
+  IGNORED_INVENTORY_ALGORITHM,
+  IGNORED_OUTPUT_POLICY_DIGESTS,
+  compareIgnoredPathInventories,
+  computeIgnoredPathInventory,
+  type IgnoredInventorySummary,
+  type IgnoredOutputPolicy,
+  type IgnoredPathInventory,
+} from './ignored-path-inventory.js'
+import {
   inspectCodeGraphIndex,
   validateGovernanceAmendmentEntryPair,
   type GovernanceAmendmentEntry,
@@ -198,7 +207,12 @@ const SCHEMA_PATHS = {
   review_schema: 'docs/superpowers/schemas/oracle-lab-governance-amendment-review.schema.json',
 } as const
 const COMMAND_CATALOG_PATH = 'docs/superpowers/registry/oracle-lab-governance-amendment-command-catalog.json'
-const CAPTURE_INPUT_PATHS = { successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts', command_catalog: COMMAND_CATALOG_PATH, ...SCHEMA_PATHS } as const
+const CAPTURE_INPUT_PATHS = {
+  successor_tool: 'tools/oracle-lab/governance-amendment-evidence.ts',
+  ignored_path_inventory: 'tools/oracle-lab/ignored-path-inventory.ts',
+  command_catalog: COMMAND_CATALOG_PATH,
+  ...SCHEMA_PATHS,
+} as const
 
 const COMMAND_IDS = {
   green: ['cc-build', 'cc-tests', 'cc-cross-repo-baseline', 'sidecar-tests', 'sub2api-formal-pool', 'sub2api-joint-local-chain', 'p0-1-focused'],
@@ -208,16 +222,16 @@ const CC_EXECUTION_BINDINGS = ['cc_gateway_head', 'cc_gateway_before_snapshot', 
 const SUB_EXECUTION_BINDINGS = ['sub2api_head', 'sub2api_before_snapshot', 'sub2api_after_snapshot', 'shared_contract_digest'] as const
 const DUAL_EXECUTION_BINDINGS = ['cc_gateway_head', 'sub2api_head', 'cc_gateway_before_snapshot', 'cc_gateway_after_snapshot', 'sub2api_before_snapshot', 'sub2api_after_snapshot', 'shared_contract_digest'] as const
 const COMMAND_SPEC = [
-  { id: 'cc-build', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'build'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'cc-tests', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'test'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'cc-cross-repo-baseline', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:cross-repo'], extraEnv: { SUB2API_ROOT: '${SUB2API_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS },
-  { id: 'sidecar-tests', group: 'green', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', './...', '-count=1'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'sub2api-formal-pool', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', './internal/server/routes', '-run', 'FormalPool|FormalPoolOperations', '-count=1'], bindings: SUB_EXECUTION_BINDINGS },
-  { id: 'sub2api-joint-local-chain', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', '-run', '^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$', '-count=1', '-v'], extraEnv: { CC_GATEWAY_REPO_ROOT: '${CC_GATEWAY_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS },
-  { id: 'p0-1-focused', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:p0-1'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'cc-boundary-red', group: 'red', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'exec', 'tsx', 'tests/red/phase0-boundary.red.test.ts'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'sidecar-boundary-red', group: 'red', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', '-tags=phase0red', './internal/control', './internal/server', '-count=1'], bindings: CC_EXECUTION_BINDINGS },
-  { id: 'sub2api-boundary-red', group: 'red', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', '-tags=phase0red', './internal/service', './internal/server/routes', '-run', 'FormalPoolOnboarding|FormalPoolOperations|Browser|Egress', '-count=1'], bindings: SUB_EXECUTION_BINDINGS },
+  { id: 'cc-build', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'build'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'cc-tests', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'test'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'cc-cross-repo-baseline', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:cross-repo'], extraEnv: { SUB2API_ROOT: '${SUB2API_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'sidecar-tests', group: 'green', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', './...', '-count=1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'sub2api-formal-pool', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', './internal/server/routes', '-run', 'FormalPool|FormalPoolOperations', '-count=1'], bindings: SUB_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'sub2api-joint-local-chain', group: 'green', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', './internal/service', '-run', '^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$', '-count=1', '-v'], extraEnv: { CC_GATEWAY_REPO_ROOT: '${CC_GATEWAY_ROOT}' }, bindings: DUAL_EXECUTION_BINDINGS, ignoredPolicy: 'sub2api_joint_safe_deliverable_v1' },
+  { id: 'p0-1-focused', group: 'green', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'run', 'test:oracle:p0-1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'cc-boundary-red', group: 'red', repository: 'cc-gateway', cwd: '${CC_GATEWAY_ROOT}', argv: ['npm', 'exec', 'tsx', 'tests/red/phase0-boundary.red.test.ts'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'sidecar-boundary-red', group: 'red', repository: 'egress-tls-sidecar', cwd: '${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar', argv: ['go', 'test', '-tags=phase0red', './internal/control', './internal/server', '-count=1'], bindings: CC_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
+  { id: 'sub2api-boundary-red', group: 'red', repository: 'sub2api', cwd: '${SUB2API_ROOT}/backend', argv: ['go', 'test', '-tags=phase0red', './internal/service', './internal/server/routes', '-run', 'FormalPoolOnboarding|FormalPoolOperations|Browser|Egress', '-count=1'], bindings: SUB_EXECUTION_BINDINGS, ignoredPolicy: 'none' },
 ] as const
 const EXPECTED_RED_FAILURE_FAMILIES: Record<string, RegExp[]> = {
   'cc-boundary-red': [/B4/i, /B5/i, /B6/i],
@@ -227,14 +241,14 @@ const EXPECTED_RED_FAILURE_FAMILIES: Record<string, RegExp[]> = {
 
 const CATALOG_FIELDS = [
   'id', 'schema_version', 'group', 'owner', 'requirement_ids', 'repository', 'cwd', 'argv', 'env', 'inherit_env', 'shell',
-  'bindings', 'allowed_worktree_delta', 'timeout_ms', 'max_output_bytes', 'expected_exit', 'output_policy', 'rollback',
+  'bindings', 'allowed_worktree_delta', 'ignored_output_policy', 'timeout_ms', 'max_output_bytes', 'expected_exit', 'output_policy', 'rollback',
 ] as const
 
 const REPORT_FIELDS = ['schema_version', 'report_type', 'generated_at', 'status', 'manifest', 'results', 'reviews', 'command_summary', 'report_digest'] as const
 const HANDOFF_FIELDS = ['schema_version', 'handoff_kind', 'generated_at', 'expires_at', 'bindings', 'disabled_capabilities', 'next_planning_entry_conditions', 'next_implementation_entry_conditions', 'handoff_digest'] as const
 const REVIEW_FIELDS = ['schema_version', 'review_kind', 'reviewer_identity', 'reviewer_role', 'reviewed_candidate_heads', 'diff_digests', 'plan_digest', 'review_import_digest', 'decision', 'findings', 'verification'] as const
 const RESULT_FIELDS = ['schema_version', 'result_kind', 'generated_at', 'expires_at', 'manifest_digest', 'catalog_digest', 'group', 'records', 'result_set_digest'] as const
-const RESULT_RECORD_FIELDS = ['command_id', 'repository', 'repository_commit', 'expected_exit', 'exit_code', 'status', 'duration_ms', 'stdout_digest', 'stderr_digest', 'output_bytes', 'timed_out', 'output_overflow', 'failure_names', 'manifest_digest', 'catalog_entry_digest', 'argv_digest', 'environment_digest', 'execution_bindings', 'result_digest'] as const
+const RESULT_RECORD_FIELDS = ['command_id', 'repository', 'repository_commit', 'expected_exit', 'exit_code', 'status', 'duration_ms', 'stdout_digest', 'stderr_digest', 'output_bytes', 'timed_out', 'output_overflow', 'failure_names', 'manifest_digest', 'catalog_entry_digest', 'argv_digest', 'environment_digest', 'execution_bindings', 'ignored_output_observations', 'result_digest'] as const
 const CONTEXT_FIELDS = ['schema_version', 'context_kind', 'generated_at', 'expires_at', 'bindings', 'review_import', 'reviews', 'disabled_capabilities', 'context_digest'] as const
 const RECEIPT_FIELDS = ['schema_version', 'receipt_kind', 'generated_at', 'artifact_commit', 'reviewed_heads', 'shared_contract', 'review_amendment', 'parent_receipts', 'artifact_digests', 'disabled_capabilities', 'next_planning_entry_conditions', 'next_implementation_entry_conditions', 'receipt_digest'] as const
 
@@ -314,6 +328,7 @@ export function validateCommandCatalogValue(value: unknown): HarnessResult {
     if (!same(candidate.inherit_env, ['PATH', 'HOME', 'TMPDIR'])) add(errors, 'invalid_inherited_environment', `${where}.inherit_env`, 'only PATH, HOME, TMPDIR may be inherited')
     if (!reviewed || !same(candidate.bindings, reviewed.bindings)) add(errors, 'incomplete_execution_binding', `${where}.bindings`, 'execution bindings differ from the reviewed inventory')
     if (!same(candidate.allowed_worktree_delta, [])) add(errors, 'invalid_allowed_delta', `${where}.allowed_worktree_delta`, 'catalog entries cannot add worktree deltas')
+    if (!reviewed || candidate.ignored_output_policy !== reviewed.ignoredPolicy) add(errors, 'invalid_ignored_output_policy', `${where}.ignored_output_policy`, 'ignored-output policy differs from the reviewed inventory')
     if (candidate.shell !== false) add(errors, 'unsafe_shell', `${where}.shell`, 'commands require shell false')
     if (candidate.max_output_bytes !== MAX_OUTPUT_BYTES) add(errors, 'invalid_output_bound', `${where}.max_output_bytes`, 'output bound must be 8 MiB')
     if (candidate.expected_exit !== (candidate.group === 'green' ? 0 : 'nonzero')) add(errors, 'invalid_expected_exit', `${where}.expected_exit`, 'classification expectation differs from group')
@@ -411,8 +426,20 @@ export type RepositorySnapshot = {
   allowed_artifacts: ArtifactBinding[]
   dirty_state_digest: string
   dirty_records_digest: string
+  ignored_exclusion_rules_digest: string
+  ignored_inventory: IgnoredInventorySummary
+  ignored_output_policy_digest: string
   snapshot_digest: string
 }
+
+export type RepositorySnapshotTransition = {
+  before_snapshot_digest: string
+  after_snapshot_digest: string
+  ignored_output_observation?: Omit<IgnoredOutputObservation, 'repository'>
+}
+
+const SNAPSHOT_IGNORED_INVENTORY = Symbol('repositorySnapshotIgnoredInventory')
+type InternalRepositorySnapshot = RepositorySnapshot & { [SNAPSHOT_IGNORED_INVENTORY]: IgnoredPathInventory }
 
 function normalizedRepositoryPath(value: string): boolean {
   return value.length > 0 && !path.isAbsolute(value) && !value.includes('\\') && path.posix.normalize(value) === value && !value.split('/').includes('..')
@@ -428,7 +455,35 @@ function inspectAllowedArtifact(root: string, binding: ArtifactBinding): void {
   if (sha256(readFileSync(absolute)) !== binding.digest) fail('prior_output_mutated', `${binding.path} bytes differ from the binding`)
 }
 
-export function captureRepositorySnapshot(rootInput: string, allowedArtifacts: ArtifactBinding[] = []): RepositorySnapshot {
+function snapshotUnsigned(snapshot: Omit<RepositorySnapshot, 'snapshot_digest'>, ignoredInventory = snapshot.ignored_inventory): Omit<RepositorySnapshot, 'snapshot_digest'> {
+  return {
+    head: snapshot.head,
+    branch: snapshot.branch,
+    allowed_artifacts: snapshot.allowed_artifacts,
+    dirty_state_digest: snapshot.dirty_state_digest,
+    dirty_records_digest: snapshot.dirty_records_digest,
+    ignored_exclusion_rules_digest: snapshot.ignored_exclusion_rules_digest,
+    ignored_inventory: ignoredInventory,
+    ignored_output_policy_digest: snapshot.ignored_output_policy_digest,
+  }
+}
+
+function snapshotWithInventory(unsigned: Omit<RepositorySnapshot, 'snapshot_digest'>, inventory: IgnoredPathInventory): RepositorySnapshot {
+  const value = { ...unsigned, snapshot_digest: sha256(canonicalJson(unsigned)) } as InternalRepositorySnapshot
+  Object.defineProperty(value, SNAPSHOT_IGNORED_INVENTORY, { value: inventory, enumerable: false })
+  return value
+}
+
+function internalSnapshot(snapshot: RepositorySnapshot): InternalRepositorySnapshot {
+  if (!(SNAPSHOT_IGNORED_INVENTORY in snapshot)) fail('repository_mutation', 'repository state changed across the child command')
+  return snapshot as InternalRepositorySnapshot
+}
+
+export function captureRepositorySnapshot(
+  rootInput: string,
+  allowedArtifacts: ArtifactBinding[] = [],
+  ignoredOutputPolicy: IgnoredOutputPolicy = 'none',
+): RepositorySnapshot {
   const root = realpathSync(rootInput)
   const sortedArtifacts = [...allowedArtifacts].sort((left, right) => left.path.localeCompare(right.path))
   if (new Set(sortedArtifacts.map((binding) => binding.path)).size !== sortedArtifacts.length) fail('duplicate_allowed_artifact', 'allowed artifact paths must be unique')
@@ -442,20 +497,65 @@ export function captureRepositorySnapshot(rootInput: string, allowedArtifacts: A
     if (source && source !== destination && !allowedPaths.has(source)) fail('undeclared_dirty_path', `${source} is an undeclared rename or copy source`)
     if (record.object_type === 'symlink') fail('artifact_symlink', `${destination} is a symlink`)
   }
+  const ignoredInventory = computeIgnoredPathInventory(root)
   const unsigned = {
     head: state.head,
     branch: state.branch,
     allowed_artifacts: sortedArtifacts,
     dirty_state_digest: `sha256:${state.dirty_digest}`,
     dirty_records_digest: sha256(canonicalJson(state.dirty_records)),
+    ignored_exclusion_rules_digest: sha256(canonicalJson(state.ignored_exclusion_rules)),
+    ignored_inventory: ignoredInventory.summary,
+    ignored_output_policy_digest: IGNORED_OUTPUT_POLICY_DIGESTS[ignoredOutputPolicy],
   }
-  return { ...unsigned, snapshot_digest: sha256(canonicalJson(unsigned)) }
+  return snapshotWithInventory(unsigned, ignoredInventory)
+}
+
+export function rebindRepositorySnapshotPolicy(snapshotInput: RepositorySnapshot, policy: IgnoredOutputPolicy): RepositorySnapshot {
+  const snapshot = internalSnapshot(snapshotInput)
+  const unsigned = {
+    ...snapshotUnsigned(snapshot),
+    ignored_output_policy_digest: IGNORED_OUTPUT_POLICY_DIGESTS[policy],
+  }
+  return snapshotWithInventory(unsigned, snapshot[SNAPSHOT_IGNORED_INVENTORY])
+}
+
+export function compareRepositorySnapshots(
+  beforeInput: RepositorySnapshot,
+  afterInput: RepositorySnapshot,
+  policy: IgnoredOutputPolicy,
+  commandStartedAt: Date,
+  commandFinishedAt: Date,
+): RepositorySnapshotTransition {
+  try {
+    const before = internalSnapshot(beforeInput)
+    const after = internalSnapshot(afterInput)
+    const policyDigest = IGNORED_OUTPUT_POLICY_DIGESTS[policy]
+    if (before.ignored_output_policy_digest !== policyDigest || after.ignored_output_policy_digest !== policyDigest) fail('repository_mutation', 'repository state changed across the child command')
+    const ignored = compareIgnoredPathInventories(
+      before[SNAPSHOT_IGNORED_INVENTORY],
+      after[SNAPSHOT_IGNORED_INVENTORY],
+      policy,
+      commandStartedAt,
+      commandFinishedAt,
+    )
+    const beforeSnapshot = snapshotWithInventory(snapshotUnsigned(before, ignored.before_protected), before[SNAPSHOT_IGNORED_INVENTORY])
+    const afterSnapshot = snapshotWithInventory(snapshotUnsigned(after, ignored.after_protected), after[SNAPSHOT_IGNORED_INVENTORY])
+    if (beforeSnapshot.snapshot_digest !== afterSnapshot.snapshot_digest) fail('repository_mutation', 'repository state changed across the child command')
+    return {
+      before_snapshot_digest: beforeSnapshot.snapshot_digest,
+      after_snapshot_digest: afterSnapshot.snapshot_digest,
+      ...(ignored.observation ? { ignored_output_observation: ignored.observation } : {}),
+    }
+  } catch {
+    fail('repository_mutation', 'repository state changed across the child command')
+  }
 }
 
 export function assertRepositorySnapshot(root: string, expected: RepositorySnapshot, allowedArtifacts: ArtifactBinding[] = []): RepositorySnapshot {
   let actual: RepositorySnapshot
   try { actual = captureRepositorySnapshot(root, allowedArtifacts) } catch { fail('repository_mutation', 'repository state changed across the child command') }
-  if (!same(actual, expected)) fail('repository_mutation', 'repository state changed across the child command')
+  compareRepositorySnapshots(expected, actual, 'none', new Date(0), new Date(0))
   return actual
 }
 
@@ -556,10 +656,15 @@ export function initializeArtifactChain(rootInput: string): void {
   initializeChainState(root, produced)
 }
 
-export function prepareArtifactChainStage(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): ArtifactBinding[] {
+function prepareArtifactChainStagePrior(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): { root: string; prior: ArtifactBinding[] } {
   const root = realpathSync(rootInput)
   const prior = stageBindings(root, STAGE_TRANSITIONS[stage].prior)
   assertChainState(root, prior)
+  return { root, prior }
+}
+
+export function prepareArtifactChainStage(rootInput: string, stage: Exclude<ArtifactStage, 'exit'>): ArtifactBinding[] {
+  const { root, prior } = prepareArtifactChainStagePrior(rootInput, stage)
   captureRepositorySnapshot(root, prior)
   return prior
 }
@@ -704,6 +809,14 @@ export function validateReviewPair(requirementsReview: unknown, securityReview: 
   return result(errors)
 }
 
+export type IgnoredOutputObservation = {
+  repository: 'sub2api'
+  policy: 'sub2api_joint_safe_deliverable_v1'
+  policy_digest: string
+  before: IgnoredInventorySummary
+  after: IgnoredInventorySummary
+}
+
 export type ResultRecord = {
   command_id: string
   repository: 'cc-gateway' | 'sub2api' | 'egress-tls-sidecar'
@@ -723,6 +836,7 @@ export type ResultRecord = {
   argv_digest: string
   environment_digest: string
   execution_bindings: Record<string, string>
+  ignored_output_observations: IgnoredOutputObservation[]
   result_digest: string
 }
 
@@ -762,6 +876,45 @@ export function buildResultSet(options: {
   return { ...unsigned, result_set_digest: sha256(canonicalJson(unsigned)) }
 }
 
+const IGNORED_SUMMARY_FIELDS = ['algorithm', 'endpoint_count', 'entry_count', 'regular_file_count', 'directory_count', 'symlink_count', 'regular_file_bytes', 'digest'] as const
+const IGNORED_OBSERVATION_FIELDS = ['repository', 'policy', 'policy_digest', 'before', 'after'] as const
+
+function validateIgnoredSummary(value: unknown, where: string, allowAbsent: boolean, errors: HarnessErrorRecord[]): void {
+  if (!exactKeys(value, IGNORED_SUMMARY_FIELDS, where, errors)) return
+  if (value.algorithm !== IGNORED_INVENTORY_ALGORITHM || !DIGEST_RE.test(String(value.digest))) add(errors, 'invalid_ignored_output_observation', where, 'ignored inventory summary algorithm or digest is invalid')
+  for (const field of ['endpoint_count', 'entry_count', 'regular_file_count', 'directory_count', 'symlink_count', 'regular_file_bytes'] as const) {
+    if (!Number.isSafeInteger(value[field]) || Number(value[field]) < 0) add(errors, 'invalid_ignored_output_observation', `${where}.${field}`, 'ignored inventory summary count is invalid')
+  }
+  const entryCount = Number(value.entry_count)
+  const componentCount = Number(value.regular_file_count) + Number(value.directory_count) + Number(value.symlink_count)
+  if (entryCount !== componentCount) add(errors, 'invalid_ignored_output_observation', `${where}.entry_count`, 'ignored inventory entry count is inconsistent')
+  const absent = Number(value.endpoint_count) === 0 && entryCount === 0 && Number(value.regular_file_bytes) === 0
+  const pair = Number(value.endpoint_count) === 1 && entryCount === 4 && Number(value.regular_file_count) === 2
+    && Number(value.directory_count) === 2 && Number(value.symlink_count) === 0 && Number(value.regular_file_bytes) <= 393_216
+  if (!(pair || allowAbsent && absent)) add(errors, 'invalid_ignored_output_observation', where, 'ignored inventory summary is outside the fixed safe-deliverable surface')
+}
+
+function validateIgnoredObservations(record: Record<string, unknown>, where: string, errors: HarnessErrorRecord[]): void {
+  if (!Array.isArray(record.ignored_output_observations)) {
+    add(errors, 'invalid_ignored_output_observation', `${where}.ignored_output_observations`, 'ignored-output observations must be an array')
+    return
+  }
+  const joint = record.command_id === 'sub2api-joint-local-chain'
+  if (record.ignored_output_observations.length !== (joint ? 1 : 0)) {
+    add(errors, 'invalid_ignored_output_observation', `${where}.ignored_output_observations`, 'ignored-output observation inventory differs from the fixed catalog policy')
+    return
+  }
+  if (!joint) return
+  const observation = record.ignored_output_observations[0]
+  if (!exactKeys(observation, IGNORED_OBSERVATION_FIELDS, `${where}.ignored_output_observations[0]`, errors)) return
+  if (observation.repository !== 'sub2api' || observation.policy !== 'sub2api_joint_safe_deliverable_v1'
+    || observation.policy_digest !== IGNORED_OUTPUT_POLICY_DIGESTS.sub2api_joint_safe_deliverable_v1) {
+    add(errors, 'invalid_ignored_output_observation', `${where}.ignored_output_observations[0]`, 'ignored-output observation policy binding is invalid')
+  }
+  validateIgnoredSummary(observation.before, `${where}.ignored_output_observations[0].before`, true, errors)
+  validateIgnoredSummary(observation.after, `${where}.ignored_output_observations[0].after`, false, errors)
+}
+
 export function validateResultSetValue(value: unknown, now = Date.now()): HarnessResult {
   const errors: HarnessErrorRecord[] = []
   try { assertSafeArtifact(value) } catch (error) { add(errors, (error as Error & { code?: string }).code ?? 'unsafe_artifact', '$', (error as Error).message) }
@@ -787,6 +940,7 @@ export function validateResultSetValue(value: unknown, now = Date.now()): Harnes
       if (!Array.isArray(record.failure_names) || record.failure_names.length > 64 || record.failure_names.some((name) => typeof name !== 'string' || name.length < 1 || name.length > 256)) add(errors, 'invalid_failure_names', `${where}.failure_names`, 'failure names are invalid')
       else if (record.status === 'expected_fail' && record.failure_names.length === 0) add(errors, 'invalid_failure_names', `${where}.failure_names`, 'expected RED requires stable named failures')
       if (record.manifest_digest !== value.manifest_digest || !isObject(record.execution_bindings) || Object.keys(record.execution_bindings).length < 3 || Object.entries(record.execution_bindings).some(([name, binding]) => !EXECUTION_BINDING_NAMES.includes(name as never) || !(name.endsWith('_head') ? /^[0-9a-f]{40,64}$/.test(String(binding)) : DIGEST_RE.test(String(binding))))) add(errors, 'invalid_execution_binding', `${where}.execution_bindings`, 'execution bindings are invalid or cross-manifest')
+      validateIgnoredObservations(record, where, errors)
       if (record.result_digest !== digestUnsigned(record, 'result_digest')) add(errors, 'result_digest_mismatch', `${where}.result_digest`, 'record digest mismatch')
     }
     const expectedIds = value.group === 'green' ? COMMAND_IDS.green : value.group === 'red' ? COMMAND_IDS.red : [...COMMAND_IDS.green, ...COMMAND_IDS.red]
@@ -816,6 +970,12 @@ export function validateResultSetBindings(value: ResultSet, catalog: Array<Recor
     if ('shared_contract_digest' in bindings && bindings.shared_contract_digest !== manifest.shared_contract.digest) add(errors, 'contract_drift', `${where}.execution_bindings.shared_contract_digest`, 'shared contract binding differs')
     if ('cc_gateway_before_snapshot' in bindings && bindings.cc_gateway_before_snapshot !== bindings.cc_gateway_after_snapshot) add(errors, 'repository_mutation', `${where}.execution_bindings`, 'CC Gateway snapshots differ')
     if ('sub2api_before_snapshot' in bindings && bindings.sub2api_before_snapshot !== bindings.sub2api_after_snapshot) add(errors, 'repository_mutation', `${where}.execution_bindings`, 'Sub2API snapshots differ')
+    const expectedIgnoredPolicy = entry.ignored_output_policy === 'sub2api_joint_safe_deliverable_v1' ? 1 : 0
+    if (record.ignored_output_observations.length !== expectedIgnoredPolicy
+      || expectedIgnoredPolicy === 1 && (record.command_id !== 'sub2api-joint-local-chain' || record.repository !== 'sub2api'
+        || record.ignored_output_observations[0]?.policy_digest !== IGNORED_OUTPUT_POLICY_DIGESTS.sub2api_joint_safe_deliverable_v1)) {
+      add(errors, 'invalid_ignored_output_observation', `${where}.ignored_output_observations`, 'ignored-output observation differs from the catalog policy')
+    }
     const expectedFamilies = EXPECTED_RED_FAILURE_FAMILIES[record.command_id]
     if (record.status === 'expected_fail' && expectedFamilies && expectedFamilies.some((pattern) => !record.failure_names.some((name) => pattern.test(name)))) add(errors, 'unexpected_red_inventory', `${where}.failure_names`, 'expected RED failure families are incomplete')
   }
@@ -1502,10 +1662,9 @@ function buildResultRecord(
   observed: BoundedProcessResult,
   argv: string[],
   environment: Record<string, string>,
-  beforeCc: RepositorySnapshot,
-  afterCc: RepositorySnapshot,
-  beforeSub: RepositorySnapshot,
-  afterSub: RepositorySnapshot,
+  ccTransition: RepositorySnapshotTransition,
+  subTransition: RepositorySnapshotTransition,
+  ignoredOutputObservations: IgnoredOutputObservation[],
 ): ResultRecord {
   const expected = entry.expected_exit as 0 | 'nonzero'
   const names = observed.unsafeOutputDetected
@@ -1536,12 +1695,13 @@ function buildResultRecord(
     execution_bindings: buildExecutionBindings(entry.bindings, {
       cc_gateway_head: manifest.repositories.cc_gateway.head,
       sub2api_head: manifest.repositories.sub2api.head,
-      cc_gateway_before_snapshot: beforeCc.snapshot_digest,
-      cc_gateway_after_snapshot: afterCc.snapshot_digest,
-      sub2api_before_snapshot: beforeSub.snapshot_digest,
-      sub2api_after_snapshot: afterSub.snapshot_digest,
+      cc_gateway_before_snapshot: ccTransition.before_snapshot_digest,
+      cc_gateway_after_snapshot: ccTransition.after_snapshot_digest,
+      sub2api_before_snapshot: subTransition.before_snapshot_digest,
+      sub2api_after_snapshot: subTransition.after_snapshot_digest,
       shared_contract_digest: manifest.shared_contract.digest,
     }),
+    ignored_output_observations: ignoredOutputObservations,
   }
   return { ...unsigned, result_digest: sha256(canonicalJson(unsigned)) }
 }
@@ -1597,17 +1757,36 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     const priorGreen = readJsonAt<ResultSet>(ccRoot, ARTIFACT_CHAIN.green)
     requireValidation(validateResultSetValue(priorGreen)); if (priorGreen.group !== 'green' || priorGreen.manifest_digest !== manifestLoaded.binding.digest) fail('cross_manifest_results', 'prior GREEN result differs from the manifest')
   }
-  const prior = prepareArtifactChainStage(ccRoot, outputName)
-  captureRepositorySnapshot(subRoot)
+  const { prior } = prepareArtifactChainStagePrior(ccRoot, outputName)
+  let currentCc = captureRepositorySnapshot(ccRoot, prior)
+  let currentSub = captureRepositorySnapshot(subRoot)
   const roots = { CC_GATEWAY_ROOT: ccRoot, SUB2API_ROOT: subRoot }
   const records: ResultRecord[] = []
   for (const entry of catalog.value.filter((candidate) => candidate.group === group)) {
-    const beforeCc = captureRepositorySnapshot(ccRoot, prior); const beforeSub = captureRepositorySnapshot(subRoot)
+    const policy = entry.ignored_output_policy as IgnoredOutputPolicy
+    const beforeCc = rebindRepositorySnapshotPolicy(currentCc, 'none')
+    const beforeSub = rebindRepositorySnapshotPolicy(currentSub, policy)
     const cwd = expandCatalogString(String(entry.cwd), roots)
     const argv = (entry.argv as string[]).map((part) => expandCatalogString(part, roots)); const environment = childEnvironment(entry, roots)
+    const commandStartedAt = new Date()
     const observed = runtime.runBoundedProcess({ argv, cwd, env: environment, timeoutMs: Number(entry.timeout_ms), maxOutputBytes: Number(entry.max_output_bytes) })
-    const afterCc = assertRepositorySnapshot(ccRoot, beforeCc, prior); const afterSub = assertRepositorySnapshot(subRoot, beforeSub)
-    records.push(buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, beforeCc, afterCc, beforeSub, afterSub))
+    const commandFinishedAt = new Date()
+    let afterCc: RepositorySnapshot
+    let afterSub: RepositorySnapshot
+    let ccTransition: RepositorySnapshotTransition
+    let subTransition: RepositorySnapshotTransition
+    try {
+      afterCc = captureRepositorySnapshot(ccRoot, prior, 'none')
+      afterSub = captureRepositorySnapshot(subRoot, [], policy)
+      ccTransition = compareRepositorySnapshots(beforeCc, afterCc, 'none', commandStartedAt, commandFinishedAt)
+      subTransition = compareRepositorySnapshots(beforeSub, afterSub, policy, commandStartedAt, commandFinishedAt)
+    } catch { fail('repository_mutation', 'repository state changed across the child command') }
+    const ignoredOutputObservations: IgnoredOutputObservation[] = subTransition.ignored_output_observation
+      ? [{ repository: 'sub2api', ...subTransition.ignored_output_observation }]
+      : []
+    records.push(buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, ccTransition, subTransition, ignoredOutputObservations))
+    currentCc = afterCc
+    currentSub = afterSub
   }
   const value = buildResultSet({ generatedAt: new Date().toISOString(), manifest_digest: manifestLoaded.binding.digest, catalog_digest: catalog.binding.digest, group, records })
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); requireValidation(validateResultSetBindings(value, catalog.value, manifestLoaded.value, manifestLoaded.binding.digest, catalog.binding.digest)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.results_schema, value)
@@ -1890,10 +2069,10 @@ export function validateReviewEvidenceSchemas(options: {
   const validate = options.schemaCommit
     ? (schemaRelative: string, value: unknown) => validateAgainstCommittedSchema(root, options.schemaCommit as string, schemaRelative, value)
     : (schemaRelative: string, value: unknown) => validateAgainstSchema(root, schemaRelative, value)
+  requireValidation(validateReviewImportValue(options.reviewImport))
   validate(SCHEMA_PATHS.review_schema, options.requirements)
   validate(SCHEMA_PATHS.review_schema, options.security)
   validate(SCHEMA_PATHS.review_import_schema, options.reviewImport)
-  requireValidation(validateReviewImportValue(options.reviewImport))
   if (!same(bindingAt(root, ADOPTED_AMENDMENT_BINDING.path), ADOPTED_AMENDMENT_BINDING)) fail('adopted_amendment_digest_mismatch', 'adopted amendment differs from the fixed reviewed bytes')
 }
 
