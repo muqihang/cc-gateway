@@ -10,6 +10,7 @@ import { runReviewedGit } from '../tools/oracle-lab/secure-runtime.js'
 type Value = Record<string, any>
 
 const root = process.cwd()
+const planPath = 'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md'
 const entryPath = 'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json'
 const contextPath = 'docs/superpowers/evidence/phase-1/phase-1-context.json'
 const entrySchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-entry.schema.json'
@@ -329,6 +330,21 @@ test('Phase 1 planning context binds the exact entry bytes and governing source 
   for (const binding of [...context.authority_order, ...Object.values(context.registries)] as Value[]) {
     assert.equal(binding.digest, digest(await readFile(path.join(root, binding.path))), binding.path)
   }
+})
+
+test('Phase 1 plan classifies exact consumed-proof replay after owner but before version and state', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  const ownerCheck = plan.indexOf('authority, snap, err := s.authorizeBrowserEgressOwner(ctx, id)')
+  const replayCheck = plan.indexOf('if proof != "" && consumedBrowserProofMatches(snap, proof)')
+  const versionAndStateCheck = plan.indexOf('snap, err = s.authorizeBrowserEgressVersionAndState(')
+
+  assert(ownerCheck >= 0, 'browser egress owner authorization is missing')
+  assert(replayCheck > ownerCheck, 'consumed-proof replay must follow owner authorization')
+  assert(versionAndStateCheck > replayCheck, 'consumed-proof replay must precede version/state checks')
+  assert.match(plan, /owner, exact consumed proof, old consume-input version \| `FORMAL_POOL_BROWSER_PROOF_REJECTED`/)
+  assert.match(plan, /owner, exact consumed proof, current post-consume version \| `FORMAL_POOL_BROWSER_PROOF_REJECTED`/)
+  assert.match(plan, /different owner, exact consumed proof, either version \| `FORMAL_POOL_FORBIDDEN`/)
+  assert.match(plan, /owner, different proof, old consume-input version \| `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`/)
 })
 
 test('Phase 1 scope owns only B1-B3 and the Phase 1 listener slice', async () => {
