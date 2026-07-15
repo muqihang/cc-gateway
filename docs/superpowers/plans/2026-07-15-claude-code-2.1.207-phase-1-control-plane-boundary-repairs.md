@@ -2,26 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close B1-B3 and the Phase 1 listener boundary with server-side authority, deterministic failures, always-on H1 fixtures, and no expansion into Phase 2 contracts or Phase 4 runtime controls.
+**Goal:** Close B1-B3 and the complete local Phase 1 `RA-P0-008` deployment boundary with server-side authority, deterministic failures, always-on H1 fixtures, and no expansion into Phase 2 contracts or Phase 4 runtime controls.
 
-**Architecture:** Sub2API remains the durable authority. Its admin handler resolves a principal from server-side user state, injects a typed request authority into the service context, and every onboarding mutation checks owner dimensions plus an optimistic version before side effects. Browser egress uses the existing public nonce/IP/proxy verifier, followed by a single-use server proof finalization; absolute browser URLs come only from configured public origin. CC Gateway resolves its listener boundary before creating a socket: omitted host becomes `127.0.0.1`, while non-loopback binds require an explicit capability, inbound TLS, strong authentication, and a safe exposure-policy reference.
+**Architecture:** Sub2API remains the durable authority. Its admin handler resolves a principal from server-side user state, injects a typed request authority into the service context, and every onboarding mutation checks owner dimensions plus an expected version. Mutations with external effects acquire a CAS-backed single-operation reservation before the first dependency call, then finalize from that reservation without retrying unknown outcomes. Browser egress uses the existing public nonce/IP/proxy verifier, followed by a single-use server proof finalization; absolute browser URLs come only from configured public origin. CC Gateway resolves its deployment boundary before creating a socket: omitted host becomes `127.0.0.1`, non-loopback binds require an explicit capability, inbound TLS, strong authentication, and a code-approved exposure-policy reference, while real upstream modes require HTTPS, system trust, explicit certificate verification, and rejection of unsafe trust-environment overrides. The sidecar keeps `InsecureSkipVerify` confined to explicit loopback test overrides and proves production verification structurally.
 
 **Tech Stack:** Go 1.26, Gin, Testify, TypeScript, Node.js 24, Vue 3, Vitest, Node `http`/`https`/`net`, Ajv 2020, CodeGraph 1.1.6, existing Oracle Lab H0 command/result schemas.
 
 ## Global Constraints
 
 - Governing precedence is exact: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`.
-- Phase 1 owns exactly `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and `RA-P0-008` (`WP-R8:phase_1_loopback_remote_tls_guard`).
+- Phase 1 owns exactly `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and the full local-structural closure of `RA-P0-008` (`WP-R8:phase_1_loopback_remote_tls_guard`), including upstream certificate verification. This does not create remote-deployment or production authority.
 - Phase 1 must not change the shared contract at `backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json` (`sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`).
 - B4-B6 remain expected RED and owned by later phases. The CC and sidecar RED commands must still exit nonzero with the frozen B4-B6 failure families.
 - `real_upstream_access`, `real_credentials`, `profile_promotion`, `production_deployment`, `real_canary`, `unrestricted_capture`, and `external_network_requests` remain disabled.
 - Tests use loopback, `httptest`, fake resolvers, and mock upstreams only. No command in this plan may contact a real provider or public host.
 - Authorization denials occur before state/version/dependency evaluation and use one stable 401 class plus one stable 403 class, without revealing which owner dimension mismatched.
 - Missing or malformed `If-Match` on an onboarding mutation returns `428 FORMAL_POOL_ONBOARDING_VERSION_REQUIRED`; a stale version reuses the existing `409 FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`.
+- Any mutation that can call OAuth, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler dependencies must first acquire a CAS reservation. A concurrent request with the same version fails before a second dependency call; an ambiguous external outcome becomes `operation_outcome_unknown` and is never automatically retried.
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
 - Before each task, run `codegraph status`; if stale, run `codegraph sync`. Use CodeGraph before locating or reading code.
-- The planning entry/context expires at `2026-07-16T08:56:22Z`. If execution starts later, capture a new entry/context with the same schemas before editing.
+- The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate a fresh `phase-1-execution-context.json` against `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings. Refresh it whenever its 24-hour window expires.
 - Each repository uses its own branch and worktree: `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`. Do not mix commits across repositories.
 
 ---
@@ -30,10 +31,10 @@
 
 ### Sub2API
 
-- Create `backend/internal/service/formal_pool_onboarding_authorization.go`: typed principal/request authority, owner comparison, state/version ordering, and stable errors.
+- Create `backend/internal/service/formal_pool_onboarding_authorization.go`: typed principal/request authority, owner comparison, state/version ordering, CAS operation reservations, and stable errors.
 - Create `backend/internal/service/formal_pool_onboarding_authorization_test.go`: authority ordering and version unit tests.
 - Create `backend/internal/handler/admin/formal_pool_onboarding_principal.go`: server-side principal resolver and `If-Match` parser.
-- Modify `backend/internal/service/formal_pool_onboarding_store.go`: owner envelope, proof lifecycle, account lookup, and CAS-only mutations.
+- Modify `backend/internal/service/formal_pool_onboarding_store.go`: owner envelope, proof lifecycle, account lookup, active-operation reservation, and CAS-only mutations.
 - Modify `backend/internal/service/formal_pool_onboarding_service.go`: authority enforcement, response version, B1 two-step verification/finalization.
 - Modify `backend/internal/handler/admin/formal_pool_onboarding_handler.go`: inject authority for every admin route and stop request-derived origin construction.
 - Modify `backend/internal/handler/wire.go`: inject the production principal resolver.
@@ -43,7 +44,7 @@
 - Modify `backend/internal/service/formal_pool_onboarding_phase0_red_test.go`: make B1 corpus always-on and server-verification-aware.
 - Modify `backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go`: make B2/B3 corpus always-on and use a fake server-side principal resolver.
 - Modify `backend/internal/service/formal_pool_onboarding_service_test.go`, `backend/internal/service/formal_pool_onboarding_store_test.go`, `backend/internal/service/formal_pool_onboarding_flow_test.go`, `backend/internal/server/routes/formal_pool_onboarding_routes_test.go`, and `backend/internal/handler/formal_pool_onboarding_provider_test.go`: migrate existing fixtures to authority/version semantics.
-- Modify `frontend/src/api/admin/claudeOnboarding.ts`: expose `version` and send `If-Match` on mutations.
+- Modify `frontend/src/api/admin/claudeOnboarding.ts`: expose `version` on every mutation result and send `If-Match` on mutations.
 - Modify `frontend/src/composables/useEgressCheckPolling.ts`: preserve the newest version during polling.
 - Modify `frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue` and `frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue`: remove client-chosen confirmation and finalize the server-observed proof once.
 - Modify `frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts` and `frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts`: version and one-shot-finalization tests.
@@ -51,14 +52,20 @@
 ### CC Gateway
 
 - Create `src/listener-boundary.ts`: pure listener classification and fail-closed prerequisite validation.
+- Create `src/upstream-tls-boundary.ts`: real-mode HTTPS/system-trust verification and unsafe environment rejection.
 - Modify `src/config.ts`: typed remote-listen policy and validation call.
 - Modify `src/proxy.ts`: bind only the resolved host.
 - Modify `config.example.yaml` and `config.sub2api.formal-pool.example.yaml`: loopback default and explicit remote-listen example.
 - Create `tests/listener-boundary.test.ts`: configuration corpus plus observed socket bind tests.
+- Create `tests/upstream-tls-boundary.test.ts`: direct-egress verification, unsafe trust environment, and approved-policy corpus.
 - Modify `tests/security-boundary.test.ts` and `tests/helpers.ts`: shared safe fixtures and regression assertions.
+- Modify `sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main.go` and its tests: reject production trust-store overrides before listen.
+- Modify `sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine.go` and its tests: construct verified production TLS config and confine insecure verification to explicit loopback test overrides.
 
 ### H1 Evidence
 
+- Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json`, which is delivered with this reviewed plan.
+- Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.md` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
 - Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands.
 - Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, and `oracle-lab-phase-1-handoff.schema.json`: closed Phase 1 evidence contracts.
 - Create `tools/oracle-lab/phase-1-evidence.ts`: a small Phase 1 adapter over the reviewed `runBoundedProcess`, hermetic environment, safe artifact writer, and digest helpers already delivered by H0/P0.1.
@@ -70,10 +77,45 @@
 ## Dependency Order
 
 ```text
-Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
-Task 6 is independent after the fresh entry gate
+Mandatory Preflight -> Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
+Task 6 is independent after Mandatory Preflight
 Task 5 + Task 6 -> Task 7 -> Task 8
 ```
+
+## Mandatory Preflight: Bind Plan Approval Before Editing
+
+**Files:**
+- Create: `docs/superpowers/evidence/phase-1/phase-1-plan-review.md`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-execution-context.json`
+- Consume: `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json`
+- Consume: `docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md`
+
+- [ ] **Step 1: Start both implementation worktrees from current `muqihang/main` and sync CodeGraph**
+
+Fetch `muqihang/main` in both repositories without rebasing or rewriting history. Create the exact branches named in Global Constraints. Run `codegraph sync` and `codegraph status` in both worktrees. Record clean baseline main heads; if either local main differs from `muqihang/main`, stop and reconcile through a reviewed merge before continuing.
+
+- [ ] **Step 2: Independently review the exact merged plan bytes**
+
+The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. Persist only a safe Markdown decision at `phase-1-plan-review.md` with reviewer ID, reviewed plan commit/digest, review round, decision, and Critical/Important counts. `approved` is valid only when both counts are zero. A review of an earlier commit or different plan digest is invalid.
+
+- [ ] **Step 3: Build the fresh execution context**
+
+Create `phase-1-execution-context.json` with a window greater than zero and no more than 24 hours. Bind the exact plan path/digest/reviewed commit, exact planning entry/context bytes as provenance, the review artifact digest, both current main heads and implementation branch names, authority precedence bytes, unchanged shared-contract digest, selected requirement IDs, disabled capabilities, and all seven authorization conditions from the closed schema.
+
+- [ ] **Step 4: Validate the authorization artifact before implementation**
+
+Run: `PHASE1_REQUIRE_EXECUTION_CONTEXT=1 SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
+
+Expected: PASS. The semantic check proves the plan digest equals the approval digest, reviewed commits are identical, both baseline heads equal freshly fetched `muqihang/main`, the context is unexpired, the review artifact digest matches bytes, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
+
+- [ ] **Step 5: Commit authorization provenance as the first CC Gateway Phase 1 commit**
+
+```bash
+git add docs/superpowers/evidence/phase-1/phase-1-plan-review.md docs/superpowers/evidence/phase-1/phase-1-execution-context.json
+git commit -m "docs(oracle): authorize exact Phase 1 plan bytes"
+```
+
+No Sub2API or runtime source file may change before this commit. If the execution context expires during implementation, stop before the next edit/capture, repeat Steps 1-4 against current main/authority state, and commit a successor context; do not silently extend timestamps.
 
 ### Task 1: Sub2API Authority Envelope and Optimistic Version Foundation
 
@@ -87,7 +129,7 @@ Task 5 + Task 6 -> Task 7 -> Task 8
 
 **Interfaces:**
 - Produces: `FormalPoolOnboardingPrincipal`, `FormalPoolRequestAuthority`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
-- Produces: `FormalPoolOnboardingSession.Version int64` and owner fields on `formalPoolOnboardingSessionRecord`.
+- Produces: `FormalPoolOnboardingSession.Version int64`, owner fields, `FormalPoolOperationReservation`, `beginReservedMutation`, `finishReservedMutation`, and `failReservedMutation`.
 - Consumes: existing `FormalPoolOnboardingStore.get`, `casUpdate`, session `Version`, `GroupID`, and status constants.
 
 - [ ] **Step 1: Write focused RED tests for authority ordering and versions**
@@ -183,6 +225,7 @@ type formalPoolOnboardingSessionRecord struct {
     OwnerTenantID        string
     OwnerCreatorID       int64
     OwnerRole            string
+    ActiveOperation      *FormalPoolOperationReservation
     // Existing fields remain unchanged below.
 }
 
@@ -196,13 +239,15 @@ type FormalPoolOnboardingSession struct {
 
 `sessionResponse` sets `Version: rec.Version` and never places owner IDs or tenant ID in the response or `SafeSummary`.
 
+`FormalPoolOperationReservation` contains only a server-generated operation ID, stable operation kind, input version, reservation version, and start timestamp. It is never accepted from the client and is not serialized. `beginReservedMutation` authorizes owner/state/expected version, atomically installs the reservation and increments `Version`; if any reservation already exists it returns the same 409 conflict before dependencies. `finishReservedMutation` and `failReservedMutation` require the exact operation ID plus reservation version and never retry a failed CAS.
+
 - [ ] **Step 5: Enforce authority on create/read/abort and add account lookup**
 
-`StartSession` requires `ExpectedVersion == 0`, admin role, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` in `AllowedGroupIDs` before proxy resolution. It copies the owner envelope into the record. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses `casUpdate`. Add `snapshotByAccountID` with the same copy/session-expiry behavior as `snapshotByNonce`.
+`StartSession` requires `ExpectedVersion == 0`, admin role, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` in `AllowedGroupIDs` before proxy resolution. It copies the owner envelope into the record. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` with the same copy/session-expiry behavior as `snapshotByNonce`.
 
 - [ ] **Step 6: Run authority/store/service regression tests**
 
-Run: `cd backend && go test ./internal/service -run 'FormalPoolOnboarding(Store|Authorize|StartSession|GetSession|Abort)' -count=1`
+Run: `cd backend && go test ./internal/service -run 'FormalPoolOnboarding(Store|Authorize|Reservation|StartSession|GetSession|Abort)' -count=1`
 
 Expected: PASS with no owner identifiers in serialized sessions.
 
@@ -307,7 +352,14 @@ Use this state contract exactly:
 | `AbortSession` | every nonterminal state |
 | `AccountHealthcheck` | owner session resolved through `snapshotByAccountID` |
 
-Each final mutation uses `casUpdate(snap.ID, snap.Version, ...)`. A CAS conflict maps to `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` and does not retry side effects.
+Classify operations before implementation:
+
+- no external effect (`AbortSession`, proof finalization after a server proof already exists): one final `casUpdate` is sufficient;
+- any OAuth, proxy, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler call: call `beginReservedMutation` before the first dependency invocation, execute the dependency sequence once, then call `finishReservedMutation` from the reservation version;
+- public `VerifyBrowserEgressByNonce` and every admin mutation reject a record with `ActiveOperation` rather than racing the reservation;
+- dependency failure before any irreversible call may finalize a stable failure and return the latest version; an error after an irreversible/ambiguous call finalizes `operation_outcome_unknown`, blocks automatic retry, and requires explicit operator reconciliation.
+
+Add a table-driven concurrency test for every side-effect family. The fake dependency blocks on a channel after incrementing an atomic counter. Start request A with version `N`, wait until its reservation is visible, then start request B with the same version. B must return `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` while the dependency counter remains `1`. Release A, assert one final state transition, `ActiveOperation == nil`, and response version `N+2`. Add failure tests proving no automatic retry after `operation_outcome_unknown` and no owner/state/version detail leakage.
 
 - [ ] **Step 7: Add response versions and `If-Match` to the frontend API**
 
@@ -317,6 +369,15 @@ export interface FormalPoolSession {
   version: number
   status: string
   // Existing fields remain.
+}
+
+export interface FormalPoolMutationResult {
+  version: number
+  status: string
+}
+
+export interface FormalPoolAcceptanceResult extends FormalPoolMutationResult {
+  // Existing acceptance fields remain.
 }
 
 function versionHeaders(session: Pick<FormalPoolSession, 'version'>) {
@@ -331,7 +392,7 @@ export async function testProxy(session: FormalPoolSession): Promise<FormalPoolS
 }
 ```
 
-`createSession` sends `If-Match: "0"`. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition.
+`createSession` sends `If-Match: "0"`. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. Every successful mutation response, including `FormalPoolAcceptanceResult`, carries the final server version. Both wizards replace `session.value.version` from that response before enabling the next action; acceptance/healthcheck merge `{version,status}` instead of retaining a stale session. On any 409 or ambiguous mutation error, refetch `getSession` before exposing retry. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition.
 
 - [ ] **Step 8: Run the B2 matrix, service tests, and frontend typecheck**
 
@@ -339,7 +400,7 @@ Run: `cd backend && go test ./internal/service ./internal/server/routes ./intern
 
 Run: `cd frontend && npm run typecheck`
 
-Expected: both PASS. The route matrix returns 401 for missing principal, 403 for every owner mismatch, and 409 for stale owner versions.
+Expected: both PASS. The route matrix returns 401 for missing principal, 403 for every owner mismatch, and 409 for stale or already-reserved versions. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
 
 - [ ] **Step 9: Commit Task 2**
 
@@ -568,21 +629,27 @@ git add backend/internal/config/config.go backend/internal/service/formal_pool_c
 git commit -m "fix(formal-pool): make configured public origin authoritative"
 ```
 
-### Task 6: CC Gateway Loopback Default and Remote-Listen Startup Gate
+### Task 6: CC Gateway Listener and Upstream Certificate Startup Gates
 
 **Files:**
 - Create: `src/listener-boundary.ts`
+- Create: `src/upstream-tls-boundary.ts`
 - Create: `tests/listener-boundary.test.ts`
+- Create: `tests/upstream-tls-boundary.test.ts`
 - Modify: `src/config.ts:73-82,582-618`
-- Modify: `src/proxy.ts:246-284`
+- Modify: `src/proxy.ts:246-284,2186-2193`
 - Modify: `tests/helpers.ts:36-79`
 - Modify: `tests/security-boundary.test.ts`
 - Modify: `config.example.yaml:4-10`
 - Modify: `config.sub2api.formal-pool.example.yaml:4-10`
+- Modify: `sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main.go:16-105`
+- Modify: `sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main_test.go`
+- Modify: `sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine.go:25-165`
+- Modify: `sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine_test.go`
 
 **Interfaces:**
-- Produces: `RemoteListenConfig`, `ListenerBoundary`, and `resolveListenerBoundary(config)`.
-- Consumes: existing `ConfigValidationError`, auth tokens, inbound TLS paths, `startProxy`, and Node server `address()`.
+- Produces: `RemoteListenConfig`, `ApprovedNetworkExposurePolicyRef`, `ListenerBoundary`, `resolveListenerBoundary(config)`, `resolveUpstreamTLSBoundary(config, env)`, and sidecar `validatedProductionTrustEnvironment`/`utlsConfigForRequest`.
+- Consumes: existing `ConfigValidationError`, auth tokens, inbound TLS paths, upstream mode/URL, `startProxy`, Node `https.request`, sidecar `buildConfigFromEnv`/`dialUTLS`, and Node server `address()`.
 
 - [ ] **Step 1: Write the listener RED corpus before changing config**
 
@@ -619,24 +686,33 @@ const remoteFailures: Array<[string, (config: Config) => Config, string]> = [
   ['remote strong auth is required', (config) => ({ ...config, auth: { tokens: [{ name: 'client', token: 'weak' }] } }), 'remote_listen_strong_auth_required'],
   ['Sub2API remote internal auth is required', (config) => ({ ...config, mode: 'sub2api', auth: { gateway_token: 'remote-gateway-material-1234567890abcdef', internal_control_token: '', tokens: [] } }), 'remote_listen_strong_auth_required'],
   ['remote exposure policy is required', (config) => ({ ...config, server: { ...config.server, remote_listen: { capability: 'remote-listen-v1' } } }), 'remote_listen_exposure_policy_required'],
+  ['syntactic but unapproved policy is rejected', (config) => ({ ...config, server: { ...config.server, remote_listen: { capability: 'remote-listen-v1', exposure_policy_ref: 'network-exposure-policy:invented-v1' } } }), 'remote_listen_exposure_policy_unapproved'],
 ]
 ```
 
-The mutation table independently removes capability, cert/key, strong client auth, internal control auth in Sub2API mode, and exposure policy.
+The mutation table independently removes capability, cert/key, strong client auth, internal control auth in Sub2API mode, and exposure policy. It also proves a regex-shaped but unregistered policy is rejected.
+
+In `tests/upstream-tls-boundary.test.ts`, add a table that sets production or real-canary mode and independently mutates: `http:` upstream, `upstream.tls.verification != required`, `upstream.tls.trust_store != system`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, non-empty `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, or `SSL_CERT_DIR`. Every case must fail before server/socket/request creation with a stable secret-safe code. A positive fixture returns `{ rejectUnauthorized: true }`.
 
 - [ ] **Step 2: Run the listener corpus and confirm wildcard/default gaps**
 
-Run: `npm exec tsx tests/listener-boundary.test.ts`
+Run: `npm exec tsx tests/listener-boundary.test.ts && npm exec tsx tests/upstream-tls-boundary.test.ts`
 
-Expected: FAIL because `resolveListenerBoundary` does not exist and omitted host is not forced to loopback.
+Expected: FAIL because both resolvers are absent and omitted host is not forced to loopback.
 
 - [ ] **Step 3: Add the pure listener boundary resolver**
 
 ```typescript
+export type ApprovedNetworkExposurePolicyRef = 'network-exposure-policy:private-ingress-v1'
+
 export type RemoteListenConfig = {
   capability?: 'remote-listen-v1'
-  exposure_policy_ref?: string
+  exposure_policy_ref?: ApprovedNetworkExposurePolicyRef | string
 }
+
+const APPROVED_NETWORK_EXPOSURE_POLICY_REFS = new Set<ApprovedNetworkExposurePolicyRef>([
+  'network-exposure-policy:private-ingress-v1',
+])
 
 export type ListenerBoundary = { host: string; remote: boolean }
 
@@ -647,40 +723,53 @@ export function resolveListenerBoundary(config: Config): ListenerBoundary {
   if (remote?.capability !== 'remote-listen-v1') throw new ConfigValidationError('remote_listen_capability_required')
   if (!config.server.tls?.cert || !config.server.tls?.key) throw new ConfigValidationError('remote_listen_tls_required')
   if (!hasStrongRemoteAuth(config)) throw new ConfigValidationError('remote_listen_strong_auth_required')
-  if (!/^network-exposure-policy:[A-Za-z0-9._:-]{1,128}$/.test(remote.exposure_policy_ref || '')) {
-    throw new ConfigValidationError('remote_listen_exposure_policy_required')
+  if (!remote?.exposure_policy_ref) throw new ConfigValidationError('remote_listen_exposure_policy_required')
+  if (!APPROVED_NETWORK_EXPOSURE_POLICY_REFS.has(remote.exposure_policy_ref as ApprovedNetworkExposurePolicyRef)) {
+    throw new ConfigValidationError('remote_listen_exposure_policy_unapproved')
   }
   return { host, remote: true }
 }
 ```
 
-`hasStrongRemoteAuth` requires each active client/gateway token used by the mode to contain at least 32 characters, rejects `change-me|placeholder|example|sample|dummy|test`, and in Sub2API mode also requires an independent 32-character `internal_control_token`. Error messages contain only stable codes.
+`hasStrongRemoteAuth` requires each active client/gateway token used by the mode to contain at least 32 characters, rejects `change-me|placeholder|example|sample|dummy|test`, and in Sub2API mode also requires an independent 32-character `internal_control_token`. The exposure-policy registry is code-owned and exact; adding a policy requires a reviewed source change and corpus case, not a config-only string. Error messages contain only stable codes.
 
-- [ ] **Step 4: Validate before any server or socket creation**
+- [ ] **Step 4: Add explicit real-upstream certificate policy**
 
-`loadConfig` calls `resolveListenerBoundary(config)` after auth/mode parsing. `startProxy` calls it again defensively before `createHttpServer`/`createHttpsServer`, then passes only `boundary.host` to `server.listen`. TLS files are read only after all pure prerequisite checks pass.
+Add `upstream.tls.verification?: 'required'` and `upstream.tls.trust_store?: 'system'` to `Config`. For `shared_pool.upstream_mode` equal to `real-canary` or `production`, `resolveUpstreamTLSBoundary` requires `https:`, those two exact values, and no unsafe process trust override. Reject `NODE_TLS_REJECT_UNAUTHORIZED=0` case-insensitively and any non-empty `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, or `SSL_CERT_DIR`. Do not persist environment values in errors/evidence.
 
-- [ ] **Step 5: Prove observed bind state and secret-safe failures**
+The returned request options contain `rejectUnauthorized: true`; spread them into direct `httpsRequest` options. HTTP is still allowed only for loopback mock modes. The resolver does not authorize real traffic: existing preflight/canary/production gates still run and production/real-canary remain disabled in this phase.
 
-Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`. Remote negative fixtures assert no `listening` event and no socket object is created by calling the pure resolver before `startProxy`. Inject a secret canary as token/policy suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes.
+In the sidecar, extract a pure production trust-environment validator from `buildConfigFromEnv`. Production mode rejects custom/test root variables before `net.Listen`. Extract `utlsConfigForRequest(req)` and prove `InsecureSkipVerify == false` for every production request; it may be true only when both `DialAddress` is an explicit loopback test override and `AllowTestDialOverride` is true. Add a negative test for each single-condition mutation and preserve the existing raw-ClientHello test behavior.
 
-- [ ] **Step 6: Run listener, security, full CC tests, and build**
+- [ ] **Step 5: Validate all deployment boundaries before any server or socket creation**
+
+`loadConfig` calls both resolvers after auth/mode parsing. `startProxy` calls both again defensively before `createHttpServer`/`createHttpsServer`, then passes only `boundary.host` to `server.listen`. TLS files are read only after all pure prerequisite checks pass. Sidecar `main` validates production trust environment before `net.Listen`.
+
+- [ ] **Step 6: Prove observed bind state, verified TLS options, and secret-safe failures**
+
+Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`. Remote negative fixtures assert no `listening` event and no socket object is created by calling the pure resolver before `startProxy`. Inject a secret canary as token/policy/trust-env suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes. Node request-option tests assert `rejectUnauthorized: true`; sidecar tests assert production config never sets `InsecureSkipVerify` and unsafe trust env fails before the listen observer fires.
+
+- [ ] **Step 7: Run listener, upstream TLS, sidecar, security, full CC tests, and build**
 
 Run: `npm exec tsx tests/listener-boundary.test.ts`
 
+Run: `npm exec tsx tests/upstream-tls-boundary.test.ts`
+
 Run: `npm exec tsx tests/security-boundary.test.ts`
+
+Run: `cd sidecar/egress-tls-sidecar && go test ./cmd/egress-tls-sidecar ./internal/tlsengine -count=1`
 
 Run: `npm test`
 
 Run: `npm run build`
 
-Expected: all PASS; omitted host is proven as `127.0.0.1` from actual server state.
+Expected: all PASS; omitted host is proven as `127.0.0.1` from actual server state, syntactic-but-unapproved policies are RED, real modes expose only verified HTTPS request options, and the sidecar cannot enter production with insecure/custom test trust.
 
-- [ ] **Step 7: Commit Task 6**
+- [ ] **Step 8: Commit Task 6**
 
 ```bash
-git add src/listener-boundary.ts src/config.ts src/proxy.ts tests/listener-boundary.test.ts tests/helpers.ts tests/security-boundary.test.ts config.example.yaml config.sub2api.formal-pool.example.yaml
-git commit -m "fix(security): fail closed on remote gateway listeners"
+git add src/listener-boundary.ts src/upstream-tls-boundary.ts src/config.ts src/proxy.ts tests/listener-boundary.test.ts tests/upstream-tls-boundary.test.ts tests/helpers.ts tests/security-boundary.test.ts config.example.yaml config.sub2api.formal-pool.example.yaml sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main.go sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main_test.go sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine.go sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine_test.go
+git commit -m "fix(security): fail closed on listener and upstream TLS boundaries"
 ```
 
 ### Task 7: Lightweight H1 Evidence Adapter and Hermetic Command Catalog
@@ -705,8 +794,8 @@ git commit -m "fix(security): fail closed on remote gateway listeners"
 ```typescript
 const EXPECTED_COMMAND_IDS = [
   'sub-b1-b3', 'sub-formal-pool', 'sub-full-go', 'sub-frontend-h1',
-  'sub-frontend-typecheck', 'sub-frontend-build', 'cc-listener-h1', 'cc-build',
-  'cc-tests', 'sidecar-tests', 'joint-local-chain', 'cc-b4-b6-red', 'sidecar-b5-b6-red',
+  'sub-frontend-typecheck', 'sub-frontend-build', 'cc-listener-h1', 'cc-upstream-tls-h1',
+  'cc-build', 'cc-tests', 'sidecar-tests', 'joint-local-chain', 'cc-b4-b6-red', 'sidecar-b5-b6-red',
 ]
 
 const hasCode = (code: string) => (error: unknown) =>
@@ -722,6 +811,14 @@ test('capture rejects a dirty repository before running the first command', () =
   assert.throws(() => captureAndRunPhase1(dirtyFixture), hasCode('dirty_repository'))
 })
 
+test('capture rejects missing, expired, tampered, or unapproved execution context before spawning', () => {
+  for (const fixture of invalidExecutionContexts) {
+    assert.throws(() => captureAndRunPhase1({ ...baseOptions, executionContextPath: fixture }),
+      hasCode('execution_context_not_authorized'))
+  }
+  assert.equal(spawnObserver.count, 0)
+})
+
 test('handoff rejects unexpected pass/fail, cross-head results, unsafe output and non-ancestor artifact head', () => {
   for (const fixture of invalidHandoffFixtures) {
     assert.equal(validatePhase1HandoffValue(fixture).ok, false)
@@ -729,7 +826,7 @@ test('handoff rejects unexpected pass/fail, cross-head results, unsafe output an
 })
 ```
 
-The dirty fixture is a temporary Git repository with one committed file plus one untracked file. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
+The dirty fixture is a temporary Git repository with one committed file plus one untracked file. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, shared contract, and disabled capabilities. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
 
 - [ ] **Step 2: Run adapter tests and confirm files are absent**
 
@@ -741,6 +838,8 @@ Expected: FAIL because the schemas, catalog, and adapter do not exist.
 
 ```typescript
 export type Phase1Group = 'phase1-green' | 'phase1-red'
+export type Phase1ImplementedRequirement = 'AV-B1-001' | 'AV-B2-001' | 'AV-B3-001' | 'RA-P0-008'
+export type Phase1PreservedRedRequirement = 'AV-B4-001' | 'AV-B5-001' | 'AV-B6-001'
 export type Phase1Command = {
   id: string
   group: Phase1Group
@@ -749,7 +848,7 @@ export type Phase1Command = {
   argv: string[]
   expected_exit: 0 | 'nonzero'
   timeout_ms: number
-  requirement_ids: Array<'AV-B1-001' | 'AV-B2-001' | 'AV-B3-001' | 'RA-P0-008'>
+  requirement_ids: Array<Phase1ImplementedRequirement | Phase1PreservedRedRequirement>
 }
 
 export type Phase1Result = {
@@ -766,6 +865,8 @@ export type Phase1Result = {
 }
 ```
 
+The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement`. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+
 The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, passes argv directly to `runBoundedProcess`, uses exactly `HERMETIC_NETWORK_ENV` plus `PATH`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`.
 
 - [ ] **Step 4: Add the exact Phase 1 command catalog**
@@ -778,6 +879,7 @@ sub-frontend-h1: ${SUB2API_ROOT}/frontend :: npm run test:run -- src/components/
 sub-frontend-typecheck: ${SUB2API_ROOT}/frontend :: npm run typecheck :: exit 0
 sub-frontend-build: ${SUB2API_ROOT}/frontend :: npm run build :: exit 0
 cc-listener-h1: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/listener-boundary.test.ts :: exit 0
+cc-upstream-tls-h1: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/upstream-tls-boundary.test.ts :: exit 0
 cc-build: ${CC_GATEWAY_ROOT} :: npm run build :: exit 0
 cc-tests: ${CC_GATEWAY_ROOT} :: npm test :: exit 0
 sidecar-tests: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test ./... -count=1 :: exit 0
@@ -786,7 +888,7 @@ cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/red/phase0-boundary.red.t
 sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -count=1 :: nonzero
 ```
 
-The first eleven entries use `phase1-green`; the final two use `phase1-red`. Every requirement ID appears on at least one GREEN command. The RED entries carry only B4/B5/B6 requirement links and never satisfy a Phase 1 requirement.
+The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement.
 
 - [ ] **Step 5: Implement one `run-all` capture transaction**
 
@@ -795,6 +897,7 @@ export function captureAndRunPhase1(options: {
   ccGatewayRoot: string
   sub2apiRoot: string
   entryPath: string
+  executionContextPath: string
   catalogPath: string
   baselineOut: string
   resultsOut: string
@@ -803,7 +906,7 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-Before the first command, verify both worktrees are clean, both heads descend from the entry's `muqihang/main` heads, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all thirteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes.
+Before the first command, validate the unexpired execution context and re-derive the digests of its exact plan bytes, planning provenance, and independent review artifact. Require `approved`, zero Critical/Important findings, identical reviewed plan commit/digest in both plan and approval fields, and ancestry from the reviewed plan commit to the current CC head. Then verify both worktrees are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -850,7 +953,7 @@ git commit -m "test(oracle): add bounded Phase 1 H1 evidence adapter"
 - Test: `tests/oracle-lab-phase-1-planning.test.ts`
 
 **Interfaces:**
-- Consumes: Task 7 `run-all`, both clean implementation heads, the planning entry/context, and four selected requirement rows.
+- Consumes: Task 7 `run-all`, both clean implementation heads, the planning entry/context as provenance, the unexpired execution context/approval receipt as authority, and four selected requirement rows.
 - Produces: reviewed code-head results plus a descendant artifact-head handoff, with exact Phase 2 entry conditions.
 
 - [ ] **Step 1: Update CodeGraph and prove both implementation worktrees are clean**
@@ -862,10 +965,10 @@ Expected: both CodeGraph statuses are up to date and both Git status outputs are
 - [ ] **Step 2: Execute one atomic H1 capture**
 
 ```bash
-npm run oracle:phase1 -- run-all --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- run-all --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
-Expected: eleven `pass`, two `expected_fail`, zero unexpected statuses, zero unsafe-output flags. The exit baseline records the reviewed code heads, clean dirty digests, current CodeGraph digests, the unchanged shared contract, parent receipts, selected IDs, and disabled capabilities.
+Expected: twelve `pass`, two `expected_fail`, zero unexpected statuses, zero unsafe-output flags. The exit baseline records the execution-context digest, exact plan/approval digests, reviewed code heads, clean dirty digests, current CodeGraph digests, unchanged shared contract, parent receipts, selected IDs, and disabled capabilities.
 
 - [ ] **Step 3: Validate captured evidence before changing governance state**
 
@@ -877,7 +980,7 @@ Expected: `{"ok":true}`. If any command is unexpected, leave all four requiremen
 
 For `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and `RA-P0-008`, set the registry's reviewed implemented status, exact implementation/test file arrays, exact verification command IDs, `docs/superpowers/evidence/phase-1/phase-1-command-results.json`, reviewed code heads, and verification timestamp. Leave every other deferred row unchanged.
 
-Add claims only at `local_structural` or `local_observational`. Do not add `upstream_canary_observed` or `provider_internal_confirmed` authority. Append a new `resolved` event for `RA-CURRENT-008` bound to `tests/listener-boundary.test.ts`, its result digest, and the reviewed CC code head; preserve all prior events.
+Add claims only at `local_structural` or `local_observational`. Do not add `upstream_canary_observed` or `provider_internal_confirmed` authority. `RA-P0-008` may become locally implemented only when listener, direct-upstream TLS, and sidecar verification commands are all GREEN; retain `external_network_exposure_policy_enforcement_not_observed` and `real_upstream_certificate_chain_not_observed` as production-authority gaps. Append a new `resolved` event for `RA-CURRENT-008` bound to both `tests/listener-boundary.test.ts` and `tests/upstream-tls-boundary.test.ts`, the sidecar TLS result, their result digests, and the reviewed CC code head; preserve all prior events.
 
 - [ ] **Step 5: Commit results and registry transition as the artifact head**
 
@@ -899,7 +1002,7 @@ The handoff contains exactly:
 ```typescript
 export const PHASE2_ENTRY_CONDITIONS = [
   'phase_1_handoff_valid',
-  'b1_b3_and_listener_green_on_integrated_heads',
+  'b1_b3_listener_and_upstream_tls_green_on_integrated_heads',
   'b4_b6_expected_red_preserved_for_phase_4',
   'shared_contract_unchanged_or_reviewed_version_bump',
   'production_and_real_canary_disabled',
@@ -941,7 +1044,7 @@ git add docs/superpowers/evidence/phase-1/phase-1-handoff.json docs/superpowers/
 git commit -m "docs(oracle): publish Phase 1 handoff"
 ```
 
-The reviewer must independently check goal coverage, authorization ordering, replay behavior, origin trust, observed bind state, B4-B6 preservation, reviewed-head ancestry, registry transitions, secret leakage, and the no-production/no-canary boundary before either PR is merged.
+The reviewer must independently check goal coverage, pre-side-effect reservations, authorization ordering, replay behavior, origin trust, observed bind state, code-approved exposure policy, direct and sidecar certificate verification, execution-context/approval binding, B4-B6 preservation, reviewed-head ancestry, registry transitions, secret leakage, and the no-production/no-canary boundary before either PR is merged.
 
 ## Final Verification Matrix
 
@@ -950,9 +1053,14 @@ The reviewer must independently check goal coverage, authorization ordering, rep
 | B1 arbitrary/wrong/expired/replay/cross-session/proxy-change corpus | GREEN |
 | B2 15-route owner matrix and six independent dimensions | GREEN |
 | B2 wrong-state and stale-version ordering | GREEN |
+| B2 concurrent same-version side-effect reservation | one dependency call; second request 409 before side effect |
+| Mutation response version continuity | acceptance/healthcheck next action uses latest version |
 | B3 Host/forwarded-header mutation corpus | GREEN |
 | Listener omitted-host observed bind | `127.0.0.1` |
-| Remote-listen prerequisite mutation corpus | GREEN fail-closed |
+| Remote-listen prerequisite and approved-policy mutation corpus | GREEN fail-closed |
+| Direct upstream HTTPS/system-trust/unsafe-env corpus | GREEN fail-closed; `rejectUnauthorized: true` |
+| Sidecar production TLS config | `InsecureSkipVerify == false`; unsafe trust env rejected before listen |
+| Execution authorization | exact plan/context/review digests; zero Critical/Important; unexpired |
 | Sub2API full Go regression | GREEN |
 | Frontend focused tests, typecheck, build | GREEN |
 | CC Gateway full tests and build | GREEN |
@@ -964,13 +1072,16 @@ The reviewer must independently check goal coverage, authorization ordering, rep
 ## Rollback Boundaries
 
 - Sub2API rollback is the ordered revert of Tasks 5, 4, 3, 2, and 1. Do not partially retain the frontend `If-Match` contract after reverting backend version enforcement.
-- CC Gateway listener rollback is one Task 6 commit, but rolling it back reopens `RA-P0-008` and invalidates the Phase 1 handoff.
+- CC Gateway deployment-boundary rollback is one Task 6 commit, but rolling it back reopens listener and upstream certificate slices of `RA-P0-008` and invalidates the Phase 1 handoff.
 - H1 evidence/registry rollback is Task 8 then Task 7. Reverting evidence never claims the implementation itself was reverted.
 - Any rollback marks the affected requirement `changed` or `deferred` in a new registry/observation event; prior evidence is retained and never rewritten.
 
 ## Self-Review Checklist
 
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
+- [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
+- [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
+- [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.

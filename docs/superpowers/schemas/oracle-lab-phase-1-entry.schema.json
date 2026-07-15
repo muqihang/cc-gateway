@@ -90,8 +90,9 @@
     "gate_results": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["observed_at", "green_count", "expected_fail_count", "records"],
+      "required": ["source_results", "observed_at", "green_count", "expected_fail_count", "records"],
       "properties": {
+        "source_results": {"$ref": "#/$defs/path_digest"},
         "observed_at": {"type": "string", "format": "date-time"},
         "green_count": {"const": 7},
         "expected_fail_count": {"const": 3},
@@ -124,7 +125,7 @@
       "properties": {
         "status": {"const": "blocked"},
         "blocking_conditions": {
-          "const": ["fresh_phase_1_plan", "independent_plan_approval"]
+          "const": ["fresh_phase_1_plan", "independent_plan_approval", "fresh_phase_1_execution_context"]
         }
       }
     },
@@ -186,14 +187,26 @@
     "gate_record": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["command_id", "repository", "status", "exit_code", "scope"],
+      "required": ["command_id", "repository", "source_repository_commit", "status", "exit_code", "scope", "result_digest"],
       "properties": {
         "command_id": {"type": "string", "minLength": 1},
         "repository": {"enum": ["cc-gateway", "sub2api", "egress-tls-sidecar"]},
+        "source_repository_commit": {"$ref": "#/$defs/commit"},
         "status": {"enum": ["pass", "expected_fail"]},
         "exit_code": {"type": "integer", "minimum": 0},
-        "scope": {"type": "string", "minLength": 1}
-      }
+        "scope": {"type": "string", "minLength": 1},
+        "result_digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "pass"}}, "required": ["status"]},
+          "then": {"properties": {"exit_code": {"const": 0}}}
+        },
+        {
+          "if": {"properties": {"status": {"const": "expected_fail"}}, "required": ["status"]},
+          "then": {"properties": {"exit_code": {"type": "integer", "minimum": 1}}}
+        }
+      ]
     }
   }
 }

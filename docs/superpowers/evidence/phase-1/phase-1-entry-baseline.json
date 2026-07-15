@@ -45,9 +45,9 @@
       "version": "1.1.6",
       "up_to_date": true,
       "file_count": 119,
-      "node_count": 4764,
-      "edge_count": 18563,
-      "index_digest": "sha256:7b04c0a76120c392fb161b77c74012103beff2f4742bb7db055c69f8cf4e1d47"
+      "node_count": 4773,
+      "edge_count": 18625,
+      "index_digest": "sha256:ec691a84b73c20d4a6233b1d23d839259317d9767d772dc2b6f8ad6e2a2bbfa5"
     },
     "sub2api": {
       "version": "1.1.6",
@@ -73,6 +73,7 @@
       "formal_pool_principal_tenant_group_creator_role_state_version_authorization",
       "trusted_public_origin_and_forwarded_header_policy",
       "loopback_default_and_fail_closed_remote_listener_startup_guard",
+      "upstream_certificate_verification_and_unsafe_trust_environment_rejection",
       "h1_boundary_fixtures"
     ],
     "out_of_scope": [
@@ -85,20 +86,24 @@
     ]
   },
   "gate_results": {
+    "source_results": {
+      "path": "docs/superpowers/evidence/p0-1/p0-1-command-results.json",
+      "digest": "sha256:56382adc3686dc926cb052f80adfb1379183412513b09f9f967111266436718a"
+    },
     "observed_at": "2026-07-15T08:56:22Z",
     "green_count": 7,
     "expected_fail_count": 3,
     "records": [
-      {"command_id": "cc-build", "repository": "cc-gateway", "status": "pass", "exit_code": 0, "scope": "typescript_build"},
-      {"command_id": "p0-1-focused", "repository": "cc-gateway", "status": "pass", "exit_code": 0, "scope": "p0_1_111_of_111"},
-      {"command_id": "cc-tests", "repository": "cc-gateway", "status": "pass", "exit_code": 0, "scope": "non_p0_1_354_of_354_and_node_24_of_24"},
-      {"command_id": "cc-cross-repo-baseline", "repository": "cc-gateway", "status": "pass", "exit_code": 0, "scope": "shared_contract_baseline"},
-      {"command_id": "sidecar-tests", "repository": "egress-tls-sidecar", "status": "pass", "exit_code": 0, "scope": "all_go_packages"},
-      {"command_id": "sub2api-formal-pool", "repository": "sub2api", "status": "pass", "exit_code": 0, "scope": "formal_pool_regression"},
-      {"command_id": "sub2api-joint-local-chain", "repository": "sub2api", "status": "pass", "exit_code": 0, "scope": "two_named_joint_chain_tests"},
-      {"command_id": "cc-boundary-red", "repository": "cc-gateway", "status": "expected_fail", "exit_code": 1, "scope": "b4_b6_and_negative_capability_failures_preserved"},
-      {"command_id": "sidecar-boundary-red", "repository": "egress-tls-sidecar", "status": "expected_fail", "exit_code": 1, "scope": "b5_b6_failures_preserved"},
-      {"command_id": "sub2api-boundary-red", "repository": "sub2api", "status": "expected_fail", "exit_code": 1, "scope": "b1_b3_failures_revalidated"}
+      {"command_id": "cc-build", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "typescript_build", "result_digest": "sha256:2bc99cc434859cb176fbc7df01c7785a40d2e66d0980ac5239c1b59b795986cf"},
+      {"command_id": "p0-1-focused", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "p0_1_111_of_111", "result_digest": "sha256:7662b6e7983294eedda159fc6b0b7d5be87075a99ea9e076cf6769caffcc44aa"},
+      {"command_id": "cc-tests", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "non_p0_1_354_of_354_and_node_24_of_24", "result_digest": "sha256:3e794e726bca5fc26d3cf8134cda7fd45366e1e7bf205470c3b58082604b6ad8"},
+      {"command_id": "cc-cross-repo-baseline", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "shared_contract_baseline", "result_digest": "sha256:d8e2909b367126184692fd2bc761bbd7960bfcd83f47c77747cc5956411d7adf"},
+      {"command_id": "sidecar-tests", "repository": "egress-tls-sidecar", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "all_go_packages", "result_digest": "sha256:cfbc34c94af384309c3a77f7095f336e89d5c7be8d4fd8bd2719ff6dec0cc150"},
+      {"command_id": "sub2api-formal-pool", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "pass", "exit_code": 0, "scope": "formal_pool_regression", "result_digest": "sha256:ec632582f624eec814b1ef480616bd56058591daf5e777458fa530581351f25e"},
+      {"command_id": "sub2api-joint-local-chain", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "pass", "exit_code": 0, "scope": "two_named_joint_chain_tests", "result_digest": "sha256:22f7aa7c862ae79f26b47505b1a8af9453503e17519fd7c0b0b6a33a349832d9"},
+      {"command_id": "cc-boundary-red", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "expected_fail", "exit_code": 1, "scope": "b4_b6_and_negative_capability_failures_preserved", "result_digest": "sha256:3fcd29b2f3c7bb1938aa06ad6671d36c45404ca35a9739d808f8740d87072541"},
+      {"command_id": "sidecar-boundary-red", "repository": "egress-tls-sidecar", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "expected_fail", "exit_code": 1, "scope": "b5_b6_failures_preserved", "result_digest": "sha256:a5f5417169fd6331843f3a62c2093a558a2a33737299a09d8ff67f803810465e"},
+      {"command_id": "sub2api-boundary-red", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "expected_fail", "exit_code": 1, "scope": "b1_b3_failures_revalidated", "result_digest": "sha256:f234f23fcd67e496aaa8f58f2919e25548b523b645e4409ee205ee44a9a80370"}
     ]
   },
   "planning_entry_conditions": [
@@ -115,7 +120,7 @@
   ],
   "implementation_entry": {
     "status": "blocked",
-    "blocking_conditions": ["fresh_phase_1_plan", "independent_plan_approval"]
+    "blocking_conditions": ["fresh_phase_1_plan", "independent_plan_approval", "fresh_phase_1_execution_context"]
   },
   "disabled_capabilities": [
     "real_upstream_access",

@@ -5,7 +5,7 @@
   "expires_at": "2026-07-16T08:56:22Z",
   "entry": {
     "path": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json",
-    "digest": "sha256:6dc15485f8dbbd4eec3a08dfc8ac93fc1232dd99f106fb857a7597ebe3dd052c"
+    "digest": "sha256:69c9f216c76903493ffb5ec1a8991a3df762416ae716d8deaa6de1c1793c051e"
   },
   "authority_order": [
     {"path": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md", "digest": "sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2"},
@@ -24,7 +24,8 @@
     {"repository": "sub2api", "query": "AttestBrowserEgress VerifyBrowserEgressByNonce TestProxy BrowserNonce NonceExpiresAt", "classification": "server_side_ip_proxy_check_exists_but_manual_attestation_accepts_arbitrary_nonempty_text"},
     {"repository": "sub2api", "query": "registerFormalPoolOnboardingAdminRoutes AuthSubject FormalPoolOnboardingHandler expected version tenant group creator role", "classification": "admin_auth_only_no_per_session_owner_envelope_or_expected_version"},
     {"repository": "sub2api", "query": "withAbsoluteBrowserEgressURL formalPoolRequestPublicBaseURL PublicURLPrefix ProvideFormalPoolOnboardingService", "classification": "production_wiring_leaves_prefix_empty_and_accepts_untrusted_host_forwarded_headers"},
-    {"repository": "cc-gateway", "query": "Config server.host startProxy listenHost server.listen TLS auth remote listen", "classification": "optional_host_passed_directly_to_node_without_remote_startup_prerequisite_gate"}
+    {"repository": "cc-gateway", "query": "Config server.host startProxy listenHost server.listen TLS auth remote listen", "classification": "optional_host_passed_directly_to_node_without_remote_startup_prerequisite_gate"},
+    {"repository": "cc-gateway", "query": "handleRequest httpsRequest dialUTLS InsecureSkipVerify NODE_TLS_REJECT_UNAUTHORIZED SSL_CERT_FILE", "classification": "node_direct_egress_relies_on_process_defaults_and_sidecar_test_override_is_the_only_explicit_insecure_mode_but_no_startup_trust_environment_gate_exists"}
   ],
   "anchors": [
     {"anchor_id": "P1-A01", "repository": "sub2api", "path": "backend/internal/service/formal_pool_onboarding_service.go", "symbols": ["FormalPoolOnboardingDeps", "FormalPoolOnboardingSession", "VerifyBrowserEgressByNonce", "TestProxy", "AttestBrowserEgress", "sessionResponse"]},
@@ -42,24 +43,28 @@
     {"anchor_id": "P1-A13", "repository": "cc-gateway", "path": "src/config.ts", "symbols": ["Config", "loadConfig", "validateFormalPoolMode"]},
     {"anchor_id": "P1-A14", "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["startProxy"]},
     {"anchor_id": "P1-A15", "repository": "cc-gateway", "path": "src/index.ts", "symbols": ["loadConfig", "startProxy"]},
-    {"anchor_id": "P1-A16", "repository": "cc-gateway", "path": "tests/security-boundary.test.ts", "symbols": ["startProxy"]}
+    {"anchor_id": "P1-A16", "repository": "cc-gateway", "path": "tests/security-boundary.test.ts", "symbols": ["startProxy"]},
+    {"anchor_id": "P1-A17", "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["handleRequest", "buildFixedUpstreamUrl"]},
+    {"anchor_id": "P1-A18", "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine.go", "symbols": ["Request", "dialUTLS"]},
+    {"anchor_id": "P1-A19", "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main.go", "symbols": ["buildConfigFromEnv"]}
   ],
   "current_observations": [
     {"requirement_id": "AV-B1-001", "classification": "confirmed_manual_confirmation_is_authoritative_despite_existing_server_side_nonce_ip_proxy_verifier", "anchor_ids": ["P1-A01", "P1-A02", "P1-A03", "P1-A11"]},
     {"requirement_id": "AV-B2-001", "classification": "confirmed_session_records_and_route_calls_do_not_bind_principal_tenant_creator_role_or_expected_version", "anchor_ids": ["P1-A01", "P1-A02", "P1-A04", "P1-A05", "P1-A06", "P1-A12"]},
     {"requirement_id": "AV-B3-001", "classification": "confirmed_untrusted_host_and_forwarded_headers_can_select_absolute_browser_url_authority_when_public_prefix_is_empty", "anchor_ids": ["P1-A03", "P1-A07", "P1-A08", "P1-A12"]},
-    {"requirement_id": "RA-P0-008", "classification": "confirmed_omitted_host_has_no_loopback_default_and_remote_bind_has_no_capability_tls_auth_policy_startup_gate", "anchor_ids": ["P1-A13", "P1-A14", "P1-A15", "P1-A16"]}
+    {"requirement_id": "RA-P0-008", "classification": "confirmed_omitted_host_has_no_loopback_default_remote_bind_has_no_capability_tls_auth_approved_policy_gate_and_real_upstream_modes_have_no_explicit_unsafe_trust_environment_startup_rejection", "anchor_ids": ["P1-A13", "P1-A14", "P1-A15", "P1-A16", "P1-A17", "P1-A18", "P1-A19"]}
   ],
   "candidate_design": {
     "b1": "server_verified_nonce_then_single_use_finalize",
     "b2": "server_resolved_principal_and_session_owner_envelope_with_expected_version",
     "b3": "configured_public_origin_only_no_request_derived_authority",
-    "listener": "loopback_default_remote_requires_capability_tls_strong_auth_and_policy_ref",
+    "listener": "loopback_default_remote_requires_capability_tls_strong_auth_and_code_approved_policy_ref",
+    "upstream_tls": "real_modes_require_https_system_trust_explicit_verification_and_unsafe_trust_env_rejection",
     "h1": "always_on_mutation_corpora_observed_bind_state_and_secret_canary_scan"
   },
   "implementation_gate": {
     "status": "planning_only",
-    "reason": "fresh_phase_1_plan_and_independent_plan_approval_required",
+    "reason": "fresh_phase_1_plan_independent_plan_approval_and_execution_context_required",
     "production_and_real_canary": "disabled"
   }
 }

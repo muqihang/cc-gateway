@@ -81,12 +81,13 @@
     "candidate_design": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["b1", "b2", "b3", "listener", "h1"],
+      "required": ["b1", "b2", "b3", "listener", "upstream_tls", "h1"],
       "properties": {
         "b1": {"const": "server_verified_nonce_then_single_use_finalize"},
         "b2": {"const": "server_resolved_principal_and_session_owner_envelope_with_expected_version"},
         "b3": {"const": "configured_public_origin_only_no_request_derived_authority"},
-        "listener": {"const": "loopback_default_remote_requires_capability_tls_strong_auth_and_policy_ref"},
+        "listener": {"const": "loopback_default_remote_requires_capability_tls_strong_auth_and_code_approved_policy_ref"},
+        "upstream_tls": {"const": "real_modes_require_https_system_trust_explicit_verification_and_unsafe_trust_env_rejection"},
         "h1": {"const": "always_on_mutation_corpora_observed_bind_state_and_secret_canary_scan"}
       }
     },
@@ -96,7 +97,7 @@
       "required": ["status", "reason", "production_and_real_canary"],
       "properties": {
         "status": {"const": "planning_only"},
-        "reason": {"const": "fresh_phase_1_plan_and_independent_plan_approval_required"},
+        "reason": {"const": "fresh_phase_1_plan_independent_plan_approval_and_execution_context_required"},
         "production_and_real_canary": {"const": "disabled"}
       }
     }
