@@ -101,13 +101,13 @@ The reviewer must inspect the merged plan commit, current authority documents, a
 
 - [ ] **Step 3: Build the fresh execution context**
 
-Create `phase-1-execution-context.json` with a window greater than zero and no more than 24 hours. Bind the exact plan path/digest/reviewed commit, exact planning entry/context bytes as provenance, the review artifact digest, both current main heads and implementation branch names, authority precedence bytes, unchanged shared-contract digest, selected requirement IDs, disabled capabilities, and all seven authorization conditions from the closed schema.
+Create `phase-1-execution-context.json` with a window greater than zero and no more than 24 hours. Bind the exact plan path/digest/reviewed commit, exact planning entry/context bytes as provenance, the review artifact digest, both current main heads and implementation branch names, authority precedence bytes, unchanged shared-contract digest, selected requirement IDs, disabled capabilities, and all seven authorization conditions from the closed schema. These fields are claims until Step 4 verifies them against live reviewed-Git observations.
 
 - [ ] **Step 4: Validate the authorization artifact before implementation**
 
 Run: `PHASE1_REQUIRE_EXECUTION_CONTEXT=1 SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
 
-Expected: PASS. The semantic check parses the review receipt, compares every duplicated approval field, hashes `git show <reviewed_commit>:<plan.path>`, and requires those committed bytes, current plan bytes, context digest, and review receipt digest to agree. It also proves the exact authority path order, exact planning-provenance paths, both baseline heads equal freshly fetched `muqihang/main`, the context is unexpired, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
+Expected: PASS. Every Git query uses `runReviewedGit`, which selects a reviewed absolute Git executable, supplies the hermetic Git environment, and calls `assertNoGitReplacementRefs`; raw `git`/`execFileSync` is forbidden in this gate. The semantic check parses the review receipt, compares every duplicated approval field, hashes `git show <reviewed_commit>:<plan.path>`, and requires those committed bytes, current plan bytes, context digest, and review receipt digest to agree. It also proves the exact authority path order, exact planning-provenance paths, both baseline heads equal freshly fetched `muqihang/main`, current branches are exactly `codex/oracle-phase-1-cc-gateway` and `codex/oracle-phase-1-sub2api`, CC status contains only the two untracked preflight artifacts, Sub2API status is empty, the context is unexpired, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
 
 - [ ] **Step 5: Commit authorization provenance as the first CC Gateway Phase 1 commit**
 
@@ -795,7 +795,7 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 - Modify: `package.json`
 
 **Interfaces:**
-- Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0.
+- Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0.
 - Produces: `validatePhase1CatalogValue`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
 - Does not modify the Phase 0 command catalog, Registry v1 validators, P0.1 CLI, or their schemas.
 
@@ -836,7 +836,7 @@ test('handoff rejects unexpected pass/fail, cross-head results, unsafe output an
 })
 ```
 
-The dirty fixture is a temporary Git repository with one committed file plus one untracked file. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, shared contract, and disabled capabilities. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
+The dirty fixture is a temporary Git repository with one committed file plus one untracked file. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, branch, live status, shared contract, and disabled capabilities. Add hostile inherited `PATH`, `GIT_DIR`, `GIT_WORK_TREE`, object-directory, alternate-object, config, and replace-object environment cases; reviewed Git must either ignore them through its closed environment or fail with the existing stable replacement-ref code. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
 
 - [ ] **Step 2: Run adapter tests and confirm files are absent**
 
@@ -916,7 +916,7 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 

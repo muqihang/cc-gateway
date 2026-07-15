@@ -5,7 +5,7 @@
   "expires_at": "2026-07-16T08:56:22Z",
   "entry": {
     "path": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json",
-    "digest": "sha256:38a649e9522ded301d7fd88ad64962bc29e2245627a60216aefc77470277277e"
+    "digest": "sha256:52513af20b65be69eb5984a2ee7b5c2103fd7d54c869781a53e1dda52e37b2af"
   },
   "authority_order": [
     {"path": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md", "digest": "sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2"},

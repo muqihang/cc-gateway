@@ -45,9 +45,9 @@
       "version": "1.1.6",
       "up_to_date": true,
       "file_count": 119,
-      "node_count": 4777,
-      "edge_count": 18652,
-      "index_digest": "sha256:eff56641705b2e513b01c75be452ea236400c348733a2b31b4fd086c0e621502"
+      "node_count": 4778,
+      "edge_count": 18666,
+      "index_digest": "sha256:9d5a3643b00d05a390a4adaf052c9a6d5efc1b545d9761c6e286ffeca48df574"
     },
     "sub2api": {
       "version": "1.1.6",

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
 
 import Ajv2020 from 'ajv/dist/2020.js'
+import { runReviewedGit } from '../tools/oracle-lab/secure-runtime.js'
 
 type Value = Record<string, any>
 
@@ -53,6 +53,10 @@ async function json(relative: string): Promise<Value> {
 
 function digest(bytes: string | Buffer): string {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+}
+
+function reviewedGitText(cwd: string, args: string[]): string {
+  return runReviewedGit(cwd, args).stdout.toString('utf8').trim()
 }
 
 async function validate(schemaRelative: string, valueRelative: string): Promise<Value> {
@@ -248,6 +252,29 @@ test('Phase 1 execution context requires exact plan approval and closed authoriz
   assert.equal(validator(duplicateAuthority), false)
 })
 
+test('Phase 1 preflight Git inspection ignores inherited redirect state', () => {
+  const expected = reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
+  const hostile: Record<string, string> = {
+    PATH: '/tmp/unreviewed-git-bin',
+    GIT_DIR: '/tmp/unreviewed-git-dir',
+    GIT_WORK_TREE: '/tmp/unreviewed-worktree',
+    GIT_OBJECT_DIRECTORY: '/tmp/unreviewed-objects',
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: '/tmp/unreviewed-alternates',
+    GIT_CONFIG_GLOBAL: '/tmp/unreviewed-gitconfig',
+    GIT_NO_REPLACE_OBJECTS: '0',
+  }
+  const before = Object.fromEntries(Object.keys(hostile).map((key) => [key, process.env[key]]))
+  try {
+    Object.assign(process.env, hostile)
+    assert.equal(reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']), expected)
+  } finally {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('required Phase 1 execution context binds live bytes, approval, expiry, and both main heads', async (t) => {
   if (process.env.PHASE1_REQUIRE_EXECUTION_CONTEXT !== '1') {
     t.skip('execution context is created just in time after the reviewed plan merges')
@@ -259,7 +286,7 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
   const review = await validate(planReviewSchemaPath, context.approval_receipt.artifact.path)
   assert.equal(executionContextBindings(context), true)
   const currentPlanBytes = await readFile(path.join(root, context.plan.path))
-  const reviewedPlanBytes = execFileSync('git', ['show', `${context.plan.reviewed_commit}:${context.plan.path}`], { cwd: root })
+  const reviewedPlanBytes = runReviewedGit(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${context.plan.path}`]).stdout
   assert.equal(context.plan.digest, digest(currentPlanBytes))
   assert.equal(context.plan.digest, digest(reviewedPlanBytes))
   assert.equal(context.approval_receipt.artifact.digest, digest(await readFile(path.join(root, context.approval_receipt.artifact.path))))
@@ -277,10 +304,23 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
   const window = Date.parse(context.expires_at) - Date.parse(context.generated_at)
   assert(window > 0 && window <= 24 * 60 * 60 * 1000)
   assert(Date.now() < Date.parse(context.expires_at), 'execution context is expired')
-  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
-  assert.equal(context.repositories.cc_gateway.baseline_main_head, git(root, 'rev-parse', 'muqihang/main'))
-  assert.equal(context.repositories.sub2api.baseline_main_head, git(sub2apiRoot, 'rev-parse', 'muqihang/main'))
-  execFileSync('git', ['merge-base', '--is-ancestor', context.plan.reviewed_commit, 'HEAD'], { cwd: root })
+  const ccRemoteMain = reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
+  const subRemoteMain = reviewedGitText(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
+  assert.equal(context.repositories.cc_gateway.baseline_main_head, ccRemoteMain)
+  assert.equal(context.repositories.sub2api.baseline_main_head, subRemoteMain)
+  assert.equal(reviewedGitText(root, ['branch', '--show-current']), context.repositories.cc_gateway.implementation_branch)
+  assert.equal(reviewedGitText(sub2apiRoot, ['branch', '--show-current']), context.repositories.sub2api.implementation_branch)
+  assert.equal(reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']), context.plan.reviewed_commit)
+  assert.equal(reviewedGitText(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']), subRemoteMain)
+
+  const ccStatus = runReviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
+    .toString('utf8').split('\0').filter(Boolean).sort()
+  assert.deepEqual(ccStatus, [
+    '?? docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
+    '?? docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
+  ])
+  const subStatus = runReviewedGit(sub2apiRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
+  assert.equal(subStatus.length, 0, 'Sub2API implementation worktree must be clean before Phase 1 edits')
 })
 
 test('Phase 1 planning context binds the exact entry bytes and governing source bytes', async () => {
