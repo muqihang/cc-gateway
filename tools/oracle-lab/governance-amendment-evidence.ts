@@ -432,6 +432,8 @@ export function validateCommandCatalogValue(value: unknown): HarnessResult {
     if (!reviewed || !same(candidate.bindings, reviewed.bindings)) add(errors, 'incomplete_execution_binding', `${where}.bindings`, 'execution bindings differ from the reviewed inventory')
     if (!same(candidate.allowed_worktree_delta, [])) add(errors, 'invalid_allowed_delta', `${where}.allowed_worktree_delta`, 'catalog entries cannot add worktree deltas')
     if (!reviewed || candidate.ignored_output_policy !== reviewed.ignoredPolicy) add(errors, 'invalid_ignored_output_policy', `${where}.ignored_output_policy`, 'ignored-output policy differs from the reviewed inventory')
+    const expectedTimeout = candidate.id === 'p0-1-focused' ? 600_000 : 360_000
+    if (candidate.timeout_ms !== expectedTimeout) add(errors, 'invalid_timeout', `${where}.timeout_ms`, `timeout must equal ${expectedTimeout}`)
     if (candidate.shell !== false) add(errors, 'unsafe_shell', `${where}.shell`, 'commands require shell false')
     if (candidate.max_output_bytes !== MAX_OUTPUT_BYTES) add(errors, 'invalid_output_bound', `${where}.max_output_bytes`, 'output bound must be 8 MiB')
     if (candidate.expected_exit !== (candidate.group === 'green' ? 0 : 'nonzero')) add(errors, 'invalid_expected_exit', `${where}.expected_exit`, 'classification expectation differs from group')
@@ -2166,7 +2168,6 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
   let currentSub = prepared.sub
   const roots = { CC_GATEWAY_ROOT: ccRoot, SUB2API_ROOT: subRoot }
   const records: ResultRecord[] = []
-  const unexpectedClassifications: string[] = []
   for (const entry of catalog.value.filter((candidate) => candidate.group === group)) {
     const policy = entry.ignored_output_policy as IgnoredOutputPolicy
     const beforeCc = rebindRepositorySnapshotPolicy(currentCc, 'none')
@@ -2196,7 +2197,9 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
       : []
     const record = buildResultRecord(entry, manifestLoaded.value, manifestLoaded.binding.digest, observed, argv, environment, ccTransition, subTransition, ignoredOutputObservations)
     records.push(record)
-    if (!['pass', 'expected_fail'].includes(record.status)) unexpectedClassifications.push(summarizeUnexpectedClassification(record.command_id, record.status, observed))
+    if (!['pass', 'expected_fail'].includes(record.status)) {
+      fail('unexpected_classification', `command group contains unexpected results: ${summarizeUnexpectedClassification(record.command_id, record.status, observed)}`)
+    }
     currentCc = afterCc
     currentSub = afterSub
   }
@@ -2211,7 +2214,6 @@ function commandRun(args: ReturnType<typeof parseArgs>, runtime: CliRuntime): vo
     records,
   })
   requireValidation(validateResultSetValue(value, Date.parse(value.generated_at))); requireValidation(validateResultSetBindings(value, catalog.value, manifestLoaded.value, manifestLoaded.binding.digest, catalog.binding.digest)); validateAgainstSchema(ccRoot, SCHEMA_PATHS.results_schema, value)
-  if (unexpectedClassifications.length > 0) fail('unexpected_classification', `command group contains unexpected results: ${unexpectedClassifications.join(', ')}`)
   writeExclusiveArtifact(out, value, path.join(ccRoot, EVIDENCE_ROOT_RELATIVE))
   completeArtifactChainStage(ccRoot, outputName, terminalIgnored)
 }

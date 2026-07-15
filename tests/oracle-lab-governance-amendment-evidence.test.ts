@@ -172,6 +172,12 @@ assert.equal(validateCatalog(unknownCatalogField), false)
 const wrongArgv = structuredClone(catalog)
 wrongArgv[0].argv = ['npm', 'test']
 assert.equal(validateCatalog(wrongArgv), false)
+const wrongFocusedTimeout = structuredClone(catalog)
+wrongFocusedTimeout.find((entry: any) => entry.id === 'p0-1-focused').timeout_ms = 360_000
+assert.equal(validateCatalog(wrongFocusedTimeout), false)
+const wrongDefaultTimeout = structuredClone(catalog)
+wrongDefaultTimeout.find((entry: any) => entry.id === 'cc-tests').timeout_ms = 600_000
+assert.equal(validateCatalog(wrongDefaultTimeout), false)
 const wrongCwd = structuredClone(catalog)
 wrongCwd[4].cwd = '${CC_GATEWAY_ROOT}'
 assert.equal(validateCatalog(wrongCwd), false)
@@ -747,6 +753,8 @@ assert.equal(evidence.validateCommandCatalogValue(catalog).ok, true)
 assert.equal(evidence.validateCommandCatalogValue(missingEnv).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(wrongEnv).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(wrongArgv).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(wrongFocusedTimeout).ok, false)
+assert.equal(evidence.validateCommandCatalogValue(wrongDefaultTimeout).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(wrongCwd).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(missingCrossBinding).ok, false)
 assert.equal(evidence.validateCommandCatalogValue(injectedAllowedDelta).ok, false)
@@ -2106,11 +2114,16 @@ function expectAcceptanceCliCode(repository: string, args: string[], code: strin
 const unsafeCliRoot = cloneAcceptanceRef('unsafe-cli-persistence', acceptanceManifest.approval_attestation_head)
 const unsafeCliSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'unsafe-cli-sub', acceptanceSubCandidate)
 initializeCaptureExitCheckpoint(unsafeCliRoot, unsafeCliSubRoot)
+const unsafeCliBeforeCc = ignoredInventory.computeIgnoredPathInventory(unsafeCliRoot).summary
+const unsafeCliBeforeSub = ignoredInventory.computeIgnoredPathInventory(unsafeCliSubRoot).summary
+const unsafeCliStatePath = git(unsafeCliRoot, 'rev-parse', '--path-format=absolute', '--git-path', 'oracle-p0-1-chain-state.json')
+const unsafeCliStateBefore = readFileSync(unsafeCliStatePath)
 const unsafeCliMarker = 'Bearer unsafe-cli-failure-name'
 const unsafeShimBin = path.join(acceptanceFixtureRoot, 'unsafe-shim-bin')
+const unsafeAuditLog = path.join(acceptanceFixtureRoot, 'unsafe-catalog-audit.jsonl')
 writeCatalogShims({
   directory: unsafeShimBin,
-  auditLog: path.join(acceptanceFixtureRoot, 'unsafe-catalog-audit.jsonl'),
+  auditLog: unsafeAuditLog,
   ccRoot: unsafeCliRoot,
   subRoot: unsafeCliSubRoot,
   unsafeCommandId: 'cc-build',
@@ -2130,6 +2143,10 @@ const unsafeCliError = JSON.parse(String(unsafeCliResult.stderr).trim().split(/\
 assert.equal(unsafeCliError.message, 'command group contains unexpected results: cc-build=unexpected_fail(unsafe_output)')
 assert.equal(`${unsafeCliResult.stdout}${unsafeCliResult.stderr}`.includes(unsafeCliMarker), false, 'CLI process output leaked unsafe failure-name bytes')
 assert.equal(existsSync(path.join(unsafeCliRoot, evidence.ARTIFACT_CHAIN.green)), false, 'unsafe result artifact must not be persisted')
+assert.deepEqual(ignoredInventory.computeIgnoredPathInventory(unsafeCliRoot).summary, unsafeCliBeforeCc)
+assert.deepEqual(ignoredInventory.computeIgnoredPathInventory(unsafeCliSubRoot).summary, unsafeCliBeforeSub)
+assert.deepEqual(readFileSync(unsafeCliStatePath), unsafeCliStateBefore)
+assert.deepEqual(readFileSync(unsafeAuditLog, 'utf8').trim().split(/\r?\n/).map((line) => JSON.parse(line).command_id), ['cc-build'])
 
 const earlyJointFailureRoot = cloneAcceptanceRef('early-joint-failure', acceptanceManifest.approval_attestation_head)
 const earlyJointFailureSubRoot = cloneRepositoryRef(acceptanceSubRoot, 'early-joint-failure-sub', acceptanceSubCandidate)

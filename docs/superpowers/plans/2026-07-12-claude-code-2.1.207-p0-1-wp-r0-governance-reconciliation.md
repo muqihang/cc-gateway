@@ -823,7 +823,7 @@ The mandatory GREEN inventory has exactly these catalog IDs and argv:
 6. `sub2api-formal-pool`: Sub2API `backend`, `go test ./internal/service ./internal/server/routes -run FormalPool|FormalPoolOperations -count=1`;
 7. `sub2api-joint-local-chain`: Sub2API `backend` with `CC_GATEWAY_REPO_ROOT=${CC_GATEWAY_ROOT}`, `go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v`, with dual-repository binding.
 
-This order is fail-fast and mutation-last. The focused governance suite runs immediately after the build because it is the most likely long-running failure boundary. The only GREEN command allowed to change ignored output, `sub2api-joint-local-chain`, runs last, so an earlier failure cannot leave a permitted deliverable transition behind.
+This order is fail-fast and mutation-last. The focused governance suite runs immediately after the build because it is the most likely long-running failure boundary. After every child, the runner completes both repository snapshots and builds the bounded safe classification; the first unexpected classification then stops the group before any later command starts. The only GREEN command allowed to change ignored output, `sub2api-joint-local-chain`, runs last, so an earlier failure cannot leave a permitted deliverable transition behind.
 
 The focused H0.1 entry alone has a 600,000 ms process timeout. The reviewed
 closed-environment suite completed in 459,296 ms on the reviewed host, so the

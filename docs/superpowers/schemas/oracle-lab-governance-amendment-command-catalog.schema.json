@@ -126,6 +126,20 @@
           "properties": { "ignored_output_policy": { "const": "none" } }
         }
       }
+    },
+    {
+      "items": {
+        "if": {
+          "properties": { "id": { "const": "p0-1-focused" } },
+          "required": ["id"]
+        },
+        "then": {
+          "properties": { "timeout_ms": { "const": 600000 } }
+        },
+        "else": {
+          "properties": { "timeout_ms": { "const": 360000 } }
+        }
+      }
     }
   ],
   "items": {
