@@ -347,6 +347,27 @@ test('Phase 1 plan classifies exact consumed-proof replay after owner but before
   assert.match(plan, /owner, different proof, old consume-input version \| `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`/)
 })
 
+test('Phase 1 plan proves defensive startProxy ordering and exact RED failure families', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  const listenerValidation = plan.indexOf('const listenerBoundary = resolveListenerBoundary(config)')
+  const upstreamValidation = plan.indexOf('const upstreamTLSBoundary = resolveUpstreamTLSBoundary(config, process.env)')
+  const tlsRead = plan.indexOf('cert: startup.readTLSFile(config.server.tls.cert)')
+  const httpsCreate = plan.indexOf('startup.createHTTPSServer(tlsOptions, handler)')
+  const httpCreate = plan.indexOf('startup.createHTTPServer(handler)')
+  const listen = plan.indexOf('startup.listen(server, config.server.port, listenerBoundary.host, onListening)')
+
+  assert(listenerValidation >= 0 && upstreamValidation > listenerValidation, 'both defensive resolvers must be explicit')
+  assert(tlsRead > upstreamValidation, 'startup validation must precede TLS reads')
+  assert(httpsCreate > tlsRead && httpCreate > tlsRead, 'startup validation must precede both server constructors')
+  assert(listen > httpCreate, 'startup validation must precede listen')
+  assert.match(plan, /startProxy\(mutate\(remoteConfig\(\)\), observed\.primitives\)/)
+  assert.match(plan, /assert\.deepEqual\(observed\.calls, \[\]\)/)
+  assert.match(plan, /failure families \[B4,B5,B6\]/)
+  assert.match(plan, /failure families \[TestPhase0B5,TestPhase0B6\]/)
+  assert.match(plan, /ordered unique observed family set exactly equals the catalog set/)
+  assert.match(plan, /An unrelated failure can never satisfy a RED row/)
+})
+
 test('Phase 1 scope owns only B1-B3 and the Phase 1 listener slice', async () => {
   const entry = await json(entryPath)
   const context = await json(contextPath)

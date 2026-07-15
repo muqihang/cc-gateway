@@ -21,6 +21,8 @@
 - `AttestBrowserEgress` is the sole ordering exception after authentication and owner authorization. Its exact order is: `context -> record -> owner -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS`. An exact replay of the persisted consumed-proof safe digest returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` with either the old or current version; cross-owner requests still return the common 403 first, and nonmatching proofs do not bypass version/state checks.
 - Any mutation that can call OAuth, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler dependencies must first acquire a CAS reservation. A concurrent request with the same version fails before a second dependency call; an ambiguous external outcome becomes `operation_outcome_unknown` and is never automatically retried.
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
+- Listener and upstream negative integration must invoke `startProxy` directly and observe zero TLS-read, server-create, and listen effects; calling a pure resolver before `startProxy` is not startup-order evidence.
+- Phase 1 RED evidence is accepted only when its safe observed failure-family set exactly equals the command-specific frozen catalog set. A nonzero exit, an unrelated failure, or a forged persisted family field is always `unexpected_fail`.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
 - Before each task, run `codegraph status`; if stale, run `codegraph sync`. Use CodeGraph before locating or reading code.
 - The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate a fresh `phase-1-execution-context.json` against `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings. Refresh it whenever its 24-hour window expires.
@@ -731,7 +733,7 @@ git commit -m "fix(formal-pool): make configured public origin authoritative"
 - Modify: `sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine_test.go`
 
 **Interfaces:**
-- Produces: `RemoteListenConfig`, `ApprovedNetworkExposurePolicyRef`, `ListenerBoundary`, `resolveListenerBoundary(config)`, `resolveUpstreamTLSBoundary(config, env)`, and sidecar `validatedProductionTrustEnvironment`/`utlsConfigForRequest`.
+- Produces: `RemoteListenConfig`, `ApprovedNetworkExposurePolicyRef`, `ListenerBoundary`, `resolveListenerBoundary(config)`, `resolveUpstreamTLSBoundary(config, env)`, the test-observable `ProxyStartupPrimitives`, and sidecar `validatedProductionTrustEnvironment`/`utlsConfigForRequest`.
 - Consumes: existing `ConfigValidationError`, auth tokens, inbound TLS paths, upstream mode/URL, `startProxy`, Node `https.request`, sidecar `buildConfigFromEnv`/`dialUTLS`, and Node server `address()`.
 
 - [ ] **Step 1: Write the listener RED corpus before changing config**
@@ -824,15 +826,79 @@ The returned request options contain `rejectUnauthorized: true`; spread them int
 
 In the sidecar, extract a pure production trust-environment validator from `buildConfigFromEnv`. Production mode rejects custom/test root variables before `net.Listen`. Extract `utlsConfigForRequest(req)` and prove `InsecureSkipVerify == false` for every production request; it may be true only when both `DialAddress` is an explicit loopback test override and `AllowTestDialOverride` is true. Add a negative test for each single-condition mutation and preserve the existing raw-ClientHello test behavior.
 
-- [ ] **Step 5: Validate all deployment boundaries before any server or socket creation**
+- [ ] **Step 5: Add a behavior-preserving startup-primitives seam**
 
-`loadConfig` calls both resolvers after auth/mode parsing. `startProxy` calls both again defensively before `createHttpServer`/`createHttpsServer`, then passes only `boundary.host` to `server.listen`. TLS files are read only after all pure prerequisite checks pass. Sidecar `main` validates production trust environment before `net.Listen`.
+Add one optional, code-owned dependency argument to `startProxy`; production callers omit it and receive the frozen default. Do not move validation in this sub-step. Route only the four startup effects through this object: inbound TLS file reads, HTTP server creation, HTTPS server creation, and `listen`. The seam cannot override policy resolution, auth, host selection, or upstream TLS options.
 
-- [ ] **Step 6: Prove observed bind state, verified TLS options, and secret-safe failures**
+```typescript
+export type ProxyStartupPrimitives = Readonly<{
+  readTLSFile: (path: string) => Buffer
+  createHTTPServer: typeof createHttpServer
+  createHTTPSServer: typeof createHttpsServer
+  listen: (server: ReturnType<typeof createHttpServer>, port: number, host: string, ready: () => void) => void
+}>
 
-Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`. Remote negative fixtures assert no `listening` event and no socket object is created by calling the pure resolver before `startProxy`. Inject a secret canary as token/policy/trust-env suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes. Node request-option tests assert `rejectUnauthorized: true`; sidecar tests assert production config never sets `InsecureSkipVerify` and unsafe trust env fails before the listen observer fires.
+const DEFAULT_PROXY_STARTUP_PRIMITIVES: ProxyStartupPrimitives = Object.freeze({
+  readTLSFile: (file) => readFileSync(file),
+  createHTTPServer: (handler) => createHttpServer(handler),
+  createHTTPSServer: (options, handler) => createHttpsServer(options, handler),
+  listen: (server, port, host, ready) => { server.listen(port, host, ready) },
+})
+```
 
-- [ ] **Step 7: Run listener, upstream TLS, sidecar, security, full CC tests, and build**
+Run the existing proxy, health, and security tests before continuing. Expected: PASS, proving the default path has not changed.
+
+- [ ] **Step 6: Add direct `startProxy` negative integration tests and confirm RED**
+
+Keep the pure resolver unit table, then run the same `remoteFailures` mutations through `startProxy` itself. `observedStartupPrimitives()` returns inert fake servers and appends only `tls_read`, `http_server_create`, `https_server_create`, or `listen` when the corresponding primitive is invoked. It performs no file or socket operation.
+
+```typescript
+for (const [name, mutate, code] of remoteFailures) {
+  test(`${name} is rejected by startProxy before startup effects`, () => {
+    const observed = observedStartupPrimitives()
+    assert.throws(
+      () => startProxy(mutate(remoteConfig()), observed.primitives),
+      (error: ConfigValidationError) => error.code === code,
+    )
+    assert.deepEqual(observed.calls, [])
+  })
+}
+```
+
+Add the equivalent direct-`startProxy` table for every production/real-canary upstream TLS mutation in `tests/upstream-tls-boundary.test.ts`. Each case must return its exact stable `ConfigValidationError` code and leave all four startup-effect counters at zero. Run both test files now. Expected: FAIL because the behavior-preserving seam observes TLS reads/server creation/listen before `startProxy` performs either defensive resolver call. A pure-resolver assertion alone does not satisfy this step.
+
+- [ ] **Step 7: Validate all deployment boundaries at the top of `startProxy`**
+
+`loadConfig` calls both resolvers after auth/mode parsing. The first executable statements in `startProxy` call both resolvers again, before `initAuth`, runtime-mapping replay, URL construction, any startup primitive, or any socket object. Use only the resolved host and upstream TLS options afterward.
+
+```typescript
+export function startProxy(config: Config, startup = DEFAULT_PROXY_STARTUP_PRIMITIVES) {
+  const listenerBoundary = resolveListenerBoundary(config)
+  const upstreamTLSBoundary = resolveUpstreamTLSBoundary(config, process.env)
+
+  initAuth(config)
+  replayRuntimeMappings(config)
+  // Build handlers only after both defensive validations succeed.
+
+  const tlsOptions = config.server.tls?.cert && config.server.tls?.key
+    ? { cert: startup.readTLSFile(config.server.tls.cert), key: startup.readTLSFile(config.server.tls.key) }
+    : undefined
+  const server = tlsOptions
+    ? startup.createHTTPSServer(tlsOptions, handler)
+    : startup.createHTTPServer(handler)
+  startup.listen(server, config.server.port, listenerBoundary.host, onListening)
+  // Direct HTTPS requests consume upstreamTLSBoundary.requestOptions.
+  return server
+}
+```
+
+TLS paths may be deliberately nonexistent in negative fixtures: the required stable policy error, plus zero `tls_read`, proves boundary validation preceded filesystem access. Zero server-create and listen counters independently prove the remaining ordering. Sidecar `main` likewise validates production trust environment before `net.Listen`.
+
+- [ ] **Step 8: Prove observed bind state, verified TLS options, and secret-safe failures**
+
+Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`. The direct `startProxy` negative tables must cover every listener and upstream mutation and assert zero TLS-read, server-create, and listen effects; do not substitute a pre-call to either pure resolver. Inject a secret canary as token/policy/trust-env suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes. Node request-option tests assert `rejectUnauthorized: true`; sidecar tests assert production config never sets `InsecureSkipVerify` and unsafe trust env fails before the listen observer fires.
+
+- [ ] **Step 9: Run listener, upstream TLS, sidecar, security, full CC tests, and build**
 
 Run: `npm exec tsx tests/listener-boundary.test.ts`
 
@@ -848,7 +914,7 @@ Run: `npm run build`
 
 Expected: all PASS; omitted host is proven as `127.0.0.1` from actual server state, syntactic-but-unapproved policies are RED, real modes expose only verified HTTPS request options, and the sidecar cannot enter production with insecure/custom test trust.
 
-- [ ] **Step 8: Commit Task 6**
+- [ ] **Step 10: Commit Task 6**
 
 ```bash
 git add src/listener-boundary.ts src/upstream-tls-boundary.ts src/config.ts src/proxy.ts tests/listener-boundary.test.ts tests/upstream-tls-boundary.test.ts tests/helpers.ts tests/security-boundary.test.ts config.example.yaml config.sub2api.formal-pool.example.yaml sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main.go sidecar/egress-tls-sidecar/cmd/egress-tls-sidecar/main_test.go sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine.go sidecar/egress-tls-sidecar/internal/tlsengine/utls_engine_test.go
@@ -888,6 +954,47 @@ test('Phase 1 catalog has exact IDs, groups, repositories, argv and expected exi
   const catalog = await readJson(catalogPath)
   assert.deepEqual(catalog.map((entry: any) => entry.id), EXPECTED_COMMAND_IDS)
   assert.deepEqual(validatePhase1CatalogValue(catalog), { ok: true, errors: [] })
+  assert.deepEqual(catalog.find((entry: any) => entry.id === 'cc-b4-b6-red').expected_failure_families, ['B4', 'B5', 'B6'])
+  assert.deepEqual(catalog.find((entry: any) => entry.id === 'sidecar-b5-b6-red').expected_failure_families, ['TestPhase0B5', 'TestPhase0B6'])
+
+  const duplicate = structuredClone(catalog)
+  duplicate.find((entry: any) => entry.id === 'cc-b4-b6-red').expected_failure_families.push('B6')
+  assert.equal(validatePhase1CatalogValue(duplicate).ok, false)
+})
+
+test('RED classification requires the exact frozen failure-family set', () => {
+  for (const observed of [[], ['B4'], ['B4', 'B5'], ['B4', 'B5', 'unknown'], ['unrelated']]) {
+    const result = classifyPhase1Result(redNonzeroFixture({
+      commandID: 'cc-b4-b6-red', observedFailureFamilies: observed,
+    }))
+    assert.equal(result.status, 'unexpected_fail')
+  }
+  assert.equal(classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', observedFailureFamilies: ['B4', 'B5', 'B6'],
+  })).status, 'expected_fail')
+
+  for (const observed of [[], ['TestPhase0B5'], ['TestPhase0B6'], ['TestPhase0B5', 'unknown']]) {
+    assert.equal(classifyPhase1Result(redNonzeroFixture({
+      commandID: 'sidecar-b5-b6-red', observedFailureFamilies: observed,
+    })).status, 'unexpected_fail')
+  }
+  assert.equal(classifyPhase1Result(redNonzeroFixture({
+    commandID: 'sidecar-b5-b6-red', observedFailureFamilies: ['TestPhase0B5', 'TestPhase0B6'],
+  })).status, 'expected_fail')
+})
+
+test('result validation re-derives RED families instead of trusting persisted tokens', () => {
+  const valid = redResultFixture({
+    commandID: 'cc-b4-b6-red',
+    failureNames: ['B4 fixture', 'B5 fixture', 'B6 fixture'],
+    observedFailureFamilies: ['B4', 'B5', 'B6'],
+  })
+  assert.equal(validatePhase1ResultsValue(valid).ok, true)
+  for (const forged of [
+    { ...valid, failure_names: ['unrelated failure'] },
+    { ...valid, observed_failure_families: ['B4', 'B5'] },
+    { ...valid, observed_failure_families: ['B4', 'B5', 'B6', 'TestPhase0B5'] },
+  ]) assert.equal(validatePhase1ResultsValue(rehash(forged)).ok, false)
 })
 
 test('capture rejects a dirty repository before running the first command', () => {
@@ -923,6 +1030,7 @@ Expected: FAIL because the schemas, catalog, and adapter do not exist.
 export type Phase1Group = 'phase1-green' | 'phase1-red'
 export type Phase1ImplementedRequirement = 'AV-B1-001' | 'AV-B2-001' | 'AV-B3-001' | 'RA-P0-008'
 export type Phase1PreservedRedRequirement = 'AV-B4-001' | 'AV-B5-001' | 'AV-B6-001'
+export type Phase1RedFailureFamily = 'B4' | 'B5' | 'B6' | 'TestPhase0B5' | 'TestPhase0B6'
 export type Phase1Command = {
   id: string
   group: Phase1Group
@@ -930,6 +1038,7 @@ export type Phase1Command = {
   cwd: string
   argv: string[]
   expected_exit: 0 | 'nonzero'
+  expected_failure_families: Phase1RedFailureFamily[]
   timeout_ms: number
   requirement_ids: Array<Phase1ImplementedRequirement | Phase1PreservedRedRequirement>
 }
@@ -943,14 +1052,15 @@ export type Phase1Result = {
   stdout_digest: string
   stderr_digest: string
   failure_names: string[]
+  observed_failure_families: Phase1RedFailureFamily[]
   unsafe_output_detected: boolean
   result_digest: string
 }
 ```
 
-The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement`. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
 
-The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, passes argv directly to `runBoundedProcess`, uses exactly `HERMETIC_NETWORK_ENV` plus `PATH`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`.
+The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, passes argv directly to `runBoundedProcess`, uses exactly `HERMETIC_NETWORK_ENV` plus `PATH`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. It classifies only anchored safe names (`^B4(?:\\s|$)`, `^B5(?:\\s|$)`, `^B6(?:\\s|$)`, `^TestPhase0B5[A-Za-z0-9_/]*$`, and `^TestPhase0B6[A-Za-z0-9_/]*$`) into constant family tokens. Repeated failing test names within one family collapse to one token. A nonzero exit becomes `expected_fail` only when the ordered unique observed family set exactly equals the catalog set; empty, partial, unknown, or supersets become `unexpected_fail`, while catalog duplicates fail schema/semantic validation. `validatePhase1ResultsValue` re-derives the family set from safe `failure_names`, compares it to both `observed_failure_families` and the exact catalog row, and rejects a rehashed forgery. An unrelated failure can never satisfy a RED row.
 
 - [ ] **Step 4: Add the exact Phase 1 command catalog**
 
@@ -967,11 +1077,11 @@ cc-build: ${CC_GATEWAY_ROOT} :: npm run build :: exit 0
 cc-tests: ${CC_GATEWAY_ROOT} :: npm test :: exit 0
 sidecar-tests: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test ./... -count=1 :: exit 0
 joint-local-chain: ${SUB2API_ROOT}/backend :: go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v :: exit 0
-cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/red/phase0-boundary.red.test.ts :: nonzero
-sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -count=1 :: nonzero
+cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/red/phase0-boundary.red.test.ts :: nonzero :: failure families [B4,B5,B6]
+sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -count=1 :: nonzero :: failure families [TestPhase0B5,TestPhase0B6]
 ```
 
-The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement.
+The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes the exact family arrays per command ID rather than trusting arbitrary catalog strings.
 
 - [ ] **Step 5: Implement one `run-all` capture transaction**
 
@@ -989,7 +1099,7 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, and for each RED command derive and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any family mismatch, unexpected status, or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1051,7 +1161,7 @@ Expected: both CodeGraph statuses are up to date and both Git status outputs are
 npm run oracle:phase1 -- run-all --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
-Expected: twelve `pass`, two `expected_fail`, zero unexpected statuses, zero unsafe-output flags. The exit baseline records the execution-context digest, exact plan/approval digests, reviewed code heads, clean dirty digests, current CodeGraph digests, unchanged shared contract, parent receipts, selected IDs, and disabled capabilities.
+Expected: twelve `pass`, two `expected_fail`, zero unexpected statuses, zero unsafe-output flags, and exact observed RED families `[B4,B5,B6]` plus `[TestPhase0B5,TestPhase0B6]`. The exit baseline records the execution-context digest, exact plan/approval digests, reviewed code heads, clean dirty digests, current CodeGraph digests, unchanged shared contract, parent receipts, selected IDs, and disabled capabilities.
 
 - [ ] **Step 3: Validate captured evidence before changing governance state**
 
@@ -1143,7 +1253,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | Mutation response version continuity | acceptance/healthcheck next action uses latest version |
 | B3 Host/forwarded-header mutation corpus | GREEN |
 | Listener omitted-host observed bind | `127.0.0.1` |
-| Remote-listen prerequisite and approved-policy mutation corpus | GREEN fail-closed |
+| Remote-listen prerequisite and approved-policy mutation corpus | GREEN fail-closed through direct `startProxy`; zero TLS-read/server-create/listen effects |
 | Direct upstream HTTPS/system-trust/unsafe-env corpus | GREEN fail-closed; `rejectUnauthorized: true` |
 | Sidecar production TLS config | `InsecureSkipVerify == false`; unsafe trust env rejected before listen |
 | Execution authorization | exact plan/context/review digests; zero Critical/Important; unexpired |
@@ -1151,7 +1261,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | Frontend focused tests, typecheck, build | GREEN |
 | CC Gateway full tests and build | GREEN |
 | Joint local chain | GREEN |
-| CC B4-B6 and sidecar B5-B6 | expected RED |
+| CC B4-B6 and sidecar B5-B6 | expected RED only with exact frozen failure families; unrelated nonzero is unexpected |
 | Shared contract digest | unchanged |
 | Production and real canary | disabled |
 
@@ -1170,6 +1280,8 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 - [ ] Session creation reserves a provisional record before proxy creation, and public egress verification reserves before probing the proxy.
 - [ ] `AttestBrowserEgress` checks owner before exact consumed-proof replay, checks version/state after that replay classification only, and preserves 403/409 for cross-owner/nonmatching cases.
 - [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
+- [ ] Listener/upstream negative integration calls `startProxy` directly and proves both resolvers precede TLS reads, server creation, and listen through zero observed startup effects.
+- [ ] Every Phase 1 RED result binds the command-specific exact failure-family set; nonzero exit alone never yields `expected_fail`.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.
