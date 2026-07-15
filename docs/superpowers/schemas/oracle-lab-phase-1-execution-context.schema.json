@@ -38,8 +38,18 @@
       "additionalProperties": false,
       "required": ["entry", "context"],
       "properties": {
-        "entry": {"$ref": "#/$defs/path_digest"},
-        "context": {"$ref": "#/$defs/path_digest"}
+        "entry": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json"}}}
+          ]
+        },
+        "context": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-context.json"}}}
+          ]
+        }
       }
     },
     "approval_receipt": {
@@ -50,7 +60,7 @@
         "artifact": {
           "allOf": [
             {"$ref": "#/$defs/path_digest"},
-            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-plan-review.md"}}}
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-plan-review.json"}}}
           ]
         },
         "decision": {"const": "approved"},
@@ -95,7 +105,34 @@
       "type": "array",
       "minItems": 4,
       "maxItems": 4,
-      "items": {"$ref": "#/$defs/path_digest"}
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md"}}}
+          ]
+        }
+      ],
+      "items": false
     },
     "selected_requirements": {"const": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"]},
     "implementation_entry": {

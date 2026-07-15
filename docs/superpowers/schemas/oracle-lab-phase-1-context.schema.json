@@ -83,8 +83,8 @@
       "additionalProperties": false,
       "required": ["b1", "b2", "b3", "listener", "upstream_tls", "h1"],
       "properties": {
-        "b1": {"const": "server_verified_nonce_then_single_use_finalize"},
-        "b2": {"const": "server_resolved_principal_and_session_owner_envelope_with_expected_version"},
+        "b1": {"const": "server_verified_nonce_with_public_probe_reservation_then_single_use_finalize"},
+        "b2": {"const": "server_resolved_principal_owner_expected_version_and_pre_side_effect_reservations"},
         "b3": {"const": "configured_public_origin_only_no_request_derived_authority"},
         "listener": {"const": "loopback_default_remote_requires_capability_tls_strong_auth_and_code_approved_policy_ref"},
         "upstream_tls": {"const": "real_modes_require_https_system_trust_explicit_verification_and_unsafe_trust_env_rejection"},

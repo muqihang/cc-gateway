@@ -64,8 +64,8 @@
 
 ### H1 Evidence
 
-- Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json`, which is delivered with this reviewed plan.
-- Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.md` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
+- Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` and `oracle-lab-phase-1-plan-review.schema.json`, which are delivered with this reviewed plan.
+- Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.json` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
 - Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands.
 - Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, and `oracle-lab-phase-1-handoff.schema.json`: closed Phase 1 evidence contracts.
 - Create `tools/oracle-lab/phase-1-evidence.ts`: a small Phase 1 adapter over the reviewed `runBoundedProcess`, hermetic environment, safe artifact writer, and digest helpers already delivered by H0/P0.1.
@@ -85,9 +85,10 @@ Task 5 + Task 6 -> Task 7 -> Task 8
 ## Mandatory Preflight: Bind Plan Approval Before Editing
 
 **Files:**
-- Create: `docs/superpowers/evidence/phase-1/phase-1-plan-review.md`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-plan-review.json`
 - Create: `docs/superpowers/evidence/phase-1/phase-1-execution-context.json`
 - Consume: `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json`
+- Consume: `docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json`
 - Consume: `docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md`
 
 - [ ] **Step 1: Start both implementation worktrees from current `muqihang/main` and sync CodeGraph**
@@ -96,7 +97,7 @@ Fetch `muqihang/main` in both repositories without rebasing or rewriting history
 
 - [ ] **Step 2: Independently review the exact merged plan bytes**
 
-The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. Persist only a safe Markdown decision at `phase-1-plan-review.md` with reviewer ID, reviewed plan commit/digest, review round, decision, and Critical/Important counts. `approved` is valid only when both counts are zero. A review of an earlier commit or different plan digest is invalid.
+The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. Persist a closed JSON receipt at `phase-1-plan-review.json` with the exact plan path, reviewed commit/digest, reviewer ID, review round, decision, finding counts, and exact six-item review scope from its schema. `approved` is valid only when Critical and Important counts are zero. A review of an earlier commit or different plan digest is invalid.
 
 - [ ] **Step 3: Build the fresh execution context**
 
@@ -106,12 +107,12 @@ Create `phase-1-execution-context.json` with a window greater than zero and no m
 
 Run: `PHASE1_REQUIRE_EXECUTION_CONTEXT=1 SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
 
-Expected: PASS. The semantic check proves the plan digest equals the approval digest, reviewed commits are identical, both baseline heads equal freshly fetched `muqihang/main`, the context is unexpired, the review artifact digest matches bytes, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
+Expected: PASS. The semantic check parses the review receipt, compares every duplicated approval field, hashes `git show <reviewed_commit>:<plan.path>`, and requires those committed bytes, current plan bytes, context digest, and review receipt digest to agree. It also proves the exact authority path order, exact planning-provenance paths, both baseline heads equal freshly fetched `muqihang/main`, the context is unexpired, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
 
 - [ ] **Step 5: Commit authorization provenance as the first CC Gateway Phase 1 commit**
 
 ```bash
-git add docs/superpowers/evidence/phase-1/phase-1-plan-review.md docs/superpowers/evidence/phase-1/phase-1-execution-context.json
+git add docs/superpowers/evidence/phase-1/phase-1-plan-review.json docs/superpowers/evidence/phase-1/phase-1-execution-context.json
 git commit -m "docs(oracle): authorize exact Phase 1 plan bytes"
 ```
 
@@ -163,7 +164,9 @@ func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService,
         AllowedGroupIDs: []int64{101}, CreatorID: 1001, Role: RoleAdmin,
     }
     zero := int64(0)
-    ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{Principal: owner, ExpectedVersion: &zero})
+    ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{
+        Principal: owner, ExpectedVersion: &zero, IdempotencyKey: "fixture-create-key-0001",
+    })
     proxyID := int64(9)
     session, err := svc.StartSession(ctx, FormalPoolOnboardingStartRequest{
         ProxyMode: "existing", ProxyID: &proxyID, GroupID: 101, AccountName: "authority-fixture",
@@ -194,6 +197,7 @@ type FormalPoolOnboardingPrincipal struct {
 type FormalPoolRequestAuthority struct {
     Principal       FormalPoolOnboardingPrincipal
     ExpectedVersion *int64
+    IdempotencyKey  string
 }
 
 func WithFormalPoolRequestAuthority(ctx context.Context, authority FormalPoolRequestAuthority) context.Context
@@ -241,9 +245,13 @@ type FormalPoolOnboardingSession struct {
 
 `FormalPoolOperationReservation` contains only a server-generated operation ID, stable operation kind, input version, reservation version, and start timestamp. It is never accepted from the client and is not serialized. `beginReservedMutation` authorizes owner/state/expected version, atomically installs the reservation and increments `Version`; if any reservation already exists it returns the same 409 conflict before dependencies. `finishReservedMutation` and `failReservedMutation` require the exact operation ID plus reservation version and never retry a failed CAS.
 
+Creation uses the same primitive before a session exists. `beginCreateReservation` atomically indexes `{tenant, administrator, creator, idempotency_key}` and inserts a provisional owner-bound record in `creating_proxy` with version `1`, request fingerprint, and `ActiveOperation=create_session`. The key is supplied through `Idempotency-Key`, is never logged, and is HMAC-safe-ref persisted rather than stored raw. The same key plus the same request returns the completed session or 409 while active; the same key plus a different request returns 409. Neither path invokes proxy resolution twice.
+
 - [ ] **Step 5: Enforce authority on create/read/abort and add account lookup**
 
-`StartSession` requires `ExpectedVersion == 0`, admin role, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` in `AllowedGroupIDs` before proxy resolution. It copies the owner envelope into the record. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` with the same copy/session-expiry behavior as `snapshotByNonce`.
+`StartSession` requires `ExpectedVersion == 0`, a valid `Idempotency-Key`, admin role, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` in `AllowedGroupIDs`. It validates and fingerprints the request, calls `beginCreateReservation`, and only then calls proxy resolution once. Success finalizes the provisional record at version `2`; ambiguous proxy creation finalizes `operation_outcome_unknown` and never auto-retries. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` and `snapshotByCreateKey` with the same copy/session-expiry behavior as `snapshotByNonce`.
+
+Add a concurrent creation test with a blocking proxy fake: two requests sharing owner, request, `If-Match: "0"`, and idempotency key produce exactly one `ResolveOrCreateProxy` call; the second receives 409 while the first is active, and a post-success replay returns the same session/version without another dependency call. A changed body under the same key is 409 before proxy invocation.
 
 - [ ] **Step 6: Run authority/store/service regression tests**
 
@@ -328,7 +336,7 @@ func parseFormalPoolIfMatch(c *gin.Context, required bool) (*int64, error) {
 }
 ```
 
-`CreateSession` requires version `0`; `GetSession` does not require a version; every POST under `/sessions/:id`, `/accounts/:id/healthcheck`, and the deprecated attestation POST requires a positive current version.
+`CreateSession` requires version `0` plus one canonical `Idempotency-Key` of 16-128 URL-safe characters; missing/malformed keys return `428 FORMAL_POOL_IDEMPOTENCY_KEY_REQUIRED`. `GetSession` does not require a version; every POST under `/sessions/:id`, `/accounts/:id/healthcheck`, and the deprecated attestation POST requires a positive current version.
 
 - [ ] **Step 5: Inject authority into all admin handler calls**
 
@@ -356,7 +364,7 @@ Classify operations before implementation:
 
 - no external effect (`AbortSession`, proof finalization after a server proof already exists): one final `casUpdate` is sufficient;
 - any OAuth, proxy, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler call: call `beginReservedMutation` before the first dependency invocation, execute the dependency sequence once, then call `finishReservedMutation` from the reservation version;
-- public `VerifyBrowserEgressByNonce` and every admin mutation reject a record with `ActiveOperation` rather than racing the reservation;
+- public `VerifyBrowserEgressByNonce` acquires its own CAS reservation before the proxy IP probe; every admin mutation rejects that reservation, and a concurrent public caller returns the same enumeration-resistant pending envelope without a second probe;
 - dependency failure before any irreversible call may finalize a stable failure and return the latest version; an error after an irreversible/ambiguous call finalizes `operation_outcome_unknown`, blocks automatic retry, and requires explicit operator reconciliation.
 
 Add a table-driven concurrency test for every side-effect family. The fake dependency blocks on a channel after incrementing an atomic counter. Start request A with version `N`, wait until its reservation is visible, then start request B with the same version. B must return `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` while the dependency counter remains `1`. Release A, assert one final state transition, `ActiveOperation == nil`, and response version `N+2`. Add failure tests proving no automatic retry after `operation_outcome_unknown` and no owner/state/version detail leakage.
@@ -392,7 +400,7 @@ export async function testProxy(session: FormalPoolSession): Promise<FormalPoolS
 }
 ```
 
-`createSession` sends `If-Match: "0"`. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. Every successful mutation response, including `FormalPoolAcceptanceResult`, carries the final server version. Both wizards replace `session.value.version` from that response before enabling the next action; acceptance/healthcheck merge `{version,status}` instead of retaining a stale session. On any 409 or ambiguous mutation error, refetch `getSession` before exposing retry. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition.
+`createSession` sends `If-Match: "0"` and one `Idempotency-Key` generated once per submitted wizard attempt with `crypto.randomUUID()`; retries reuse it until a definitive response or explicit form reset. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. Every successful mutation response, including `FormalPoolAcceptanceResult`, carries the final server version. Both wizards replace `session.value.version` from that response before enabling the next action; acceptance/healthcheck merge `{version,status}` instead of retaining a stale session. On any 409 or ambiguous mutation error, refetch `getSession` before exposing retry. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition.
 
 - [ ] **Step 8: Run the B2 matrix, service tests, and frontend typecheck**
 
@@ -452,7 +460,9 @@ type formalPoolOnboardingSessionRecord struct {
 
 - [ ] **Step 4: Separate observation from finalization**
 
-On an IP/proxy match, `VerifyBrowserEgressByNonce` sets `BrowserEgressCheckStatus = "verified_pending_finalize"`, records safe buckets and `BrowserEgressObservedAt`, but leaves `BrowserVerified = false` and session status `proxy_verified`. A repeated public check may return the same safe success envelope while pending finalization; it must not mint another proof or advance version again.
+Before calling the proxy observer, `VerifyBrowserEgressByNonce` snapshots by nonce and CAS-installs `ActiveOperation=browser_egress_verify`, advancing the version once. If another verifier already owns the reservation, return the same safe pending envelope and do not call the proxy. The owner calls the observer once and finalizes match/mismatch/expiry from the reservation version, clearing `ActiveOperation`. On a match it sets `BrowserEgressCheckStatus = "verified_pending_finalize"`, records safe buckets and `BrowserEgressObservedAt`, but leaves `BrowserVerified = false` and session status `proxy_verified`. A repeated public check returns the same safe success envelope without another proxy call, proof mint, or version advance.
+
+Add a blocking-proxy concurrency test: two simultaneous public checks for one nonce increment the proxy observer counter once, expose no owner/version/conflict detail, and end with one finalized observation. Add an interleaving test proving an admin mutation started during the verifier reservation fails before its dependency and succeeds only after polling the new version.
 
 - [ ] **Step 5: Make attestation a server-gated one-time consume**
 
@@ -906,7 +916,7 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-Before the first command, validate the unexpired execution context and re-derive the digests of its exact plan bytes, planning provenance, and independent review artifact. Require `approved`, zero Critical/Important findings, identical reviewed plan commit/digest in both plan and approval fields, and ancestry from the reviewed plan commit to the current CC head. Then verify both worktrees are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, reject any unexpected status or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1051,9 +1061,11 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | Gate | Required result |
 | --- | --- |
 | B1 arbitrary/wrong/expired/replay/cross-session/proxy-change corpus | GREEN |
+| B1 concurrent public verifier reservation | one proxy observer call; enumeration-resistant duplicate response |
 | B2 15-route owner matrix and six independent dimensions | GREEN |
 | B2 wrong-state and stale-version ordering | GREEN |
 | B2 concurrent same-version side-effect reservation | one dependency call; second request 409 before side effect |
+| Session creation idempotency reservation | one proxy creation call per owner/key/request fingerprint |
 | Mutation response version continuity | acceptance/healthcheck next action uses latest version |
 | B3 Host/forwarded-header mutation corpus | GREEN |
 | Listener omitted-host observed bind | `127.0.0.1` |
@@ -1081,6 +1093,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
 - [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
+- [ ] Session creation reserves a provisional record before proxy creation, and public egress verification reserves before probing the proxy.
 - [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.

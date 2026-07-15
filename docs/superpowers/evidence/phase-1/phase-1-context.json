@@ -5,7 +5,7 @@
   "expires_at": "2026-07-16T08:56:22Z",
   "entry": {
     "path": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json",
-    "digest": "sha256:69c9f216c76903493ffb5ec1a8991a3df762416ae716d8deaa6de1c1793c051e"
+    "digest": "sha256:38a649e9522ded301d7fd88ad64962bc29e2245627a60216aefc77470277277e"
   },
   "authority_order": [
     {"path": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md", "digest": "sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2"},
@@ -55,8 +55,8 @@
     {"requirement_id": "RA-P0-008", "classification": "confirmed_omitted_host_has_no_loopback_default_remote_bind_has_no_capability_tls_auth_approved_policy_gate_and_real_upstream_modes_have_no_explicit_unsafe_trust_environment_startup_rejection", "anchor_ids": ["P1-A13", "P1-A14", "P1-A15", "P1-A16", "P1-A17", "P1-A18", "P1-A19"]}
   ],
   "candidate_design": {
-    "b1": "server_verified_nonce_then_single_use_finalize",
-    "b2": "server_resolved_principal_and_session_owner_envelope_with_expected_version",
+    "b1": "server_verified_nonce_with_public_probe_reservation_then_single_use_finalize",
+    "b2": "server_resolved_principal_owner_expected_version_and_pre_side_effect_reservations",
     "b3": "configured_public_origin_only_no_request_derived_authority",
     "listener": "loopback_default_remote_requires_capability_tls_strong_auth_and_code_approved_policy_ref",
     "upstream_tls": "real_modes_require_https_system_trust_explicit_verification_and_unsafe_trust_env_rejection",

@@ -29,8 +29,24 @@
       "additionalProperties": false,
       "required": ["cc_gateway", "sub2api"],
       "properties": {
-        "cc_gateway": {"$ref": "#/$defs/repository"},
-        "sub2api": {"$ref": "#/$defs/repository"}
+        "cc_gateway": {
+          "allOf": [
+            {"$ref": "#/$defs/repository"},
+            {"properties": {
+              "head": {"const": "dc195917edb066d826f27c46fd7bea2418f8aa16"},
+              "remote_main_head": {"const": "dc195917edb066d826f27c46fd7bea2418f8aa16"}
+            }}
+          ]
+        },
+        "sub2api": {
+          "allOf": [
+            {"$ref": "#/$defs/repository"},
+            {"properties": {
+              "head": {"const": "b0b77933716487da5fca00329443f88ce9a1c3db"},
+              "remote_main_head": {"const": "b0b77933716487da5fca00329443f88ce9a1c3db"}
+            }}
+          ]
+        }
       }
     },
     "parent_receipts": {
@@ -189,7 +205,7 @@
       "additionalProperties": false,
       "required": ["command_id", "repository", "source_repository_commit", "status", "exit_code", "scope", "result_digest"],
       "properties": {
-        "command_id": {"type": "string", "minLength": 1},
+        "command_id": {"enum": ["cc-build", "p0-1-focused", "cc-tests", "cc-cross-repo-baseline", "sidecar-tests", "sub2api-formal-pool", "sub2api-joint-local-chain", "cc-boundary-red", "sidecar-boundary-red", "sub2api-boundary-red"]},
         "repository": {"enum": ["cc-gateway", "sub2api", "egress-tls-sidecar"]},
         "source_repository_commit": {"$ref": "#/$defs/commit"},
         "status": {"enum": ["pass", "expected_fail"]},

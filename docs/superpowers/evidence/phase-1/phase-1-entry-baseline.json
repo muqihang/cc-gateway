@@ -45,9 +45,9 @@
       "version": "1.1.6",
       "up_to_date": true,
       "file_count": 119,
-      "node_count": 4773,
-      "edge_count": 18625,
-      "index_digest": "sha256:ec691a84b73c20d4a6233b1d23d839259317d9767d772dc2b6f8ad6e2a2bbfa5"
+      "node_count": 4777,
+      "edge_count": 18652,
+      "index_digest": "sha256:eff56641705b2e513b01c75be452ea236400c348733a2b31b4fd086c0e621502"
     },
     "sub2api": {
       "version": "1.1.6",
@@ -71,6 +71,7 @@
     "in_scope": [
       "server_side_browser_egress_attestation_and_replay_rejection",
       "formal_pool_principal_tenant_group_creator_role_state_version_authorization",
+      "pre_side_effect_operation_reservation_and_idempotent_session_creation",
       "trusted_public_origin_and_forwarded_header_policy",
       "loopback_default_and_fail_closed_remote_listener_startup_guard",
       "upstream_certificate_verification_and_unsafe_trust_environment_rejection",

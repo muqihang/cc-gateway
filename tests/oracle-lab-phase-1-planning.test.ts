@@ -15,9 +15,19 @@ const contextPath = 'docs/superpowers/evidence/phase-1/phase-1-context.json'
 const entrySchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-entry.schema.json'
 const contextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-context.schema.json'
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
+const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextPath = 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
+const expectedGateCommandIDs = [
+  'cc-build', 'p0-1-focused', 'cc-tests', 'cc-cross-repo-baseline', 'sidecar-tests',
+  'sub2api-formal-pool', 'sub2api-joint-local-chain', 'cc-boundary-red',
+  'sidecar-boundary-red', 'sub2api-boundary-red',
+]
+const expectedPlanningHeads = {
+  cc_gateway: 'dc195917edb066d826f27c46fd7bea2418f8aa16',
+  sub2api: 'b0b77933716487da5fca00329443f88ce9a1c3db',
+}
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
@@ -64,8 +74,17 @@ function clone<T>(value: T): T {
 function planningEntrySemantics(entry: Value, sourceResults: Value): boolean {
   if (entry.repositories.cc_gateway.head !== entry.repositories.cc_gateway.remote_main_head) return false
   if (entry.repositories.sub2api.head !== entry.repositories.sub2api.remote_main_head) return false
+  if (entry.repositories.cc_gateway.head !== expectedPlanningHeads.cc_gateway) return false
+  if (entry.repositories.sub2api.head !== expectedPlanningHeads.sub2api) return false
+  const records = entry.gate_results.records as Value[]
+  const ids = records.map((record) => record.command_id)
+  if (records.length !== expectedGateCommandIDs.length) return false
+  if (new Set(ids).size !== expectedGateCommandIDs.length) return false
+  if (!expectedGateCommandIDs.every((id) => ids.includes(id))) return false
+  if (records.filter((record) => record.status === 'pass').length !== entry.gate_results.green_count) return false
+  if (records.filter((record) => record.status === 'expected_fail').length !== entry.gate_results.expected_fail_count) return false
   const sourceByID = new Map((sourceResults.records as Value[]).map((record) => [record.command_id, record]))
-  return (entry.gate_results.records as Value[]).every((record) => {
+  return records.every((record) => {
     const source = sourceByID.get(record.command_id)
     return source
       && source.repository === record.repository
@@ -95,7 +114,7 @@ function executionContextFixture(): Value {
       context: pathDigest(contextPath),
     },
     approval_receipt: {
-      artifact: pathDigest('docs/superpowers/evidence/phase-1/phase-1-plan-review.md'),
+      artifact: pathDigest('docs/superpowers/evidence/phase-1/phase-1-plan-review.json'),
       decision: 'approved',
       reviewer_id: 'independent-plan-reviewer',
       review_round: 2,
@@ -136,6 +155,28 @@ function executionContextFixture(): Value {
   }
 }
 
+function planReviewFixture(): Value {
+  const execution = executionContextFixture()
+  return {
+    schema_version: 1,
+    review_kind: 'phase_1_plan_review',
+    generated_at: execution.generated_at,
+    plan: clone(execution.plan),
+    reviewer_id: execution.approval_receipt.reviewer_id,
+    review_round: execution.approval_receipt.review_round,
+    decision: execution.approval_receipt.decision,
+    finding_counts: { critical: 0, important: 0, minor: 0 },
+    review_scope: [
+      'requirements_and_roadmap_coverage',
+      'current_code_anchor_realism',
+      'dependency_and_side_effect_ordering',
+      'fail_closed_security_boundaries',
+      'harness_and_evidence_bindings',
+      'commands_tests_and_rollback',
+    ],
+  }
+}
+
 function executionContextBindings(value: Value): boolean {
   return value.plan.reviewed_commit === value.approval_receipt.reviewed_plan_commit
     && value.plan.digest === value.approval_receipt.reviewed_plan_digest
@@ -148,6 +189,7 @@ test('Phase 1 planning entry and context satisfy their closed schemas', async ()
   await validate(entrySchemaPath, entryPath)
   await validate(contextSchemaPath, contextPath)
   compile(await json(executionContextSchemaPath))
+  compile(await json(planReviewSchemaPath))
 })
 
 test('Phase 1 planning gate records bind exact P0.1 results and reject semantic drift', async () => {
@@ -164,6 +206,15 @@ test('Phase 1 planning gate records bind exact P0.1 results and reject semantic 
   wrongResult.gate_results.records[0].result_digest = `sha256:${'f'.repeat(64)}`
   assert.equal(planningEntrySemantics(wrongResult, sourceResults), false)
 
+  const duplicatedCommand = clone(entry)
+  duplicatedCommand.gate_results.records[9] = clone(duplicatedCommand.gate_results.records[8])
+  assert.equal(planningEntrySemantics(duplicatedCommand, sourceResults), false)
+
+  const fakeEqualHeads = clone(entry)
+  fakeEqualHeads.repositories.cc_gateway.head = 'f'.repeat(40)
+  fakeEqualHeads.repositories.cc_gateway.remote_main_head = 'f'.repeat(40)
+  assert.equal(planningEntrySemantics(fakeEqualHeads, sourceResults), false)
+
   const schemaValidator = compile(await json(entrySchemaPath))
   const impossiblePass = clone(entry)
   impossiblePass.gate_results.records[0].exit_code = 1
@@ -171,12 +222,16 @@ test('Phase 1 planning gate records bind exact P0.1 results and reject semantic 
   const impossibleExpectedFail = clone(entry)
   impossibleExpectedFail.gate_results.records.at(-1).exit_code = 0
   assert.equal(schemaValidator(impossibleExpectedFail), false)
+  assert.equal(schemaValidator(fakeEqualHeads), false)
 })
 
 test('Phase 1 execution context requires exact plan approval and closed authorization', async () => {
   const validator = compile(await json(executionContextSchemaPath))
+  const reviewValidator = compile(await json(planReviewSchemaPath))
   const fixture = executionContextFixture()
+  const review = planReviewFixture()
   assert.equal(validator(fixture), true, JSON.stringify(validator.errors))
+  assert.equal(reviewValidator(review), true, JSON.stringify(reviewValidator.errors))
   assert.equal(executionContextBindings(fixture), true)
 
   const unapproved = clone(fixture)
@@ -185,6 +240,12 @@ test('Phase 1 execution context requires exact plan approval and closed authoriz
   const wrongPlan = clone(fixture)
   wrongPlan.approval_receipt.reviewed_plan_digest = `sha256:${'c'.repeat(64)}`
   assert.equal(executionContextBindings(wrongPlan), false)
+  const wrongAuthority = clone(fixture)
+  wrongAuthority.authority_order.reverse()
+  assert.equal(validator(wrongAuthority), false)
+  const duplicateAuthority = clone(fixture)
+  duplicateAuthority.authority_order[1] = clone(duplicateAuthority.authority_order[0])
+  assert.equal(validator(duplicateAuthority), false)
 })
 
 test('required Phase 1 execution context binds live bytes, approval, expiry, and both main heads', async (t) => {
@@ -195,9 +256,19 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
   const sub2apiRoot = process.env.SUB2API_ROOT
   assert(sub2apiRoot, 'SUB2API_ROOT is required with PHASE1_REQUIRE_EXECUTION_CONTEXT=1')
   const context = await validate(executionContextSchemaPath, executionContextPath)
+  const review = await validate(planReviewSchemaPath, context.approval_receipt.artifact.path)
   assert.equal(executionContextBindings(context), true)
-  assert.equal(context.plan.digest, digest(await readFile(path.join(root, context.plan.path))))
+  const currentPlanBytes = await readFile(path.join(root, context.plan.path))
+  const reviewedPlanBytes = execFileSync('git', ['show', `${context.plan.reviewed_commit}:${context.plan.path}`], { cwd: root })
+  assert.equal(context.plan.digest, digest(currentPlanBytes))
+  assert.equal(context.plan.digest, digest(reviewedPlanBytes))
   assert.equal(context.approval_receipt.artifact.digest, digest(await readFile(path.join(root, context.approval_receipt.artifact.path))))
+  assert.deepEqual(review.plan, context.plan)
+  assert.equal(review.reviewer_id, context.approval_receipt.reviewer_id)
+  assert.equal(review.review_round, context.approval_receipt.review_round)
+  assert.equal(review.decision, context.approval_receipt.decision)
+  assert.equal(review.finding_counts.critical, context.approval_receipt.critical_findings)
+  assert.equal(review.finding_counts.important, context.approval_receipt.important_findings)
   assert.equal(context.planning_provenance.entry.digest, digest(await readFile(path.join(root, context.planning_provenance.entry.path))))
   assert.equal(context.planning_provenance.context.digest, digest(await readFile(path.join(root, context.planning_provenance.context.path))))
   for (const binding of context.authority_order as Value[]) {
