@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oracle Lab Phase 1 Execution Context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "context_kind",
+    "generated_at",
+    "expires_at",
+    "plan",
+    "planning_provenance",
+    "approval_receipt",
+    "repositories",
+    "shared_contract",
+    "authority_order",
+    "selected_requirements",
+    "implementation_entry",
+    "disabled_capabilities"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "context_kind": {"const": "phase_1_execution_context"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "reviewed_commit"],
+      "properties": {
+        "path": {"const": "docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "reviewed_commit": {"$ref": "#/$defs/commit"}
+      }
+    },
+    "planning_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "context"],
+      "properties": {
+        "entry": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json"}}}
+          ]
+        },
+        "context": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-context.json"}}}
+          ]
+        }
+      }
+    },
+    "approval_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "decision", "reviewer_id", "review_round", "reviewed_plan_commit", "reviewed_plan_digest", "critical_findings", "important_findings"],
+      "properties": {
+        "artifact": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/evidence/phase-1/phase-1-plan-review.json"}}}
+          ]
+        },
+        "decision": {"const": "approved"},
+        "reviewer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
+        "review_round": {"type": "integer", "minimum": 1},
+        "reviewed_plan_commit": {"$ref": "#/$defs/commit"},
+        "reviewed_plan_digest": {"$ref": "#/$defs/digest"},
+        "critical_findings": {"const": 0},
+        "important_findings": {"const": 0}
+      }
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cc_gateway", "sub2api"],
+      "properties": {
+        "cc_gateway": {
+          "allOf": [
+            {"$ref": "#/$defs/repository"},
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-cc-gateway"}}}
+          ]
+        },
+        "sub2api": {
+          "allOf": [
+            {"$ref": "#/$defs/repository"},
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-sub2api"}}}
+          ]
+        }
+      }
+    },
+    "shared_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "path", "digest"],
+      "properties": {
+        "repository": {"const": "sub2api"},
+        "path": {"const": "backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json"},
+        "digest": {"const": "sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"}
+      }
+    },
+    "authority_order": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "prefixItems": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md"}}}
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md"}}}
+          ]
+        }
+      ],
+      "items": false
+    },
+    "selected_requirements": {"const": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"]},
+    "implementation_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "conditions"],
+      "properties": {
+        "status": {"const": "authorized"},
+        "conditions": {
+          "const": [
+            "fresh_unexpired_execution_context",
+            "exact_plan_digest_bound",
+            "independent_plan_approval_bound",
+            "critical_and_important_findings_zero",
+            "both_main_heads_frozen",
+            "shared_contract_unchanged",
+            "production_and_real_canary_disabled"
+          ]
+        }
+      }
+    },
+    "disabled_capabilities": {
+      "const": [
+        "real_upstream_access",
+        "real_credentials",
+        "provider_internal_authority",
+        "profile_promotion",
+        "production_deployment",
+        "real_canary",
+        "direct_egress_trust",
+        "unverified_pinned_wire_claims",
+        "unsupported_negative_capabilities",
+        "expired_or_missing_negative_capabilities",
+        "unrestricted_capture",
+        "external_network_requests"
+      ]
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "path_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline_main_head", "tracking_ref", "implementation_branch", "clean", "dirty_digest"],
+      "properties": {
+        "baseline_main_head": {"$ref": "#/$defs/commit"},
+        "tracking_ref": {"const": "refs/remotes/muqihang/main"},
+        "implementation_branch": {"type": "string", "minLength": 1},
+        "clean": {"const": true},
+        "dirty_digest": {"const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+      }
+    }
+  }
+}

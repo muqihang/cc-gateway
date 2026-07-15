@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oracle Lab Phase 1 Planning Context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "context_kind",
+    "generated_at",
+    "expires_at",
+    "entry",
+    "authority_order",
+    "registries",
+    "selected_requirements",
+    "codegraph_queries",
+    "anchors",
+    "current_observations",
+    "candidate_design",
+    "implementation_gate"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "context_kind": {"const": "phase_1_planning_context"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "entry": {"$ref": "#/$defs/path_digest"},
+    "authority_order": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/path_digest"}
+    },
+    "registries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements", "claims", "review_requirements", "roadmap"],
+      "properties": {
+        "requirements": {"$ref": "#/$defs/path_digest"},
+        "claims": {"$ref": "#/$defs/path_digest"},
+        "review_requirements": {"$ref": "#/$defs/path_digest"},
+        "roadmap": {"$ref": "#/$defs/path_digest"}
+      }
+    },
+    "selected_requirements": {
+      "const": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"]
+    },
+    "codegraph_queries": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repository", "query", "classification"],
+        "properties": {
+          "repository": {"enum": ["cc-gateway", "sub2api"]},
+          "query": {"type": "string", "minLength": 1},
+          "classification": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "minItems": 8,
+      "items": {"$ref": "#/$defs/anchor"}
+    },
+    "current_observations": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement_id", "classification", "anchor_ids"],
+        "properties": {
+          "requirement_id": {"enum": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"]},
+          "classification": {"type": "string", "minLength": 1},
+          "anchor_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "candidate_design": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["b1", "b2", "b3", "listener", "upstream_tls", "h1"],
+      "properties": {
+        "b1": {"const": "server_verified_nonce_with_public_probe_reservation_then_single_use_finalize"},
+        "b2": {"const": "server_resolved_principal_owner_expected_version_and_pre_side_effect_reservations"},
+        "b3": {"const": "configured_public_origin_only_no_request_derived_authority"},
+        "listener": {"const": "loopback_default_remote_requires_capability_tls_strong_auth_and_code_approved_policy_ref"},
+        "upstream_tls": {"const": "real_modes_require_https_system_trust_explicit_verification_and_unsafe_trust_env_rejection"},
+        "h1": {"const": "always_on_mutation_corpora_observed_bind_state_and_secret_canary_scan"}
+      }
+    },
+    "implementation_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "production_and_real_canary"],
+      "properties": {
+        "status": {"const": "planning_only"},
+        "reason": {"const": "fresh_phase_1_plan_independent_plan_approval_and_execution_context_required"},
+        "production_and_real_canary": {"const": "disabled"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "path_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_id", "repository", "path", "symbols"],
+      "properties": {
+        "anchor_id": {"type": "string", "pattern": "^P1-A[0-9]{2}$"},
+        "repository": {"enum": ["cc-gateway", "sub2api"]},
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "symbols": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    }
+  }
+}

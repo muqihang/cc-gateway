@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "entry_kind": "phase_1_planning_entry",
+  "generated_at": "2026-07-15T08:56:22Z",
+  "expires_at": "2026-07-16T08:56:22Z",
+  "repositories": {
+    "cc_gateway": {
+      "head": "dc195917edb066d826f27c46fd7bea2418f8aa16",
+      "remote_main_head": "dc195917edb066d826f27c46fd7bea2418f8aa16",
+      "branch": "codex/oracle-phase-1-plan",
+      "tracking_ref": "refs/remotes/muqihang/main",
+      "clean": true,
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "sub2api": {
+      "head": "b0b77933716487da5fca00329443f88ce9a1c3db",
+      "remote_main_head": "b0b77933716487da5fca00329443f88ce9a1c3db",
+      "branch": "codex/oracle-phase-1-plan",
+      "tracking_ref": "refs/remotes/muqihang/main",
+      "clean": true,
+      "dirty_digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "parent_receipts": {
+    "phase_zero": {
+      "path": "docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json",
+      "digest": "sha256:5a2bef840e04d6533bfc657520c73cbc8fcc5f27ede181d168d9b2bf8a3fedee"
+    },
+    "post_integration_v2": {
+      "path": "docs/superpowers/evidence/post-integration-v2/post-integration-receipt.json",
+      "digest": "sha256:c6b64e233dfa2df8c4cd8937aa2b8552ac54c68d4593a32a837af20d4923fb64"
+    },
+    "p0_1_successor": {
+      "path": "docs/superpowers/evidence/p0-1/p0-1-successor-receipt.json",
+      "digest": "sha256:4fcf4ec5f38e4ce587cf63d9d767642c14d7196628971c5ae9006158863f45ee"
+    }
+  },
+  "shared_contract": {
+    "repository": "sub2api",
+    "path": "backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json",
+    "digest": "sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"
+  },
+  "codegraph": {
+    "cc_gateway": {
+      "version": "1.1.6",
+      "up_to_date": true,
+      "file_count": 119,
+      "node_count": 4778,
+      "edge_count": 18666,
+      "index_digest": "sha256:9d5a3643b00d05a390a4adaf052c9a6d5efc1b545d9761c6e286ffeca48df574"
+    },
+    "sub2api": {
+      "version": "1.1.6",
+      "up_to_date": true,
+      "file_count": 3042,
+      "node_count": 98105,
+      "edge_count": 328871,
+      "index_digest": "sha256:19f757699c4431cdec2e0e5bec14c24fefdc70706b39b33cb9411384d95b576e"
+    }
+  },
+  "runtime": {
+    "node": "v24.7.0",
+    "npm": "11.5.1",
+    "go": "go1.26.0 darwin/arm64",
+    "git": "2.49.0",
+    "codegraph": "1.1.6"
+  },
+  "phase_scope": {
+    "requirement_ids": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"],
+    "work_package_slices": ["WP-R8:phase_1_loopback_remote_tls_guard"],
+    "in_scope": [
+      "server_side_browser_egress_attestation_and_replay_rejection",
+      "formal_pool_principal_tenant_group_creator_role_state_version_authorization",
+      "pre_side_effect_operation_reservation_and_idempotent_session_creation",
+      "trusted_public_origin_and_forwarded_header_policy",
+      "loopback_default_and_fail_closed_remote_listener_startup_guard",
+      "upstream_certificate_verification_and_unsafe_trust_environment_rejection",
+      "h1_boundary_fixtures"
+    ],
+    "out_of_scope": [
+      "b4_b6_contract_sidecar_and_destination_controls",
+      "oracle_capture_and_reverse_analysis",
+      "profile_synthesis_and_promotion",
+      "real_upstream_or_real_canary",
+      "production_deployment",
+      "multi_replica_runtime_authority"
+    ]
+  },
+  "gate_results": {
+    "source_results": {
+      "path": "docs/superpowers/evidence/p0-1/p0-1-command-results.json",
+      "digest": "sha256:56382adc3686dc926cb052f80adfb1379183412513b09f9f967111266436718a"
+    },
+    "observed_at": "2026-07-15T08:56:22Z",
+    "green_count": 7,
+    "expected_fail_count": 3,
+    "records": [
+      {"command_id": "cc-build", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "typescript_build", "result_digest": "sha256:2bc99cc434859cb176fbc7df01c7785a40d2e66d0980ac5239c1b59b795986cf"},
+      {"command_id": "p0-1-focused", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "p0_1_111_of_111", "result_digest": "sha256:7662b6e7983294eedda159fc6b0b7d5be87075a99ea9e076cf6769caffcc44aa"},
+      {"command_id": "cc-tests", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "non_p0_1_354_of_354_and_node_24_of_24", "result_digest": "sha256:3e794e726bca5fc26d3cf8134cda7fd45366e1e7bf205470c3b58082604b6ad8"},
+      {"command_id": "cc-cross-repo-baseline", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "shared_contract_baseline", "result_digest": "sha256:d8e2909b367126184692fd2bc761bbd7960bfcd83f47c77747cc5956411d7adf"},
+      {"command_id": "sidecar-tests", "repository": "egress-tls-sidecar", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "pass", "exit_code": 0, "scope": "all_go_packages", "result_digest": "sha256:cfbc34c94af384309c3a77f7095f336e89d5c7be8d4fd8bd2719ff6dec0cc150"},
+      {"command_id": "sub2api-formal-pool", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "pass", "exit_code": 0, "scope": "formal_pool_regression", "result_digest": "sha256:ec632582f624eec814b1ef480616bd56058591daf5e777458fa530581351f25e"},
+      {"command_id": "sub2api-joint-local-chain", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "pass", "exit_code": 0, "scope": "two_named_joint_chain_tests", "result_digest": "sha256:22f7aa7c862ae79f26b47505b1a8af9453503e17519fd7c0b0b6a33a349832d9"},
+      {"command_id": "cc-boundary-red", "repository": "cc-gateway", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "expected_fail", "exit_code": 1, "scope": "b4_b6_and_negative_capability_failures_preserved", "result_digest": "sha256:3fcd29b2f3c7bb1938aa06ad6671d36c45404ca35a9739d808f8740d87072541"},
+      {"command_id": "sidecar-boundary-red", "repository": "egress-tls-sidecar", "source_repository_commit": "5c575e48f1add9d17d5990eceffa2619dd15d774", "status": "expected_fail", "exit_code": 1, "scope": "b5_b6_failures_preserved", "result_digest": "sha256:a5f5417169fd6331843f3a62c2093a558a2a33737299a09d8ff67f803810465e"},
+      {"command_id": "sub2api-boundary-red", "repository": "sub2api", "source_repository_commit": "0a97b3f3b84b5c679788b3694d5840e235031f07", "status": "expected_fail", "exit_code": 1, "scope": "b1_b3_failures_revalidated", "result_digest": "sha256:f234f23fcd67e496aaa8f58f2919e25548b523b645e4409ee205ee44a9a80370"}
+    ]
+  },
+  "planning_entry_conditions": [
+    {"condition": "p0_1_successor_receipt_valid", "status": "pass"},
+    {"condition": "cc_gateway_p0_1_branch_merged_to_main", "status": "pass"},
+    {"condition": "sub2api_p0_1_branch_merged_to_main", "status": "pass"},
+    {"condition": "local_main_equals_muqihang_main_in_both_repositories", "status": "pass"},
+    {"condition": "p0_1_artifact_and_sub2api_fix_ancestry_verified", "status": "pass"},
+    {"condition": "historical_phase_0_and_post_integration_v2_receipts_valid", "status": "pass"},
+    {"condition": "joint_local_chain_green_on_integrated_heads", "status": "pass"},
+    {"condition": "b1_b3_expected_red_revalidated_for_phase_1", "status": "pass"},
+    {"condition": "protected_gateway_production_and_real_canary_disabled", "status": "pass"},
+    {"condition": "fresh_unexpired_p1_entry_baseline_and_context", "status": "pass"}
+  ],
+  "implementation_entry": {
+    "status": "blocked",
+    "blocking_conditions": ["fresh_phase_1_plan", "independent_plan_approval", "fresh_phase_1_execution_context"]
+  },
+  "disabled_capabilities": [
+    "real_upstream_access",
+    "real_credentials",
+    "provider_internal_authority",
+    "profile_promotion",
+    "production_deployment",
+    "real_canary",
+    "direct_egress_trust",
+    "unverified_pinned_wire_claims",
+    "unsupported_negative_capabilities",
+    "expired_or_missing_negative_capabilities",
+    "unrestricted_capture",
+    "external_network_requests"
+  ]
+}
