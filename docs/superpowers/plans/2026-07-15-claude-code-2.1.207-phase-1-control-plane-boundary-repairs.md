@@ -46,7 +46,7 @@
 - Modify `backend/internal/service/formal_pool_onboarding_store.go`: owner envelope, proof lifecycle, account lookup, active-operation reservation, and CAS-only mutations.
 - Modify `backend/internal/service/formal_pool_onboarding_service.go`: authority enforcement, response version, B1 two-step verification/finalization.
 - Modify `backend/internal/handler/admin/formal_pool_onboarding_handler.go`: inject authority for every admin route and stop request-derived origin construction.
-- Modify `backend/internal/handler/wire.go`: inject the production principal resolver.
+- Modify `backend/internal/handler/wire.go`: register the production principal resolver provider for direct router injection; do not inject it into the onboarding handler.
 - Regenerate `backend/cmd/server/wire_gen.go`: commit the deterministic Wire graph after provider and router signature changes.
 - Modify `backend/internal/config/config.go`: `authority_tenant_id` and `public_origin` configuration.
 - Modify `backend/internal/service/formal_pool_config.go` and `backend/internal/service/wire.go`: normalize public origin and wire it into onboarding service.
@@ -345,7 +345,7 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 
 **Interfaces:**
 - Consumes: Task 1 authority context and response version.
-- Produces: `FormalPoolOnboardingJWTAuthMiddleware`, `RegisterFormalPoolOnboardingAdminRoutes`, an `AuthSubject` safe claims snapshot, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `FormalPoolOnboardingPrincipalGuard(resolver)`, `FormalPoolOnboardingPrincipalFromGin`, `WithFormalPoolOnboardingPrincipalResolver`, and `parseFormalPoolIfMatch`.
+- Produces: `FormalPoolOnboardingJWTAuthMiddleware`, `RegisterFormalPoolOnboardingAdminRoutes`, an `AuthSubject` safe claims snapshot, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `FormalPoolOnboardingPrincipalGuard(resolver)`, `FormalPoolOnboardingPrincipalFromGin`, and `parseFormalPoolIfMatch`.
 - Produces: every mutating frontend API function accepts the current `FormalPoolSession` and sends its version.
 
 - [ ] **Step 1: Make the existing B2 RED corpus always-on and complete**
@@ -422,7 +422,7 @@ func (r *formalPoolOnboardingPrincipalResolver) Resolve(c *gin.Context) (service
 
 Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body. `StartSession` validates the requested group exists and is active through the existing trusted group repository; system-admin scope does not turn a client-supplied group ID into authority.
 
-Wire it with the exact provider `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`. Production sets `now: time.Now`; tests inject a fixed clock.
+Register the exact provider `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver` in `handler.ProviderSet`, then inject that resolver directly into `ProvideRouter`, `SetupRouter`, and `RegisterFormalPoolOnboardingAdminRoutes`. `ProvideFormalPoolOnboardingHandler` keeps its existing constructor signature and never receives a resolver or fallback option. Production resolver construction sets `now: time.Now`; tests inject a fixed clock.
 
 After changing middleware/handler/server/service ProviderSets or provider signatures, run `cd backend && go generate ./cmd/server`. This repository commits `backend/cmd/server/wire_gen.go`; omitting it is a build failure. Record its SHA-256, run the same generation command a second time, and require the digest to remain identical. Then run `git diff --check -- cmd/server/wire_gen.go` and `go test ./cmd/server -count=1` so the generated call graph must compile with the new `ProvideFormalPoolOnboardingHandler`, middleware provider, `ProvideRouter`, and `SetupRouter` signatures.
 
@@ -443,9 +443,9 @@ func parseFormalPoolIfMatch(c *gin.Context, required bool) (*int64, error) {
 
 `CreateSession` requires version `0` plus one canonical `Idempotency-Key` of 16-128 URL-safe characters; missing/malformed keys return `428 FORMAL_POOL_IDEMPOTENCY_KEY_REQUIRED`. `GetSession` does not require a version; every POST under `/sessions/:id`, `/accounts/:id/healthcheck`, and the deprecated attestation POST requires a positive current version.
 
-- [ ] **Step 5: Inject authority into all admin handler calls**
+- [ ] **Step 5: Consume the guard-stored principal in all admin handler calls**
 
-Add one handler helper that resolves the principal, parses `If-Match`, and returns `service.WithFormalPoolRequestAuthority(c.Request.Context(), ...)`. Apply it to these exact operations: `CreateSession`, `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateAuthURL`, `ExchangeCodeAndCreate`, `SetupTokenCookieAuthAndCreate`, `Acceptance`, `Activate`, `RefreshOnly`, `RuntimeRegister`, `Healthcheck`, `StartWarming`, `PromoteProduction`, `Abort`, and `AccountHealthcheck`. `BrowserEgressCheck` remains public nonce-capability handling and never uses admin principal headers.
+Add one handler helper that reads the already authorized principal only through `FormalPoolOnboardingPrincipalFromGin`, parses `If-Match`, and returns `service.WithFormalPoolRequestAuthority(c.Request.Context(), ...)`. A missing private Gin principal is the common 401 and must not trigger resolver lookup. No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalResolver`; a code-search assertion over `backend/internal/handler/admin/formal_pool_onboarding_handler.go` permits only `FormalPoolOnboardingPrincipalFromGin`. Apply the helper to these exact operations: `CreateSession`, `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateAuthURL`, `ExchangeCodeAndCreate`, `SetupTokenCookieAuthAndCreate`, `Acceptance`, `Activate`, `RefreshOnly`, `RuntimeRegister`, `Healthcheck`, `StartWarming`, `PromoteProduction`, `Abort`, and `AccountHealthcheck`. `BrowserEgressCheck` remains public nonce-capability handling and never uses admin principal headers.
 
 - [ ] **Step 6: Enforce owner/state/version before dependencies in every service operation**
 
@@ -1381,7 +1381,9 @@ Expected: both CodeGraph statuses are up to date and both Git status outputs are
 - [ ] **Step 2: Execute and validate one feature-candidate H1 capture**
 
 ```bash
+npm run oracle:phase1 -- validate-catalog --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json
 npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
+npm run oracle:phase1 -- validate-results --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
 ```
 
 Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
@@ -1423,6 +1425,7 @@ Each `${...}` value is a required nonempty pre-captured scalar, not a default: h
 
 ```bash
 npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- validate-results --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
 Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the entry plus the two declared result files. Validate results before changing governance state.
@@ -1437,6 +1440,7 @@ Add claims only at `local_structural` or `local_observational`. Do not add `upst
 
 ```bash
 npm run oracle:phase1 -- build-handoff --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
+npm run oracle:phase1 -- validate-handoff --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md
 ```
 
 The handoff contains exactly:
