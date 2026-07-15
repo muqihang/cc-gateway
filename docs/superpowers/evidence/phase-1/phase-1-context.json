@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "context_kind": "phase_1_planning_context",
+  "generated_at": "2026-07-15T09:14:31Z",
+  "expires_at": "2026-07-16T08:56:22Z",
+  "entry": {
+    "path": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json",
+    "digest": "sha256:6dc15485f8dbbd4eec3a08dfc8ac93fc1232dd99f106fb857a7597ebe3dd052c"
+  },
+  "authority_order": [
+    {"path": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md", "digest": "sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2"},
+    {"path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md", "digest": "sha256:f1ccedc813e6edfbd50fb7779221e0fa4b9fd62863e0562fecf9c06c920f478e"},
+    {"path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md", "digest": "sha256:ba3e5798bea7c079445769d589c7cda93a6ba0f85ba204e0f5639f01cb9f0754"},
+    {"path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md", "digest": "sha256:f54f3aa730144e4d2b438c9af63f83aaaaab22e6e4c56d8b99983d5aadb54fc8"}
+  ],
+  "registries": {
+    "requirements": {"path": "docs/superpowers/registry/oracle-lab-requirements.json", "digest": "sha256:875086715d3a05b0af81fdc2d0bf2988a61106621f632f87efdb5d76f2492772"},
+    "claims": {"path": "docs/superpowers/registry/oracle-lab-claims.json", "digest": "sha256:a968bf2efbff6768cb79761fe60787487494e12d239cf13563de775b177c3cd0"},
+    "review_requirements": {"path": "docs/superpowers/registry/oracle-lab-review-requirements.json", "digest": "sha256:06b7dca841b3a3288c128db48616398659b5ba3e2bf82fc490ed84aa8a4b5ac4"},
+    "roadmap": {"path": "docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md", "digest": "sha256:87e0ee04ab1beba573ee47e1ba7da7c5c06dbbcc5e6d63fb1f15703549e0f407"}
+  },
+  "selected_requirements": ["AV-B1-001", "AV-B2-001", "AV-B3-001", "RA-P0-008"],
+  "codegraph_queries": [
+    {"repository": "sub2api", "query": "AttestBrowserEgress VerifyBrowserEgressByNonce TestProxy BrowserNonce NonceExpiresAt", "classification": "server_side_ip_proxy_check_exists_but_manual_attestation_accepts_arbitrary_nonempty_text"},
+    {"repository": "sub2api", "query": "registerFormalPoolOnboardingAdminRoutes AuthSubject FormalPoolOnboardingHandler expected version tenant group creator role", "classification": "admin_auth_only_no_per_session_owner_envelope_or_expected_version"},
+    {"repository": "sub2api", "query": "withAbsoluteBrowserEgressURL formalPoolRequestPublicBaseURL PublicURLPrefix ProvideFormalPoolOnboardingService", "classification": "production_wiring_leaves_prefix_empty_and_accepts_untrusted_host_forwarded_headers"},
+    {"repository": "cc-gateway", "query": "Config server.host startProxy listenHost server.listen TLS auth remote listen", "classification": "optional_host_passed_directly_to_node_without_remote_startup_prerequisite_gate"}
+  ],
+  "anchors": [
+    {"anchor_id": "P1-A01", "repository": "sub2api", "path": "backend/internal/service/formal_pool_onboarding_service.go", "symbols": ["FormalPoolOnboardingDeps", "FormalPoolOnboardingSession", "VerifyBrowserEgressByNonce", "TestProxy", "AttestBrowserEgress", "sessionResponse"]},
+    {"anchor_id": "P1-A02", "repository": "sub2api", "path": "backend/internal/service/formal_pool_onboarding_store.go", "symbols": ["formalPoolOnboardingSessionRecord", "FormalPoolOnboardingStore", "snapshotByNonce", "casUpdate", "nonceExpired"]},
+    {"anchor_id": "P1-A03", "repository": "sub2api", "path": "backend/internal/handler/admin/formal_pool_onboarding_handler.go", "symbols": ["FormalPoolOnboardingHandler", "BrowserEgressAttestation", "withAbsoluteBrowserEgressURL", "formalPoolRequestPublicBaseURL"]},
+    {"anchor_id": "P1-A04", "repository": "sub2api", "path": "backend/internal/server/routes/admin.go", "symbols": ["RegisterAdminRoutes", "registerFormalPoolOnboardingAdminRoutes", "RegisterFormalPoolOnboardingPublicRoutes"]},
+    {"anchor_id": "P1-A05", "repository": "sub2api", "path": "backend/internal/server/middleware/auth_subject.go", "symbols": ["AuthSubject", "GetAuthSubjectFromContext", "GetUserRoleFromContext"]},
+    {"anchor_id": "P1-A06", "repository": "sub2api", "path": "backend/internal/server/middleware/admin_auth.go", "symbols": ["adminAuth", "validateAdminAPIKey", "validateJWTForAdmin"]},
+    {"anchor_id": "P1-A07", "repository": "sub2api", "path": "backend/internal/service/wire.go", "symbols": ["ProvideFormalPoolConfig", "formalPoolConfigFromAppConfig", "ProvideFormalPoolOnboardingService"]},
+    {"anchor_id": "P1-A08", "repository": "sub2api", "path": "backend/internal/config/config.go", "symbols": ["Config", "FormalPoolRuntimeConfig"]},
+    {"anchor_id": "P1-A09", "repository": "sub2api", "path": "frontend/src/api/admin/claudeOnboarding.ts", "symbols": ["FormalPoolSession", "getSession", "testProxy", "attestBrowserEgress"]},
+    {"anchor_id": "P1-A10", "repository": "sub2api", "path": "frontend/src/composables/useEgressCheckPolling.ts", "symbols": ["useEgressCheckPolling", "poll", "start", "stop"]},
+    {"anchor_id": "P1-A11", "repository": "sub2api", "path": "backend/internal/service/formal_pool_onboarding_phase0_red_test.go", "symbols": ["TestFormalPoolBrowserEgressAttestationRejectsUntrustedProofs"]},
+    {"anchor_id": "P1-A12", "repository": "sub2api", "path": "backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go", "symbols": ["TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations", "TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent", "TestFormalPoolOnboardingPublicOriginAuthority"]},
+    {"anchor_id": "P1-A13", "repository": "cc-gateway", "path": "src/config.ts", "symbols": ["Config", "loadConfig", "validateFormalPoolMode"]},
+    {"anchor_id": "P1-A14", "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["startProxy"]},
+    {"anchor_id": "P1-A15", "repository": "cc-gateway", "path": "src/index.ts", "symbols": ["loadConfig", "startProxy"]},
+    {"anchor_id": "P1-A16", "repository": "cc-gateway", "path": "tests/security-boundary.test.ts", "symbols": ["startProxy"]}
+  ],
+  "current_observations": [
+    {"requirement_id": "AV-B1-001", "classification": "confirmed_manual_confirmation_is_authoritative_despite_existing_server_side_nonce_ip_proxy_verifier", "anchor_ids": ["P1-A01", "P1-A02", "P1-A03", "P1-A11"]},
+    {"requirement_id": "AV-B2-001", "classification": "confirmed_session_records_and_route_calls_do_not_bind_principal_tenant_creator_role_or_expected_version", "anchor_ids": ["P1-A01", "P1-A02", "P1-A04", "P1-A05", "P1-A06", "P1-A12"]},
+    {"requirement_id": "AV-B3-001", "classification": "confirmed_untrusted_host_and_forwarded_headers_can_select_absolute_browser_url_authority_when_public_prefix_is_empty", "anchor_ids": ["P1-A03", "P1-A07", "P1-A08", "P1-A12"]},
+    {"requirement_id": "RA-P0-008", "classification": "confirmed_omitted_host_has_no_loopback_default_and_remote_bind_has_no_capability_tls_auth_policy_startup_gate", "anchor_ids": ["P1-A13", "P1-A14", "P1-A15", "P1-A16"]}
+  ],
+  "candidate_design": {
+    "b1": "server_verified_nonce_then_single_use_finalize",
+    "b2": "server_resolved_principal_and_session_owner_envelope_with_expected_version",
+    "b3": "configured_public_origin_only_no_request_derived_authority",
+    "listener": "loopback_default_remote_requires_capability_tls_strong_auth_and_policy_ref",
+    "h1": "always_on_mutation_corpora_observed_bind_state_and_secret_canary_scan"
+  },
+  "implementation_gate": {
+    "status": "planning_only",
+    "reason": "fresh_phase_1_plan_and_independent_plan_approval_required",
+    "production_and_real_canary": "disabled"
+  }
+}
