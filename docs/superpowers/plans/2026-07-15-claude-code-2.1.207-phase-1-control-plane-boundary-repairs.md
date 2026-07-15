@@ -410,7 +410,7 @@ func (r *formalPoolOnboardingPrincipalResolver) Resolve(c *gin.Context) (service
     if !user.IsAdmin() { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
     return service.FormalPoolOnboardingPrincipal{
         SubjectID: user.ID, AdministratorID: user.ID, TenantID: r.tenantID,
-        CreatorID: user.ID, Role: user.Role, CallerKind: CallerKindHumanJWT,
+        CreatorID: user.ID, Role: user.Role, CallerKind: service.CallerKindHumanJWT,
         AuthorityRevision: user.TokenVersion, Active: true, SystemAdmin: true,
     }, nil
 }
@@ -844,6 +844,11 @@ test('omitted host binds IPv4 loopback from observed socket state', async () => 
   await close(server)
 })
 
+test('bracketed IPv6 loopback is normalized for Node listen', () => {
+  const config = baseConfig({ server: { port: 0, host: '[::1]', tls: { cert: '', key: '' } } })
+  assert.deepEqual(resolveListenerBoundary(config), { host: '::1', remote: false })
+})
+
 for (const [name, mutate, code] of remoteFailures) {
   test(name, () => assert.throws(() => resolveListenerBoundary(mutate(remoteConfig())),
     (error: ConfigValidationError) => error.code === code))
@@ -899,8 +904,9 @@ const APPROVED_NETWORK_EXPOSURE_POLICY_REFS = new Set<ApprovedNetworkExposurePol
 export type ListenerBoundary = { host: string; remote: boolean }
 
 export function resolveListenerBoundary(config: Config): ListenerBoundary {
-  const host = String(config.server.host || '').trim() || '127.0.0.1'
-  if (host === '127.0.0.1' || host === '::1' || host === '[::1]') return { host, remote: false }
+  const configuredHost = String(config.server.host || '').trim() || '127.0.0.1'
+  const host = configuredHost === '[::1]' ? '::1' : configuredHost
+  if (host === '127.0.0.1' || host === '::1') return { host, remote: false }
   const remote = config.server.remote_listen
   if (remote?.capability !== 'remote-listen-v1') throw new ConfigValidationError('remote_listen_capability_required')
   if (!config.server.tls?.cert || !config.server.tls?.key) throw new ConfigValidationError('remote_listen_tls_required')
@@ -928,17 +934,20 @@ In the sidecar, extract a pure production trust-environment validator from `buil
 Add one optional, code-owned dependency argument to `startProxy`; production callers omit it and receive the frozen default. Do not move validation in this sub-step. Route only the four startup effects through this object: inbound TLS file reads, HTTP server creation, HTTPS server creation, and `listen`. The seam cannot override policy resolution, auth, host selection, or upstream TLS options.
 
 ```typescript
+type ProxyRequestListener = (request: IncomingMessage, response: ServerResponse) => void
+type ProxyStartupServer = ReturnType<typeof createHttpServer> | ReturnType<typeof createHttpsServer>
+
 export type ProxyStartupPrimitives = Readonly<{
   readTLSFile: (path: string) => Buffer
-  createHTTPServer: typeof createHttpServer
-  createHTTPSServer: typeof createHttpsServer
-  listen: (server: ReturnType<typeof createHttpServer>, port: number, host: string, ready: () => void) => void
+  createHTTPServer: (handler: ProxyRequestListener) => ReturnType<typeof createHttpServer>
+  createHTTPSServer: (options: ServerOptions, handler: ProxyRequestListener) => ReturnType<typeof createHttpsServer>
+  listen: (server: ProxyStartupServer, port: number, host: string, ready: () => void) => void
 }>
 
 const DEFAULT_PROXY_STARTUP_PRIMITIVES: ProxyStartupPrimitives = Object.freeze({
   readTLSFile: (file) => readFileSync(file),
-  createHTTPServer: (handler) => createHttpServer(handler),
-  createHTTPSServer: (options, handler) => createHttpsServer(options, handler),
+  createHTTPServer: createHttpServer,
+  createHTTPSServer: createHttpsServer,
   listen: (server, port, host, ready) => { server.listen(port, host, ready) },
 })
 ```
@@ -993,7 +1002,7 @@ TLS paths may be deliberately nonexistent in negative fixtures: the required sta
 
 - [ ] **Step 8: Prove observed bind state, verified TLS options, and secret-safe failures**
 
-Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`. The direct `startProxy` negative tables must cover every listener and upstream mutation and assert zero TLS-read, server-create, and listen effects; do not substitute a pre-call to either pure resolver. Inject a secret canary as token/policy/trust-env suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes. Node request-option tests assert `rejectUnauthorized: true`; sidecar tests assert production config never sets `InsecureSkipVerify` and unsafe trust env fails before the listen observer fires.
+Tests inspect `server.address()` for omitted host, `127.0.0.1`, and `::1`; a configured `[::1]` must resolve and bind as unbracketed `::1`, never reach Node DNS as a bracketed hostname. The direct `startProxy` negative tables must cover every listener and upstream mutation and assert zero TLS-read, server-create, and listen effects; do not substitute a pre-call to either pure resolver. Inject a secret canary as token/policy/trust-env suffix and assert thrown/logged text is exactly `config: <stable_code>` with no canary bytes. Node request-option tests assert `rejectUnauthorized: true`; sidecar tests assert production config never sets `InsecureSkipVerify` and unsafe trust env fails before the listen observer fires.
 
 - [ ] **Step 9: Run listener, upstream TLS, sidecar, security, full CC tests, and build**
 

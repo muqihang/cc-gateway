@@ -366,6 +366,11 @@ test('Phase 1 plan proves defensive startProxy ordering and exact RED failure fa
   assert.match(plan, /failure families \[TestPhase0B5,TestPhase0B6\]/)
   assert.match(plan, /ordered unique observed family set exactly equals the catalog set/)
   assert.match(plan, /valid B4-B6 set plus `HA-P0-009` or any other failure is always unexpected/)
+  assert.match(plan, /const host = configuredHost === '\[::1\]' \? '::1' : configuredHost/)
+  assert.match(plan, /createHTTPServer: \(handler: ProxyRequestListener\) => ReturnType<typeof createHttpServer>/)
+  assert.match(plan, /createHTTPSServer: \(options: ServerOptions, handler: ProxyRequestListener\) => ReturnType<typeof createHttpsServer>/)
+  assert.match(plan, /createHTTPServer: createHttpServer/)
+  assert.match(plan, /createHTTPSServer: createHttpsServer/)
 })
 
 test('Phase 1 plan freezes the complete authorization matrix and executable task boundaries', async () => {
@@ -392,6 +397,7 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
   assert.match(plan, /`AllowedGroups` is a binding permission, not an administrator grant/)
   assert.match(plan, /FormalPoolOnboardingGroupReader/)
   assert.match(plan, /Groups: &formalGroupReaderFake/)
+  assert.match(plan, /CallerKind: service\.CallerKindHumanJWT/)
   assert.match(plan, /AuthorityRevision/)
   assert.match(plan, /svc\.authorizeSession\(ctx, session\.ID, true, FormalPoolOnboardingStatusWarming\)/)
   assert.match(plan, /formal_pool_onboarding_flow_test\.go/)
