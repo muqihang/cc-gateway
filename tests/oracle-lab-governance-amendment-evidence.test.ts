@@ -210,14 +210,14 @@ const focusedSuiteFilesSource = readFileSync(focusedSuiteFilesPath, 'utf8')
 const expectedFocusedTestFiles = [
   'oracle-lab-hermetic-dependencies.test.ts',
   'oracle-lab-governance-amendment-entry.test.ts',
+  'oracle-lab-ignored-path-inventory.test.ts',
+  'oracle-lab-governance-amendment-evidence.test.ts',
   'oracle-lab-review-overlay.test.ts',
   'oracle-lab-traceability.test.ts',
   'oracle-lab-claim-matrix.test.ts',
   'oracle-lab-current-observations.test.ts',
   'oracle-lab-harness.test.ts',
   'oracle-lab-reviewed-snapshot-binding.test.ts',
-  'oracle-lab-ignored-path-inventory.test.ts',
-  'oracle-lab-governance-amendment-evidence.test.ts',
 ]
 assert.deepEqual([...focusedSuiteFilesSource.matchAll(/['"]([^'"]+\.test\.ts)['"]/g)].map((match) => match[1]), expectedFocusedTestFiles)
 const focusedRunner = readFileSync(path.join(root, 'tests/run-p0-1.ts'), 'utf8')
@@ -871,8 +871,10 @@ function writeReportFixture(repository: string): void {
 const leafSymlinkCliRoot = cliFixture('report-leaf-symlink')
 writeReportFixture(leafSymlinkCliRoot)
 const leafTarget = path.join(leafSymlinkCliRoot, 'report-target.md')
+const leafOutput = path.join(leafSymlinkCliRoot, evidence.ARTIFACT_CHAIN.report_markdown)
 writeFileSync(leafTarget, markdown)
-symlinkSync(leafTarget, path.join(leafSymlinkCliRoot, evidence.ARTIFACT_CHAIN.report_markdown))
+if (existsSync(leafOutput)) renameSync(leafOutput, path.join(leafSymlinkCliRoot, 'committed-report.md'))
+symlinkSync(leafTarget, leafOutput)
 expectCliCode(runCli(leafSymlinkCliRoot, [
   'validate-report', '--report', evidence.ARTIFACT_CHAIN.report, '--markdown', evidence.ARTIFACT_CHAIN.report_markdown,
 ]), 'artifact_symlink')
