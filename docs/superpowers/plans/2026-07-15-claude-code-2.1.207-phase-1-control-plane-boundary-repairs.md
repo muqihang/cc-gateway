@@ -26,7 +26,7 @@
 - Every non-public onboarding route is exercised against the complete executable caller/session matrix from hardening Section 8.3. Coverage is route-by-dimension, not one route per dimension; revoked/expired sessions, ordinary users, group and tenant administrators, service callers, stale tabs, concurrent role changes, and duplicated callbacks are explicit cases.
 - Phase 1 RED evidence is accepted only when every failing leaf name matches the command-specific frozen allowlist and its safe observed failure-family set exactly equals the catalog set. A nonzero exit, an extra unrelated failure, an unparsed failing leaf, or a forged persisted family field is always `unexpected_fail`.
 - Every H1 command runs inside a reviewed OS-enforced loopback-only network sandbox. Proxy variables are defense in depth, not the sandbox. Missing enforcement, a failed public-socket denial canary, or any observed non-loopback DNS/socket violation fails before evidence is written.
-- The final Phase 1 handoff is never minted from feature branches. Both implementation PRs must first merge; a clean post-integration worktree then freezes exact `muqihang/main` heads, reruns the complete catalog, and emits an artifact-commit plus one-file receipt-commit chain bound to those integrated heads.
+- The final Phase 1 handoff is never minted from feature branches. Both implementation PRs must first merge. Post-integration uses one CC evidence/controller worktree whose HEAD remains the exact fetched CC main plus two distinct clean tested roots (detached CC integrated main and Sub2API integrated main); the uncommitted integration entry exists only in the controller root. This preserves clean capture inputs and lets the eventual artifact commit retain the exact integrated CC main as its parent.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
 - Before each task, run `codegraph status`; if stale, run `codegraph sync`. Use CodeGraph before locating or reading code.
 - The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate a fresh `phase-1-execution-context.json` against `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings. Refresh it whenever its 24-hour window expires.
@@ -47,6 +47,7 @@
 - Modify `backend/internal/service/formal_pool_onboarding_service.go`: authority enforcement, response version, B1 two-step verification/finalization.
 - Modify `backend/internal/handler/admin/formal_pool_onboarding_handler.go`: inject authority for every admin route and stop request-derived origin construction.
 - Modify `backend/internal/handler/wire.go`: inject the production principal resolver.
+- Regenerate `backend/cmd/server/wire_gen.go`: commit the deterministic Wire graph after provider and router signature changes.
 - Modify `backend/internal/config/config.go`: `authority_tenant_id` and `public_origin` configuration.
 - Modify `backend/internal/service/formal_pool_config.go` and `backend/internal/service/wire.go`: normalize public origin and wire it into onboarding service.
 - Modify `deploy/config.example.yaml`: document explicit tenant and public origin.
@@ -140,7 +141,7 @@ No Sub2API or runtime source file may change before this commit. If the executio
 - Test: `backend/internal/service/formal_pool_onboarding_store_test.go`
 
 **Interfaces:**
-- Produces: `FormalPoolOnboardingPrincipal`, `FormalPoolRequestAuthority`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
+- Produces: `FormalPoolOnboardingPrincipal`, exact `CallerKindHumanJWT = "human_jwt"`, `FormalPoolRequestAuthority`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
 - Produces: `FormalPoolOnboardingGroupReader` as a narrow adapter over the existing `GroupRepository` for active-group validation during creation.
 - Produces: `FormalPoolOnboardingSession.Version int64`, owner fields, `FormalPoolOperationReservation`, `beginReservedMutation`, `finishReservedMutation`, and `failReservedMutation`.
 - Consumes: existing `FormalPoolOnboardingStore.get`, `casUpdate`, session `Version`, `GroupID`, and status constants.
@@ -226,6 +227,8 @@ type FormalPoolOnboardingPrincipal struct {
     Active          bool
     SystemAdmin     bool
 }
+
+const CallerKindHumanJWT = "human_jwt"
 
 type FormalPoolRequestAuthority struct {
     Principal       FormalPoolOnboardingPrincipal
@@ -328,6 +331,7 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 - Modify: `backend/internal/service/formal_pool_onboarding_authorization.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_service.go:626-1659`
 - Modify: `backend/internal/service/wire.go`
+- Modify: `backend/cmd/server/wire_gen.go` (generated deterministically by `go generate ./cmd/server`)
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go:1-347`
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_routes_test.go`
 - Modify: `backend/internal/handler/formal_pool_onboarding_provider_test.go`
@@ -420,6 +424,8 @@ Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `Formal
 
 Wire it with the exact provider `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`. Production sets `now: time.Now`; tests inject a fixed clock.
 
+After changing middleware/handler/server/service ProviderSets or provider signatures, run `cd backend && go generate ./cmd/server`. This repository commits `backend/cmd/server/wire_gen.go`; omitting it is a build failure. Record its SHA-256, run the same generation command a second time, and require the digest to remain identical. Then run `git diff --check -- cmd/server/wire_gen.go` and `go test ./cmd/server -count=1` so the generated call graph must compile with the new `ProvideFormalPoolOnboardingHandler`, middleware provider, `ProvideRouter`, and `SetupRouter` signatures.
+
 Add a production-route integration test that mounts the real JWT middleware, router registration, principal resolver, and handler. It proves: valid system-admin JWT reaches the handler; ordinary JWTs, non-admin users with `AllowedGroups`, and non-admin users carrying same/cross request tenant/group labels get the common 403; expired/revoked/inactive JWTs get the common 401; Admin API Key does not authenticate; and a hook that changes user role/status/token version after middleware but before resolver returns 401/403 with zero service/dependency calls. These are the executable group/tenant-administrator denial rows: no test may fabricate a production role or policy table that the repository does not have. Assert the 16-route inventory so a path cannot silently remain under `adminAuth`.
 
 - [ ] **Step 4: Parse optimistic versions centrally**
@@ -507,6 +513,8 @@ export async function testProxy(session: FormalPoolSession): Promise<FormalPoolS
 
 Run: `cd backend && go test ./internal/service ./internal/server/middleware ./internal/server/routes ./internal/handler/... -run 'FormalPoolOnboarding|ProvideFormalPoolOnboarding|JWTAuth' -count=1`
 
+Run: `cd backend && go generate ./cmd/server && go test ./cmd/server -count=1`
+
 Run: `cd frontend && npm run typecheck`
 
 Expected: both PASS. The exact 15-route cross-product returns 401 for missing/revoked/expired JWTs and Admin API Key service callers, 403 for valid non-admin JWTs (including would-be group/tenant administrator fixtures and cross-boundary labels), 401/403 for concurrently invalidated authority according to status/token-version versus role failure, and 409 for stale or conflicting versions only after authority succeeds. Combined owner+stale+wrong-state cases return 403 with zero dependency calls. Duplicate OAuth callback and concurrent promote are idempotent with one dependency call. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
@@ -514,7 +522,7 @@ Expected: both PASS. The exact 15-route cross-product returns 401 for missing/re
 - [ ] **Step 9: Commit Task 2**
 
 ```bash
-git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/service/wire.go backend/internal/server/middleware/auth_subject.go backend/internal/server/middleware/jwt_auth.go backend/internal/server/middleware/jwt_auth_test.go backend/internal/server/middleware/formal_pool_onboarding_auth.go backend/internal/server/middleware/formal_pool_onboarding_auth_test.go backend/internal/server/middleware/wire.go backend/internal/server/http.go backend/internal/server/router.go backend/internal/server/routes/admin.go backend/internal/server/routes/formal_pool_onboarding_auth_integration_test.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
+git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/service/wire.go backend/internal/server/middleware/auth_subject.go backend/internal/server/middleware/jwt_auth.go backend/internal/server/middleware/jwt_auth_test.go backend/internal/server/middleware/formal_pool_onboarding_auth.go backend/internal/server/middleware/formal_pool_onboarding_auth_test.go backend/internal/server/middleware/wire.go backend/internal/server/http.go backend/internal/server/router.go backend/internal/server/routes/admin.go backend/internal/server/routes/formal_pool_onboarding_auth_integration_test.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go backend/cmd/server/wire_gen.go frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
 git commit -m "feat(formal-pool): enforce owner and version on every onboarding route"
 ```
 
@@ -1044,7 +1052,7 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 
 **Interfaces:**
 - Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0. The older `tools/claude-native-oracle-matrix.ts` profile is a discovery reference only; H1 accepts only the exact profile below after live canaries pass.
-- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `validatePhase1CatalogValue`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
+- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `validatePhase1CatalogValue`, `validatePhase1CaptureInputs`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
 - Does not modify the Phase 0 command catalog, Registry v1 validators, P0.1 CLI, or their schemas.
 
 - [ ] **Step 1: Write RED tests for the Phase 1 adapter contract**
@@ -1125,6 +1133,20 @@ test('capture rejects missing, expired, tampered, or unapproved execution contex
       hasCode('execution_context_not_authorized'))
   }
   assert.equal(spawnObserver.count, 0)
+})
+
+test('post-integration separates the declared controller delta from clean tested roots', () => {
+  const allowed = postIntegrationFixture({
+    controllerStatus: ['?? docs/superpowers/evidence/phase-1/phase-1-integration-entry.json'],
+    ccTestedStatus: [], sub2apiTestedStatus: [],
+  })
+  assert.doesNotThrow(() => validatePhase1CaptureInputs(allowed))
+  for (const fixture of [
+    postIntegrationFixture({ controllerStatus: ['?? unrelated.txt'] }),
+    postIntegrationFixture({ ccTestedStatus: [' M src/proxy.ts'] }),
+    postIntegrationFixture({ sub2apiTestedStatus: ['?? stray.txt'] }),
+    postIntegrationFixture({ controllerEqualsCCTestedRoot: true }),
+  ]) assert.throws(() => validatePhase1CaptureInputs(fixture), hasCode('capture_root_not_authorized'))
 })
 
 test('capture refuses proxy-only networking and requires an OS loopback sandbox', async () => {
@@ -1210,12 +1232,39 @@ export type Phase1ContractRootBinding = {
   contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
 }
 
-export type Phase1ContractRootEnvelope = {
+export type Phase1ControllerRootBinding =
+  | {
+      stage: 'feature-candidate'
+      head: string
+      root_identity_digest: string
+      same_as_tested_cc_root: true
+      preexisting_delta_paths: []
+      declared_output_paths: [
+        'docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json',
+        'docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json',
+      ]
+    }
+  | {
+      stage: 'post-integration'
+      head: string
+      root_identity_digest: string
+      same_as_tested_cc_root: false
+      preexisting_delta_paths: [
+        'docs/superpowers/evidence/phase-1/phase-1-integration-entry.json',
+      ]
+      declared_output_paths: [
+        'docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json',
+        'docs/superpowers/evidence/phase-1/phase-1-command-results.json',
+      ]
+    }
+
+export type Phase1CaptureRootEnvelope = {
+  controller_root: Phase1ControllerRootBinding
   sub2api_contract_root: Phase1ContractRootBinding
 }
 ```
 
-`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1ContractRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact `Phase1ContractRootBinding` object and `additionalProperties: false`. `root_identity_digest` is the SHA-256 of the canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. `clone_kind`, branch, contract path, and contract digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects equality with either implementation root, and rechecks the same binding before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1CaptureRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact controller and contract-root unions with `additionalProperties: false`. The controller union freezes each stage's only legal preexisting delta and output paths. Every `root_identity_digest` is the SHA-256 of canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. Contract `clone_kind`, branch, path, and digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves contract `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects forbidden root equality, and rechecks the same bindings before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
 
 The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}`, `${SUB2API_ROOT}`, and `${SUB2API_CONTRACT_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
 
@@ -1249,6 +1298,7 @@ The first twelve entries use `phase1-green`; the final two use `phase1-red`. `SU
 ```typescript
 export function captureAndRunPhase1(options: {
   stage: 'feature-candidate' | 'post-integration'
+  controllerRoot: string
   ccGatewayRoot: string
   sub2apiRoot: string
   sub2apiContractRoot: string
@@ -1264,9 +1314,9 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-`feature-candidate` requires `executionContextPath` and forbids `integrationEntryPath`; `post-integration` requires `integrationEntryPath` and forbids `executionContextPath`. Both stages require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
+`feature-candidate` requires `executionContextPath`, forbids `integrationEntryPath`, and requires `controllerRoot === ccGatewayRoot` with a clean pre-run status. `post-integration` requires `integrationEntryPath`, forbids `executionContextPath`, requires `controllerRoot !== ccGatewayRoot`, and requires the controller HEAD to equal the frozen CC integrated-main commit with exactly one allowed pre-run delta: untracked `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`. In both stages, `ccGatewayRoot` and `sub2apiRoot` are the tested roots and must be entirely clean before and after every catalog command; only declared output writes in the controller root may change during the transaction. Output paths must resolve inside `controllerRoot`, be absent before capture, and be included in its declared after-status. Both stages also require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
 
-Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture reviewed heads, CodeGraph digests, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, reject every unclassified failing leaf and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any sandbox violation, family/name mismatch, unexpected status, or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the selected stage authority and parse the closed plan-review provenance. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then enforce the stage-specific controller rule above; verify both tested roots are on the declared feature heads or exact integrated-main heads, are clean, have current CodeGraph indexes, and remain byte/status stable around each command; validate parent receipts, shared-contract bytes, and absent production/canary flags. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture controller/tested heads, root-identity/status digests, CodeGraph digests, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, reject every unclassified failing leaf and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any sandbox violation, root/status change, family/name mismatch, unexpected status, or unsafe output, then atomically write the two declared outputs under `controllerRoot`. No result evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1330,7 +1380,7 @@ Expected: both CodeGraph statuses are up to date and both Git status outputs are
 - [ ] **Step 2: Execute and validate one feature-candidate H1 capture**
 
 ```bash
-npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
+npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
 ```
 
 Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
@@ -1350,17 +1400,23 @@ Push `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`, creat
 
 - [ ] **Step 5: Freeze exact integrated mains in new clean worktrees**
 
-Fetch `muqihang/main` in both repositories after both PRs merge. Create `codex/oracle-phase-1-post-integration` from the fetched CC Gateway main and a clean Sub2API post-integration worktree at its fetched main. Initialize or sync CodeGraph in both and require current indexes and empty status.
+Fetch `muqihang/main` in both repositories after both PRs merge. Create these three distinct roots, all initially at the exact fetched integrated commits:
 
-Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, on branch `main` at the exact integrated Sub2API remote-main commit; it must not be a linked worktree or either tested repository root. Create `phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; the closed contract-root clone-kind/origin-URL/root-identity/head/branch/clean-status/contract binding; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either local HEAD differs from fetched remote main, either remote advances during freezing, or any feature head is not an ancestor.
+- `CC_GATEWAY_EVIDENCE_ROOT`: a CC worktree on branch `codex/oracle-phase-1-post-integration`; this is the controller/output root and the eventual artifact/receipt branch.
+- `CC_GATEWAY_INTEGRATION_ROOT`: a separate detached CC worktree at fetched `muqihang/main`; this is the clean tested CC root and is never written by evidence generation.
+- `SUB2API_INTEGRATION_ROOT`: a separate detached Sub2API worktree at fetched `muqihang/main`; this is the clean tested Sub2API root and is never written by evidence generation.
+
+Initialize or sync CodeGraph in all three and require current indexes. Before building the integration entry, all three statuses are empty. `CC_GATEWAY_EVIDENCE_ROOT` and `CC_GATEWAY_INTEGRATION_ROOT` must have different canonical realpaths but the same exact integrated CC HEAD and implementation-path tree digest.
+
+Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, on branch `main` at the exact integrated Sub2API remote-main commit; it must not be a linked worktree or either tested repository root. From `CC_GATEWAY_EVIDENCE_ROOT`, create the untracked `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; controller and both tested root identity/head/status digests; proof the CC controller/tested roots start at the same integrated main; the closed contract-root clone-kind/origin-URL/root-identity/head/branch/clean-status/contract binding; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either tested HEAD differs from fetched remote main, either remote advances during freezing, either tested root is dirty, the controller has any other delta, or any feature head is not an ancestor. Do not commit the entry yet: immediately before Step 6, controller status must contain exactly that one untracked path while both tested roots remain empty.
 
 - [ ] **Step 6: Rerun the complete catalog on the exact integrated main heads**
 
 ```bash
-npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
-Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, and repository commits exactly equal the integration entry's two fetched main heads. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. Validate results before changing governance state.
+Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the entry plus the two declared result files. Validate results before changing governance state.
 
 - [ ] **Step 7: Transition only the four Phase 1 requirement rows**
 
@@ -1400,7 +1456,7 @@ git add docs/superpowers/evidence/phase-1/phase-1-integration-entry.json docs/su
 git commit -m "docs(oracle): bind Phase 1 to integrated main heads"
 ```
 
-The validator requires this commit's parent to be the exact captured CC integrated main head and its delta to contain only the declared Phase 1 evidence/governance paths. Every bound artifact digest must equal `git show <artifact_commit>:<path>`.
+Because `CC_GATEWAY_EVIDENCE_ROOT` has received no prior commit, the validator requires this artifact commit's sole parent to be the exact captured CC integrated main head and its delta to contain only the declared Phase 1 evidence/governance paths. Every bound artifact digest must equal `git show <artifact_commit>:<path>`. The detached tested roots are never used for commits and remain clean through receipt generation.
 
 - [ ] **Step 10: Generate a self-reference-safe receipt and commit only it**
 
@@ -1477,3 +1533,5 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.
 - [ ] Both implementation PRs merge before final capture; the post-integration artifact/receipt chain binds fetched mains and is independently reviewable and revertible.
+- [ ] Post-integration keeps the controller/evidence branch distinct from clean detached CC/Sub2API tested roots, allows only the untracked integration entry before capture, and preserves the exact integrated CC main as the artifact commit parent.
+- [ ] Every Wire provider/signature change regenerates and commits deterministic `backend/cmd/server/wire_gen.go`, and `go test ./cmd/server` passes.
