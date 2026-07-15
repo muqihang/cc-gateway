@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-current-observation.schema.json",
+  "title": "Oracle Lab RA-CURRENT Observation Ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ledger_kind",
+    "ledger_role",
+    "task_0b_entry_binding",
+    "repository_commits",
+    "verifications",
+    "append_history",
+    "observations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ledger_kind": { "const": "ra_current_observation_ledger" },
+    "ledger_role": { "const": "evidence_not_requirement" },
+    "task_0b_entry_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "path", "digest"],
+      "properties": {
+        "repository": { "const": "cc-gateway" },
+        "path": { "const": "docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json" },
+        "digest": { "const": "sha256:e6d7426c63f8bf96a91de5c47d9fc6807fae5da68ad507e8ba65b93f2732f235" }
+      }
+    },
+    "repository_commits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cc_gateway", "sub2api"],
+      "properties": {
+        "cc_gateway": { "$ref": "#/$defs/repositoryCommit" },
+        "sub2api": { "$ref": "#/$defs/repositoryCommit" }
+      }
+    },
+    "verifications": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/verification" }
+    },
+    "append_history": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/appendEntry" }
+    },
+    "observations": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/observation" }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "resultDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[0-9a-f]{64}$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$", "maxLength": 40 },
+    "repository": { "enum": ["cc-gateway", "sub2api"] },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+    },
+    "repositoryCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "commit": { "$ref": "#/$defs/commit" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verification_id", "repository", "cwd", "argv", "environment_profile", "env", "expected_classification", "result_digest"],
+      "properties": {
+        "verification_id": { "type": "string", "pattern": "^OBS[0-9]{3}(?:-[A-Z0-9]+)*$", "maxLength": 40 },
+        "repository": { "$ref": "#/$defs/repository" },
+        "cwd": { "anyOf": [{ "const": "." }, { "$ref": "#/$defs/relativePath" }] },
+        "argv": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "environment_profile": { "enum": ["HERMETIC_NETWORK_ENV", "INDEXED_CODEGRAPH"] },
+        "env": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Z_][A-Z0-9_]*$" },
+          "additionalProperties": { "type": "string", "maxLength": 100 }
+        },
+        "expected_classification": { "type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 80 },
+        "result_digest": { "$ref": "#/$defs/resultDigest" }
+      }
+    },
+    "repositoryBinding": { "$ref": "#/$defs/repositoryCommit" },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "path"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/repository" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "symbols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_][A-Za-z0-9_./-]*$" }
+        },
+        "test_names": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 180, "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9_][A-Za-z0-9_./-]*$" }
+        }
+      },
+      "anyOf": [{ "required": ["symbols"] }, { "required": ["test_names"] }]
+    },
+    "failureSafeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "results", "aggregate_digest"],
+      "properties": {
+        "kind": { "const": "stable_failure_code_aggregate" },
+        "results": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification", "failure_code"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-A" },
+                "classification": { "const": "expected_fail" },
+                "failure_code": { "const": "gateway_compromise_boundary_required" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification", "failure_code"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-B" },
+                "classification": { "const": "expected_fail" },
+                "failure_code": { "const": "gateway_compromise_boundary_required" }
+              }
+            }
+          ],
+          "items": false
+        },
+        "aggregate_digest": { "const": "sha256:a65265c1d00fb16f440417006ba96f1d1ad4583914c8325d521de9ea73ce933b" }
+      }
+    },
+    "successSafeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "results", "aggregate_digest"],
+      "properties": {
+        "kind": { "const": "stable_success_aggregate" },
+        "results": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-A" },
+                "classification": { "const": "pass" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["verification_id", "classification"],
+              "properties": {
+                "verification_id": { "const": "OBS009-RED-B" },
+                "classification": { "const": "pass" }
+              }
+            }
+          ],
+          "items": false
+        },
+        "aggregate_digest": { "const": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468" }
+      }
+    },
+    "safeResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/failureSafeResult" },
+        { "$ref": "#/$defs/successSafeResult" }
+      ]
+    },
+    "statusEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "sequence",
+        "state",
+        "source_section",
+        "revalidated_at",
+        "repository_bindings",
+        "anchors",
+        "verification_ids",
+        "evidence_digest",
+        "result_digest",
+        "observation_scope",
+        "confidence",
+        "phase_slices",
+        "wp_umbrella",
+        "change_reason",
+        "previous_event_digest",
+        "event_digest"
+      ],
+      "properties": {
+        "event_id": { "type": "string", "pattern": "^RA-CURRENT-(?:00[1-9]|010)-E[0-9]{3}$" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "state": { "enum": ["confirmed", "partial", "changed", "resolved", "stale"] },
+        "source_section": { "type": "string", "pattern": "^Task 4 / RA-CURRENT-(?:00[1-9]|010)$", "maxLength": 40 },
+        "revalidated_at": { "$ref": "#/$defs/timestamp" },
+        "repository_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/repositoryBinding" }
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/anchor" }
+        },
+        "verification_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^OBS[0-9]{3}(?:-[A-Z0-9]+)*$" }
+        },
+        "evidence_digest": { "$ref": "#/$defs/digest" },
+        "result_digest": { "$ref": "#/$defs/resultDigest" },
+        "observation_scope": { "enum": ["local_structural", "local_observational", "cross_repository_local", "process_local"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "phase_slices": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["phase_1", "phase_2", "phase_3a", "phase_3b", "phase_3_5", "phase_4", "phase_5"] }
+        },
+        "wp_umbrella": { "enum": ["WP-R0", "WP-R1", "WP-R2", "WP-R3", "WP-R4", "WP-R5", "WP-R6", "WP-R7", "WP-R8", "WP-R9"] },
+        "change_reason": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^(?!.*(?:system_prompt|api_key|account_id|proxy_id)(?:_|$))[a-z0-9]+(?:_[a-z0-9]+)*$" },
+        "safe_result": { "$ref": "#/$defs/safeResult" },
+        "previous_event_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "event_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "required_consequence", "prohibited_promotion", "status_history"],
+      "properties": {
+        "observation_id": { "type": "string", "pattern": "^RA-CURRENT-(?:00[1-9]|010)$" },
+        "required_consequence": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "prohibited_promotion": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "status_history": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/statusEvent" }
+        }
+      },
+      "allOf": [{
+        "if": {
+          "properties": { "observation_id": { "const": "RA-CURRENT-009" } },
+          "required": ["observation_id"]
+        },
+        "then": {
+          "properties": {
+            "status_history": {
+              "items": {
+                "allOf": [
+                  { "required": ["safe_result"] },
+                  {
+                    "if": {
+                      "properties": { "state": { "const": "resolved" } },
+                      "required": ["state"]
+                    },
+                    "then": { "properties": { "safe_result": { "$ref": "#/$defs/successSafeResult" } } },
+                    "else": { "properties": { "safe_result": { "$ref": "#/$defs/failureSafeResult" } } }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "status_history": {
+              "items": { "not": { "required": ["safe_result"] } }
+            }
+          }
+        }
+      }]
+    },
+    "appendEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "appended_at", "previous_ledger_commit", "previous_ledger_digest", "previous_append_digest", "event_digests", "append_digest"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 1 },
+        "appended_at": { "$ref": "#/$defs/timestamp" },
+        "previous_ledger_commit": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/commit" }] },
+        "previous_ledger_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "previous_append_digest": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "event_digests": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/digest" }
+        },
+        "append_digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

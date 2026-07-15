@@ -1,7 +1,9 @@
 [
   {
     "claim_id": "CL-DIRECT-EGRESS-001",
-    "requirement_ids": ["HA-P0-003"],
+    "requirement_ids": [
+      "HA-P0-003"
+    ],
     "claim_class": "local_structural",
     "authority_state": "unverified",
     "statement": "The gateway direct-egress path is not proven disabled; B4 RED evidence shows the negative capability remains unverified.",
@@ -21,7 +23,9 @@
   },
   {
     "claim_id": "CL-PINNED-OBS-001",
-    "requirement_ids": ["HA-P0-006"],
+    "requirement_ids": [
+      "HA-P0-006"
+    ],
     "claim_class": "local_observational",
     "authority_state": "unverified",
     "statement": "No persisted local-wire artifact proves the pinned client emitted the recorded request shape; Phase 3 owns that evidence capture.",
@@ -37,6 +41,183 @@
     "rollback_evidence_ids": [],
     "deployed_artifacts": [],
     "derived_from": "pinned-client-run",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED",
+    "requirement_ids": [
+      "RA-P1-002"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "Matching local headers does not prove official-client identity.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "provider",
+    "stability_class": "provider-unknown",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-CCH-SERVER-ACCEPTANCE-PROHIBITED",
+    "requirement_ids": [
+      "RA-P1-001"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "Local CCH verification does not prove server acceptance.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "server",
+    "stability_class": "server-version-dependent",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-DEVICE-PROOF-PROHIBITED",
+    "requirement_ids": [
+      "RA-P1-005"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "A stable `device_id` is not trusted-device proof.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "provider",
+    "stability_class": "provider-unknown",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-TLS-WIRE-EQUIVALENCE-PROHIBITED",
+    "requirement_ids": [
+      "RA-P0-003",
+      "RA-P1-001"
+    ],
+    "claim_class": "local_observational",
+    "authority_state": "unverified",
+    "statement": "A local TLS summary does not prove complete wire equivalence.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "local",
+    "stability_class": "transport-version-dependent",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-LONG-TERM-ACCOUNT-SAFETY-PROHIBITED",
+    "requirement_ids": [
+      "RA-P0-009"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "One successful request does not prove long-term account safety.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "provider",
+    "stability_class": "longitudinal-provider-dependent",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-CHANGELOG-RISK-RULES-PROHIBITED",
+    "requirement_ids": [
+      "RA-P1-001"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "Public changelog entries do not reveal private risk-control rules.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "provider",
+    "stability_class": "provider-private",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-NEWER-PERSONA-PROMOTION-PROHIBITED",
+    "requirement_ids": [
+      "RA-P1-002"
+    ],
+    "claim_class": "local_structural",
+    "authority_state": "unverified",
+    "statement": "A newer client version cannot select a newer outbound persona without profile authority.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "local",
+    "stability_class": "profile-version-dependent",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
+    "authoritative_provider_disclosure": false
+  },
+  {
+    "claim_id": "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED",
+    "requirement_ids": [
+      "RA-P0-009"
+    ],
+    "claim_class": "provider_internal",
+    "authority_state": "unverified",
+    "statement": "Local or mock evidence does not authorize production traffic.",
+    "evidence_ids": [],
+    "observation_scope": "local",
+    "server_dependency": "provider",
+    "stability_class": "deployment-gated",
+    "confidence": 1,
+    "contradiction_ids": [],
+    "expiry": null,
+    "canary_evidence_ids": [],
+    "production_gate_ids": [],
+    "rollback_evidence_ids": [],
+    "deployed_artifacts": [],
+    "derived_from": "review-amendments-section-2.2",
     "authoritative_provider_disclosure": false
   }
 ]

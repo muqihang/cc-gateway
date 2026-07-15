@@ -1,0 +1,557 @@
+{
+  "schema_version": 1,
+  "ledger_kind": "ra_current_observation_ledger",
+  "ledger_role": "evidence_not_requirement",
+  "task_0b_entry_binding": {
+    "repository": "cc-gateway",
+    "path": "docs/superpowers/evidence/p0-1/p0-1-entry-baseline.json",
+    "digest": "sha256:e6d7426c63f8bf96a91de5c47d9fc6807fae5da68ad507e8ba65b93f2732f235"
+  },
+  "repository_commits": {
+    "cc_gateway": {
+      "repository": "cc-gateway",
+      "commit": "c7404e36c576965a6177f6d25cd8657b6550261d"
+    },
+    "sub2api": {
+      "repository": "sub2api",
+      "commit": "d5a42bbd24d15af2ce7646d050a5ae5c77911d4f"
+    }
+  },
+  "verifications": [
+    {
+      "verification_id": "OBS001-T",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/native-oracle-matrix.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass",
+      "result_digest": "sha256:b82f4cb26f83c6496a9570f9f0cc5c830cd662a79b4fac6dfa0fb6564e89a6db"
+    },
+    {
+      "verification_id": "OBS002-T1",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/persona-registry.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass",
+      "result_digest": "sha256:543d329d1f557785ecdc84bf843db0b7c3d286f32991608e350769e37e8442e9"
+    },
+    {
+      "verification_id": "OBS002-T2",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/formal-pool-canonical-promotion.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass",
+      "result_digest": "sha256:21dec77d55f3a7a1917f925ae8329990f49082d440348656598da5abe95a12f4"
+    },
+    {
+      "verification_id": "OBS003-G",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "handleRequest RawCaptureSink EgressSidecarStreamResponse pipe Buffer.concat"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "anchors_present_no_outcome_envelope_owner",
+      "result_digest": "sha256:f518831422a9dcb66cf56a24163e08399f7b75f96712159d5b94cbb7aad8b524"
+    },
+    {
+      "verification_id": "OBS003-T",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/formal-pool-real-chain-mock-response.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass",
+      "result_digest": "sha256:f5295670b35252ad5ccc795ad9375c0d289f15d0bee282457dccc8b847c4e0fe"
+    },
+    {
+      "verification_id": "OBS004-SUB",
+      "repository": "sub2api",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "FormalPoolCCGatewayRuntimeRegistrar RegisterCCGatewayRuntime freeze drain revoke delete query reconcile"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "register_present_full_lifecycle_absent",
+      "result_digest": "sha256:2cf5cb66abcb0ce6dbe00d003bbc9e9d8f29fc7ca90451c581818037b25f00c2"
+    },
+    {
+      "verification_id": "OBS004-CC",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "RUNTIME_REGISTER_PATH sameRuntimeMappingAuthorityAllowingCredentialRotation isAllowedRuntimeCanonicalPromotion sameRuntimeMappingAuthorityAllowingTLSProfileBackfill"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "limited_paths_present",
+      "result_digest": "sha256:c318bc5e78eaa474f4a509a7d356abb6158a027ff59008845eb7a9c75f01ab96"
+    },
+    {
+      "verification_id": "OBS005-CC",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "EgressSidecarControl Control replay nonce deadline body hash header hash attempt key epoch resolve classify pin dial"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "capability_and_replay_fields_missing",
+      "result_digest": "sha256:e56e2891aeb772282b8c9ce913f99cfa574331a23a13a2e5f095fccd52f20932"
+    },
+    {
+      "verification_id": "OBS005-GO-RED",
+      "repository": "cc-gateway",
+      "cwd": "sidecar/egress-tls-sidecar",
+      "argv": ["go", "test", "-tags=phase0red", "./internal/control", "./internal/server", "-count=1"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "expected_fail_b5_b6",
+      "result_digest": "sha256:903ef955061b27e2f801abc77be511507a73af5f4fd77f4a7601cbb312696909"
+    },
+    {
+      "verification_id": "OBS006-SUB",
+      "repository": "sub2api",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "ccGatewayGeneratedDeviceID ccGatewayDeviceID scopedStickyHMACBytes"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "hmac_derived_id_path_present",
+      "result_digest": "sha256:e62de8a011a13ef87dec1efa802271137d0dada421aafaa5e936421094186e2d"
+    },
+    {
+      "verification_id": "OBS006-CC",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "normalizeRuntimeAccountMapping verifyProviderAwareFinalRequest device_id equality"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "format_equality_present_issuer_verifier_absent",
+      "result_digest": "sha256:e6efe08994eec5f942ccaccb74960d16133aeecb6a10be0b3af1a6dd3b554f8b"
+    },
+    {
+      "verification_id": "OBS007-G",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "ProxyRuntimeState replayRuntimeMappings RUNTIME_MAPPING_FILE_ENV FORMAL_POOL_SESSION_LEDGER_FILE_ENV /_health"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "process_map_local_file_authority_present",
+      "result_digest": "sha256:d1fc2245e1089dbc0a103d3c897cb646bbb38fac17d2f8f971931cfd20fd64b2"
+    },
+    {
+      "verification_id": "OBS007-T",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/health-verify.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass",
+      "result_digest": "sha256:8e1ba19dccfd9f397b6d99e8af8de47ab437d65de4db15cac10bf326edc38174"
+    },
+    {
+      "verification_id": "OBS008-G",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "explore", "Config server.host startProxy listenHost server.listen"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "configured_host_passed_to_listen",
+      "result_digest": "sha256:10b6a4bf50447b0a4f02114dc864fdd0733e218a527dc59dcd48e5e3b071eca0"
+    },
+    {
+      "verification_id": "OBS008-T",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["npm", "exec", "tsx", "tests/security-boundary.test.ts"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": {},
+      "expected_classification": "pass_current_default_ipv6_any",
+      "result_digest": "sha256:32783a541b3e4fb5b5ff1d6b0ccbcdbeff887ea6d8241b486694fa43edbf02a3"
+    },
+    {
+      "verification_id": "OBS009-RED-A",
+      "repository": "sub2api",
+      "cwd": "backend",
+      "argv": ["go", "test", "./internal/service", "-run", "^TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream$", "-count=1", "-v"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": { "CC_GATEWAY_REPO_ROOT": "${CC_GATEWAY_ROOT}" },
+      "expected_classification": "expected_fail_gateway_compromise_boundary_required",
+      "result_digest": "sha256:81857c3a5ae049e3d0b5ae428c7e9ade496fe6fecd1be47eed93907038b709a6"
+    },
+    {
+      "verification_id": "OBS009-RED-B",
+      "repository": "sub2api",
+      "cwd": "backend",
+      "argv": ["go", "test", "./internal/service", "-run", "^TestJointLocalCaptureAcceptanceArtifact$", "-count=1", "-v"],
+      "environment_profile": "HERMETIC_NETWORK_ENV",
+      "env": { "CC_GATEWAY_REPO_ROOT": "${CC_GATEWAY_ROOT}" },
+      "expected_classification": "expected_fail_gateway_compromise_boundary_required",
+      "result_digest": "sha256:e3486ec1622e88e1c0271078f62314aa30f7f2cbe579bd3dae70210839411b64"
+    },
+    {
+      "verification_id": "OBS010-G",
+      "repository": "cc-gateway",
+      "cwd": ".",
+      "argv": ["codegraph", "node", "src/proxy.ts"],
+      "environment_profile": "INDEXED_CODEGRAPH",
+      "env": {},
+      "expected_classification": "one_4726_line_concentrated_owner_file",
+      "result_digest": "sha256:2bcdb0ef3fc851912b9125475b5a4e21f0a184add288fb5d06cace523125f802"
+    }
+  ],
+  "append_history": [
+    {
+      "sequence": 1,
+      "appended_at": "2026-07-13T07:01:25Z",
+      "previous_ledger_commit": null,
+      "previous_ledger_digest": null,
+      "previous_append_digest": null,
+      "event_digests": [
+        "sha256:9e38d7b3ddcfbffce392f023423a8ed25694f8f6db5aff29a4cb8ca7c59819a5",
+        "sha256:743667290dc09dfd4732473c085286aaedb32b1067e08231420df022873beaa5",
+        "sha256:4825a3ad5398c77df21dc214b9910712b2abbd3a67fcf7d36dfed1ed82781af3",
+        "sha256:93caed593264583883bfeec8106771f466f92eb4074ca2c1630ad8c420c388b6",
+        "sha256:4b107508de9f8f48072160cc92de1990d556b57d67fe4414d0c899ae9cb860c4",
+        "sha256:350775b018573d2425b5809cffc4f4abfaf70679dfb2478bc8f8cbe291ff6369",
+        "sha256:7db74c1f90d643eb009375a85abe23b2ae66a2f56393cbe5461cbf97b4ce205e",
+        "sha256:19147d6da36eb762f4f4d632d35c1b1d9adf372f9036bfccd0884229a6b6d98e",
+        "sha256:ffcc80bdc40b8f29694609230fedc9ad533bacde65b5413069aada2360de56c0",
+        "sha256:722e30d1e04d70f1887c876d82339afd3fb70428f58812f9829bc2e115ac1372"
+      ],
+      "append_digest": "sha256:8760d1661678d690151302f2ee73e280c03c1938e79e03b64d1e5115a626cce3"
+    },
+    {
+      "sequence": 2,
+      "appended_at": "2026-07-13T09:44:13Z",
+      "previous_ledger_commit": "19f4ce49f5d5598309b70a1d09c70e848428ec46",
+      "previous_ledger_digest": "sha256:d6db962709227d5333b6e4d98e053adb77be542d31f502e9f7bc0467054351e1",
+      "previous_append_digest": "sha256:8760d1661678d690151302f2ee73e280c03c1938e79e03b64d1e5115a626cce3",
+      "event_digests": [
+        "sha256:6d78a176893613692a0bf84cb67592eda1dd9c197d9d69b2e001f549d54b396a"
+      ],
+      "append_digest": "sha256:ad733ef63d7cc4f69e78bf8345de07760d0e26035b4a1cec9c33c03e0aaf8e6c"
+    }
+  ],
+  "observations": [
+    {
+      "observation_id": "RA-CURRENT-001",
+      "required_consequence": "Expand the version/change-point evidence matrix before profile synthesis.",
+      "prohibited_promotion": "Existing 2.1.179 harness cannot satisfy 2.1.207 evidence or profile completion.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-001-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-001",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "tools/claude-native-oracle-matrix.ts", "symbols": ["DEFAULT_VERSION", "runNativeOracleMatrix", "runMockProfile", "runRealProfile"] },
+          { "repository": "cc-gateway", "path": "tests/native-oracle-matrix.test.ts", "test_names": ["tests/native-oracle-matrix.test.ts"] }
+        ],
+        "verification_ids": ["OBS001-T"],
+        "evidence_digest": "sha256:01c3bdc63412ddd0c8429f07f3cb668086a8914c4ce4a2c6449c72974b8dd2b6",
+        "result_digest": "sha256:37d842ad5faaf956c94cdfe112ce6b5702f1af61a7932e9cd2afb39067c3225e",
+        "observation_scope": "local_observational",
+        "confidence": 0.99,
+        "phase_slices": ["phase_3a"],
+        "wp_umbrella": "WP-R4",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:9e38d7b3ddcfbffce392f023423a8ed25694f8f6db5aff29a4cb8ca7c59819a5"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-002",
+      "required_consequence": "Generate a coherent 2.1.207 profile from accepted evidence.",
+      "prohibited_promotion": "No handwritten 2.1.207 persona or outbound-persona promotion.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-002-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-002",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/persona-registry.ts", "symbols": ["PersonaProfile", "REGISTRY"] },
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["sameRuntimeMappingAuthorityAllowingCanonicalPromotion", "isAllowedRuntimeCanonicalPromotion"] },
+          { "repository": "cc-gateway", "path": "tests/persona-registry.test.ts", "test_names": ["tests/persona-registry.test.ts"] },
+          { "repository": "cc-gateway", "path": "tests/formal-pool-canonical-promotion.test.ts", "test_names": ["tests/formal-pool-canonical-promotion.test.ts"] }
+        ],
+        "verification_ids": ["OBS002-T1", "OBS002-T2"],
+        "evidence_digest": "sha256:00218a1980bf8bb78cf6a21e85ebe91bfeeb9c14628f83033e62ae4af02c4650",
+        "result_digest": "sha256:4f002ad5544e556a38972ed73f06ad96de669b083b8d1ea69d256d64739b3bc9",
+        "observation_scope": "local_structural",
+        "confidence": 0.99,
+        "phase_slices": ["phase_3b"],
+        "wp_umbrella": "WP-R5",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:743667290dc09dfd4732473c085286aaedb32b1067e08231420df022873beaa5"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-003",
+      "required_consequence": "Capture evidence, then implement bounded layered response/outcome facts.",
+      "prohibited_promotion": "Transparent pipe/chunk capture cannot authorize retry, cost, budget, scheduler, or quarantine decisions.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-003-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-003",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["handleRequest", "RawCaptureSink"] },
+          { "repository": "cc-gateway", "path": "src/egress-sidecar-client.ts", "symbols": ["EgressSidecarStreamResponse"] },
+          { "repository": "cc-gateway", "path": "tests/formal-pool-real-chain-mock-response.test.ts", "test_names": ["tests/formal-pool-real-chain-mock-response.test.ts"] }
+        ],
+        "verification_ids": ["OBS003-G", "OBS003-T"],
+        "evidence_digest": "sha256:3db1edb159c91462414ed5abbd436949fa6309b7adf7c6cea070b40d01f0fcf0",
+        "result_digest": "sha256:813739a07fb1c28a75034986cc8bdfee028c2b5ad93a46dc04876f9327c09654",
+        "observation_scope": "local_observational",
+        "confidence": 0.98,
+        "phase_slices": ["phase_3a", "phase_4"],
+        "wp_umbrella": "WP-R7",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:4825a3ad5398c77df21dc214b9910712b2abbd3a67fcf7d36dfed1ed82781af3"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-004",
+      "required_consequence": "Preserve known re-registration rotation/promotion/TLS-backfill behavior while designing the full signed lifecycle.",
+      "prohibited_promotion": "No freeze/drain/revoke/delete/query/reconcile or complete lifecycle claim.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-004-E001",
+        "sequence": 1,
+        "state": "partial",
+        "source_section": "Task 4 / RA-CURRENT-004",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [
+          { "repository": "sub2api", "commit": "d5a42bbd24d15af2ce7646d050a5ae5c77911d4f" },
+          { "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }
+        ],
+        "anchors": [
+          { "repository": "sub2api", "path": "backend/internal/service/formal_pool_onboarding_service.go", "symbols": ["FormalPoolCCGatewayRuntimeRegistrar", "RegisterCCGatewayRuntime"] },
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["RUNTIME_REGISTER_PATH", "sameRuntimeMappingAuthorityAllowingCredentialRotation", "isAllowedRuntimeCanonicalPromotion", "sameRuntimeMappingAuthorityAllowingTLSProfileBackfill"] }
+        ],
+        "verification_ids": ["OBS004-SUB", "OBS004-CC"],
+        "evidence_digest": "sha256:500885f61b782b18a2c0752db6b22cea9823b4829daf1598655119f6f4523044",
+        "result_digest": "sha256:d66813e7149774eac64240be599c08ede83abf840d3ca4a8d4c3566807270730",
+        "observation_scope": "cross_repository_local",
+        "confidence": 0.85,
+        "phase_slices": ["phase_2", "phase_4"],
+        "wp_umbrella": "WP-R2",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:93caed593264583883bfeec8106771f466f92eb4074ca2c1630ad8c420c388b6"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-005",
+      "required_consequence": "Specify then implement request capability, replay ledger, and resolve/classify/pin/dial enforcement.",
+      "prohibited_promotion": "Protected production and real canary remain disabled.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-005-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-005",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/egress-sidecar-client.ts", "symbols": ["EgressSidecarControl"] },
+          { "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/internal/control/control.go", "symbols": ["Control", "Validate"] },
+          { "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/internal/server/server.go", "symbols": ["Handler"] },
+          { "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/internal/control/phase0_red_test.go", "test_names": ["TestPhase0B5ControlRequiresCompleteV2Envelope"] },
+          { "repository": "cc-gateway", "path": "sidecar/egress-tls-sidecar/internal/server/phase0_red_test.go", "test_names": ["TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange", "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial", "TestPhase0B6RebindingResolutionIsPinnedBeforeDial"] }
+        ],
+        "verification_ids": ["OBS005-CC", "OBS005-GO-RED"],
+        "evidence_digest": "sha256:b56e114d6a51546a07cfed683ee56dc02ac8b7f02252ebe93e02e8fa437942e1",
+        "result_digest": "sha256:f954a8b6e0c757a73cc17fedfa7cd1a2088238497ea65e3912c462bb8f70057f",
+        "observation_scope": "local_structural",
+        "confidence": 0.99,
+        "phase_slices": ["phase_2", "phase_4"],
+        "wp_umbrella": "WP-R3",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:4b107508de9f8f48072160cc92de1990d556b57d67fe4414d0c899ae9cb860c4"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-006",
+      "required_consequence": "Record trusted-device proof as an unavailable capability until independent issuer/verifier lifecycle exists.",
+      "prohibited_promotion": "Stable/equal `device_id` is not device proof.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-006-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-006",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [
+          { "repository": "sub2api", "commit": "d5a42bbd24d15af2ce7646d050a5ae5c77911d4f" },
+          { "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }
+        ],
+        "anchors": [
+          { "repository": "sub2api", "path": "backend/internal/service/cc_gateway_adapter.go", "symbols": ["ccGatewayGeneratedDeviceID", "ccGatewayDeviceID"] },
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["normalizeRuntimeAccountMapping", "verifyProviderAwareFinalRequest"] }
+        ],
+        "verification_ids": ["OBS006-SUB", "OBS006-CC"],
+        "evidence_digest": "sha256:2a527a1f3e3cbcb5c2ced7bcf9499c934608bff6295dc7d29c8c5106cefd8ccf",
+        "result_digest": "sha256:9e8587c1a3c00e9e275e40df8be56116628d29f48788aa0439b51f6c023e9f10",
+        "observation_scope": "cross_repository_local",
+        "confidence": 0.99,
+        "phase_slices": ["phase_2", "phase_3b"],
+        "wp_umbrella": "WP-R6",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:350775b018573d2425b5809cffc4f4abfaf70679dfb2478bc8f8cbe291ff6369"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-007",
+      "required_consequence": "Add versioned readiness and later shared/replica-consistent authority.",
+      "prohibited_promotion": "No multi-replica readiness or production capability claim.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-007-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-007",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["ProxyRuntimeState", "replayRuntimeMappings", "RUNTIME_MAPPING_FILE_ENV", "FORMAL_POOL_SESSION_LEDGER_FILE_ENV"] },
+          { "repository": "cc-gateway", "path": "tests/health-verify.test.ts", "test_names": ["tests/health-verify.test.ts"] }
+        ],
+        "verification_ids": ["OBS007-G", "OBS007-T"],
+        "evidence_digest": "sha256:2f3cc75fd939e9b5bd3a8f0e8d7203b65bb0e223b19e4f35acd147d12d29d58c",
+        "result_digest": "sha256:7f98c2e52b8dc4229cbdeb4b835cd722543e26fd62c563ef5484b09ca49358e3",
+        "observation_scope": "process_local",
+        "confidence": 0.99,
+        "phase_slices": ["phase_2", "phase_4"],
+        "wp_umbrella": "WP-R8",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:7db74c1f90d643eb009375a85abe23b2ae66a2f56393cbe5461cbf97b4ce205e"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-008",
+      "required_consequence": "Plan loopback fail-closed guard in Phase 1 and implement remote TLS/auth/certificate gates before deployment.",
+      "prohibited_promotion": "No remote-listen or production authorization.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-008-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-008",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/config.ts", "symbols": ["Config.server.host"] },
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["startProxy", "listenHost"] },
+          { "repository": "cc-gateway", "path": "tests/security-boundary.test.ts", "test_names": ["tests/security-boundary.test.ts"] }
+        ],
+        "verification_ids": ["OBS008-G", "OBS008-T"],
+        "evidence_digest": "sha256:b5f4bdc135a42878e398e2edc7e760c57e14ff947c0e3ebb128db6d6c59f6d99",
+        "result_digest": "sha256:5a7ec907e848d9c8d2f4b2a8d6acb095641cdcbe939037604df68583d5608278",
+        "observation_scope": "local_structural",
+        "confidence": 0.99,
+        "phase_slices": ["phase_1", "phase_4"],
+        "wp_umbrella": "WP-R8",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:19147d6da36eb762f4f4d632d35c1b1d9adf372f9036bfccd0884229a6b6d98e"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-009",
+      "required_consequence": "Preserve the frozen P0.1 failure, repair only four fixture blocks, and add both tests to GREEN.",
+      "prohibited_promotion": "Joint-chain evidence is not GREEN until the append-only resolved event exists.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-009-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-009",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "sub2api", "commit": "d5a42bbd24d15af2ce7646d050a5ae5c77911d4f" }],
+        "anchors": [
+          { "repository": "sub2api", "path": "backend/internal/service/claude_platform_aws_full_chain_e2e_test.go", "symbols": ["cp6AWSGatewayConfigYAML"], "test_names": ["TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream"] },
+          { "repository": "sub2api", "path": "backend/internal/service/local_capture_acceptance_artifact_test.go", "symbols": ["jointGatewayConfigYAML", "jointGatewaySigningConfigYAML", "jointGatewayDisabledConfigYAML"], "test_names": ["TestJointLocalCaptureAcceptanceArtifact"] }
+        ],
+        "verification_ids": ["OBS009-RED-A", "OBS009-RED-B"],
+        "evidence_digest": "sha256:bd6c99550da93feaf4f8e8f1e2ad0b66c6d4d5e6bb31437f4cb9ca9de4b6d36a",
+        "result_digest": "sha256:a65265c1d00fb16f440417006ba96f1d1ad4583914c8325d521de9ea73ce933b",
+        "observation_scope": "cross_repository_local",
+        "confidence": 1,
+        "phase_slices": ["phase_2"],
+        "wp_umbrella": "WP-R1",
+        "change_reason": "initial_canonical_reconnaissance",
+        "safe_result": {
+          "kind": "stable_failure_code_aggregate",
+          "results": [
+            { "verification_id": "OBS009-RED-A", "classification": "expected_fail", "failure_code": "gateway_compromise_boundary_required" },
+            { "verification_id": "OBS009-RED-B", "classification": "expected_fail", "failure_code": "gateway_compromise_boundary_required" }
+          ],
+          "aggregate_digest": "sha256:a65265c1d00fb16f440417006ba96f1d1ad4583914c8325d521de9ea73ce933b"
+        },
+        "previous_event_digest": null,
+        "event_digest": "sha256:ffcc80bdc40b8f29694609230fedc9ad533bacde65b5413069aada2360de56c0"
+      },
+      {
+        "event_id": "RA-CURRENT-009-E002",
+        "sequence": 2,
+        "state": "resolved",
+        "source_section": "Task 4 / RA-CURRENT-009",
+        "revalidated_at": "2026-07-13T09:44:13Z",
+        "repository_bindings": [{ "repository": "sub2api", "commit": "0a97b3f3b84b5c679788b3694d5840e235031f07" }],
+        "anchors": [
+          { "repository": "sub2api", "path": "backend/internal/service/claude_platform_aws_full_chain_e2e_test.go", "symbols": ["cp6AWSGatewayConfigYAML"], "test_names": ["TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream"] },
+          { "repository": "sub2api", "path": "backend/internal/service/local_capture_acceptance_artifact_test.go", "symbols": ["jointGatewayConfigYAML", "jointGatewaySigningConfigYAML", "jointGatewayDisabledConfigYAML"], "test_names": ["TestJointLocalCaptureAcceptanceArtifact"] }
+        ],
+        "verification_ids": ["OBS009-RED-A", "OBS009-RED-B"],
+        "evidence_digest": "sha256:cdd6cdf9828a09563cb1eeeff824bdc85f8f0f7fe7ed824a085e4e148d6710d6",
+        "result_digest": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468",
+        "observation_scope": "cross_repository_local",
+        "confidence": 1,
+        "phase_slices": ["phase_2"],
+        "wp_umbrella": "WP-R1",
+        "change_reason": "task5_fixture_drift_resolved",
+        "safe_result": {
+          "kind": "stable_success_aggregate",
+          "results": [
+            { "verification_id": "OBS009-RED-A", "classification": "pass" },
+            { "verification_id": "OBS009-RED-B", "classification": "pass" }
+          ],
+          "aggregate_digest": "sha256:4be70150ef8a88a237bd6ee514c11044c1e261226d736d2096b5126f98583468"
+        },
+        "previous_event_digest": "sha256:ffcc80bdc40b8f29694609230fedc9ad533bacde65b5413069aada2360de56c0",
+        "event_digest": "sha256:6d78a176893613692a0bf84cb67592eda1dd9c197d9d69b2e001f549d54b396a"
+      }]
+    },
+    {
+      "observation_id": "RA-CURRENT-010",
+      "required_consequence": "Split only touched security boundaries incrementally, with WP-R7 related response ownership.",
+      "prohibited_promotion": "No big-bang refactor and no claim that current concentrated logic is independently reviewable.",
+      "status_history": [{
+        "event_id": "RA-CURRENT-010-E001",
+        "sequence": 1,
+        "state": "confirmed",
+        "source_section": "Task 4 / RA-CURRENT-010",
+        "revalidated_at": "2026-07-13T07:01:25Z",
+        "repository_bindings": [{ "repository": "cc-gateway", "commit": "c7404e36c576965a6177f6d25cd8657b6550261d" }],
+        "anchors": [
+          { "repository": "cc-gateway", "path": "src/proxy.ts", "symbols": ["startProxy", "handleRequest", "ProxyRuntimeState", "RawCaptureSink", "RUNTIME_REGISTER_PATH"] }
+        ],
+        "verification_ids": ["OBS010-G"],
+        "evidence_digest": "sha256:66cc6fa5637659dd0aaf6bcdda20eb72a460987597de8e568c2b697d7857bf36",
+        "result_digest": "sha256:342f43743f4bd18cff83e4fc5ff57e5dd3ee5f5d94a59e2ca9b9e737d7da9ebc",
+        "observation_scope": "local_structural",
+        "confidence": 1,
+        "phase_slices": ["phase_4"],
+        "wp_umbrella": "WP-R6",
+        "change_reason": "initial_canonical_reconnaissance",
+        "previous_event_digest": null,
+        "event_digest": "sha256:722e30d1e04d70f1887c876d82339afd3fb70428f58812f9829bc2e115ac1372"
+      }]
+    }
+  ]
+}

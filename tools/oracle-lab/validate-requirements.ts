@@ -5,7 +5,7 @@ export type ValidationResult =
   | { ok: true; errors: [] }
   | { ok: false; errors: ValidationError[] }
 
-const fields = [
+const v1Fields = [
   'requirement_id', 'source_document', 'source_section', 'precedence', 'priority', 'depends_on',
   'acceptance_gate', 'implementation_status', 'owner', 'repository', 'implementation_files',
   'test_files', 'verification_command', 'evidence_artifact', 'last_verified_commit',
@@ -13,16 +13,23 @@ const fields = [
   'rollback_evidence_ids', 'deployed_artifacts', 'contradiction_ids',
 ] as const
 
-const arrayFields = [
+const v2Fields = [
+  'schema_version', ...v1Fields, 'reviewer', 'phase_owner', 'work_package', 'introduced_after_phase',
+  'refines', 'supersedes', 'related_requirements',
+] as const
+
+const v1ArrayFields = [
   'depends_on', 'implementation_files', 'test_files', 'known_gaps', 'canary_evidence_ids',
   'production_gate_ids', 'rollback_evidence_ids', 'contradiction_ids',
 ] as const
+const relationshipFields = ['refines', 'supersedes', 'related_requirements'] as const
 
 const statuses = new Set([
   'design_only', 'deferred', 'failing_test_added', 'locally_verified',
   'upstream_canary_observed', 'production_verified', 'blocked_by_baseline',
 ])
-const precedences = new Set(['oracle_lab_design', 'adversarial_validation_v2', 'hardening_amendments'])
+const v1Precedences = new Set(['oracle_lab_design', 'adversarial_validation_v2', 'hardening_amendments'])
+const v2Precedences = new Set([...v1Precedences, 'review_amendments'])
 const productionFields = ['canary_evidence_ids', 'production_gate_ids', 'rollback_evidence_ids'] as const
 const commitPattern = /^[0-9a-f]{40}$/
 const digestPattern = /^sha256:[0-9a-f]{64}$/
@@ -54,6 +61,16 @@ const canonicalSections = new Map<string, string>([
   ['HA-P1-006', '8.3 Complete Authorization Matrix and 8.4 Operator and Administrator Threats'],
 ])
 
+const reviewAmendmentSections = new Map<string, string>([
+  ...Array.from({ length: 9 }, (_, index) => `RA-P0-${String(index + 1).padStart(3, '0')}`),
+  ...Array.from({ length: 9 }, (_, index) => `RA-P1-${String(index + 1).padStart(3, '0')}`),
+].map((id) => [id, `1.1 Normative requirement registry / ${id}`]))
+const allCanonicalSections = new Map([...canonicalSections, ...reviewAmendmentSections])
+const reviewAmendmentDocument = '2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md'
+const phaseOrder = new Map([
+  'phase_0', 'phase_1', 'phase_2', 'phase_3a', 'phase_3b', 'phase_4', 'phase_5', 'phase_6a', 'phase_6b',
+].map((phase, index) => [phase, index]))
+
 const phase0DeferredPolicy = new Map<string, { acceptanceGate: string; negativeCapabilitiesDisabled: boolean }>([
   ['HA-P0-009', { acceptanceGate: 'phase_2_negative_capability_enforcement', negativeCapabilitiesDisabled: true }],
   ['HA-P1-001', { acceptanceGate: 'phase_1_control_flow_evidence', negativeCapabilitiesDisabled: true }],
@@ -66,6 +83,10 @@ const phase0DeferredPolicy = new Map<string, { acceptanceGate: string; negativeC
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function hasOwn(value: Record<string, unknown>, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, field)
 }
 
 export function isRfc3339Timestamp(value: unknown): value is string {
@@ -95,6 +116,42 @@ function add(errors: ValidationError[], code: string, path: string, message: str
   errors.push({ code, path, message })
 }
 
+export function detectRequirementSchemaVersion(parsed: unknown[]): { version: 1 | 2; errors: ValidationError[] } {
+  const errors: ValidationError[] = []
+  const versions = new Set<1 | 2>()
+  for (const [index, value] of parsed.entries()) {
+    if (!isObject(value) || !hasOwn(value, 'schema_version')) {
+      versions.add(1)
+      continue
+    }
+    if (value.schema_version === 2) versions.add(2)
+    else add(errors, 'unsupported_schema_version', `$[${index}].schema_version`, 'only schema version 2 or absent v1 versioning is supported')
+  }
+  if (versions.size > 1) add(errors, 'mixed_schema_versions', '$', 'requirement registry records must use one homogeneous schema version')
+  return { version: versions.has(2) ? 2 : 1, errors }
+}
+
+function hasCycle(records: unknown[]): boolean {
+  const graph = new Map<string, string[]>()
+  for (const value of records) {
+    if (!isObject(value) || typeof value.requirement_id !== 'string') continue
+    const targets = ['refines', 'supersedes'].flatMap((field) => Array.isArray(value[field]) ? value[field] : [])
+    graph.set(value.requirement_id, targets.filter((entry): entry is string => typeof entry === 'string'))
+  }
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return true
+    if (visited.has(id)) return false
+    visiting.add(id)
+    for (const target of graph.get(id) ?? []) if (graph.has(target) && visit(target)) return true
+    visiting.delete(id)
+    visited.add(id)
+    return false
+  }
+  return [...graph.keys()].some(visit)
+}
+
 export function validateRequirements(path: string): ValidationResult {
   let parsed: unknown
   try {
@@ -116,7 +173,14 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     return { ok: false, errors: [{ code: 'invalid_registry', path: '$', message: 'registry must be an array' }] }
   }
 
+  const detected = detectRequirementSchemaVersion(parsed)
+  errors.push(...detected.errors)
+  const version = detected.version
+  const fields = version === 2 ? v2Fields : v1Fields
+  const arrayFields = version === 2 ? [...v1ArrayFields, ...relationshipFields] : v1ArrayFields
+  const precedences = version === 2 ? v2Precedences : v1Precedences
   const ids = new Set<string>()
+  const recordsById = new Map<string, Record<string, unknown>>()
   for (const [index, value] of parsed.entries()) {
     const base = `$[${index}]`
     if (!isObject(value)) {
@@ -125,7 +189,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
 
     for (const field of fields) {
-      if (!(field in value)) add(errors, 'missing_field', `${base}.${field}`, `${field} is required`)
+      if (!hasOwn(value, field)) add(errors, 'missing_field', `${base}.${field}`, `${field} is required`)
     }
     for (const field of Object.keys(value)) {
       if (!(fields as readonly string[]).includes(field)) {
@@ -133,18 +197,21 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
       }
     }
 
+    if (version === 2 && value.schema_version !== 2) add(errors, 'missing_field', `${base}.schema_version`, 'schema_version 2 is required')
     const id = value.requirement_id
-    if (typeof id !== 'string' || !/^(OL|AV|HA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$/.test(id)) {
+    const idPattern = version === 2 ? /^(OL|AV|HA|RA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$/ : /^(OL|AV|HA)-[A-Z0-9]+(?:-[A-Z0-9]+)*$/
+    if (typeof id !== 'string' || !idPattern.test(id)) {
       add(errors, 'invalid_requirement_id', `${base}.requirement_id`, 'requirement_id has an invalid format')
     } else if (ids.has(id)) {
       add(errors, 'duplicate_requirement_id', `${base}.requirement_id`, `${id} is duplicated`)
     } else {
       ids.add(id)
+      recordsById.set(id, value)
     }
 
     if (typeof value.source_section !== 'string' || value.source_section.trim() === '') {
       add(errors, 'missing_source_section', `${base}.source_section`, 'source_section must be non-empty')
-    } else if (typeof id === 'string' && canonicalSections.has(id) && value.source_section !== canonicalSections.get(id)) {
+    } else if (typeof id === 'string' && allCanonicalSections.has(id) && value.source_section !== allCanonicalSections.get(id)) {
       add(errors, 'invalid_source_section', `${base}.source_section`, `${id} must use its canonical source section`)
     }
     if (typeof value.source_document !== 'string' || value.source_document.trim() === '') {
@@ -181,6 +248,27 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
       add(errors, 'missing_owner', `${base}.owner`, 'P0/P1 requirements must have an owner')
     }
 
+    if (version === 2) {
+      if (typeof value.reviewer !== 'string' || value.reviewer.trim() === '') add(errors, 'invalid_field', `${base}.reviewer`, 'reviewer must be non-empty')
+      if (typeof value.phase_owner !== 'string' || value.phase_owner.trim() === '') add(errors, 'invalid_field', `${base}.phase_owner`, 'phase_owner must be non-empty')
+      else if (!phaseOrder.has(value.phase_owner)) add(errors, 'invalid_phase_owner', `${base}.phase_owner`, 'phase_owner is not in the approved roadmap phase order')
+      if (value.work_package !== null && (typeof value.work_package !== 'string' || value.work_package.trim() === '')) add(errors, 'invalid_field', `${base}.work_package`, 'work_package must be a non-empty string or null')
+      if (value.introduced_after_phase !== null && (typeof value.introduced_after_phase !== 'string' || value.introduced_after_phase.trim() === '')) add(errors, 'invalid_field', `${base}.introduced_after_phase`, 'introduced_after_phase must be a non-empty string or null')
+      const reviewAmendment = typeof id === 'string' && id.startsWith('RA-')
+      if (reviewAmendment !== (value.precedence === 'review_amendments') ||
+          (reviewAmendment && (typeof value.work_package !== 'string' || value.work_package.trim() === '' || value.introduced_after_phase !== 'phase_0'))) {
+        add(errors, 'invalid_review_amendment', base, 'RA records require review_amendments precedence, a work package, and phase_0 introduction history')
+      }
+      if (reviewAmendment && (value.source_document !== reviewAmendmentDocument ||
+          value.priority !== (id.startsWith('RA-P0-') ? 'P0' : 'P1') || value.owner === value.reviewer ||
+          !phaseOrder.has(String(value.phase_owner)))) {
+        add(errors, 'invalid_review_amendment', base, 'RA records require the adopted source, priority-specific ID, recognized phase, and independent reviewer')
+      }
+      if (typeof id === 'string' && canonicalSections.has(id) && (value.work_package !== null || value.introduced_after_phase !== null)) {
+        add(errors, 'invalid_legacy_governance_history', base, 'legacy coverage anchors must retain null work-package and introduction history')
+      }
+    }
+
     for (const field of arrayFields) {
       const entries = value[field]
       if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== 'string' || entry === '')) {
@@ -196,7 +284,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
         const artifactPath = `${base}.deployed_artifacts[${artifactIndex}]`
         const expected = ['repository', 'commit', 'config_digest', 'manifest_digest', 'deployed_at']
         if (!isObject(artifact) || Object.keys(artifact).some((key) => !expected.includes(key)) ||
-            expected.some((key) => typeof artifact[key] !== 'string' || artifact[key] === '') ||
+            expected.some((key) => !hasOwn(artifact, key) || typeof artifact[key] !== 'string' || artifact[key] === '') ||
             !isSafeRepository(artifact.repository) || artifact.repository !== value.repository ||
             typeof artifact.commit !== 'string' || !commitPattern.test(artifact.commit) ||
             artifact.commit !== value.last_verified_commit ||
@@ -215,6 +303,19 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
 
     const status = value.implementation_status
+    if (version === 2 && typeof id === 'string' && id.startsWith('RA-')) {
+      const populated = status !== 'deferred' || value.verification_command !== '' || value.evidence_artifact !== '' ||
+        value.last_verified_commit !== null || value.last_verified_at !== null || value.expiry !== null ||
+        !Array.isArray(value.known_gaps) || value.known_gaps.length !== 1 || value.known_gaps[0] !== 'implementation_not_started' ||
+        !Array.isArray(value.implementation_files) || value.implementation_files.length > 0 ||
+        !Array.isArray(value.test_files) || value.test_files.length > 0 ||
+        [...productionFields, 'deployed_artifacts', 'contradiction_ids'].some((field) =>
+          !Array.isArray(value[field]) || value[field].length > 0) ||
+        !Array.isArray(value.supersedes) || value.supersedes.length > 0
+      if (populated) {
+        add(errors, 'review_amendment_promotion_prohibited', base, 'registering an RA requirement cannot confer implementation or verification authority')
+      }
+    }
     const deferredPolicy = typeof id === 'string' ? phase0DeferredPolicy.get(id) : undefined
     if (deferredPolicy && (status !== 'deferred' || value.acceptance_gate !== deferredPolicy.acceptanceGate ||
         (deferredPolicy.negativeCapabilitiesDisabled && Array.isArray(value.implementation_files) && value.implementation_files.length > 0))) {
@@ -236,7 +337,7 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     if (status !== 'production_verified') {
       const populated = productionFields.some((field) => Array.isArray(value[field]) && value[field].length > 0) ||
         (Array.isArray(value.deployed_artifacts) && value.deployed_artifacts.length > 0) ||
-        (Array.isArray(value.contradiction_ids) && value.contradiction_ids.length > 0) || value.expiry !== null
+        (version === 1 && Array.isArray(value.contradiction_ids) && value.contradiction_ids.length > 0) || value.expiry !== null
       if (populated) {
         add(errors, 'non_production_evidence', base, 'non-production records must have empty production fields and null expiry')
       }
@@ -251,11 +352,13 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     }
   }
 
-  for (const expectedId of canonicalSections.keys()) {
-    if (!ids.has(expectedId)) add(errors, 'invalid_inventory', '$', `${expectedId} is missing from the fixed Phase 0 inventory`)
+  const hasReviewAmendment = [...ids].some((id) => id.startsWith('RA-'))
+  const expectedInventory = version === 2 && hasReviewAmendment ? allCanonicalSections : canonicalSections
+  for (const expectedId of expectedInventory.keys()) {
+    if (!ids.has(expectedId)) add(errors, 'invalid_inventory', '$', `${expectedId} is missing from the fixed requirement inventory`)
   }
   for (const id of ids) {
-    if (!canonicalSections.has(id)) add(errors, 'invalid_inventory', '$', `${id} is not in the fixed Phase 0 inventory`)
+    if (!expectedInventory.has(id)) add(errors, 'invalid_inventory', '$', `${id} is not in the fixed requirement inventory`)
   }
 
   for (const [index, value] of parsed.entries()) {
@@ -263,8 +366,34 @@ export function validateRequirementRecords(parsed: unknown): ValidationResult {
     for (const dependency of value.depends_on) {
       if (typeof dependency === 'string' && !ids.has(dependency)) {
         add(errors, 'unresolved_dependency', `$[${index}].depends_on`, `${dependency} is not registered`)
+      } else if (typeof dependency === 'string' && typeof value.requirement_id === 'string' &&
+          value.requirement_id.startsWith('RA-')) {
+        const requirementPhase = phaseOrder.get(String(value.phase_owner))
+        const dependencyPhase = phaseOrder.get(String(recordsById.get(dependency)?.phase_owner))
+        if (requirementPhase !== undefined && dependencyPhase !== undefined && dependencyPhase > requirementPhase) {
+          add(errors, 'future_phase_dependency', `$[${index}].depends_on`, `${dependency} belongs to a later roadmap phase; use related_requirements for semantic coverage`)
+        }
       }
     }
+  }
+
+  if (version === 2) {
+    for (const [index, value] of parsed.entries()) {
+      if (!isObject(value) || typeof value.requirement_id !== 'string') continue
+      for (const field of [...relationshipFields, 'contradiction_ids'] as const) {
+        if (!Array.isArray(value[field])) continue
+        for (const target of value[field]) {
+          if (typeof target !== 'string') continue
+          if (!ids.has(target)) add(errors, 'unresolved_relationship', `$[${index}].${field}`, `${target} is not registered`)
+          else if (target === value.requirement_id) add(errors, 'self_relationship', `$[${index}].${field}`, `${field} cannot self-reference`)
+          else if (field === 'contradiction_ids') {
+            const reverse = recordsById.get(target)?.contradiction_ids
+            if (!Array.isArray(reverse) || !reverse.includes(value.requirement_id)) add(errors, 'asymmetric_contradiction', `$[${index}].${field}`, `${target} must record the same contradiction`)
+          }
+        }
+      }
+    }
+    if (hasCycle(parsed)) add(errors, 'cyclic_relationship', '$', 'refines and supersedes relationships must form one acyclic graph')
   }
 
   return errors.length === 0 ? { ok: true, errors: [] } : { ok: false, errors }

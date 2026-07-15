@@ -3,18 +3,49 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 import { validateClaims } from '../tools/oracle-lab/validate-claims.js'
 
 const registryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements.json')
+const v1RegistryPath = path.resolve('docs/superpowers/registry/oracle-lab-requirements-v1.json')
 const claimsPath = path.resolve('docs/superpowers/registry/oracle-lab-claims.json')
 const schemaPath = path.resolve('docs/superpowers/schemas/oracle-lab-claim.schema.json')
 
 type RecordValue = Record<string, unknown>
 type Claim = RecordValue
 
+const prohibitedClaims: Record<string, Claim> = {
+  'CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED': { requirement_ids: ['RA-P1-002'], claim_class: 'provider_internal', server_dependency: 'provider', stability_class: 'provider-unknown', confidence: 1.0, statement: 'Matching local headers does not prove official-client identity.' },
+  'CL-CCH-SERVER-ACCEPTANCE-PROHIBITED': { requirement_ids: ['RA-P1-001'], claim_class: 'provider_internal', server_dependency: 'server', stability_class: 'server-version-dependent', confidence: 1.0, statement: 'Local CCH verification does not prove server acceptance.' },
+  'CL-DEVICE-PROOF-PROHIBITED': { requirement_ids: ['RA-P1-005'], claim_class: 'provider_internal', server_dependency: 'provider', stability_class: 'provider-unknown', confidence: 1.0, statement: 'A stable `device_id` is not trusted-device proof.' },
+  'CL-TLS-WIRE-EQUIVALENCE-PROHIBITED': { requirement_ids: ['RA-P0-003', 'RA-P1-001'], claim_class: 'local_observational', server_dependency: 'local', stability_class: 'transport-version-dependent', confidence: 1.0, statement: 'A local TLS summary does not prove complete wire equivalence.' },
+  'CL-LONG-TERM-ACCOUNT-SAFETY-PROHIBITED': { requirement_ids: ['RA-P0-009'], claim_class: 'provider_internal', server_dependency: 'provider', stability_class: 'longitudinal-provider-dependent', confidence: 1.0, statement: 'One successful request does not prove long-term account safety.' },
+  'CL-CHANGELOG-RISK-RULES-PROHIBITED': { requirement_ids: ['RA-P1-001'], claim_class: 'provider_internal', server_dependency: 'provider', stability_class: 'provider-private', confidence: 1.0, statement: 'Public changelog entries do not reveal private risk-control rules.' },
+  'CL-NEWER-PERSONA-PROMOTION-PROHIBITED': { requirement_ids: ['RA-P1-002'], claim_class: 'local_structural', server_dependency: 'local', stability_class: 'profile-version-dependent', confidence: 1.0, statement: 'A newer client version cannot select a newer outbound persona without profile authority.' },
+  'CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED': { requirement_ids: ['RA-P0-009'], claim_class: 'provider_internal', server_dependency: 'provider', stability_class: 'deployment-gated', confidence: 1.0, statement: 'Local or mock evidence does not authorize production traffic.' },
+}
+
+const prohibitedClaimIds = Object.keys(prohibitedClaims)
+
 async function requirements(): Promise<RecordValue[]> {
   return JSON.parse(await readFile(registryPath, 'utf8')) as RecordValue[]
+}
+
+async function v2Requirements(): Promise<RecordValue[]> {
+  const records = await requirements()
+  if (records.every((record) => record.schema_version === 2)) return records.map((record) => ({ ...record }))
+  return records.map((record, index) => ({
+    ...record,
+    schema_version: 2,
+    reviewer: `independent-reviewer-${index}`,
+    phase_owner: 'phase_0',
+    work_package: null,
+    introduced_after_phase: null,
+    refines: [],
+    supersedes: [],
+    related_requirements: [],
+  }))
 }
 
 async function validateRaw(contents: string, records?: RecordValue[]) {
@@ -129,6 +160,22 @@ test('accepts valid direct-egress structural and pinned-client observation claim
   assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation]), { ok: true, errors: [] })
 })
 
+test('consumes normalized homogeneous v2 requirement arrays without weakening claim authority', async () => {
+  const v2 = await v2Requirements()
+  const v1 = JSON.parse(await readFile(v1RegistryPath, 'utf8')) as RecordValue[]
+  assert.deepEqual(await validateFixture([directEgressStructural, pinnedObservation], v2), { ok: true, errors: [] })
+  expectError(await validateFixture([directEgressStructural], [...v1.slice(0, 1), ...v2.slice(1)]), 'invalid_requirement_registry')
+
+  const authoritative = v2.map((record) => ({ ...record }))
+  const index = authoritative.findIndex((entry) => entry.requirement_id === 'HA-P0-003')
+  assert.notEqual(index, -1)
+  authoritative[index] = authoritativeRequirement(authoritative[index])
+  assert.deepEqual(await validateFixture([productionClaim()], authoritative), { ok: true, errors: [] })
+
+  const inheritedAuthority = authoritative.map((record) => Object.create(record) as RecordValue)
+  expectError(await validateFixture([productionClaim()], inheritedAuthority), 'invalid_requirement_registry')
+})
+
 test('seed claims state only the Phase 0 negative capabilities actually supported by evidence', async () => {
   const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
   const directEgress = seeded.find((claim) => claim.claim_id === 'CL-DIRECT-EGRESS-001')
@@ -147,6 +194,56 @@ test('seed claims state only the Phase 0 negative capabilities actually supporte
   assert.match(String(pinnedWire.statement), /Phase 3/i)
 })
 
+test('seed claim matrix registers all eight prohibited conclusions as exact negative unverified rows', async () => {
+  const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
+  assert.equal(seeded.length, 10)
+  assert.deepEqual(seeded.slice(-8).map((claim) => claim.claim_id), prohibitedClaimIds)
+  for (const id of prohibitedClaimIds) {
+    const claim = seeded.find((entry) => entry.claim_id === id)
+    assert(claim, `${id} is missing`)
+    for (const [field, value] of Object.entries(prohibitedClaims[id])) assert.deepEqual(claim[field], value, `${id}.${field}`)
+    assert.equal(claim.authority_state, 'unverified')
+    assert.equal(claim.observation_scope, 'local')
+    assert.deepEqual(claim.evidence_ids, [])
+    assert.deepEqual(claim.contradiction_ids, [])
+    assert.equal(claim.expiry, null)
+    assert.deepEqual(claim.canary_evidence_ids, [])
+    assert.deepEqual(claim.production_gate_ids, [])
+    assert.deepEqual(claim.rollback_evidence_ids, [])
+    assert.deepEqual(claim.deployed_artifacts, [])
+    assert.equal(claim.derived_from, 'review-amendments-section-2.2')
+    assert.equal(claim.authoritative_provider_disclosure, false)
+  }
+  assert.deepEqual(validateClaims(claimsPath, await requirements()), { ok: true, errors: [] })
+})
+
+test('runtime and schema reject positive whitespace and case drift for every prohibited claim ID', async () => {
+  const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
+  const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as RecordValue
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  assert.equal(validate(seeded), true, JSON.stringify(validate.errors))
+  assert.equal(validate(seeded.slice(0, 2)), true, JSON.stringify(validate.errors))
+  for (const id of prohibitedClaimIds) {
+    const exact = String(prohibitedClaims[id].statement)
+    for (const statement of [
+      `Positive provider-internal conclusion asserted by ${id}.`,
+      ` ${exact}`,
+      exact.toLowerCase(),
+    ]) {
+      const mutated = seeded.map((claim) => claim.claim_id === id ? { ...claim, statement } : claim)
+      expectError(await validateFixture(mutated), 'invalid_prohibited_claim')
+      assert.equal(validate(mutated), false, `${id} schema accepted ${JSON.stringify(statement)}`)
+    }
+  }
+})
+
+test('inherited-only prohibited claim fixtures fail closed at the JSON exact-shape boundary', async () => {
+  const seeded = JSON.parse(await readFile(claimsPath, 'utf8')) as Claim[]
+  const prohibited = seeded.find((claim) => claim.claim_id === prohibitedClaimIds[0])
+  assert(prohibited)
+  expectError(await validateFixture([Object.create(prohibited) as Claim]), 'missing_field')
+})
+
 test('seeded claim matrix and strict schema expose runtime-equivalent authority rules', async () => {
   assert.deepEqual(validateClaims(claimsPath, await requirements()), { ok: true, errors: [] })
   const schema = JSON.parse(await readFile(schemaPath, 'utf8')) as RecordValue
@@ -159,6 +256,10 @@ test('seeded claim matrix and strict schema expose runtime-equivalent authority 
     'authoritative_provider_disclosure', 'evidence_ids', 'observation_scope', 'production_verified',
     'canary_evidence_ids', 'production_gate_ids', 'rollback_evidence_ids', 'deployed_artifacts']) {
     assert(serialized.includes(token), `schema conditionals are missing ${token}`)
+  }
+  for (const id of prohibitedClaimIds) {
+    assert(serialized.includes(id), `schema conditionals are missing ${id}`)
+    assert(serialized.includes(String(prohibitedClaims[id].statement)), `schema conditionals are missing ${id} statement`)
   }
   const definitions = schema.$defs as RecordValue
   assert.equal(((definitions.stringArray as RecordValue).uniqueItems), true)

@@ -7,3 +7,5 @@ certs/
 clients/
 runtime/
 docs/superpowers/evidence/**/*.tmp
+.codegraph/
+.superpowers/sdd/

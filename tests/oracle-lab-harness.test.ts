@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -10,12 +10,20 @@ import { buildContextPack } from '../tools/oracle-lab/build-context-pack.js'
 import { buildExitReceipt, requiredReceiptArtifacts, validateExitReceiptValue } from '../tools/oracle-lab/build-exit-receipt.js'
 import { buildHandoff, validateHandoffValue } from '../tools/oracle-lab/build-handoff-bundle.js'
 import { assertSafeArtifact, canonicalJson, digestFile, digestValue, writeJson } from '../tools/oracle-lab/harness-core.js'
+import { migrateRequirementsV1ToV2 } from '../tools/oracle-lab/migrate-requirements-v1-to-v2.js'
 import { commandRecordDigest, commandSetDigest, mergeCommandResults, validateCommandResultsBindings, validateCommandResultsValue, type CommandResultRecord, type CommandResultSet } from '../tools/oracle-lab/merge-command-results.js'
 import { redactOutput, runCommandCatalog } from '../tools/oracle-lab/run-command-catalog.js'
 import { validateCommandCatalogValue, type CommandCatalogEntry } from '../tools/oracle-lab/validate-command-catalog.js'
 import { contextPackDigest, validateContextPackValue, type ContextPack } from '../tools/oracle-lab/validate-context-pack.js'
 
 const catalogPath = path.resolve('docs/superpowers/registry/oracle-lab-command-catalog.json')
+const historicalRegistryPath = 'docs/superpowers/registry/oracle-lab-requirements-v1.json'
+const historicalClaimsPath = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-h0-legacy-claims-')), 'claims.json')
+writeFileSync(historicalClaimsPath, `${JSON.stringify(
+  (JSON.parse(readFileSync('docs/superpowers/registry/oracle-lab-claims.json', 'utf8')) as unknown[]).slice(0, 2),
+  null,
+  2,
+)}\n`)
 const entryBaseline = 'docs/superpowers/evidence/phase-0/phase-0-entry-baseline.json'
 const approvedPlan = 'docs/superpowers/plans/2026-07-11-claude-code-2.1.207-phase-0-governance-baseline.md'
 const digest = `sha256:${'a'.repeat(64)}`
@@ -64,7 +72,7 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
     ['AV-B1-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:9a8e8243d5433ad61c73e0f0ea58a18c4be5e0a8afd70a1152de3413e2b81339']],
     ['AV-B2-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:3e05b74f37ec8e16f720bc4409b8a10aa930464f961076b211c1299daa4cb6da']],
     ['AV-B3-001', ['sha256:e91e73322e349bcecf7962ca6ecd5ea6e847e29d664cb05c059ae036c658b19f', 'sha256:302effcdb78c69f0fb128ef0415667d207300ed030a4605d5f56d7552e7598be']],
-    ['AV-B4-001', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
+    ['AV-B4-001', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:83dc5cf5460ef272f9920281f49439eef9ef5185573feea7b808b532fc9c1c0d']],
     ['AV-B5-001', ['sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:29fd4e3bf4432003fcf6a560c0a5cf69b05b902e637f82dfdfbeef98460745cf']],
     ['AV-B6-001', ['sha256:49c758af2acf9a1c698001316fd979e4c02285f0162c97baaa963667e361bc8d', 'sha256:548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7', 'sha256:fbefa27d21a62119c46ff74b3a21b8ec5fcd6fd20a95e07e9fba52c68efde9e4']],
   ])
@@ -74,6 +82,11 @@ test('roadmap makes the approved DAG and evidence-to-decision contract normative
     assert.equal(row.length, 10, `${decision} must populate every decision column`)
     for (const digest of digests) assert.match(row[2], new RegExp(digest))
   }
+  const avB4 = decisionRows.get('AV-B4-001')
+  assert.ok(avB4)
+  assert.doesNotMatch(avB4[2], /sidecar-b4-b6-red|548fad68cfa6b041380057a1e731125b3ce0437bd959d36657835f9de2018db7/)
+  assert.match(avB4[3], /Local CC Gateway formal-pool direct-egress fixture/)
+  assert.doesNotMatch(avB4[3], /sidecar/i)
   assert.match(roadmap, /Delivery state: Phase 0 complete/)
   assert.match(roadmap, /phase-0-exit-baseline\.json.*sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6/)
   assert.match(roadmap, /phase-0-exit-receipt\.json.*binds the final roadmap bytes/)
@@ -172,8 +185,8 @@ test('result evidence binds exactly to catalog, manifest, repository heads, cont
 })
 
 test('context and handoff builders reject cross-input evidence and missing selected requirement results', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const manifest = JSON.parse(await readFile(entryBaseline, 'utf8')) as { repositories: Record<string, { head: string }>; contract: { sha256: string } }
   const catalogValue = await catalog()
   const make = (entry: CommandCatalogEntry): CommandResultRecord => {
@@ -194,9 +207,27 @@ test('context and handoff builders reject cross-input evidence and missing selec
   assert.doesNotThrow(() => buildContextPack({ registry, claims, manifest: entryBaseline, commandResults: resultPath, requirementIds: ['HA-P0-007'] }))
 })
 
+test('historical H0 context builder rejects v2 registry bytes bound to a v1 entry manifest', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-v2-registry-'))
+  const registry = path.join(root, 'requirements-v2.json')
+  const v1 = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-requirements-v1.json', 'utf8')) as Array<Record<string, unknown>>
+  const metadata = JSON.parse(await readFile('docs/superpowers/registry/oracle-lab-requirement-v2-migration.json', 'utf8')) as Array<Record<string, unknown>>
+  await writeFile(registry, `${JSON.stringify(migrateRequirementsV1ToV2(v1, metadata), null, 2)}\n`)
+  assert.throws(
+    () => buildContextPack({
+      registry,
+      claims: 'docs/superpowers/registry/oracle-lab-claims.json',
+      manifest: entryBaseline,
+      commandResults: path.join(root, 'not-consumed.json'),
+      requirementIds: ['HA-P0-007'],
+    }),
+    (error: Error & { code?: string }) => error.code === 'historical_registry_version_mismatch',
+  )
+})
+
 test('handoff rejects a known context requirement with no catalog command mapping', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-unmapped-requirement-'))
   const results = path.join(root, 'results.json')
   const contextPath = path.join(root, 'context.json')
@@ -218,8 +249,8 @@ test('handoff rejects a known context requirement with no catalog command mappin
 })
 
 test('handoff rejects context test status forged without changing command id or result digest', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-forged-status-'))
   const results = path.join(root, 'results.json')
   const contextPath = path.join(root, 'context.json')
@@ -241,8 +272,8 @@ test('handoff rejects context test status forged without changing command id or 
 })
 
 test('handoff rejects a transient context pack whose registry claims or required command evidence is unrelated', async () => {
-  const registry = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registry = historicalRegistryPath
+  const claims = historicalClaimsPath
   const root = await mkdtemp(path.join(tmpdir(), 'oracle-h0-context-binding-'))
   const results = path.join(root, 'results.json')
   const baseline = entryBaseline
@@ -304,7 +335,10 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
   for (const file of fixtureFiles) {
     const destination = path.join(root, file)
     await mkdir(path.dirname(destination), { recursive: true })
-    await writeFile(destination, await readFile(path.join(originalCwd, file)))
+    const source = file === 'docs/superpowers/registry/oracle-lab-requirements.json'
+      ? historicalRegistryPath
+      : file === 'docs/superpowers/registry/oracle-lab-claims.json' ? historicalClaimsPath : path.join(originalCwd, file)
+    await writeFile(destination, await readFile(source))
   }
   await mkdir(path.dirname(path.join(root, baseline)), { recursive: true })
   await writeFile(path.join(root, entryManifest), await readFile(path.join(originalCwd, entryBaseline)))
@@ -445,8 +479,8 @@ test('documented Task 8 exit pipeline rejects entry context and completes explic
 })
 
 test('context builder fails closed when any selected requirement source bytes are missing', async () => {
-  const registryPath = 'docs/superpowers/registry/oracle-lab-requirements.json'
-  const claims = 'docs/superpowers/registry/oracle-lab-claims.json'
+  const registryPath = historicalRegistryPath
+  const claims = historicalClaimsPath
   const registry = JSON.parse(await readFile(registryPath, 'utf8')) as Array<Record<string, unknown>>
   const baseline = JSON.parse(await readFile(entryBaseline, 'utf8')) as Record<string, unknown> & { governance: Record<string, { sha256: string }>; repositories: Record<string, { head: string }>; contract: { sha256: string } }
   const catalogValue = await catalog()

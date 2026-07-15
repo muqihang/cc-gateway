@@ -8,8 +8,16 @@
 - npm release state at design time: `latest=2.1.207`, `next=2.1.207`, `stable=2.1.197`
 - Real Anthropic requests: forbidden during this design's capture and integration phases
 - Real account credentials: forbidden during this design's capture and integration phases
-- Requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json`
-- Normative precedence: `hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; missing or contradictory authority fails closed
+- Governing documents, highest precedence first:
+  1. `docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md`
+  2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
+  3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
+  4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
+- Canonical in-place requirement registry: `docs/superpowers/registry/oracle-lab-requirements.json` is schema v2 and contains exactly 41 homogeneous records
+- Preserved Registry v1 snapshot: `docs/superpowers/registry/oracle-lab-requirements-v1.json` remains the immutable 23-row migration source and evidence
+- Reviewed governance adoption: Tasks 2 and 3 completed the in-place Registry v2 migration, explicit conflict registration, and adoption of the exact 18 RA records
+- RA authority boundary: all 18 RA records remain `deferred`; governance adoption does not imply implementation, production verification, canary approval, or runtime authority
+- Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; no conflict, requirement, or authority statement may be silently replaced or superseded
 - Requirement ID prefix: `OL-*`
 
 ## Objective

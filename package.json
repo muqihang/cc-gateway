@@ -25,7 +25,10 @@
     "oracle:post-integration:context": "tsx tools/oracle-lab/post-integration-context.ts",
     "oracle:post-integration:handoff": "tsx tools/oracle-lab/post-integration-handoff.ts handoff",
     "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt",
-    "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt"
+    "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt",
+    "oracle:p0-1": "tools/oracle-lab/oracle-p0-1",
+    "test:oracle:p0-1": "tsx tests/run-p0-1.ts",
+    "test:oracle:non-p0-1": "tsx tests/run-all.ts --exclude-oracle-p0-1"
   },
   "dependencies": {
     "https-proxy-agent": "^9.0.0",
@@ -34,6 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "ajv": "8.20.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
