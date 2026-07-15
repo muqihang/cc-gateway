@@ -22,7 +22,10 @@
 - Any mutation that can call OAuth, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler dependencies must first acquire a CAS reservation. A concurrent request with the same version fails before a second dependency call; an ambiguous external outcome becomes `operation_outcome_unknown` and is never automatically retried.
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
 - Listener and upstream negative integration must invoke `startProxy` directly and observe zero TLS-read, server-create, and listen effects; calling a pure resolver before `startProxy` is not startup-order evidence.
-- Phase 1 RED evidence is accepted only when its safe observed failure-family set exactly equals the command-specific frozen catalog set. A nonzero exit, an unrelated failure, or a forged persisted family field is always `unexpected_fail`.
+- Every non-public onboarding route is exercised against the complete executable caller/session matrix from hardening Section 8.3. Coverage is route-by-dimension, not one route per dimension; revoked/expired sessions, ordinary users, group and tenant administrators, service callers, stale tabs, concurrent role changes, and duplicated callbacks are explicit cases.
+- Phase 1 RED evidence is accepted only when every failing leaf name matches the command-specific frozen allowlist and its safe observed failure-family set exactly equals the catalog set. A nonzero exit, an extra unrelated failure, an unparsed failing leaf, or a forged persisted family field is always `unexpected_fail`.
+- Every H1 command runs inside a reviewed OS-enforced loopback-only network sandbox. Proxy variables are defense in depth, not the sandbox. Missing enforcement, a failed public-socket denial canary, or any observed non-loopback DNS/socket violation fails before evidence is written.
+- The final Phase 1 handoff is never minted from feature branches. Both implementation PRs must first merge; a clean post-integration worktree then freezes exact `muqihang/main` heads, reruns the complete catalog, and emits an artifact-commit plus one-file receipt-commit chain bound to those integrated heads.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
 - Before each task, run `codegraph status`; if stale, run `codegraph sync`. Use CodeGraph before locating or reading code.
 - The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate a fresh `phase-1-execution-context.json` against `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings. Refresh it whenever its 24-hour window expires.
@@ -70,11 +73,12 @@
 - Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` and `oracle-lab-phase-1-plan-review.schema.json`, which are delivered with this reviewed plan.
 - Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.json` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
 - Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands.
-- Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, and `oracle-lab-phase-1-handoff.schema.json`: closed Phase 1 evidence contracts.
+- Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, `oracle-lab-phase-1-handoff.schema.json`, `oracle-lab-phase-1-integration-entry.schema.json`, and `oracle-lab-phase-1-integration-receipt.schema.json`: closed Phase 1 evidence contracts.
 - Create `tools/oracle-lab/phase-1-evidence.ts`: a small Phase 1 adapter over the reviewed `runBoundedProcess`, hermetic environment, safe artifact writer, and digest helpers already delivered by H0/P0.1.
+- Create `tools/oracle-lab/phase-1-loopback-sandbox.ts`: fail-closed OS sandbox selection, loopback/public-socket canaries, wrapped argv, policy/binary digests, and violation classification.
 - Create `tests/oracle-lab-phase-1-evidence.test.ts`: schema, binding, dirty-tree, unexpected-result, unsafe-output, ancestry, and handoff tests.
 - Modify `package.json`: add only `oracle:phase1` for the new adapter; do not alter Phase 0/P0.1 scripts.
-- Create `docs/superpowers/evidence/phase-1/phase-1-command-results.json`, `phase-1-exit-baseline.json`, `phase-1-handoff.json`, and `phase-1-exit-report.md` during the final evidence task.
+- Create feature-candidate evidence first, then `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`, `phase-1-command-results.json`, `phase-1-exit-baseline.json`, `phase-1-handoff.json`, `phase-1-exit-report.md`, and `phase-1-integration-receipt.json` only through Task 8's post-merge chain.
 - Modify `docs/superpowers/registry/oracle-lab-requirements.json`, `docs/superpowers/registry/oracle-lab-claims.json`, and `docs/superpowers/registry/oracle-lab-current-observations.json` only after all exit commands pass.
 
 ## Dependency Order
@@ -82,7 +86,7 @@
 ```text
 Mandatory Preflight -> Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
 Task 6 is independent after Mandatory Preflight
-Task 5 + Task 6 -> Task 7 -> Task 8
+Task 5 + Task 6 -> Task 7 -> Task 8 feature capture/review -> merge both implementation PRs -> Task 8 post-integration capture/receipt
 ```
 
 ## Mandatory Preflight: Bind Plan Approval Before Editing
@@ -128,6 +132,7 @@ No Sub2API or runtime source file may change before this commit. If the executio
 - Create: `backend/internal/service/formal_pool_onboarding_authorization_test.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_store.go:34-168`
 - Modify: `backend/internal/service/formal_pool_onboarding_service.go:62-149,297-415,1661-1702`
+- Modify: `backend/internal/service/formal_pool_onboarding_flow_test.go`
 - Test: `backend/internal/service/formal_pool_onboarding_authorization_test.go`
 - Test: `backend/internal/service/formal_pool_onboarding_store_test.go`
 
@@ -148,9 +153,10 @@ func TestFormalPoolAuthorizeSessionOrdersOwnerBeforeVersionAndState(t *testing.T
         Principal: intruder,
         ExpectedVersion: &stale,
     })
-    _, err := svc.GetSession(ctx, session.ID)
+    _, err := svc.authorizeSession(ctx, session.ID, true, FormalPoolOnboardingStatusWarming)
     require.ErrorIs(t, err, ErrFormalPoolOnboardingForbidden)
     require.NotErrorIs(t, err, ErrFormalPoolOnboardingVersionConflict)
+    require.NotErrorIs(t, err, ErrFormalPoolOnboardingInvalidState)
 }
 
 func TestFormalPoolStartSessionRequiresAdminTenantAndAllowedGroup(t *testing.T) {
@@ -165,6 +171,7 @@ func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService,
     owner := FormalPoolOnboardingPrincipal{
         SubjectID: 1001, AdministratorID: 1001, TenantID: "tenant-one",
         AllowedGroupIDs: []int64{101}, CreatorID: 1001, Role: RoleAdmin,
+        CallerKind: CallerKindHuman, AuthorityRevision: 1, Active: true,
     }
     zero := int64(0)
     ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{
@@ -195,6 +202,9 @@ type FormalPoolOnboardingPrincipal struct {
     AllowedGroupIDs []int64
     CreatorID       int64
     Role            string
+    CallerKind      string
+    AuthorityRevision int64
+    Active          bool
 }
 
 type FormalPoolRequestAuthority struct {
@@ -219,7 +229,7 @@ var ErrFormalPoolOnboardingVersionRequired = infraerrors.New(http.StatusPrecondi
 
 Reuse the existing `ErrFormalPoolOnboardingVersionConflict`; do not declare a second conflict error or change its reason code.
 
-Implement exact validation order in `authorizeSession`: context presence, record lookup, subject/admin/tenant/group/creator/role comparison, expected-version requirement for mutations, expected-version equality, then allowed-state membership. All owner mismatches return the same 403 error. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
+Implement exact validation order in `authorizeSession`: context presence; active human-caller shape; record lookup; subject/admin/tenant/group/creator/role comparison; authority-revision revalidation when the Task 2 policy dependency is installed; expected-version requirement for mutations; expected-version equality; then allowed-state membership. Revoked/expired sessions return the common 401, while caller/owner/policy mismatches return the common 403. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
 
 - [ ] **Step 4: Extend the record and response without exposing owner identifiers**
 
@@ -252,20 +262,22 @@ Creation uses the same primitive before a session exists. `beginCreateReservatio
 
 - [ ] **Step 5: Enforce authority on create/read/abort and add account lookup**
 
-`StartSession` requires `ExpectedVersion == 0`, a valid `Idempotency-Key`, admin role, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` in `AllowedGroupIDs`. It validates and fingerprints the request, calls `beginCreateReservation`, and only then calls proxy resolution once. Success finalizes the provisional record at version `2`; ambiguous proxy creation finalizes `operation_outcome_unknown` and never auto-retries. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` and `snapshotByCreateKey` with the same copy/session-expiry behavior as `snapshotByNonce`.
+`StartSession` requires `ExpectedVersion == 0`, a valid `Idempotency-Key`, active human administrator authority, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` granted by the trusted policy resolver. It validates and fingerprints the request, calls `beginCreateReservation`, and only then calls proxy resolution once. Success finalizes the provisional record at version `2`; ambiguous proxy creation finalizes `operation_outcome_unknown` and never auto-retries. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` and `snapshotByCreateKey` with the same copy/session-expiry behavior as `snapshotByNonce`.
 
 Add a concurrent creation test with a blocking proxy fake: two requests sharing owner, request, `If-Match: "0"`, and idempotency key produce exactly one `ResolveOrCreateProxy` call; the second receives 409 while the first is active, and a post-success replay returns the same session/version without another dependency call. A changed body under the same key is 409 before proxy invocation.
 
-- [ ] **Step 6: Run authority/store/service regression tests**
+- [ ] **Step 6: Migrate the direct flow harness and run authority/store/service regression tests**
 
-Run: `cd backend && go test ./internal/service -run 'FormalPoolOnboarding(Store|Authorize|Reservation|StartSession|GetSession|Abort)' -count=1`
+Add one `authorizedFlowContext(t, sessionVersion)` helper to `formal_pool_onboarding_flow_test.go`. Migrate every direct `StartSession` and mutation call in that file to an owner-bound authority plus the current response version; do not weaken production authorization for test compatibility. Add this file to the focused command so Task 1 cannot commit while the direct flow harness still uses the old API.
+
+Run: `cd backend && go test ./internal/service -run 'FormalPoolOnboarding(Store|Authorize|Reservation|StartSession|GetSession|Abort|Flow)' -count=1`
 
 Expected: PASS with no owner identifiers in serialized sessions.
 
 - [ ] **Step 7: Commit Task 1**
 
 ```bash
-git add backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_authorization_test.go backend/internal/service/formal_pool_onboarding_store.go backend/internal/service/formal_pool_onboarding_store_test.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/service/formal_pool_onboarding_service_test.go
+git add backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_authorization_test.go backend/internal/service/formal_pool_onboarding_store.go backend/internal/service/formal_pool_onboarding_store_test.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/service/formal_pool_onboarding_service_test.go backend/internal/service/formal_pool_onboarding_flow_test.go
 git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 ```
 
@@ -276,21 +288,45 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 - Modify: `backend/internal/handler/admin/formal_pool_onboarding_handler.go:18-522`
 - Modify: `backend/internal/handler/wire.go:117-123`
 - Modify: `backend/internal/config/config.go:169-181`
+- Modify: `backend/internal/service/formal_pool_onboarding_authorization.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_service.go:626-1659`
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go:1-347`
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_routes_test.go`
 - Modify: `backend/internal/handler/formal_pool_onboarding_provider_test.go`
 - Modify: `frontend/src/api/admin/claudeOnboarding.ts:57-208`
+- Modify: `frontend/src/composables/useEgressCheckPolling.ts`
+- Modify: `frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue`
+- Modify: `frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue`
+- Modify: `frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts`
+- Modify: `frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts`
 - Test: `backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go`
 
 **Interfaces:**
 - Consumes: Task 1 authority context and response version.
-- Produces: `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `WithFormalPoolOnboardingPrincipalResolver`, and `parseFormalPoolIfMatch`.
+- Produces: `FormalPoolAuthSessionAuthority`, `FormalPoolAuthorizationPolicy`, the per-operation authority revalidator, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `WithFormalPoolOnboardingPrincipalResolver`, and `parseFormalPoolIfMatch`.
 - Produces: every mutating frontend API function accepts the current `FormalPoolSession` and sends its version.
 
-- [ ] **Step 1: Make the existing B2 RED corpus always-on**
+- [ ] **Step 1: Make the existing B2 RED corpus always-on and complete**
 
-Remove only `//go:build phase0red` from `formal_pool_onboarding_phase0_red_test.go`; keep the filename for history. Replace test-only `X-Phase0-*` authority headers with a fake `FormalPoolOnboardingPrincipalResolver` whose current principal is set by the fixture before each request. Keep the complete 15-operation matrix, six independent owner dimensions, wrong-state test, and stale-version test.
+Remove only `//go:build phase0red` from `formal_pool_onboarding_phase0_red_test.go`; keep the filename for history. Replace test-only `X-Phase0-*` authority headers with a fake `FormalPoolOnboardingPrincipalResolver` whose current principal is set by the fixture before each request.
+
+Freeze `formalPoolAdminOperationCases` as these exact 15 existing non-public object operations: `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateOAuth`, `ExchangeOAuth`, `ExchangeSetupToken`, `Acceptance`, `RefreshOnly`, `RuntimeRegistration`, `SessionHealthcheck`, `AccountHealthcheck`, `StartWarming`, `Abort`, `Activation`, and `Promotion`. Each operation must execute every row in `formalPoolAuthorityCases`; sampling six dimensions on `GetSession` is forbidden. `CreateSession` is a separately frozen sixteenth route and executes the same authentication/caller/session/role/tenant/group matrix, with creator/object-owner and stale-tab cases marked structurally not applicable rather than silently omitted:
+
+| Caller/session case | Required result |
+| --- | --- |
+| unauthenticated | common 401 |
+| active ordinary user, creator and non-creator | common 403 |
+| active group administrator, same tenant and granted group | allowed to reach state/version evaluation |
+| group administrator, ungranted or cross-group | common 403 |
+| active tenant administrator, same tenant | allowed to reach state/version evaluation |
+| tenant administrator, cross-tenant | common 403 |
+| revoked session; expired session | common 401 before record/state/version |
+| stale browser tab | 409 only after authority succeeds |
+| service-to-service caller | common 403; Phase 1 admin routes are human-only |
+| concurrent role/policy revision changed after initial resolve | common 403 before reservation or dependency |
+| duplicated OAuth callback and concurrent promote with the same operation key/fingerprint | idempotent pending/completed result; one dependency invocation |
+
+For every mutation family, add a combined negative in which owner mismatch, stale version, and wrong state are simultaneously true. It must return the common 403 and leave its proxy/OAuth/account/healthcheck/cache/scheduler dependency counter at zero. The table also asserts the exact route inventory; adding a route without a matrix row fails the test.
 
 - [ ] **Step 2: Run B2 tests and capture the expected failures**
 
@@ -306,25 +342,30 @@ type FormalPoolOnboardingPrincipalResolver interface {
 }
 
 type formalPoolOnboardingPrincipalResolver struct {
-    users    *service.UserService
+    sessions service.FormalPoolAuthSessionAuthority
+    policy   service.FormalPoolAuthorizationPolicy
     tenantID string
+    now      func() time.Time
 }
 
 func (r *formalPoolOnboardingPrincipalResolver) Resolve(c *gin.Context) (service.FormalPoolOnboardingPrincipal, error) {
     subject, ok := middleware.GetAuthSubjectFromContext(c)
     if !ok || subject.UserID <= 0 { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
-    user, err := r.users.GetByID(c.Request.Context(), subject.UserID)
-    if err != nil || user == nil { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
+    session, err := r.sessions.ResolveActive(c.Request.Context(), subject)
+    if err != nil || session.Revoked || !session.ExpiresAt.After(r.now()) { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
+    grant, err := r.policy.ResolveOnboardingGrant(c.Request.Context(), session.UserID, r.tenantID)
+    if err != nil || !grant.Active { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
     return service.FormalPoolOnboardingPrincipal{
-        SubjectID: user.ID, AdministratorID: user.ID, TenantID: r.tenantID,
-        AllowedGroupIDs: append([]int64(nil), user.AllowedGroups...), CreatorID: user.ID, Role: user.Role,
+        SubjectID: session.UserID, AdministratorID: grant.AdministratorID, TenantID: grant.TenantID,
+        AllowedGroupIDs: append([]int64(nil), grant.GroupIDs...), CreatorID: session.UserID,
+        Role: grant.Role, CallerKind: grant.CallerKind, AuthorityRevision: grant.Revision, Active: grant.Active,
     }, nil
 }
 ```
 
-Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body.
+`FormalPoolAuthSessionAuthority` revalidates the server-side session record rather than trusting only middleware presence. `FormalPoolAuthorizationPolicy` resolves group-administrator or tenant-administrator grants from the trusted group/tenant policy source; `User.AllowedGroups` is not itself an administrator grant. Ordinary users and service callers are denied. Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body.
 
-Wire it with an exact provider: `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`.
+Wire it with an exact provider: `ProvideFormalPoolOnboardingPrincipalResolver(sessionAuthority service.FormalPoolAuthSessionAuthority, policy service.FormalPoolAuthorizationPolicy, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`. Production sets `now: time.Now`; tests inject a fixed clock.
 
 - [ ] **Step 4: Parse optimistic versions centrally**
 
@@ -363,7 +404,7 @@ Use this state contract exactly:
 | `AbortSession` | every nonterminal state |
 | `AccountHealthcheck` | owner session resolved through `snapshotByAccountID` |
 
-Classify operations before implementation:
+Before state/version evaluation, the service calls the injected policy revalidator with `{subject, tenant, role, group, authority_revision}`. A concurrent role/revocation/policy change returns the same 401/403 before reservation and before any business dependency. Classify operations before implementation:
 
 - no external effect (`AbortSession`, proof finalization after a server proof already exists): one final `casUpdate` is sufficient;
 - any OAuth, proxy, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler call: call `beginReservedMutation` before the first dependency invocation, execute the dependency sequence once, then call `finishReservedMutation` from the reservation version;
@@ -371,6 +412,8 @@ Classify operations before implementation:
 - dependency failure before any irreversible call may finalize a stable failure and return the latest version; an error after an irreversible/ambiguous call finalizes `operation_outcome_unknown`, blocks automatic retry, and requires explicit operator reconciliation.
 
 Add a table-driven concurrency test for every side-effect family. The fake dependency blocks on a channel after incrementing an atomic counter. Start request A with version `N`, wait until its reservation is visible, then start request B with the same version. B must return `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` while the dependency counter remains `1`. Release A, assert one final state transition, `ActiveOperation == nil`, and response version `N+2`. Add failure tests proving no automatic retry after `operation_outcome_unknown` and no owner/state/version detail leakage.
+
+`ExchangeCodeAndCreate` and `PromoteProduction` additionally require an `Idempotency-Key`. Persist only its HMAC safe ref plus a request fingerprint in the reservation/outcome. An exact duplicate while active returns the same safe pending session/version; an exact post-success duplicate returns the stored safe result; a changed fingerprint returns 409. Tests run both operations concurrently and prove one OAuth/account or scheduler invocation. No raw OAuth code or idempotency key is persisted or logged.
 
 - [ ] **Step 7: Add response versions and `If-Match` to the frontend API**
 
@@ -403,7 +446,7 @@ export async function testProxy(session: FormalPoolSession): Promise<FormalPoolS
 }
 ```
 
-`createSession` sends `If-Match: "0"` and one `Idempotency-Key` generated once per submitted wizard attempt with `crypto.randomUUID()`; retries reuse it until a definitive response or explicit form reset. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. Every successful mutation response, including `FormalPoolAcceptanceResult`, carries the final server version. Both wizards replace `session.value.version` from that response before enabling the next action; acceptance/healthcheck merge `{version,status}` instead of retaining a stale session. On any 409 or ambiguous mutation error, refetch `getSession` before exposing retry. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition.
+`createSession` sends `If-Match: "0"` and one `Idempotency-Key` generated once per submitted wizard attempt with `crypto.randomUUID()`; retries reuse it until a definitive response or explicit form reset. Convert `generateAuthUrl`, `exchangeCodeAndCreate`, `setupTokenCookieAuthAndCreate`, `runAcceptance`, `activate`, `refreshOnly`, `runtimeRegister`, `healthcheck`, `startWarming`, `promoteProduction`, and `abort` to accept the current session and send `versionHeaders(session)`. `exchangeCodeAndCreate` and `promoteProduction` also reuse one operation idempotency key across ambiguous retries. Every successful mutation response, including `FormalPoolAcceptanceResult`, carries the final server version. In this task, migrate both wizard call sites and polling state so `npm run typecheck` is green: every mutation passes the current session, both wizards replace `session.value.version` from the response before enabling the next action, and acceptance/healthcheck merge `{version,status}` instead of retaining a stale session. On any 409 or ambiguous mutation error, refetch `getSession` before exposing retry. `getSession(id, signal)` remains version-free so polling can observe a server-side nonce transition. Task 4 adds only server-proof auto-finalization behavior; it does not repair these call sites later.
 
 - [ ] **Step 8: Run the B2 matrix, service tests, and frontend typecheck**
 
@@ -411,12 +454,12 @@ Run: `cd backend && go test ./internal/service ./internal/server/routes ./intern
 
 Run: `cd frontend && npm run typecheck`
 
-Expected: both PASS. The route matrix returns 401 for missing principal, 403 for every owner mismatch, and 409 for stale or already-reserved versions. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
+Expected: both PASS. The exact 15-route cross-product returns 401 for missing/revoked/expired sessions, 403 for ordinary/service/cross-boundary/concurrently revoked authority, and 409 for stale or conflicting versions only after authority succeeds. Combined owner+stale+wrong-state cases return 403 with zero dependency calls. Duplicate OAuth callback and concurrent promote are idempotent with one dependency call. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
 
 - [ ] **Step 9: Commit Task 2**
 
 ```bash
-git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go frontend/src/api/admin/claudeOnboarding.ts
+git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
 git commit -m "feat(formal-pool): enforce owner and version on every onboarding route"
 ```
 
@@ -585,7 +628,6 @@ git commit -m "fix(formal-pool): require server-observed one-time egress proof"
 ### Task 4: B1 Frontend Auto-Finalization Without Client-Chosen Authority
 
 **Files:**
-- Modify: `frontend/src/api/admin/claudeOnboarding.ts:41-208`
 - Modify: `frontend/src/composables/useEgressCheckPolling.ts:8-98`
 - Modify: `frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue:148-204`
 - Modify: `frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue:532-584,1205-1285`
@@ -632,9 +674,9 @@ async function finalizeObservedBrowserEgress(next: FormalPoolSession) {
 
 Call this only from the polling watcher after merging the newest session. Clear the guard when `TestProxy` returns a new version/proof. Do not render a free-form attestation-code input.
 
-- [ ] **Step 4: Migrate both wizards and preserve version monotonicity**
+- [ ] **Step 4: Add auto-finalization to both already-migrated wizards and preserve version monotonicity**
 
-Every mutation passes the current session object. Polling accepts a session only when its `version >= local.version`; a stale response cannot overwrite a newer finalized session. The legacy wizard uses the same polling/finalization path and removes `attestationCode` plus its manual confirmation control.
+Task 2 already made every mutation pass the current session object. Here, polling accepts a session only when its `version >= local.version`; a stale response cannot overwrite a newer finalized session. The legacy wizard uses the same polling/finalization path and removes `attestationCode` plus its manual confirmation control.
 
 - [ ] **Step 5: Run frontend tests, typecheck, and build**
 
@@ -647,7 +689,7 @@ Expected: PASS. No rendered control accepts client-chosen egress confirmation te
 - [ ] **Step 6: Commit Task 4**
 
 ```bash
-git add frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
+git add frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
 git commit -m "fix(frontend): finalize only server-observed browser egress"
 ```
 
@@ -929,13 +971,16 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json`
 - Create: `tools/oracle-lab/phase-1-evidence.ts`
+- Create: `tools/oracle-lab/phase-1-loopback-sandbox.ts`
 - Create: `tests/oracle-lab-phase-1-evidence.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
-- Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0.
-- Produces: `validatePhase1CatalogValue`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
+- Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0, plus the proven loopback-only `sandbox-exec` profile shape already used by `tools/claude-native-oracle-matrix.ts`.
+- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `validatePhase1CatalogValue`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
 - Does not modify the Phase 0 command catalog, Registry v1 validators, P0.1 CLI, or their schemas.
 
 - [ ] **Step 1: Write RED tests for the Phase 1 adapter contract**
@@ -983,6 +1028,15 @@ test('RED classification requires the exact frozen failure-family set', () => {
   })).status, 'expected_fail')
 })
 
+test('RED classification rejects a valid family set plus any unrelated failing leaf', () => {
+  const result = classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red',
+    failureNames: ['B4 fixture', 'B5 fixture', 'B6 fixture', 'HA-P0-009 unrelated failure'],
+  }))
+  assert.equal(result.status, 'unexpected_fail')
+  assert.equal(result.unclassified_failure_names.length, 1)
+})
+
 test('result validation re-derives RED families instead of trusting persisted tokens', () => {
   const valid = redResultFixture({
     commandID: 'cc-b4-b6-red',
@@ -1007,6 +1061,15 @@ test('capture rejects missing, expired, tampered, or unapproved execution contex
       hasCode('execution_context_not_authorized'))
   }
   assert.equal(spawnObserver.count, 0)
+})
+
+test('capture refuses proxy-only networking and requires an OS loopback sandbox', async () => {
+  assert.throws(() => captureAndRunPhase1({ ...baseOptions, sandbox: unavailableSandbox }),
+    hasCode('network_sandbox_unavailable'))
+  const canaries = await runPhase1SandboxCanaries(reviewedSandboxFixture)
+  assert.equal(canaries.loopback_socket, 'pass')
+  assert.equal(canaries.non_loopback_test_net_socket, 'denied_by_policy')
+  assert.equal(canaries.policy_bypass_detected, false)
 })
 
 test('handoff rejects unexpected pass/fail, cross-head results, unsafe output and non-ancestor artifact head', () => {
@@ -1053,6 +1116,9 @@ export type Phase1Result = {
   stderr_digest: string
   failure_names: string[]
   observed_failure_families: Phase1RedFailureFamily[]
+  unclassified_failure_names: string[]
+  sandbox_policy_digest: string
+  network_policy_violations: number
   unsafe_output_detected: boolean
   result_digest: string
 }
@@ -1060,7 +1126,11 @@ export type Phase1Result = {
 
 The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
 
-The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, passes argv directly to `runBoundedProcess`, uses exactly `HERMETIC_NETWORK_ENV` plus `PATH`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. It classifies only anchored safe names (`^B4(?:\\s|$)`, `^B5(?:\\s|$)`, `^B6(?:\\s|$)`, `^TestPhase0B5[A-Za-z0-9_/]*$`, and `^TestPhase0B6[A-Za-z0-9_/]*$`) into constant family tokens. Repeated failing test names within one family collapse to one token. A nonzero exit becomes `expected_fail` only when the ordered unique observed family set exactly equals the catalog set; empty, partial, unknown, or supersets become `unexpected_fail`, while catalog duplicates fail schema/semantic validation. `validatePhase1ResultsValue` re-derives the family set from safe `failure_names`, compares it to both `observed_failure_families` and the exact catalog row, and rejects a rehashed forgery. An unrelated failure can never satisfy a RED row.
+The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
+
+On the frozen macOS runner, `resolvePhase1LoopbackSandbox` requires the reviewed absolute `/usr/bin/sandbox-exec`, records its binary digest, generates a private mode-0600 profile that denies `network*` and re-allows only IPv4/IPv6 loopback TCP required by local fixtures, and records the policy digest. Before the first catalog command, canaries prove a dynamically allocated loopback server is reachable while a direct socket to the RFC 5737 TEST-NET address `198.51.100.1` is rejected by policy rather than timing out or returning connection refused. The canary carries no credential or user data. Unsupported platforms or unavailable enforcement return `network_sandbox_unavailable`; there is no proxy-only degraded mode. Each result binds the same policy digest and zero observed sandbox violations. A sandbox denial/violation during a command terminates that capture as `unexpected_fail`; no evidence file is written. Unit tests prove a Node direct socket and a spawned child cannot bypass the guard. A later Linux runner requires a separately reviewed namespace adapter and equivalent canaries; it is not silently accepted by this plan.
+
+The RED parser accepts only failing leaf names, never suite/file summaries or skipped names. It classifies anchored safe names (`^B4(?:\\s|$)`, `^B5(?:\\s|$)`, `^B6(?:\\s|$)`, `^TestPhase0B5[A-Za-z0-9_/]*$`, and `^TestPhase0B6[A-Za-z0-9_/]*$`) into constant family tokens. Repeated failing test names within one family collapse to one token. Any failing leaf that does not match the exact command allowlist is retained only as a safe constant/category in `unclassified_failure_names` and forces `unexpected_fail`. A nonzero exit becomes `expected_fail` only when there are zero unclassified names and the ordered unique observed family set exactly equals the catalog set; empty, partial, unknown, or supersets become `unexpected_fail`, while catalog duplicates fail schema/semantic validation. `validatePhase1ResultsValue` re-parses `failure_names`, compares the derived names/families to the persisted fields and exact catalog row, and rejects a rehashed forgery. A valid B4-B6 set plus `HA-P0-009` or any other failure is always unexpected.
 
 - [ ] **Step 4: Add the exact Phase 1 command catalog**
 
@@ -1077,29 +1147,34 @@ cc-build: ${CC_GATEWAY_ROOT} :: npm run build :: exit 0
 cc-tests: ${CC_GATEWAY_ROOT} :: npm test :: exit 0
 sidecar-tests: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test ./... -count=1 :: exit 0
 joint-local-chain: ${SUB2API_ROOT}/backend :: go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v :: exit 0
-cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: npm exec tsx tests/red/phase0-boundary.red.test.ts :: nonzero :: failure families [B4,B5,B6]
-sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -count=1 :: nonzero :: failure families [TestPhase0B5,TestPhase0B6]
+cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: node --import tsx --test --test-name-pattern=^(B4|B5|B6)(\\s|$) tests/red/phase0-boundary.red.test.ts :: env ORACLE_LAB_MANIFEST_PATH=${CC_GATEWAY_ROOT}/docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json, SUB2API_ROOT=${SUB2API_ROOT} :: nonzero :: failure families [B4,B5,B6] :: allowed failing prefixes [B4 ,B5 ,B6 ]
+sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -run ^TestPhase0B[56] -count=1 :: nonzero :: failure families [TestPhase0B5,TestPhase0B6] :: allowed failing prefixes [TestPhase0B5,TestPhase0B6]
 ```
 
-The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes the exact family arrays per command ID rather than trusting arbitrary catalog strings.
+The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The CC RED name filter excludes the separate `HA-P0-009` Phase 2 corpus instead of ignoring its failures; the sidecar filter excludes unrelated Go tests. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes exact argv, environment, family arrays, and failing-name prefixes per command ID rather than trusting arbitrary catalog strings.
 
 - [ ] **Step 5: Implement one `run-all` capture transaction**
 
 ```typescript
 export function captureAndRunPhase1(options: {
+  stage: 'feature-candidate' | 'post-integration'
   ccGatewayRoot: string
   sub2apiRoot: string
   entryPath: string
-  executionContextPath: string
+  executionContextPath?: string
+  integrationEntryPath?: string
   catalogPath: string
   baselineOut: string
   resultsOut: string
   now?: string
   runner?: typeof runBoundedProcess
+  sandbox?: Phase1LoopbackSandbox
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Capture reviewed heads and CodeGraph digests in memory, run all fourteen commands sequentially, and for each RED command derive and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any family mismatch, unexpected status, or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+`feature-candidate` requires `executionContextPath` and forbids `integrationEntryPath`; `post-integration` requires `integrationEntryPath` and forbids `executionContextPath`. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
+
+Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture reviewed heads, CodeGraph digests, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, reject every unclassified failing leaf and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any sandbox violation, family/name mismatch, unexpected status, or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1111,7 +1186,7 @@ Before the first command, validate the unexpired execution context and parse the
 }
 ```
 
-Supported subcommands are exact: `validate-catalog`, `run-all`, `validate-results`, `build-handoff`, and `validate-handoff`. Unknown commands, duplicate arguments, path traversal, symlink artifacts, expired inputs, and absolute persisted paths fail with stable error codes.
+Supported subcommands are exact: `validate-catalog`, `run-all`, `validate-results`, `build-integration-entry`, `build-handoff`, `validate-handoff`, `build-integration-receipt`, and `validate-integration-receipt`. Unknown commands, duplicate arguments, path traversal, symlink artifacts, expired inputs, and absolute persisted paths fail with stable error codes. The receipt builder accepts only a clean exact artifact commit; the validator enforces its one-path child commit when supplied.
 
 - [ ] **Step 7: Run adapter, planning, P0.1, and full CC regression**
 
@@ -1128,17 +1203,22 @@ Expected: all PASS. The Phase 0 and P0.1 artifacts and tools remain byte-for-byt
 - [ ] **Step 8: Commit Task 7 in CC Gateway**
 
 ```bash
-git add docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json tools/oracle-lab/phase-1-evidence.ts tests/oracle-lab-phase-1-evidence.test.ts package.json
+git add docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json tools/oracle-lab/phase-1-evidence.ts tools/oracle-lab/phase-1-loopback-sandbox.ts tests/oracle-lab-phase-1-evidence.test.ts package.json
 git commit -m "test(oracle): add bounded Phase 1 H1 evidence adapter"
 ```
 
-### Task 8: Integrated Exit Evidence, Registry Transition, and Handoff
+### Task 8: Feature Review, Post-Integration Evidence, Registry Transition, and Handoff
 
 **Files:**
+- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-review.md`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`
 - Create: `docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json`
 - Create: `docs/superpowers/evidence/phase-1/phase-1-command-results.json`
 - Create: `docs/superpowers/evidence/phase-1/phase-1-handoff.json`
 - Create: `docs/superpowers/evidence/phase-1/phase-1-exit-report.md`
+- Create: `docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json`
 - Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 - Modify: `docs/superpowers/registry/oracle-lab-claims.json`
 - Modify: `docs/superpowers/registry/oracle-lab-current-observations.json`
@@ -1146,55 +1226,68 @@ git commit -m "test(oracle): add bounded Phase 1 H1 evidence adapter"
 - Test: `tests/oracle-lab-phase-1-planning.test.ts`
 
 **Interfaces:**
-- Consumes: Task 7 `run-all`, both clean implementation heads, the planning entry/context as provenance, the unexpired execution context/approval receipt as authority, and four selected requirement rows.
-- Produces: reviewed code-head results plus a descendant artifact-head handoff, with exact Phase 2 entry conditions.
+- Consumes: Task 7 `run-all`, both clean feature heads, the exact plan approval/execution context, the two merged implementation PRs, and four selected requirement rows.
+- Produces: non-authoritative feature-candidate results, a fresh integration entry bound to exact fetched `muqihang/main` heads, complete post-integration results, a descendant artifact commit, a one-file receipt commit, and final Phase 2 entry conditions.
 
-- [ ] **Step 1: Update CodeGraph and prove both implementation worktrees are clean**
+- [ ] **Step 1: Update CodeGraph and prove both feature worktrees are clean**
 
 Run `codegraph sync` then `codegraph status` in each implementation worktree. Run `git status --porcelain=v1 --untracked-files=all` in each worktree.
 
 Expected: both CodeGraph statuses are up to date and both Git status outputs are empty. Do not run evidence capture from the operator's original dirty Sub2API main worktree.
 
-- [ ] **Step 2: Execute one atomic H1 capture**
+- [ ] **Step 2: Execute and validate one feature-candidate H1 capture**
 
 ```bash
-npm run oracle:phase1 -- run-all --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
 ```
 
-Expected: twelve `pass`, two `expected_fail`, zero unexpected statuses, zero unsafe-output flags, and exact observed RED families `[B4,B5,B6]` plus `[TestPhase0B5,TestPhase0B6]`. The exit baseline records the execution-context digest, exact plan/approval digests, reviewed code heads, clean dirty digests, current CodeGraph digests, unchanged shared contract, parent receipts, selected IDs, and disabled capabilities.
+Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
 
-- [ ] **Step 3: Validate captured evidence before changing governance state**
-
-Run: `npm run oracle:phase1 -- validate-results --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json`
-
-Expected: `{"ok":true}`. If any command is unexpected, leave all four requirement rows deferred.
-
-- [ ] **Step 4: Transition only the four Phase 1 requirement rows**
-
-For `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and `RA-P0-008`, set the registry's reviewed implemented status, exact implementation/test file arrays, exact verification command IDs, `docs/superpowers/evidence/phase-1/phase-1-command-results.json`, reviewed code heads, and verification timestamp. Leave every other deferred row unchanged.
-
-Add claims only at `local_structural` or `local_observational`. Do not add `upstream_canary_observed` or `provider_internal_confirmed` authority. `RA-P0-008` may become locally implemented only when listener, direct-upstream TLS, and sidecar verification commands are all GREEN; retain `external_network_exposure_policy_enforcement_not_observed` and `real_upstream_certificate_chain_not_observed` as production-authority gaps. Append a new `resolved` event for `RA-CURRENT-008` bound to both `tests/listener-boundary.test.ts` and `tests/upstream-tls-boundary.test.ts`, the sidecar TLS result, their result digests, and the reviewed CC code head; preserve all prior events.
-
-- [ ] **Step 5: Commit results and registry transition as the artifact head**
+- [ ] **Step 3: Commit feature-candidate evidence and obtain independent implementation review**
 
 ```bash
-git add docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json docs/superpowers/evidence/phase-1/phase-1-command-results.json docs/superpowers/registry/oracle-lab-requirements.json docs/superpowers/registry/oracle-lab-claims.json docs/superpowers/registry/oracle-lab-current-observations.json
-git commit -m "docs(oracle): bind Phase 1 results to reviewed code heads"
+git add docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json docs/superpowers/evidence/phase-1/phase-1-feature-review.md
+git commit -m "test(oracle): bind Phase 1 feature candidate results"
 ```
 
-The adapter later verifies this artifact head descends from the reviewed CC code head; the Sub2API reviewed head remains exact.
+The independent reviewer checks full goal coverage, the exact route-by-authority matrix, authority-before-state/version/dependency ordering, role-revision races, duplicate callback/promote idempotency, replay behavior, frontend version continuity, origin trust, direct `startProxy` startup ordering, direct and sidecar certificate verification, exact RED leaves/families, sandbox enforcement, secret leakage, and scope. Critical and Important findings must be zero before either PR is merged.
 
-- [ ] **Step 6: Build deterministic handoff and report**
+- [ ] **Step 4: Merge both implementation PRs before final evidence**
+
+Push `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`, create reviewable PRs, and merge each with an ordinary merge commit after required checks. Do not squash, rebase, force-push, or commit directly to `main`. Record the exact reviewed feature heads and PR merge references. A feature-branch handoff is prohibited.
+
+- [ ] **Step 5: Freeze exact integrated mains in new clean worktrees**
+
+Fetch `muqihang/main` in both repositories after both PRs merge. Create `codex/oracle-phase-1-post-integration` from the fetched CC Gateway main and a clean Sub2API post-integration worktree at its fetched main. Initialize or sync CodeGraph in both and require current indexes and empty status.
+
+Create `phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either local HEAD differs from fetched remote main, either remote advances during freezing, or any feature head is not an ancestor.
+
+- [ ] **Step 6: Rerun the complete catalog on the exact integrated main heads**
 
 ```bash
-npm run oracle:phase1 -- build-handoff --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
+npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+```
+
+Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, and repository commits exactly equal the integration entry's two fetched main heads. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. Validate results before changing governance state.
+
+- [ ] **Step 7: Transition only the four Phase 1 requirement rows**
+
+For `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and `RA-P0-008`, set reviewed implemented status, exact implementation/test arrays, exact post-integration command IDs/results, the two integrated main heads, and verification timestamp. Leave every other deferred row unchanged.
+
+Add claims only at `local_structural` or `local_observational`. Do not add `upstream_canary_observed` or `provider_internal_confirmed`. `RA-P0-008` becomes locally implemented only when listener, direct-upstream TLS, and sidecar commands are GREEN. Retain `external_network_exposure_policy_enforcement_not_observed` and `real_upstream_certificate_chain_not_observed` as production gaps. Append one `resolved` event for `RA-CURRENT-008` bound to the two boundary tests, sidecar result, result digests, and integrated CC main head; preserve all prior events.
+
+- [ ] **Step 8: Build and validate the deterministic final handoff/report**
+
+```bash
+npm run oracle:phase1 -- build-handoff --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
 ```
 
 The handoff contains exactly:
 
 ```typescript
 export const PHASE2_ENTRY_CONDITIONS = [
-  'phase_1_handoff_valid',
+  'phase_1_integration_receipt_valid',
+  'current_remote_mains_match_or_descend_from_receipted_integration_chain',
   'b1_b3_listener_and_upstream_tls_green_on_integrated_heads',
   'b4_b6_expected_red_preserved_for_phase_4',
   'shared_contract_unchanged_or_reviewed_version_bump',
@@ -1204,40 +1297,37 @@ export const PHASE2_ENTRY_CONDITIONS = [
 ] as const
 ```
 
-It expires exactly 24 hours after generation, binds reviewed code heads and the descendant artifact head, and contains only digests, safe command IDs, safe failure names, requirement IDs, and repository-relative paths.
+It expires exactly 24 hours after generation and binds the exact two fetched integrated main heads, integration-entry/result digests, safe command/failure names, requirement IDs, and repository-relative paths. Validate the handoff/report pair, planning tests, Phase 1 evidence tests, full CC tests, and build before committing.
 
-- [ ] **Step 7: Validate final artifacts and rerun governance tests**
+- [ ] **Step 9: Commit the exact post-integration artifact set**
 
-Run: `npm run oracle:phase1 -- validate-handoff --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md`
-
-Run: `npm exec tsx tests/oracle-lab-phase-1-evidence.test.ts`
-
-Run: `npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
-
-Run: `npm test && npm run build`
-
-Expected: all PASS; handoff/report bytes are a deterministic pair.
-
-- [ ] **Step 8: Perform the final scope and leak audit**
-
-Run: `git diff --check`
-
-Run: `rg -n 'real_canary_user_approved:\s*true|production_upstream_enabled:\s*true|upstream_mode:\s*(real-canary|production)' docs src config*.yaml`
-
-Expected: no newly enabled production/canary value.
-
-Run: `rg -n 'ORACLE[_-]?SECRET[_-]?CANARY|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|Bearer [A-Za-z0-9._~+/-]{4,}|sk-[A-Za-z0-9_-]{8,}' docs/superpowers/evidence/phase-1`
-
-Expected: no matches.
-
-- [ ] **Step 9: Commit the handoff/report and request independent review**
+Run the scope/leak audits from the prior plan, then commit all final artifacts and governance transitions in one artifact commit:
 
 ```bash
-git add docs/superpowers/evidence/phase-1/phase-1-handoff.json docs/superpowers/evidence/phase-1/phase-1-exit-report.md
-git commit -m "docs(oracle): publish Phase 1 handoff"
+git add docs/superpowers/evidence/phase-1/phase-1-integration-entry.json docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json docs/superpowers/evidence/phase-1/phase-1-command-results.json docs/superpowers/evidence/phase-1/phase-1-handoff.json docs/superpowers/evidence/phase-1/phase-1-exit-report.md docs/superpowers/registry/oracle-lab-requirements.json docs/superpowers/registry/oracle-lab-claims.json docs/superpowers/registry/oracle-lab-current-observations.json
+git commit -m "docs(oracle): bind Phase 1 to integrated main heads"
 ```
 
-The reviewer must independently check goal coverage, pre-side-effect reservations, authorization ordering, replay behavior, origin trust, observed bind state, code-approved exposure policy, direct and sidecar certificate verification, execution-context/approval binding, B4-B6 preservation, reviewed-head ancestry, registry transitions, secret leakage, and the no-production/no-canary boundary before either PR is merged.
+The validator requires this commit's parent to be the exact captured CC integrated main head and its delta to contain only the declared Phase 1 evidence/governance paths. Every bound artifact digest must equal `git show <artifact_commit>:<path>`.
+
+- [ ] **Step 10: Generate a self-reference-safe receipt and commit only it**
+
+At the clean artifact commit, generate `phase-1-integration-receipt.json`. It binds the artifact commit, exact CC/Sub2API integrated main heads, reviewed feature heads, integration-entry/results/handoff/report/registry digests, sandbox digests, disabled capabilities, and Phase 2 gates. Validate it both before and after commit.
+
+```bash
+git add docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+git commit -m "docs(oracle): publish Phase 1 integration receipt"
+```
+
+The receipt commit must have the artifact commit as its sole parent and add exactly one path. This two-commit chain is the only permitted solution to the artifact self-reference problem; the receipt never claims to contain its own commit hash.
+
+- [ ] **Step 11: Independently review and merge the post-integration evidence PR**
+
+The reviewer reruns receipt validation and verifies the integrated-main bindings, feature-head ancestry, exact artifact/receipt commit deltas, complete command set, sandbox proof, Registry transitions, leak audit, and no-production/no-canary boundary. Require zero Critical/Important findings, then merge `codex/oracle-phase-1-post-integration` through an ordinary PR merge commit.
+
+- [ ] **Step 12: Perform final remote-main verification without minting a false receipt**
+
+Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain exactly the receipt's integrated Sub2API head. Require the CC remote main to descend from the receipt commit, and require the only paths changed after the receipted integrated CC code head to be the declared Phase 1 evidence/governance paths plus the reviewed PR merge. Revalidate receipt bytes from remote main, rerun the focused planning/receipt validators, and report the final remote heads plus receipt digest. If either implementation tree changed after capture, the handoff is invalid and Steps 5-12 repeat from new integrated heads.
 
 ## Final Verification Matrix
 
@@ -1246,8 +1336,11 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | B1 arbitrary/wrong/expired/replay/cross-session/proxy-change corpus | GREEN |
 | B1 consumed-proof replay classification | same owner returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` for old/current version; cross-owner remains common 403; nonmatching stale proof remains 409 |
 | B1 concurrent public verifier reservation | one proxy observer call; enumeration-resistant duplicate response |
-| B2 15-route owner matrix and six independent dimensions | GREEN |
-| B2 wrong-state and stale-version ordering | GREEN |
+| B2 exact 15-route × complete caller/session matrix | GREEN; no route/dimension sampling |
+| B2 ordinary/group-admin/tenant-admin/service/revoked/expired cases | exact 401/403/allowed outcomes from trusted policy/session state |
+| B2 owner + wrong-state + stale-version combined ordering | common 403; zero dependency calls |
+| B2 concurrent authority revision change | common 401/403 before reservation/dependency |
+| Duplicate OAuth callback and concurrent promote | idempotent pending/completed result; one dependency call |
 | B2 concurrent same-version side-effect reservation | one dependency call; second request 409 before side effect |
 | Session creation idempotency reservation | one proxy creation call per owner/key/request fingerprint |
 | Mutation response version continuity | acceptance/healthcheck next action uses latest version |
@@ -1261,7 +1354,10 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | Frontend focused tests, typecheck, build | GREEN |
 | CC Gateway full tests and build | GREEN |
 | Joint local chain | GREEN |
-| CC B4-B6 and sidecar B5-B6 | expected RED only with exact frozen failure families; unrelated nonzero is unexpected |
+| OS network boundary | reviewed loopback-only sandbox and canaries; proxy environment alone is insufficient |
+| CC B4-B6 and sidecar B5-B6 | filtered command, exact failing-name allowlist and families; any extra/unparsed failure is unexpected |
+| Post-integration authority | final results bind exact fetched `muqihang/main` heads after both implementation PRs merge |
+| Receipt chain | artifact commit exact delta plus one-path receipt child; final CC remote main descends receipt commit |
 | Shared contract digest | unchanged |
 | Production and real canary | disabled |
 
@@ -1269,7 +1365,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 
 - Sub2API rollback is the ordered revert of Tasks 5, 4, 3, 2, and 1. Do not partially retain the frontend `If-Match` contract after reverting backend version enforcement.
 - CC Gateway deployment-boundary rollback is one Task 6 commit, but rolling it back reopens listener and upstream certificate slices of `RA-P0-008` and invalidates the Phase 1 handoff.
-- H1 evidence/registry rollback is Task 8 then Task 7. Reverting evidence never claims the implementation itself was reverted.
+- H1 evidence/registry rollback is the Task 8 receipt commit, Task 8 artifact commit, feature-candidate evidence commit, then Task 7. Reverting evidence never claims the implementation itself was reverted.
 - Any rollback marks the affected requirement `changed` or `deferred` in a new registry/observation event; prior evidence is retained and never rewritten.
 
 ## Self-Review Checklist
@@ -1277,12 +1373,15 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
 - [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
+- [ ] Every one of the 15 non-public routes executes every caller/session matrix row, including active group/tenant admins, ordinary/service callers, revoked/expired sessions, and concurrent authority revision changes.
+- [ ] OAuth callback and promote duplicates are idempotent by safe operation key/fingerprint and invoke dependencies once.
 - [ ] Session creation reserves a provisional record before proxy creation, and public egress verification reserves before probing the proxy.
 - [ ] `AttestBrowserEgress` checks owner before exact consumed-proof replay, checks version/state after that replay classification only, and preserves 403/409 for cross-owner/nonmatching cases.
 - [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
 - [ ] Listener/upstream negative integration calls `startProxy` directly and proves both resolvers precede TLS reads, server creation, and listen through zero observed startup effects.
-- [ ] Every Phase 1 RED result binds the command-specific exact failure-family set; nonzero exit alone never yields `expected_fail`.
+- [ ] Every H1 subprocess is OS-sandboxed to loopback after passing allow/deny canaries; proxy variables alone never authorize capture.
+- [ ] Every Phase 1 RED result binds the command-specific exact failing-name allowlist and failure-family set; nonzero or an extra unrelated leaf never yields `expected_fail`.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.
-- [ ] Both repository PRs can be reviewed and reverted independently before the integrated evidence commit.
+- [ ] Both implementation PRs merge before final capture; the post-integration artifact/receipt chain binds fetched mains and is independently reviewable and revertible.

@@ -365,7 +365,70 @@ test('Phase 1 plan proves defensive startProxy ordering and exact RED failure fa
   assert.match(plan, /failure families \[B4,B5,B6\]/)
   assert.match(plan, /failure families \[TestPhase0B5,TestPhase0B6\]/)
   assert.match(plan, /ordered unique observed family set exactly equals the catalog set/)
-  assert.match(plan, /An unrelated failure can never satisfy a RED row/)
+  assert.match(plan, /valid B4-B6 set plus `HA-P0-009` or any other failure is always unexpected/)
+})
+
+test('Phase 1 plan freezes the complete authorization matrix and executable task boundaries', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  assert.match(plan, /exact 15 existing non-public object operations/)
+  assert.match(plan, /`GetSession`, `TestProxy`, `BrowserEgressAttestation`/)
+  assert.match(plan, /`CreateSession` is a separately frozen sixteenth route/)
+  assert.match(plan, /Each operation must execute every row in `formalPoolAuthorityCases`/)
+  for (const required of [
+    'active ordinary user, creator and non-creator',
+    'active group administrator, same tenant and granted group',
+    'active tenant administrator, same tenant',
+    'revoked session; expired session',
+    'service-to-service caller',
+    'concurrent role/policy revision changed after initial resolve',
+    'duplicated OAuth callback and concurrent promote',
+  ]) assert(plan.includes(required), required)
+  assert.match(plan, /owner mismatch, stale version, and wrong state are simultaneously true/)
+  assert.match(plan, /proxy\/OAuth\/account\/healthcheck\/cache\/scheduler dependency counter at zero/)
+  assert.match(plan, /FormalPoolAuthSessionAuthority/)
+  assert.match(plan, /FormalPoolAuthorizationPolicy/)
+  assert.match(plan, /`User\.AllowedGroups` is not itself an administrator grant/)
+  assert.match(plan, /AuthorityRevision/)
+  assert.match(plan, /svc\.authorizeSession\(ctx, session\.ID, true, FormalPoolOnboardingStatusWarming\)/)
+  assert.match(plan, /formal_pool_onboarding_flow_test\.go/)
+  assert.match(plan, /Task 4 adds only server-proof auto-finalization behavior/)
+
+  const task2 = plan.slice(plan.indexOf('### Task 2:'), plan.indexOf('### Task 3:'))
+  const task4 = plan.slice(plan.indexOf('### Task 4:'), plan.indexOf('### Task 5:'))
+  assert.match(task2, /ClaudeFormalPoolOnboardingWizard\.vue/)
+  assert.match(task2, /ClaudeFormalPoolOnboardingWizardV2\.vue/)
+  assert.match(task2, /npm run typecheck/)
+  assert.doesNotMatch(task4.slice(task4.lastIndexOf('git add')), /frontend\/src\/api\/admin\/claudeOnboarding\.ts/)
+})
+
+test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  assert.match(plan, /valid family set plus any unrelated failing leaf/)
+  assert.match(plan, /unclassified_failure_names/)
+  assert.match(plan, /--test-name-pattern=\^\(B4\|B5\|B6\)\(\\\\s\|\$\)/)
+  assert.match(plan, /-run \^TestPhase0B\[56\]/)
+  assert.match(plan, /allowed failing prefixes \[B4 ,B5 ,B6 \]/)
+  assert.match(plan, /`\/usr\/bin\/sandbox-exec`/)
+  assert.match(plan, /198\.51\.100\.1/)
+  assert.match(plan, /network_sandbox_unavailable/)
+  assert.match(plan, /there is no proxy-only degraded mode/)
+  assert.match(plan, /only through `wrapPhase1Command`/)
+})
+
+test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  const merge = plan.indexOf('Step 4: Merge both implementation PRs before final evidence')
+  const freeze = plan.indexOf('Step 5: Freeze exact integrated mains in new clean worktrees')
+  const recapture = plan.indexOf('Step 6: Rerun the complete catalog on the exact integrated main heads')
+  const artifact = plan.indexOf('Step 9: Commit the exact post-integration artifact set')
+  const receipt = plan.indexOf('Step 10: Generate a self-reference-safe receipt and commit only it')
+  const finalRemote = plan.indexOf('Step 12: Perform final remote-main verification without minting a false receipt')
+  assert(merge >= 0 && freeze > merge && recapture > freeze && artifact > recapture && receipt > artifact && finalRemote > receipt)
+  assert.match(plan, /phase-1-integration-entry\.json/)
+  assert.match(plan, /phase-1-integration-receipt\.json/)
+  assert.match(plan, /receipt commit must have the artifact commit as its sole parent and add exactly one path/)
+  assert.match(plan, /Sub2API remote main to remain exactly the receipt's integrated Sub2API head/)
+  assert.match(plan, /CC remote main to descend from the receipt commit/)
 })
 
 test('Phase 1 scope owns only B1-B3 and the Phase 1 listener slice', async () => {
