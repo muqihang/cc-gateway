@@ -18,6 +18,7 @@
 - Tests use loopback, `httptest`, fake resolvers, and mock upstreams only. No command in this plan may contact a real provider or public host.
 - Authorization denials occur before state/version/dependency evaluation and use one stable 401 class plus one stable 403 class, without revealing which owner dimension mismatched.
 - Missing or malformed `If-Match` on an onboarding mutation returns `428 FORMAL_POOL_ONBOARDING_VERSION_REQUIRED`; a stale version reuses the existing `409 FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`.
+- `AttestBrowserEgress` is the sole ordering exception after authentication and owner authorization. Its exact order is: `context -> record -> owner -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS`. An exact replay of the persisted consumed-proof safe digest returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` with either the old or current version; cross-owner requests still return the common 403 first, and nonmatching proofs do not bypass version/state checks.
 - Any mutation that can call OAuth, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler dependencies must first acquire a CAS reservation. A concurrent request with the same version fails before a second dependency call; an ambiguous external outcome becomes `operation_outcome_unknown` and is never automatically retried.
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
@@ -216,7 +217,7 @@ var ErrFormalPoolOnboardingVersionRequired = infraerrors.New(http.StatusPrecondi
 
 Reuse the existing `ErrFormalPoolOnboardingVersionConflict`; do not declare a second conflict error or change its reason code.
 
-Implement exact validation order in `authorizeSession`: context presence, record lookup, subject/admin/tenant/group/creator/role comparison, expected-version requirement for mutations, expected-version equality, then allowed-state membership. All owner mismatches return the same 403 error.
+Implement exact validation order in `authorizeSession`: context presence, record lookup, subject/admin/tenant/group/creator/role comparison, expected-version requirement for mutations, expected-version equality, then allowed-state membership. All owner mismatches return the same 403 error. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
 
 - [ ] **Step 4: Extend the record and response without exposing owner identifiers**
 
@@ -429,11 +430,65 @@ git commit -m "feat(formal-pool): enforce owner and version on every onboarding 
 
 **Interfaces:**
 - Consumes: Task 2 owner/version authority.
-- Produces: server-observed status `verified_pending_finalize`, one-use `verification_code`, consumed-proof replay rejection, and final `browser_egress_verified` state.
+- Produces: server-observed status `verified_pending_finalize`, one-use `verification_code`, `authorizeBrowserEgressOwner`, `authorizeBrowserEgressVersionAndState`, consumed-proof replay rejection, and final `browser_egress_verified` state.
 
 - [ ] **Step 1: Convert the B1 RED corpus to the required two-step success path**
 
 Remove only the build tag. For the positive/replay case, call `VerifyBrowserEgressByNonce(ctx, proof, "198.51.100.10")` before `AttestBrowserEgress`; carry the returned version into the authority context. Keep arbitrary, modified, expired, replayed, cross-session, and pre-proxy-change proof cases. Add one case asserting that the correct proof is rejected before the server-side IP/proxy check.
+
+Add an exact error-reason matrix after the first successful consume:
+
+| Caller/proof/version | Required reason |
+| --- | --- |
+| owner, exact consumed proof, old consume-input version | `FORMAL_POOL_BROWSER_PROOF_REJECTED` |
+| owner, exact consumed proof, current post-consume version | `FORMAL_POOL_BROWSER_PROOF_REJECTED` |
+| different owner, exact consumed proof, either version | `FORMAL_POOL_FORBIDDEN` |
+| owner, different proof, old consume-input version | `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` |
+
+```go
+func requireFormalPoolReason(t *testing.T, err error, reason string) {
+    t.Helper()
+    var appErr *infraerrors.ApplicationError
+    require.ErrorAs(t, err, &appErr)
+    require.Equal(t, reason, appErr.Reason)
+}
+
+func TestFormalPoolConsumedBrowserProofReplayReasonPrecedesOnlyVersionAndState(t *testing.T) {
+    svc, owner, observed, proof := newServerObservedBrowserProofFixture(t)
+    consumeInputVersion := observed.Version
+    consumed, err := svc.AttestBrowserEgress(
+        formalPoolAuthorityContext(owner, consumeInputVersion), observed.ID,
+        FormalPoolBrowserEgressAttestationRequest{Confirmed: true, VerificationCode: proof},
+    )
+    require.NoError(t, err)
+
+    _, err = svc.AttestBrowserEgress(
+        formalPoolAuthorityContext(owner, consumeInputVersion), observed.ID,
+        FormalPoolBrowserEgressAttestationRequest{Confirmed: true, VerificationCode: proof},
+    )
+    requireFormalPoolReason(t, err, "FORMAL_POOL_BROWSER_PROOF_REJECTED")
+
+    _, err = svc.AttestBrowserEgress(
+        formalPoolAuthorityContext(owner, consumed.Version), observed.ID,
+        FormalPoolBrowserEgressAttestationRequest{Confirmed: true, VerificationCode: proof},
+    )
+    requireFormalPoolReason(t, err, "FORMAL_POOL_BROWSER_PROOF_REJECTED")
+
+    intruder := owner
+    intruder.SubjectID++
+    _, err = svc.AttestBrowserEgress(
+        formalPoolAuthorityContext(intruder, consumeInputVersion), observed.ID,
+        FormalPoolBrowserEgressAttestationRequest{Confirmed: true, VerificationCode: proof},
+    )
+    requireFormalPoolReason(t, err, "FORMAL_POOL_FORBIDDEN")
+
+    _, err = svc.AttestBrowserEgress(
+        formalPoolAuthorityContext(owner, consumeInputVersion), observed.ID,
+        FormalPoolBrowserEgressAttestationRequest{Confirmed: true, VerificationCode: proof + "0"},
+    )
+    requireFormalPoolReason(t, err, "FORMAL_POOL_ONBOARDING_VERSION_CONFLICT")
+}
+```
 
 - [ ] **Step 2: Run the B1 corpus and confirm manual confirmation is still authoritative**
 
@@ -468,9 +523,20 @@ Add a blocking-proxy concurrency test: two simultaneous public checks for one no
 
 ```go
 func (s *FormalPoolOnboardingService) AttestBrowserEgress(ctx context.Context, id string, req FormalPoolBrowserEgressAttestationRequest) (*FormalPoolOnboardingSession, error) {
-    snap, err := s.authorizeSession(ctx, id, true, FormalPoolOnboardingStatusProxyVerified)
+    authority, snap, err := s.authorizeBrowserEgressOwner(ctx, id)
     if err != nil { return nil, err }
     proof := strings.TrimSpace(req.VerificationCode)
+
+    // Sole exception: owner is already proven, so an exact consumed proof is
+    // classified as replay before stale-version or terminal-state handling.
+    if proof != "" && consumedBrowserProofMatches(snap, proof) {
+        return nil, ErrFormalPoolOnboardingProofRejected
+    }
+
+    snap, err = s.authorizeBrowserEgressVersionAndState(
+        authority, snap, FormalPoolOnboardingStatusProxyVerified,
+    )
+    if err != nil { return nil, err }
     if !req.Confirmed || proof == "" || nonceExpired(snap, s.store.now()) {
         return nil, ErrFormalPoolOnboardingProofRejected
     }
@@ -488,9 +554,16 @@ func (s *FormalPoolOnboardingService) AttestBrowserEgress(ctx context.Context, i
         return nil
     })
 }
+
+func consumedBrowserProofMatches(rec *formalPoolOnboardingSessionRecord, proof string) bool {
+    if rec.BrowserProofConsumedHash == "" || proof == "" { return false }
+    return constantTimeEqual(formalPoolProofDigest(proof), rec.BrowserProofConsumedHash)
+}
 ```
 
-Use `crypto/subtle.ConstantTimeCompare`. Define `formalPoolProofDigest(proof string) string { return formalPoolSafeRef("browser_proof_consumed", proof) }`; it persists only the existing HMAC safe-ref form, never a raw proof. When `BrowserNonce` is empty and the supplied digest equals the consumed digest, return the same safe `FORMAL_POOL_BROWSER_PROOF_REJECTED` class as every other invalid proof.
+`authorizeBrowserEgressOwner` performs context presence, record lookup, and the complete subject/admin/tenant/group/creator/role comparison, returning the common authentication/forbidden errors. It does not inspect proof, expected version, or state. `authorizeBrowserEgressVersionAndState` then requires `ExpectedVersion`, compares it, and validates `proxy_verified`. Do not call generic `authorizeSession` before `consumedBrowserProofMatches`, and do not reuse this split ordering for any other mutation.
+
+Use `crypto/subtle.ConstantTimeCompare`. Define `formalPoolProofDigest(proof string) string { return formalPoolSafeRef("browser_proof_consumed", proof) }`; it persists only the existing HMAC safe-ref form, never a raw proof. When the supplied digest equals the consumed digest, return the same safe `FORMAL_POOL_BROWSER_PROOF_REJECTED` reason for both old and current versions. A nonmatching proof continues through the generic version/state ordering and cannot use this exception to hide a stale version or wrong state.
 
 Define `ErrFormalPoolOnboardingProofRejected = infraerrors.BadRequest("FORMAL_POOL_BROWSER_PROOF_REJECTED", "browser egress proof was rejected")` and `constantTimeEqual(left, right string) bool` as a length check followed by `subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1`.
 
@@ -1061,6 +1134,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 | Gate | Required result |
 | --- | --- |
 | B1 arbitrary/wrong/expired/replay/cross-session/proxy-change corpus | GREEN |
+| B1 consumed-proof replay classification | same owner returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` for old/current version; cross-owner remains common 403; nonmatching stale proof remains 409 |
 | B1 concurrent public verifier reservation | one proxy observer call; enumeration-resistant duplicate response |
 | B2 15-route owner matrix and six independent dimensions | GREEN |
 | B2 wrong-state and stale-version ordering | GREEN |
@@ -1094,6 +1168,7 @@ The reviewer must independently check goal coverage, pre-side-effect reservation
 - [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
 - [ ] Session creation reserves a provisional record before proxy creation, and public egress verification reserves before probing the proxy.
+- [ ] `AttestBrowserEgress` checks owner before exact consumed-proof replay, checks version/state after that replay classification only, and preserves 403/409 for cross-owner/nonmatching cases.
 - [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
