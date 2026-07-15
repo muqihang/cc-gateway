@@ -13,6 +13,7 @@
 - Governing precedence is exact: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`.
 - Phase 1 owns exactly `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and the full local-structural closure of `RA-P0-008` (`WP-R8:phase_1_loopback_remote_tls_guard`), including upstream certificate verification. This does not create remote-deployment or production authority.
 - Phase 1 must not change the shared contract at `backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json` (`sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`).
+- CC RED contract discovery uses a separate clean read-only Sub2API Git clone whose checked-out branch is exactly `main`; it is not a linked worktree, never uses the operator's dirty main, and never uses a non-main implementation worktree. Its origin-URL digest, HEAD/root/branch/clean-status/contract digest are bound as `SUB2API_CONTRACT_ROOT` evidence and must match the applicable frozen remote main. Create or refresh this clone before capture and never during a sandboxed command.
 - B4-B6 remain expected RED and owned by later phases. The CC and sidecar RED commands must still exit nonzero with the frozen B4-B6 failure families.
 - `real_upstream_access`, `real_credentials`, `profile_promotion`, `production_deployment`, `real_canary`, `unrestricted_capture`, and `external_network_requests` remain disabled.
 - Tests use loopback, `httptest`, fake resolvers, and mock upstreams only. No command in this plan may contact a real provider or public host.
@@ -40,6 +41,8 @@
 - Create `backend/internal/service/formal_pool_onboarding_authorization.go`: typed principal/request authority, owner comparison, state/version ordering, CAS operation reservations, and stable errors.
 - Create `backend/internal/service/formal_pool_onboarding_authorization_test.go`: authority ordering and version unit tests.
 - Create `backend/internal/handler/admin/formal_pool_onboarding_principal.go`: server-side principal resolver and `If-Match` parser.
+- Modify `backend/internal/server/middleware/auth_subject.go` and `jwt_auth.go`: retain only safe JWT expiry/token-version/auth-method claims for downstream revalidation.
+- Modify `backend/internal/server/router.go` and `backend/internal/server/routes/admin.go`: keep the same onboarding URLs but move only that route group from broad `adminAuth` to JWT auth plus the onboarding principal resolver.
 - Modify `backend/internal/service/formal_pool_onboarding_store.go`: owner envelope, proof lifecycle, account lookup, active-operation reservation, and CAS-only mutations.
 - Modify `backend/internal/service/formal_pool_onboarding_service.go`: authority enforcement, response version, B1 two-step verification/finalization.
 - Modify `backend/internal/handler/admin/formal_pool_onboarding_handler.go`: inject authority for every admin route and stop request-derived origin construction.
@@ -138,6 +141,7 @@ No Sub2API or runtime source file may change before this commit. If the executio
 
 **Interfaces:**
 - Produces: `FormalPoolOnboardingPrincipal`, `FormalPoolRequestAuthority`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
+- Produces: `FormalPoolOnboardingGroupReader` as a narrow adapter over the existing `GroupRepository` for active-group validation during creation.
 - Produces: `FormalPoolOnboardingSession.Version int64`, owner fields, `FormalPoolOperationReservation`, `beginReservedMutation`, `finishReservedMutation`, and `failReservedMutation`.
 - Consumes: existing `FormalPoolOnboardingStore.get`, `casUpdate`, session `Version`, `GroupID`, and status constants.
 
@@ -159,19 +163,26 @@ func TestFormalPoolAuthorizeSessionOrdersOwnerBeforeVersionAndState(t *testing.T
     require.NotErrorIs(t, err, ErrFormalPoolOnboardingInvalidState)
 }
 
-func TestFormalPoolStartSessionRequiresAdminTenantAndAllowedGroup(t *testing.T) {
-    svc := NewFormalPoolOnboardingService(FormalPoolOnboardingDeps{Proxy: &formalProxyFake{}})
+func TestFormalPoolStartSessionRequiresSystemAdminTenantAndActiveGroup(t *testing.T) {
+    svc := NewFormalPoolOnboardingService(FormalPoolOnboardingDeps{
+        Proxy: &formalProxyFake{}, Groups: &formalGroupReaderFake{},
+    })
     _, err := svc.StartSession(context.Background(), FormalPoolOnboardingStartRequest{GroupID: 101})
     require.ErrorIs(t, err, ErrFormalPoolOnboardingAuthenticationRequired)
 }
 
 func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService, FormalPoolOnboardingPrincipal, *FormalPoolOnboardingSession) {
     t.Helper()
-    svc := NewFormalPoolOnboardingService(FormalPoolOnboardingDeps{Proxy: &formalProxyFake{}})
+    svc := NewFormalPoolOnboardingService(FormalPoolOnboardingDeps{
+        Proxy: &formalProxyFake{},
+        Groups: &formalGroupReaderFake{groups: map[int64]*Group{
+            101: {ID: 101, Status: StatusActive, Hydrated: true},
+        }},
+    })
     owner := FormalPoolOnboardingPrincipal{
         SubjectID: 1001, AdministratorID: 1001, TenantID: "tenant-one",
-        AllowedGroupIDs: []int64{101}, CreatorID: 1001, Role: RoleAdmin,
-        CallerKind: CallerKindHuman, AuthorityRevision: 1, Active: true,
+        CreatorID: 1001, Role: RoleAdmin, CallerKind: CallerKindHumanJWT,
+        AuthorityRevision: 1, Active: true, SystemAdmin: true,
     }
     zero := int64(0)
     ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{
@@ -184,11 +195,20 @@ func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService,
     require.NoError(t, err)
     return svc, owner, session
 }
+
+type formalGroupReaderFake struct { groups map[int64]*Group }
+func (f *formalGroupReaderFake) GetByID(ctx context.Context, id int64) (*Group, error) {
+    _ = ctx
+    group := f.groups[id]
+    if group == nil { return nil, nil }
+    copy := *group
+    return &copy, nil
+}
 ```
 
 - [ ] **Step 2: Run the focused tests and confirm the authority API is absent**
 
-Run: `cd backend && go test ./internal/service -run '^TestFormalPoolAuthorize|^TestFormalPoolStartSessionRequiresAdminTenant' -count=1`
+Run: `cd backend && go test ./internal/service -run '^TestFormalPoolAuthorize|^TestFormalPoolStartSessionRequiresSystemAdminTenant' -count=1`
 
 Expected: FAIL to compile because `FormalPoolRequestAuthority` and the stable errors do not exist.
 
@@ -199,12 +219,12 @@ type FormalPoolOnboardingPrincipal struct {
     SubjectID       int64
     AdministratorID int64
     TenantID        string
-    AllowedGroupIDs []int64
     CreatorID       int64
     Role            string
     CallerKind      string
     AuthorityRevision int64
     Active          bool
+    SystemAdmin     bool
 }
 
 type FormalPoolRequestAuthority struct {
@@ -212,6 +232,13 @@ type FormalPoolRequestAuthority struct {
     ExpectedVersion *int64
     IdempotencyKey  string
 }
+
+type FormalPoolOnboardingGroupReader interface {
+    GetByID(ctx context.Context, id int64) (*Group, error)
+}
+
+// Add Groups FormalPoolOnboardingGroupReader to FormalPoolOnboardingDeps and
+// store it as groups FormalPoolOnboardingGroupReader on the service.
 
 func WithFormalPoolRequestAuthority(ctx context.Context, authority FormalPoolRequestAuthority) context.Context
 func FormalPoolRequestAuthorityFromContext(ctx context.Context) (FormalPoolRequestAuthority, bool)
@@ -229,7 +256,7 @@ var ErrFormalPoolOnboardingVersionRequired = infraerrors.New(http.StatusPrecondi
 
 Reuse the existing `ErrFormalPoolOnboardingVersionConflict`; do not declare a second conflict error or change its reason code.
 
-Implement exact validation order in `authorizeSession`: context presence; active human-caller shape; record lookup; subject/admin/tenant/group/creator/role comparison; authority-revision revalidation when the Task 2 policy dependency is installed; expected-version requirement for mutations; expected-version equality; then allowed-state membership. Revoked/expired sessions return the common 401, while caller/owner/policy mismatches return the common 403. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
+Implement exact validation order in `authorizeSession`: context presence; active human-JWT/system-admin shape; record lookup; subject/admin/tenant/creator/role ownership plus immutable record-group integrity; current user status/role/token-version revalidation through the Task 2 resolver; expected-version requirement for mutations; expected-version equality; then allowed-state membership. Expired/revoked/inactive JWT authority returns the common 401, while caller/owner/role mismatches return the common 403. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
 
 - [ ] **Step 4: Extend the record and response without exposing owner identifiers**
 
@@ -262,7 +289,7 @@ Creation uses the same primitive before a session exists. `beginCreateReservatio
 
 - [ ] **Step 5: Enforce authority on create/read/abort and add account lookup**
 
-`StartSession` requires `ExpectedVersion == 0`, a valid `Idempotency-Key`, active human administrator authority, non-empty tenant, positive subject/admin/creator IDs, and requested `GroupID` granted by the trusted policy resolver. It validates and fingerprints the request, calls `beginCreateReservation`, and only then calls proxy resolution once. Success finalizes the provisional record at version `2`; ambiguous proxy creation finalizes `operation_outcome_unknown` and never auto-retries. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` and `snapshotByCreateKey` with the same copy/session-expiry behavior as `snapshotByNonce`.
+`StartSession` requires `ExpectedVersion == 0`, a valid `Idempotency-Key`, active human-JWT system-admin authority, non-empty tenant, positive subject/admin/creator IDs, and a requested `GroupID` proven present and active through an injected adapter over the existing trusted `GroupRepository`. It validates and fingerprints the request, calls `beginCreateReservation`, and only then calls proxy resolution once. Success finalizes the provisional record at version `2`; ambiguous proxy creation finalizes `operation_outcome_unknown` and never auto-retries. `GetSession` authorizes the owner but does not require `If-Match`. `AbortSession` requires an expected version and uses one `casUpdate` because it has no external effect. Add `snapshotByAccountID` and `snapshotByCreateKey` with the same copy/session-expiry behavior as `snapshotByNonce`.
 
 Add a concurrent creation test with a blocking proxy fake: two requests sharing owner, request, `If-Match: "0"`, and idempotency key produce exactly one `ResolveOrCreateProxy` call; the second receives 409 while the first is active, and a post-success replay returns the same session/version without another dependency call. A changed body under the same key is 409 before proxy invocation.
 
@@ -287,9 +314,20 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 - Create: `backend/internal/handler/admin/formal_pool_onboarding_principal.go`
 - Modify: `backend/internal/handler/admin/formal_pool_onboarding_handler.go:18-522`
 - Modify: `backend/internal/handler/wire.go:117-123`
+- Modify: `backend/internal/server/middleware/auth_subject.go`
+- Modify: `backend/internal/server/middleware/jwt_auth.go`
+- Modify: `backend/internal/server/middleware/jwt_auth_test.go`
+- Create: `backend/internal/server/middleware/formal_pool_onboarding_auth.go`
+- Create: `backend/internal/server/middleware/formal_pool_onboarding_auth_test.go`
+- Modify: `backend/internal/server/middleware/wire.go`
+- Modify: `backend/internal/server/http.go`
+- Modify: `backend/internal/server/router.go`
+- Modify: `backend/internal/server/routes/admin.go`
+- Create: `backend/internal/server/routes/formal_pool_onboarding_auth_integration_test.go`
 - Modify: `backend/internal/config/config.go:169-181`
 - Modify: `backend/internal/service/formal_pool_onboarding_authorization.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_service.go:626-1659`
+- Modify: `backend/internal/service/wire.go`
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go:1-347`
 - Modify: `backend/internal/server/routes/formal_pool_onboarding_routes_test.go`
 - Modify: `backend/internal/handler/formal_pool_onboarding_provider_test.go`
@@ -303,7 +341,7 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 
 **Interfaces:**
 - Consumes: Task 1 authority context and response version.
-- Produces: `FormalPoolAuthSessionAuthority`, `FormalPoolAuthorizationPolicy`, the per-operation authority revalidator, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `WithFormalPoolOnboardingPrincipalResolver`, and `parseFormalPoolIfMatch`.
+- Produces: `FormalPoolOnboardingJWTAuthMiddleware`, JWT-only `RegisterFormalPoolOnboardingAdminRoutes`, an `AuthSubject` safe claims snapshot, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `WithFormalPoolOnboardingPrincipalResolver`, and `parseFormalPoolIfMatch`.
 - Produces: every mutating frontend API function accepts the current `FormalPoolSession` and sends its version.
 
 - [ ] **Step 1: Make the existing B2 RED corpus always-on and complete**
@@ -316,14 +354,12 @@ Freeze `formalPoolAdminOperationCases` as these exact 15 existing non-public obj
 | --- | --- |
 | unauthenticated | common 401 |
 | active ordinary user, creator and non-creator | common 403 |
-| active group administrator, same tenant and granted group | allowed to reach state/version evaluation |
-| group administrator, ungranted or cross-group | common 403 |
-| active tenant administrator, same tenant | allowed to reach state/version evaluation |
-| tenant administrator, cross-tenant | common 403 |
+| would-be group administrator: active non-admin JWT with existing `AllowedGroups`, same/cross requested tenant or group | common 403; `AllowedGroups` is a binding permission, not an administrator grant, and this repository has no group-admin production role |
+| would-be tenant administrator: active non-admin JWT with same/cross requested tenant labels | common 403; request labels grant no authority and this repository has no tenant-admin production role |
 | revoked session; expired session | common 401 before record/state/version |
 | stale browser tab | 409 only after authority succeeds |
-| service-to-service caller | common 403; Phase 1 admin routes are human-only |
-| concurrent role/policy revision changed after initial resolve | common 403 before reservation or dependency |
+| service-to-service/admin-API-key caller | common 401; onboarding is JWT-human-only in Phase 1 |
+| concurrent user status, role, or token-version change after JWT middleware | common 401/403 before reservation or dependency |
 | duplicated OAuth callback and concurrent promote with the same operation key/fingerprint | idempotent pending/completed result; one dependency invocation |
 
 For every mutation family, add a combined negative in which owner mismatch, stale version, and wrong state are simultaneously true. It must return the common 403 and leave its proxy/OAuth/account/healthcheck/cache/scheduler dependency counter at zero. The table also asserts the exact route inventory; adding a route without a matrix row fails the test.
@@ -332,9 +368,27 @@ For every mutation family, add a combined negative in which owner mismatch, stal
 
 Run: `cd backend && go test ./internal/server/routes -run 'TestFormalPoolOnboardingAuthorization' -count=1`
 
-Expected: FAIL because the handler neither resolves the principal nor parses `If-Match`.
+Expected: FAIL because onboarding still inherits `adminAuth`, `AuthSubject` lacks the safe JWT claims snapshot, and the handler neither revalidates the principal nor parses `If-Match`.
 
-- [ ] **Step 3: Add the production principal resolver**
+- [ ] **Step 3: Put onboarding behind JWT auth and add the production principal resolver**
+
+This phase deliberately authorizes only an active system `RoleAdmin` using a nonexpired, nonrevoked human JWT. Group/tenant administrators remain mandatory denial cases; Phase 1 does not invent new role tables, tenant grants, or group-policy persistence. Extract the existing role-agnostic JWT validation/user-active/token-version logic into a shared internal helper. Keep `NewJWTAuthMiddleware` behavior unchanged. Add `FormalPoolOnboardingJWTAuthMiddleware`, which calls the same helper but maps every missing/malformed/expired/revoked/inactive credential failure to the one `401 FORMAL_POOL_AUTH_REQUIRED` envelope and allows every valid human JWT role to reach the onboarding principal resolver.
+
+Move only the onboarding admin route registration out of the broad `RegisterAdminRoutes(... adminAuth ...)` group. Export `RegisterFormalPoolOnboardingAdminRoutes(v1, h, formalPoolJWTAuth)` and register its unchanged `/api/v1/admin/claude-onboarding/...` paths directly from `server/router.go`. Wire the new middleware through `middleware.ProviderSet`, `ProvideRouter`, and `SetupRouter`. The public nonce route remains unchanged. All other admin routes retain `AdminAuthMiddleware`, including Admin API Key support.
+
+Extend the safe middleware context snapshot without storing the raw JWT:
+
+```go
+type AuthSubject struct {
+    UserID        int64
+    Concurrency   int
+    AuthMethod    string // exact: "jwt" for onboarding
+    TokenVersion  int64
+    ExpiresAtUnix int64
+}
+```
+
+The shared JWT helper sets these fields from validated `JWTClaims` (`ExpiresAtUnix` from `claims.ExpiresAt.Time.Unix()` when present) after current user-active and token-version checks. A missing expiry is represented as zero so existing non-onboarding behavior remains unchanged; the onboarding middleware rejects zero through its common 401. Existing consumers continue using `UserID`/`Concurrency`. Admin API Key never reaches the onboarding route and is a tested 401 service-caller case.
 
 ```go
 type FormalPoolOnboardingPrincipalResolver interface {
@@ -342,8 +396,7 @@ type FormalPoolOnboardingPrincipalResolver interface {
 }
 
 type formalPoolOnboardingPrincipalResolver struct {
-    sessions service.FormalPoolAuthSessionAuthority
-    policy   service.FormalPoolAuthorizationPolicy
+    users    *service.UserService
     tenantID string
     now      func() time.Time
 }
@@ -351,21 +404,23 @@ type formalPoolOnboardingPrincipalResolver struct {
 func (r *formalPoolOnboardingPrincipalResolver) Resolve(c *gin.Context) (service.FormalPoolOnboardingPrincipal, error) {
     subject, ok := middleware.GetAuthSubjectFromContext(c)
     if !ok || subject.UserID <= 0 { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
-    session, err := r.sessions.ResolveActive(c.Request.Context(), subject)
-    if err != nil || session.Revoked || !session.ExpiresAt.After(r.now()) { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
-    grant, err := r.policy.ResolveOnboardingGrant(c.Request.Context(), session.UserID, r.tenantID)
-    if err != nil || !grant.Active { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
+    if subject.AuthMethod != "jwt" || subject.ExpiresAtUnix <= r.now().Unix() { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
+    user, err := r.users.GetByID(c.Request.Context(), subject.UserID)
+    if err != nil || user == nil || !user.IsActive() || user.TokenVersion != subject.TokenVersion { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
+    if !user.IsAdmin() { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
     return service.FormalPoolOnboardingPrincipal{
-        SubjectID: session.UserID, AdministratorID: grant.AdministratorID, TenantID: grant.TenantID,
-        AllowedGroupIDs: append([]int64(nil), grant.GroupIDs...), CreatorID: session.UserID,
-        Role: grant.Role, CallerKind: grant.CallerKind, AuthorityRevision: grant.Revision, Active: grant.Active,
+        SubjectID: user.ID, AdministratorID: user.ID, TenantID: r.tenantID,
+        CreatorID: user.ID, Role: user.Role, CallerKind: CallerKindHumanJWT,
+        AuthorityRevision: user.TokenVersion, Active: true, SystemAdmin: true,
     }, nil
 }
 ```
 
-`FormalPoolAuthSessionAuthority` revalidates the server-side session record rather than trusting only middleware presence. `FormalPoolAuthorizationPolicy` resolves group-administrator or tenant-administrator grants from the trusted group/tenant policy source; `User.AllowedGroups` is not itself an administrator grant. Ordinary users and service callers are denied. Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body.
+Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body. `StartSession` validates the requested group exists and is active through the existing trusted group repository; system-admin scope does not turn a client-supplied group ID into authority.
 
-Wire it with an exact provider: `ProvideFormalPoolOnboardingPrincipalResolver(sessionAuthority service.FormalPoolAuthSessionAuthority, policy service.FormalPoolAuthorizationPolicy, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`. Production sets `now: time.Now`; tests inject a fixed clock.
+Wire it with the exact provider `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver`, then pass that resolver into `ProvideFormalPoolOnboardingHandler` via `admin.WithFormalPoolOnboardingPrincipalResolver(resolver)`. Production sets `now: time.Now`; tests inject a fixed clock.
+
+Add a production-route integration test that mounts the real JWT middleware, router registration, principal resolver, and handler. It proves: valid system-admin JWT reaches the handler; ordinary JWTs, non-admin users with `AllowedGroups`, and non-admin users carrying same/cross request tenant/group labels get the common 403; expired/revoked/inactive JWTs get the common 401; Admin API Key does not authenticate; and a hook that changes user role/status/token version after middleware but before resolver returns 401/403 with zero service/dependency calls. These are the executable group/tenant-administrator denial rows: no test may fabricate a production role or policy table that the repository does not have. Assert the 16-route inventory so a path cannot silently remain under `adminAuth`.
 
 - [ ] **Step 4: Parse optimistic versions centrally**
 
@@ -404,7 +459,7 @@ Use this state contract exactly:
 | `AbortSession` | every nonterminal state |
 | `AccountHealthcheck` | owner session resolved through `snapshotByAccountID` |
 
-Before state/version evaluation, the service calls the injected policy revalidator with `{subject, tenant, role, group, authority_revision}`. A concurrent role/revocation/policy change returns the same 401/403 before reservation and before any business dependency. Classify operations before implementation:
+Before state/version evaluation, the handler resolver re-fetches the current user and compares active status, system-admin role, and `TokenVersion` with the safe JWT snapshot before constructing request authority. A concurrent status/role/token-version change returns the same 401/403 before reservation and before any business dependency. Classify operations before implementation:
 
 - no external effect (`AbortSession`, proof finalization after a server proof already exists): one final `casUpdate` is sufficient;
 - any OAuth, proxy, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler call: call `beginReservedMutation` before the first dependency invocation, execute the dependency sequence once, then call `finishReservedMutation` from the reservation version;
@@ -450,16 +505,16 @@ export async function testProxy(session: FormalPoolSession): Promise<FormalPoolS
 
 - [ ] **Step 8: Run the B2 matrix, service tests, and frontend typecheck**
 
-Run: `cd backend && go test ./internal/service ./internal/server/routes ./internal/handler/... -run 'FormalPoolOnboarding|ProvideFormalPoolOnboarding' -count=1`
+Run: `cd backend && go test ./internal/service ./internal/server/middleware ./internal/server/routes ./internal/handler/... -run 'FormalPoolOnboarding|ProvideFormalPoolOnboarding|JWTAuth' -count=1`
 
 Run: `cd frontend && npm run typecheck`
 
-Expected: both PASS. The exact 15-route cross-product returns 401 for missing/revoked/expired sessions, 403 for ordinary/service/cross-boundary/concurrently revoked authority, and 409 for stale or conflicting versions only after authority succeeds. Combined owner+stale+wrong-state cases return 403 with zero dependency calls. Duplicate OAuth callback and concurrent promote are idempotent with one dependency call. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
+Expected: both PASS. The exact 15-route cross-product returns 401 for missing/revoked/expired JWTs and Admin API Key service callers, 403 for valid non-admin JWTs (including would-be group/tenant administrator fixtures and cross-boundary labels), 401/403 for concurrently invalidated authority according to status/token-version versus role failure, and 409 for stale or conflicting versions only after authority succeeds. Combined owner+stale+wrong-state cases return 403 with zero dependency calls. Duplicate OAuth callback and concurrent promote are idempotent with one dependency call. A sequential `runAcceptance -> startWarming` frontend test proves the second call uses the acceptance result's new version and does not 409.
 
 - [ ] **Step 9: Commit Task 2**
 
 ```bash
-git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
+git add backend/internal/handler/admin/formal_pool_onboarding_principal.go backend/internal/handler/admin/formal_pool_onboarding_handler.go backend/internal/handler/wire.go backend/internal/config/config.go backend/internal/service/formal_pool_onboarding_authorization.go backend/internal/service/formal_pool_onboarding_service.go backend/internal/service/wire.go backend/internal/server/middleware/auth_subject.go backend/internal/server/middleware/jwt_auth.go backend/internal/server/middleware/jwt_auth_test.go backend/internal/server/middleware/formal_pool_onboarding_auth.go backend/internal/server/middleware/formal_pool_onboarding_auth_test.go backend/internal/server/middleware/wire.go backend/internal/server/http.go backend/internal/server/router.go backend/internal/server/routes/admin.go backend/internal/server/routes/formal_pool_onboarding_auth_integration_test.go backend/internal/server/routes/formal_pool_onboarding_phase0_red_test.go backend/internal/server/routes/formal_pool_onboarding_routes_test.go backend/internal/handler/formal_pool_onboarding_provider_test.go frontend/src/api/admin/claudeOnboarding.ts frontend/src/composables/useEgressCheckPolling.ts frontend/src/components/account/ClaudeFormalPoolOnboardingWizard.vue frontend/src/components/account/ClaudeFormalPoolOnboardingWizardV2.vue frontend/src/composables/__tests__/useEgressCheckPolling.spec.ts frontend/src/components/account/__tests__/ClaudeFormalPoolOnboardingWizardV2.spec.ts
 git commit -m "feat(formal-pool): enforce owner and version on every onboarding route"
 ```
 
@@ -1072,6 +1127,17 @@ test('capture refuses proxy-only networking and requires an OS loopback sandbox'
   assert.equal(canaries.policy_bypass_detected, false)
 })
 
+test('capture binds one independent clean main contract clone before spawn', () => {
+  for (const mutation of [
+    'feature_branch', 'wrong_head', 'wrong_origin', 'dirty_status', 'wrong_contract_digest',
+    'linked_worktree', 'same_as_sub2api_implementation_root', 'same_as_operator_root',
+  ]) {
+    assert.throws(() => captureAndRunPhase1(contractRootMutation(baseOptions, mutation)),
+      hasCode('contract_root_not_authorized'))
+  }
+  assert.equal(spawnObserver.count, 0)
+})
+
 test('handoff rejects unexpected pass/fail, cross-head results, unsafe output and non-ancestor artifact head', () => {
   for (const fixture of invalidHandoffFixtures) {
     assert.equal(validatePhase1HandoffValue(fixture).ok, false)
@@ -1079,7 +1145,7 @@ test('handoff rejects unexpected pass/fail, cross-head results, unsafe output an
 })
 ```
 
-The dirty fixture is a temporary Git repository with one committed file plus one untracked file. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, branch, live status, shared contract, and disabled capabilities. Add hostile inherited `PATH`, `GIT_DIR`, `GIT_WORK_TREE`, object-directory, alternate-object, config, and replace-object environment cases; reviewed Git must either ignore them through its closed environment or fail with the existing stable replacement-ref code. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
+The dirty fixture is a temporary Git repository with one committed file plus one untracked file. The contract-root fixture is a distinct temporary clone with local branch `main`; each named mutation changes exactly one derived binding and all rejection cases assert zero spawned commands and zero persisted evidence. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, branch, live status, shared contract, and disabled capabilities. Add hostile inherited `PATH`, `GIT_DIR`, `GIT_WORK_TREE`, object-directory, alternate-object, config, and replace-object environment cases; reviewed Git must either ignore them through its closed environment or fail with the existing stable replacement-ref code. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, contract-root binding, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
 
 - [ ] **Step 2: Run adapter tests and confirm files are absent**
 
@@ -1122,11 +1188,27 @@ export type Phase1Result = {
   unsafe_output_detected: boolean
   result_digest: string
 }
+
+export type Phase1ContractRootBinding = {
+  repository: 'sub2api'
+  clone_kind: 'independent_clone'
+  branch: 'main'
+  head: string
+  origin_url_digest: string
+  root_identity_digest: string
+  clean_status_digest: string
+  contract_relative_path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+  contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
+}
+
+export type Phase1ContractRootEnvelope = {
+  sub2api_contract_root: Phase1ContractRootBinding
+}
 ```
 
-The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1ContractRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact `Phase1ContractRootBinding` object and `additionalProperties: false`. `root_identity_digest` is the SHA-256 of the canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. `clone_kind`, branch, contract path, and contract digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects equality with either implementation root, and rechecks the same binding before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
 
-The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}` and `${SUB2API_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
+The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}`, `${SUB2API_ROOT}`, and `${SUB2API_CONTRACT_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
 
 On the frozen macOS runner, `resolvePhase1LoopbackSandbox` requires the reviewed absolute `/usr/bin/sandbox-exec`, records its binary digest, and generates a private mode-0600 profile with exactly `(allow default)`, `(deny network*)`, `(allow network-outbound (remote tcp "localhost:*"))`, and `(allow network-inbound (local tcp "localhost:*"))` after the required `(version 1)`. The `localhost:*` rule is live-tested for both `127.0.0.1` and `::1`; address-literal profile rules are forbidden because they are rejected by the current Seatbelt parser. Record the policy digest. Before the first catalog command, canaries prove dynamically allocated IPv4 and IPv6 loopback servers are reachable while a direct socket to the RFC 5737 TEST-NET address `198.51.100.1` fails with `EPERM` or `EACCES`, never timeout, refusal, or success. The canary carries no credential or user data. Unsupported platforms, unexpected denial codes, or unavailable enforcement return `network_sandbox_unavailable`; there is no proxy-only degraded mode. Each result binds the same policy digest and zero observed sandbox violations. A sandbox denial/violation during a command terminates that capture as `unexpected_fail`; no evidence file is written. Unit tests prove a Node direct socket and a spawned child cannot bypass the guard. A later Linux runner requires a separately reviewed namespace adapter and equivalent canaries; it is not silently accepted by this plan.
 
@@ -1147,11 +1229,11 @@ cc-build: ${CC_GATEWAY_ROOT} :: npm run build :: exit 0
 cc-tests: ${CC_GATEWAY_ROOT} :: npm test :: exit 0
 sidecar-tests: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test ./... -count=1 :: exit 0
 joint-local-chain: ${SUB2API_ROOT}/backend :: go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v :: exit 0
-cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: node --import tsx --test --test-name-pattern=^(B4|B5|B6)(\\s|$) tests/red/phase0-boundary.red.test.ts :: env ORACLE_LAB_MANIFEST_PATH=${CC_GATEWAY_ROOT}/docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json, SUB2API_ROOT=${SUB2API_ROOT} :: nonzero :: failure families [B4,B5,B6] :: allowed failing prefixes [B4 ,B5 ,B6 ]
+cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: node --import tsx --test --test-name-pattern=^(B4|B5|B6)(\\s|$) tests/red/phase0-boundary.red.test.ts :: env SUB2API_ROOT=${SUB2API_CONTRACT_ROOT} :: nonzero :: failure families [B4,B5,B6] :: allowed failing prefixes [B4 ,B5 ,B6 ]
 sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -run ^TestPhase0B[56] -count=1 :: nonzero :: failure families [TestPhase0B5,TestPhase0B6] :: allowed failing prefixes [TestPhase0B5,TestPhase0B6]
 ```
 
-The first twelve entries use `phase1-green`; the final two use `phase1-red`. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The CC RED name filter excludes the separate `HA-P0-009` Phase 2 corpus instead of ignoring its failures; the sidecar filter excludes unrelated Go tests. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes exact argv, environment, family arrays, and failing-name prefixes per command ID rather than trusting arbitrary catalog strings.
+The first twelve entries use `phase1-green`; the final two use `phase1-red`. `SUB2API_ROOT` normally expands to the tested implementation root; only `cc-b4-b6-red` overrides it with `${SUB2API_CONTRACT_ROOT}` so the existing fail-closed resolver sees a committed `main` contract clone rather than rejecting the feature branch before test registration. Catalog validation forbids this override on every other row. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The CC RED name filter excludes the separate `HA-P0-009` Phase 2 corpus instead of ignoring its failures; the sidecar filter excludes unrelated Go tests. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes exact argv, environment, family arrays, and failing-name prefixes per command ID rather than trusting arbitrary catalog strings.
 
 - [ ] **Step 5: Implement one `run-all` capture transaction**
 
@@ -1160,6 +1242,7 @@ export function captureAndRunPhase1(options: {
   stage: 'feature-candidate' | 'post-integration'
   ccGatewayRoot: string
   sub2apiRoot: string
+  sub2apiContractRoot: string
   entryPath: string
   executionContextPath?: string
   integrationEntryPath?: string
@@ -1172,7 +1255,7 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-`feature-candidate` requires `executionContextPath` and forbids `integrationEntryPath`; `post-integration` requires `integrationEntryPath` and forbids `executionContextPath`. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
+`feature-candidate` requires `executionContextPath` and forbids `integrationEntryPath`; `post-integration` requires `integrationEntryPath` and forbids `executionContextPath`. Both stages require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
 
 Before the first command, validate the unexpired execution context and parse the closed plan-review receipt. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then verify both worktrees are on the declared implementation branches, are clean, both heads descend from the execution context's main baselines, both CodeGraph indexes are current, parent receipts validate, shared-contract bytes match the frozen digest, and production/canary environment flags are absent. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture reviewed heads, CodeGraph digests, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, reject every unclassified failing leaf and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any sandbox violation, family/name mismatch, unexpected status, or unsafe output, then write baseline and results. No evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
@@ -1238,10 +1321,10 @@ Expected: both CodeGraph statuses are up to date and both Git status outputs are
 - [ ] **Step 2: Execute and validate one feature-candidate H1 capture**
 
 ```bash
-npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
+npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
 ```
 
-Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
+Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
 
 - [ ] **Step 3: Commit feature-candidate evidence and obtain independent implementation review**
 
@@ -1260,12 +1343,12 @@ Push `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`, creat
 
 Fetch `muqihang/main` in both repositories after both PRs merge. Create `codex/oracle-phase-1-post-integration` from the fetched CC Gateway main and a clean Sub2API post-integration worktree at its fetched main. Initialize or sync CodeGraph in both and require current indexes and empty status.
 
-Create `phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either local HEAD differs from fetched remote main, either remote advances during freezing, or any feature head is not an ancestor.
+Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, on branch `main` at the exact integrated Sub2API remote-main commit; it must not be a linked worktree or either tested repository root. Create `phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; the closed contract-root clone-kind/origin-URL/root-identity/head/branch/clean-status/contract binding; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either local HEAD differs from fetched remote main, either remote advances during freezing, or any feature head is not an ancestor.
 
 - [ ] **Step 6: Rerun the complete catalog on the exact integrated main heads**
 
 ```bash
-npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
 Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, and repository commits exactly equal the integration entry's two fetched main heads. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. Validate results before changing governance state.
@@ -1337,9 +1420,9 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 | B1 consumed-proof replay classification | same owner returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` for old/current version; cross-owner remains common 403; nonmatching stale proof remains 409 |
 | B1 concurrent public verifier reservation | one proxy observer call; enumeration-resistant duplicate response |
 | B2 exact 15-route × complete caller/session matrix | GREEN; no route/dimension sampling |
-| B2 ordinary/group-admin/tenant-admin/service/revoked/expired cases | exact 401/403/allowed outcomes from trusted policy/session state |
+| B2 system-admin/ordinary/would-be group-admin/would-be tenant-admin/service/revoked/expired cases | only an active, nonexpired, nonrevoked system-admin human JWT is allowed; exact common 401/403 outcomes for every denial |
 | B2 owner + wrong-state + stale-version combined ordering | common 403; zero dependency calls |
-| B2 concurrent authority revision change | common 401/403 before reservation/dependency |
+| B2 concurrent status/role/token-version change | common 401/403 before reservation/dependency |
 | Duplicate OAuth callback and concurrent promote | idempotent pending/completed result; one dependency call |
 | B2 concurrent same-version side-effect reservation | one dependency call; second request 409 before side effect |
 | Session creation idempotency reservation | one proxy creation call per owner/key/request fingerprint |
@@ -1373,7 +1456,7 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
 - [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
-- [ ] Every one of the 15 non-public routes executes every caller/session matrix row, including active group/tenant admins, ordinary/service callers, revoked/expired sessions, and concurrent authority revision changes.
+- [ ] Every one of the 15 non-public routes executes every caller/session matrix row: active system-admin JWT allowed; ordinary and would-be group/tenant administrator JWT fixtures denied 403; Admin API Key and revoked/expired/inactive JWTs denied 401; concurrent status/role/token-version changes denied before dependency work.
 - [ ] OAuth callback and promote duplicates are idempotent by safe operation key/fingerprint and invoke dependencies once.
 - [ ] Session creation reserves a provisional record before proxy creation, and public egress verification reserves before probing the proxy.
 - [ ] `AttestBrowserEgress` checks owner before exact consumed-proof replay, checks version/state after that replay classification only, and preserves 403/409 for cross-owner/nonmatching cases.

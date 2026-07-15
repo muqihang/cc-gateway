@@ -376,18 +376,22 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
   assert.match(plan, /Each operation must execute every row in `formalPoolAuthorityCases`/)
   for (const required of [
     'active ordinary user, creator and non-creator',
-    'active group administrator, same tenant and granted group',
-    'active tenant administrator, same tenant',
+    'would-be group administrator: active non-admin JWT with existing `AllowedGroups`',
+    'would-be tenant administrator: active non-admin JWT with same/cross requested tenant labels',
     'revoked session; expired session',
-    'service-to-service caller',
-    'concurrent role/policy revision changed after initial resolve',
+    'service-to-service/admin-API-key caller',
+    'concurrent user status, role, or token-version change after JWT middleware',
     'duplicated OAuth callback and concurrent promote',
   ]) assert(plan.includes(required), required)
   assert.match(plan, /owner mismatch, stale version, and wrong state are simultaneously true/)
   assert.match(plan, /proxy\/OAuth\/account\/healthcheck\/cache\/scheduler dependency counter at zero/)
-  assert.match(plan, /FormalPoolAuthSessionAuthority/)
-  assert.match(plan, /FormalPoolAuthorizationPolicy/)
-  assert.match(plan, /`User\.AllowedGroups` is not itself an administrator grant/)
+  assert.match(plan, /FormalPoolOnboardingJWTAuthMiddleware/)
+  assert.match(plan, /RegisterFormalPoolOnboardingAdminRoutes/)
+  assert.match(plan, /`AuthSubject` safe claims snapshot/)
+  assert.match(plan, /Phase 1 does not invent new role tables, tenant grants, or group-policy persistence/)
+  assert.match(plan, /`AllowedGroups` is a binding permission, not an administrator grant/)
+  assert.match(plan, /FormalPoolOnboardingGroupReader/)
+  assert.match(plan, /Groups: &formalGroupReaderFake/)
   assert.match(plan, /AuthorityRevision/)
   assert.match(plan, /svc\.authorizeSession\(ctx, session\.ID, true, FormalPoolOnboardingStatusWarming\)/)
   assert.match(plan, /formal_pool_onboarding_flow_test\.go/)
@@ -416,6 +420,19 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.match(plan, /network_sandbox_unavailable/)
   assert.match(plan, /there is no proxy-only degraded mode/)
   assert.match(plan, /only through `wrapPhase1Command`/)
+  assert.match(plan, /SUB2API_ROOT=\$\{SUB2API_CONTRACT_ROOT\}/)
+  assert.match(plan, /only `cc-b4-b6-red` overrides it with `\$\{SUB2API_CONTRACT_ROOT\}`/)
+  assert.match(plan, /separate clean local Git clone/)
+  assert.match(plan, /local branch name exactly `main`/)
+  assert.match(plan, /do not use `git worktree`/)
+  assert.match(plan, /Phase1ContractRootBinding/)
+  assert.match(plan, /clone_kind: 'independent_clone'/)
+  assert.match(plan, /origin_url_digest: string/)
+  assert.match(plan, /root_identity_digest: string/)
+  assert.match(plan, /clean_status_digest: string/)
+  assert.match(plan, /contract_root_not_authorized/)
+  assert.match(plan, /clone-kind\/origin-URL\/root-identity\/head\/branch\/clean-status\/contract binding/)
+  assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
 test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {
