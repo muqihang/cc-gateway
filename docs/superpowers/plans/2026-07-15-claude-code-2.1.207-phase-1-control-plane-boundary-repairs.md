@@ -14,7 +14,7 @@
 - Phase 1 owns exactly `AV-B1-001`, `AV-B2-001`, `AV-B3-001`, and the full local-structural closure of `RA-P0-008` (`WP-R8:phase_1_loopback_remote_tls_guard`), including upstream certificate verification. This does not create remote-deployment or production authority.
 - Phase 1 must not change the shared contract at `backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json` (`sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`).
 - CC RED contract discovery uses a separate clean read-only Sub2API Git clone whose checked-out branch is exactly `main`; it is not a linked worktree, never uses the operator's dirty main, and never uses a non-main implementation worktree. Its origin-URL digest, HEAD/root/branch/clean-status/contract digest are bound as `SUB2API_CONTRACT_ROOT` evidence and must match the applicable frozen remote main. Create or refresh this clone before capture and never during a sandboxed command.
-- B4-B6 remain expected RED and owned by later phases. The CC and sidecar RED commands must still exit nonzero with the frozen B4-B6 failure families.
+- B4-B6 remain expected RED and owned by later phases. The CC and sidecar RED commands must still exit nonzero with the command-specific canonical failing-leaf inventories and exact counts frozen in Task 7; failure-family tokens are derived secondary summaries, not sufficient acceptance evidence.
 - `real_upstream_access`, `real_credentials`, `profile_promotion`, `production_deployment`, `real_canary`, `unrestricted_capture`, and `external_network_requests` remain disabled.
 - Tests use loopback, `httptest`, fake resolvers, and mock upstreams only. No command in this plan may contact a real provider or public host.
 - Authorization denials occur before state/version/dependency evaluation and use one stable 401 class plus one stable 403 class, without revealing which owner dimension mismatched.
@@ -24,7 +24,7 @@
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
 - Listener and upstream negative integration must invoke `startProxy` directly and observe zero TLS-read, server-create, and listen effects; calling a pure resolver before `startProxy` is not startup-order evidence.
 - Every non-public onboarding route is exercised against the complete executable caller/session matrix from hardening Section 8.3. Coverage is route-by-dimension, not one route per dimension; revoked/expired sessions, ordinary users, group and tenant administrators, service callers, stale tabs, concurrent role changes, and duplicated callbacks are explicit cases.
-- Phase 1 RED evidence is accepted only when every failing leaf name matches the command-specific frozen allowlist and its safe observed failure-family set exactly equals the catalog set. A nonzero exit, an extra unrelated failure, an unparsed failing leaf, or a forged persisted family field is always `unexpected_fail`.
+- Phase 1 RED evidence is accepted only when the runner-specific parser completes without ambiguity, emits no duplicate leaf, and its canonical UTF-8-byte-sorted failing-leaf names, exact count, and derived family set all equal the command-specific catalog constants. A nonzero exit alone, a missing leaf, an added same-prefix leaf, a duplicate, a persisted-order violation, an unparsed leaf, a count mismatch, or any forged persisted field is always `unexpected_fail`. Raw runner event order is deliberately not authoritative: permutations canonicalize to the same exact inventory.
 - Every H1 command runs inside a reviewed OS-enforced loopback-only network sandbox. Proxy variables are defense in depth, not the sandbox. Missing enforcement, a failed public-socket denial canary, or any observed non-loopback DNS/socket violation fails before evidence is written.
 - The final Phase 1 handoff is never minted from feature branches. Both implementation PRs must first merge. Post-integration uses one CC evidence/controller worktree whose HEAD remains the exact fetched CC main plus two distinct clean tested roots (detached CC integrated main and Sub2API integrated main); the uncommitted integration entry exists only in the controller root. This preserves clean capture inputs and lets the eventual artifact commit retain the exact integrated CC main as its parent.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
@@ -76,11 +76,11 @@
 
 - Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` and `oracle-lab-phase-1-plan-review.schema.json`, which are delivered with this reviewed plan.
 - Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.json` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
-- Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands.
+- Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands, including the two normative parser lifecycles, canonical failing-leaf arrays, and counts frozen in Task 7.
 - Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, `oracle-lab-phase-1-handoff.schema.json`, `oracle-lab-phase-1-integration-entry.schema.json`, and `oracle-lab-phase-1-integration-receipt.schema.json`: closed Phase 1 evidence contracts.
 - Create `tools/oracle-lab/phase-1-evidence.ts`: a small Phase 1 adapter over the reviewed `runBoundedProcess`, hermetic environment, safe artifact writer, and digest helpers already delivered by H0/P0.1.
 - Create `tools/oracle-lab/phase-1-loopback-sandbox.ts`: fail-closed OS sandbox selection, loopback/public-socket canaries, wrapped argv, policy/binary digests, and violation classification.
-- Create `tests/oracle-lab-phase-1-evidence.test.ts`: schema, binding, dirty-tree, unexpected-result, unsafe-output, ancestry, and handoff tests.
+- Create `tests/oracle-lab-phase-1-evidence.test.ts`: schema, binding, dirty-tree, RED leaf-inventory metamorphic cases, unexpected-result, unsafe-output, ancestry, and handoff tests.
 - Modify `package.json`: add only `oracle:phase1` for the new adapter; do not alter Phase 0/P0.1 scripts.
 - Create feature-candidate evidence first, then `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`, `phase-1-command-results.json`, `phase-1-exit-baseline.json`, `phase-1-handoff.json`, `phase-1-exit-report.md`, and `phase-1-integration-receipt.json` only through Task 8's post-merge chain.
 - Modify `docs/superpowers/registry/oracle-lab-requirements.json`, `docs/superpowers/registry/oracle-lab-claims.json`, and `docs/superpowers/registry/oracle-lab-current-observations.json` only after all exit commands pass.
@@ -108,7 +108,7 @@ Fetch `muqihang/main` in both repositories without rebasing or rewriting history
 
 - [ ] **Step 2: Independently review the exact merged plan bytes**
 
-The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. Persist a closed JSON receipt at `phase-1-plan-review.json` with the exact plan path, reviewed commit/digest, reviewer ID, review round, decision, finding counts, and exact six-item review scope from its schema. `approved` is valid only when Critical and Important counts are zero. A review of an earlier commit or different plan digest is invalid.
+The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. The review is holistic, not limited to the latest patch: under `harness_and_evidence_bindings`, explicitly audit the complete acceptance truth table across catalog schema, TAP/Go lifecycle parsing, capture classification, results schema/semantic validation, integration-entry, handoff/report, pre/post-commit receipt binding, and every missing/extra-same-prefix/duplicate-event/raw-permutation/persisted-multiset-or-unique-permutation/event-or-unique-count/family/parser/lifecycle mutation. On the exact frozen roots, rerun both machine-readable RED commands and independently compare their lifecycle summaries, event/unique counts, canonical name digests, and families to the normative JSON before approval. Persist a closed JSON receipt at `phase-1-plan-review.json` with the exact plan path, reviewed commit/digest, reviewer ID, review round, decision, finding counts, and exact six-item review scope from its schema. The review cannot be `approved` if any acceptance layer, named mutation, or live inventory comparison was not checked; `approved` is valid only when Critical and Important counts are zero. A review of an earlier commit or different plan digest is invalid.
 
 - [ ] **Step 3: Build the fresh execution context**
 
@@ -1053,10 +1053,12 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 
 **Interfaces:**
 - Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0. The older `tools/claude-native-oracle-matrix.ts` profile is a discovery reference only; H1 accepts only the exact profile below after live canaries pass.
-- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `validatePhase1CatalogValue`, `validatePhase1CaptureInputs`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, and deterministic Markdown rendering.
+- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `parsePhase1RedFailureLeaves`, `canonicalizePhase1FailureEvents`, `validatePhase1CatalogValue`, `validatePhase1CaptureInputs`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1IntegrationEntry`, `validatePhase1IntegrationEntryValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, `buildPhase1IntegrationReceipt`, `validatePhase1IntegrationReceiptValue`, and deterministic Markdown rendering.
 - Does not modify the Phase 0 command catalog, Registry v1 validators, P0.1 CLI, or their schemas.
 
 - [ ] **Step 1: Write RED tests for the Phase 1 adapter contract**
+
+In `tests/oracle-lab-phase-1-evidence.test.ts`, define `CC_RED_FAILURE_NAMES`, `SIDECAR_RED_FAILURE_NAMES`, `CC_RED_LIFECYCLE`, and `SIDECAR_RED_LIFECYCLE` as literal copies of the normative arrays/objects in Step 3 below. Do not derive expected fixtures from the catalog under test; the independent literals make catalog omission, addition, duplication, reordering, lifecycle, and count drift observable.
 
 ```typescript
 const EXPECTED_COMMAND_IDS = [
@@ -1068,60 +1070,114 @@ const EXPECTED_COMMAND_IDS = [
 const hasCode = (code: string) => (error: unknown) =>
   error instanceof Error && (error as Error & { code?: string }).code === code
 
+const RED_SEMANTIC_MUTATIONS = [
+  'missing_leaf', 'same_prefix_extra_leaf', 'unrelated_extra_leaf', 'duplicate_leaf_event',
+  'wrong_event_count', 'wrong_unique_count', 'wrong_family', 'wrong_parser', 'wrong_lifecycle',
+  'reordered_event_multiset', 'reordered_unique_names',
+] as const
+
 test('Phase 1 catalog has exact IDs, groups, repositories, argv and expected exits', async () => {
   const catalog = await readJson(catalogPath)
   assert.deepEqual(catalog.map((entry: any) => entry.id), EXPECTED_COMMAND_IDS)
   assert.deepEqual(validatePhase1CatalogValue(catalog), { ok: true, errors: [] })
-  assert.deepEqual(catalog.find((entry: any) => entry.id === 'cc-b4-b6-red').expected_failure_families, ['B4', 'B5', 'B6'])
-  assert.deepEqual(catalog.find((entry: any) => entry.id === 'sidecar-b5-b6-red').expected_failure_families, ['TestPhase0B5', 'TestPhase0B6'])
+  const ccRed = catalog.find((entry: any) => entry.id === 'cc-b4-b6-red')
+  const sidecarRed = catalog.find((entry: any) => entry.id === 'sidecar-b5-b6-red')
+  assert.equal(ccRed.failure_parser, 'node_test_tap_v1')
+  assert.deepEqual(ccRed.expected_parser_lifecycle, CC_RED_LIFECYCLE)
+  assert.equal(ccRed.expected_failure_count, 61)
+  assert.deepEqual(ccRed.expected_failure_names, CC_RED_FAILURE_NAMES)
+  assert.deepEqual(ccRed.expected_failure_families, ['B4', 'B5', 'B6'])
+  assert.equal(sidecarRed.failure_parser, 'go_test_json_leaf_v1')
+  assert.deepEqual(sidecarRed.expected_parser_lifecycle, SIDECAR_RED_LIFECYCLE)
+  assert.equal(sidecarRed.expected_failure_count, 51)
+  assert.deepEqual(sidecarRed.expected_failure_names, SIDECAR_RED_FAILURE_NAMES)
+  assert.deepEqual(sidecarRed.expected_failure_families, ['TestPhase0B5', 'TestPhase0B6'])
 
   const duplicate = structuredClone(catalog)
-  duplicate.find((entry: any) => entry.id === 'cc-b4-b6-red').expected_failure_families.push('B6')
+  duplicate.find((entry: any) => entry.id === 'cc-b4-b6-red').expected_failure_names.push(CC_RED_FAILURE_NAMES[0])
   assert.equal(validatePhase1CatalogValue(duplicate).ok, false)
+  const wrongCount = structuredClone(catalog)
+  wrongCount.find((entry: any) => entry.id === 'sidecar-b5-b6-red').expected_failure_count = 50
+  assert.equal(validatePhase1CatalogValue(wrongCount).ok, false)
+  const wrongLifecycle = structuredClone(catalog)
+  wrongLifecycle.find((entry: any) => entry.id === 'sidecar-b5-b6-red').expected_parser_lifecycle.packages[1].run_test_count = 63
+  assert.equal(validatePhase1CatalogValue(wrongLifecycle).ok, false)
+  const extraKey = structuredClone(catalog)
+  extraKey.find((entry: any) => entry.id === 'cc-b4-b6-red').undeclared = true
+  assert.equal(validatePhase1CatalogValue(extraKey).ok, false)
 })
 
-test('RED classification requires the exact frozen failure-family set', () => {
-  for (const observed of [[], ['B4'], ['B4', 'B5'], ['B4', 'B5', 'unknown'], ['unrelated']]) {
-    const result = classifyPhase1Result(redNonzeroFixture({
-      commandID: 'cc-b4-b6-red', observedFailureFamilies: observed,
-    }))
-    assert.equal(result.status, 'unexpected_fail')
-  }
-  assert.equal(classifyPhase1Result(redNonzeroFixture({
-    commandID: 'cc-b4-b6-red', observedFailureFamilies: ['B4', 'B5', 'B6'],
-  })).status, 'expected_fail')
+test('RED classification requires exact lifecycle, sorted event multiset, unique names, counts, and families', () => {
+  const valid = redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', failureEvents: CC_RED_FAILURE_NAMES, parserLifecycle: CC_RED_LIFECYCLE,
+  })
+  assert.equal(classifyPhase1Result(valid).status, 'expected_fail')
 
-  for (const observed of [[], ['TestPhase0B5'], ['TestPhase0B6'], ['TestPhase0B5', 'unknown']]) {
-    assert.equal(classifyPhase1Result(redNonzeroFixture({
-      commandID: 'sidecar-b5-b6-red', observedFailureFamilies: observed,
-    })).status, 'unexpected_fail')
-  }
-  assert.equal(classifyPhase1Result(redNonzeroFixture({
-    commandID: 'sidecar-b5-b6-red', observedFailureFamilies: ['TestPhase0B5', 'TestPhase0B6'],
-  })).status, 'expected_fail')
-})
+  for (const failureEvents of [
+    CC_RED_FAILURE_NAMES.slice(1),
+    [...CC_RED_FAILURE_NAMES, 'B4 invented same-prefix leaf'],
+    [...CC_RED_FAILURE_NAMES, CC_RED_FAILURE_NAMES[0]],
+    [...CC_RED_FAILURE_NAMES, 'HA-P0-009 unrelated failure'],
+  ]) assert.equal(classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', failureEvents, parserLifecycle: CC_RED_LIFECYCLE,
+  })).status, 'unexpected_fail')
 
-test('RED classification rejects a valid family set plus any unrelated failing leaf', () => {
-  const result = classifyPhase1Result(redNonzeroFixture({
-    commandID: 'cc-b4-b6-red',
-    failureNames: ['B4 fixture', 'B5 fixture', 'B6 fixture', 'HA-P0-009 unrelated failure'],
+  const shuffledEvents = [...CC_RED_FAILURE_NAMES].reverse()
+  const shuffled = classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', failureEvents: shuffledEvents, parserLifecycle: CC_RED_LIFECYCLE,
   }))
-  assert.equal(result.status, 'unexpected_fail')
-  assert.equal(result.unclassified_failure_names.length, 1)
+  assert.equal(shuffled.status, 'expected_fail')
+  assert.deepEqual(shuffled.failure_event_names, CC_RED_FAILURE_NAMES)
+  assert.deepEqual(shuffled.failure_names, CC_RED_FAILURE_NAMES)
 })
 
-test('result validation re-derives RED families instead of trusting persisted tokens', () => {
+test('runner parsers reject incomplete or ambiguous TAP and Go lifecycles', () => {
+  for (const mutation of [
+    'tap_missing_plan', 'tap_duplicate_plan', 'tap_missing_ordinal', 'tap_terminal_then_event',
+    'go_missing_package', 'go_missing_test_terminal', 'go_missing_package_terminal',
+    'go_json_valid_truncation', 'go_build_failure', 'go_terminal_then_event',
+    'unexpected_go_package', 'nonempty_unexplained_stderr', 'go_parent_independent_diagnostic',
+  ]) assert.throws(() => parsePhase1RedFailureLeaves(runnerStreamMutation(validRunnerStreams, mutation)),
+    hasCode('red_runner_output_incomplete'))
+})
+
+test('result validation derives RED multiset, duplicates, unique names, counts, lifecycle, and families', () => {
   const valid = redResultFixture({
     commandID: 'cc-b4-b6-red',
-    failureNames: ['B4 fixture', 'B5 fixture', 'B6 fixture'],
+    failureEventNames: CC_RED_FAILURE_NAMES,
+    failureEventCount: 61,
+    failureNames: CC_RED_FAILURE_NAMES,
+    failureCount: 61,
+    parserLifecycle: CC_RED_LIFECYCLE,
     observedFailureFamilies: ['B4', 'B5', 'B6'],
   })
   assert.equal(validatePhase1ResultsValue(valid).ok, true)
-  for (const forged of [
-    { ...valid, failure_names: ['unrelated failure'] },
-    { ...valid, observed_failure_families: ['B4', 'B5'] },
-    { ...valid, observed_failure_families: ['B4', 'B5', 'B6', 'TestPhase0B5'] },
-  ]) assert.equal(validatePhase1ResultsValue(rehash(forged)).ok, false)
+  for (const mutation of RED_SEMANTIC_MUTATIONS) {
+    assert.equal(validatePhase1ResultsValue(rehashDeep(resultMutation(valid, mutation))).ok, false)
+  }
+})
+
+test('raw event permutations canonicalize to one identical downstream result', () => {
+  const forward = classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', failureEvents: CC_RED_FAILURE_NAMES, parserLifecycle: CC_RED_LIFECYCLE,
+  }))
+  const reverse = classifyPhase1Result(redNonzeroFixture({
+    commandID: 'cc-b4-b6-red', failureEvents: [...CC_RED_FAILURE_NAMES].reverse(), parserLifecycle: CC_RED_LIFECYCLE,
+  }))
+  assert.deepEqual(reverse, forward)
+})
+
+test('integration entry, handoff, and receipt builders and validators revalidate RED semantics', () => {
+  for (const mutation of ['catalog_digest', ...RED_SEMANTIC_MUTATIONS] as const) {
+    const fixture = rehashEveryAffectedArtifact(downstreamMutation(validDownstreamChain, mutation))
+    assert.throws(() => buildPhase1IntegrationEntry(fixture.integrationEntryInputs), hasCode('red_evidence_mismatch'))
+    assert.equal(validatePhase1IntegrationEntryValue(fixture.integrationEntry).ok, false)
+    assert.throws(() => buildPhase1Handoff(fixture.handoffInputs), hasCode('red_evidence_mismatch'))
+    assert.equal(validatePhase1HandoffValue(fixture.handoff).ok, false)
+    assert.throws(() => buildPhase1IntegrationReceipt(fixture.receiptInputs), hasCode('red_evidence_mismatch'))
+    assert.equal(validatePhase1IntegrationReceiptValue(fixture.receiptPreCommit).ok, false)
+    assert.equal(validatePhase1IntegrationReceiptValue(fixture.receiptPostCommit).ok, false)
+  }
 })
 
 test('capture rejects a dirty repository before running the first command', () => {
@@ -1177,7 +1233,9 @@ test('handoff rejects unexpected pass/fail, cross-head results, unsafe output an
 })
 ```
 
-The dirty fixture is a temporary Git repository with one committed file plus one untracked file. The contract-root fixture is a distinct temporary clone with local branch `main`; each named mutation changes exactly one derived binding and all rejection cases assert zero spawned commands and zero persisted evidence. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, branch, live status, shared contract, and disabled capabilities. Add hostile inherited `PATH`, `GIT_DIR`, `GIT_WORK_TREE`, object-directory, alternate-object, config, and replace-object environment cases; reviewed Git must either ignore them through its closed environment or fail with the existing stable replacement-ref code. Invalid handoff fixtures each mutate one field of a valid fixture: unexpected status, repository head, contract-root binding, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
+The dirty fixture is a temporary Git repository with one committed file plus one untracked file. The contract-root fixture is a distinct temporary clone with local branch `main`; each named mutation changes exactly one derived binding and all rejection cases assert zero spawned commands and zero persisted evidence. Execution-context mutations independently change expiry, plan bytes/digest, plan commit, approval artifact bytes/digest, reviewer decision/counts, base head, branch, live status, shared contract, and disabled capabilities. Add hostile inherited `PATH`, `GIT_DIR`, `GIT_WORK_TREE`, object-directory, alternate-object, config, and replace-object environment cases; reviewed Git must either ignore them through its closed environment or fail with the existing stable replacement-ref code.
+
+`resultMutation` mutates the persisted sorted event multiset, event count, unique array/count, parser, lifecycle, or family while leaving the other redundant fields untouched. `rehashDeep` recomputes the result and enclosing results-set digests so semantic checks, not stale hashes, cause rejection. `downstreamMutation` starts from one valid feature-result/integration-entry/handoff/report/receipt chain, applies the same one-field mutation at its earliest source, and `rehashEveryAffectedArtifact` recomputes every child digest through the pre/post-commit receipt fixtures. The integration-entry builder/validator, handoff builder/validator, and receipt builder/pre-commit-validator/post-commit-validator each receive every mutation independently and must reject it. The raw-permutation fixture is the sole accepting metamorphic case and must produce byte-identical canonical result JSON/digest before downstream construction. Other invalid handoff fixtures mutate unexpected status, repository head, contract-root binding, `unsafe_output_detected`, reviewed-head ancestry, expiry, artifact path traversal, or report bytes.
 
 - [ ] **Step 2: Run adapter tests and confirm files are absent**
 
@@ -1192,6 +1250,49 @@ export type Phase1Group = 'phase1-green' | 'phase1-red'
 export type Phase1ImplementedRequirement = 'AV-B1-001' | 'AV-B2-001' | 'AV-B3-001' | 'RA-P0-008'
 export type Phase1PreservedRedRequirement = 'AV-B4-001' | 'AV-B5-001' | 'AV-B6-001'
 export type Phase1RedFailureFamily = 'B4' | 'B5' | 'B6' | 'TestPhase0B5' | 'TestPhase0B6'
+export type Phase1FailureParser = 'node_test_tap_v1' | 'go_test_json_leaf_v1'
+export type Phase1NodeTapLifecycle = {
+  parser: 'node_test_tap_v1'
+  tap_version_count: 1
+  terminal_plan_count: 1
+  declared_test_count: 68
+  observed_test_count: 68
+  pass_count: 7
+  fail_count: 61
+  cancelled_count: 0
+  skipped_count: 0
+  todo_count: 0
+  unexplained_stderr_line_count: 0
+}
+export type Phase1GoControlLifecycle = {
+  package_suffix: 'internal/control'
+  start_count: 1
+  run_test_count: 4
+  terminal_test_count: 4
+  pass_test_count: 2
+  fail_test_count: 2
+  skip_test_count: 0
+  package_fail_terminal_count: 1
+  post_terminal_event_count: 0
+}
+export type Phase1GoServerLifecycle = {
+  package_suffix: 'internal/server'
+  start_count: 1
+  run_test_count: 64
+  terminal_test_count: 64
+  pass_test_count: 11
+  fail_test_count: 53
+  skip_test_count: 0
+  package_fail_terminal_count: 1
+  post_terminal_event_count: 0
+}
+export type Phase1GoTestLifecycle = {
+  parser: 'go_test_json_leaf_v1'
+  packages: [Phase1GoControlLifecycle, Phase1GoServerLifecycle]
+  unexplained_stderr_line_count: 0
+  malformed_or_unparsed_event_count: 0
+}
+export type Phase1ParserLifecycle = Phase1NodeTapLifecycle | Phase1GoTestLifecycle
 export type Phase1Command = {
   id: string
   group: Phase1Group
@@ -1199,6 +1300,10 @@ export type Phase1Command = {
   cwd: string
   argv: string[]
   expected_exit: 0 | 'nonzero'
+  failure_parser: null | Phase1FailureParser
+  expected_parser_lifecycle: null | Phase1ParserLifecycle
+  expected_failure_count: number
+  expected_failure_names: string[]
   expected_failure_families: Phase1RedFailureFamily[]
   timeout_ms: number
   requirement_ids: Array<Phase1ImplementedRequirement | Phase1PreservedRedRequirement>
@@ -1212,6 +1317,11 @@ export type Phase1Result = {
   status: 'pass' | 'expected_fail' | 'unexpected_fail' | 'unexpected_pass'
   stdout_digest: string
   stderr_digest: string
+  failure_parser: null | Phase1FailureParser
+  parser_lifecycle: null | Phase1ParserLifecycle
+  failure_event_count: number
+  failure_event_names: string[]
+  failure_count: number
   failure_names: string[]
   observed_failure_families: Phase1RedFailureFamily[]
   unclassified_failure_names: string[]
@@ -1265,13 +1375,210 @@ export type Phase1CaptureRootEnvelope = {
 }
 ```
 
-`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1CaptureRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact controller and contract-root unions with `additionalProperties: false`. The controller union freezes each stage's only legal preexisting delta and output paths. Every `root_identity_digest` is the SHA-256 of canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. Contract `clone_kind`, branch, path, and digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves contract `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects forbidden root equality, and rechecks the same bindings before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific exact nonempty family array below. Arrays are ordered, unique, closed enums. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1CaptureRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact controller and contract-root unions with `additionalProperties: false`. The controller union freezes each stage's only legal preexisting delta and output paths. Every `root_identity_digest` is the SHA-256 of canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. Contract `clone_kind`, branch, path, and digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves contract `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects forbidden root equality, and rechecks the same bindings before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `failure_parser: null`, `expected_parser_lifecycle: null`, `expected_failure_count: 0`, `expected_failure_names: []`, and `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific parser/lifecycle, exact count, exact canonical name array, and exact nonempty family array below. The schema uses command-ID-specific closed branches, `const`/`prefixItems`, `minItems == maxItems`, and `uniqueItems: true` for the unique catalog/result arrays. `failure_event_names` is the only deliberate non-unique array: it is a deterministic UTF-8-sorted multiset retaining repeated safe leaf events so downstream validation can detect parser de-duplication; `failure_event_count` must equal its length. Semantic validation independently requires canonical ordering, derives duplicate multiplicity, unique `failure_names`, `failure_count`, families, and lifecycle consistency from that multiset, and compares all derived values to the catalog. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
 
 The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}`, `${SUB2API_ROOT}`, and `${SUB2API_CONTRACT_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
 
 On the frozen macOS runner, `resolvePhase1LoopbackSandbox` requires the reviewed absolute `/usr/bin/sandbox-exec`, records its binary digest, and generates a private mode-0600 profile with exactly `(allow default)`, `(deny network*)`, `(allow network-outbound (remote tcp "localhost:*"))`, and `(allow network-inbound (local tcp "localhost:*"))` after the required `(version 1)`. The `localhost:*` rule is live-tested for both `127.0.0.1` and `::1`; address-literal profile rules are forbidden because they are rejected by the current Seatbelt parser. Record the policy digest. Before the first catalog command, canaries prove dynamically allocated IPv4 and IPv6 loopback servers are reachable while a direct socket to the RFC 5737 TEST-NET address `198.51.100.1` fails with `EPERM` or `EACCES`, never timeout, refusal, or success. The canary carries no credential or user data. Unsupported platforms, unexpected denial codes, or unavailable enforcement return `network_sandbox_unavailable`; there is no proxy-only degraded mode. Each result binds the same policy digest and zero observed sandbox violations. A sandbox denial/violation during a command terminates that capture as `unexpected_fail`; no evidence file is written. Unit tests prove a Node direct socket and a spawned child cannot bypass the guard. A later Linux runner requires a separately reviewed namespace adapter and equivalent canaries; it is not silently accepted by this plan.
 
-The RED parser accepts only failing leaf names, never suite/file summaries or skipped names. It classifies anchored safe names (`^B4(?:\\s|$)`, `^B5(?:\\s|$)`, `^B6(?:\\s|$)`, `^TestPhase0B5[A-Za-z0-9_/]*$`, and `^TestPhase0B6[A-Za-z0-9_/]*$`) into constant family tokens. Repeated failing test names within one family collapse to one token. Any failing leaf that does not match the exact command allowlist is retained only as a safe constant/category in `unclassified_failure_names` and forces `unexpected_fail`. A nonzero exit becomes `expected_fail` only when there are zero unclassified names and the ordered unique observed family set exactly equals the catalog set; empty, partial, unknown, or supersets become `unexpected_fail`, while catalog duplicates fail schema/semantic validation. `validatePhase1ResultsValue` re-parses `failure_names`, compares the derived names/families to the persisted fields and exact catalog row, and rejects a rehashed forgery. A valid B4-B6 set plus `HA-P0-009` or any other failure is always unexpected.
+The RED parser consumes only complete machine-readable runner streams and requires empty stderr. `node_test_tap_v1` accepts exactly one `TAP version 13` stream, unique contiguous test-point ordinals `1..68`, exactly one terminal `1..68` plan after all test points, and the exact terminal summary `tests 68 / suites 0 / pass 7 / fail 61 / cancelled 0 / skipped 0 / todo 0`. The plan, summary, and parsed point counts must agree. It extracts only failed `B4`/`B5`/`B6` leaf test points, never the file process, suite summaries, YAML diagnostics, passes, or skips; any failed non-leaf/process point is unparsed failure. A second/missing plan, duplicate or missing ordinal, test point after the terminal plan, JSON/YAML diagnostic pretending to be a point, truncated-but-line-valid prefix, or nonempty unexplained stderr is `unexpected_fail`.
+
+`go_test_json_leaf_v1` requires every nonblank stdout line to be one valid `go test -json` object and permits exactly the module packages ending in `internal/control` and `internal/server`. Per package, the first event is the sole package `start`; every unique `Test` has exactly one `run` before exactly one terminal `pass|fail|skip`; no test event follows its terminal; the final package event is the sole package-level `fail`; and no event follows that package terminal. Control must have `4` run/terminal tests (`2` pass, `2` fail), server must have `64` run/terminal tests (`11` pass, `53` fail), and both have zero skips. A package/build failure without this lifecycle, a missing package, missing test/package terminal, duplicate run/terminal, JSON-valid truncation, unexpected package, terminal-after-terminal event, malformed object, or nonempty unexplained stderr is `unexpected_fail`. A failed `Test` is a leaf only when it has no failed strict `/` descendant in the same package. A failed parent with descendants may be excluded as a container only when its own `Output` events contain runner scaffolding and no independent file/line diagnostic; otherwise the parent failure is unparsed and blocks capture.
+
+After runner validation, names are classified by anchored safe patterns (`^B4(?:\\s|$)`, `^B5(?:\\s|$)`, `^B6(?:\\s|$)`, `^TestPhase0B5[A-Za-z0-9_/]*$`, and `^TestPhase0B6[A-Za-z0-9_/]*$`). All safe leaf events, including repeats, are UTF-8-byte-sorted into deterministic `failure_event_names`; raw runner order is ignored. `failure_event_count` equals that multiset length. The validator derives duplicate multiplicity and canonical unique `failure_names` from the multiset rather than trusting either persisted unique field; `failure_count` equals the unique length. A nonzero exit becomes `expected_fail` only when parsing/lifecycle are complete and equal the command's catalog lifecycle, duplicate multiplicity is zero, both event and unique counts equal the catalog constant, unique names equal the command's exact catalog array byte-for-byte, the derived family array exactly equals the catalog family array, and there are zero unclassified names. Missing, added same-prefix, duplicate, reordered persisted multiset/unique array, unknown, partial, lifecycle drift, or supersets become `unexpected_fail`.
+
+`validatePhase1ResultsValue` reloads the catalog, validates the persisted parser lifecycle summary, re-derives sorted multiset/count, duplicates, unique names/count, and families from `failure_event_names`, compares every field to the command-specific catalog row, and rejects a rehashed forgery. It never treats the stdout digest alone as parser proof. `validatePhase1IntegrationEntryValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, `buildPhase1IntegrationReceipt`, and both pre/post-commit receipt validators independently reload catalog plus results, require the exact catalog digest, rerun results semantics, and repeat the same per-command comparison before accepting downstream bindings. The closed lifecycle summary preserves only counts and constant package/parser identifiers; raw diagnostics are not persisted.
+
+The following JSON is the normative canonical RED inventory captured at CC Gateway `ca0a1453a855ea6381de98eb66a25667ebd1cbaf` with the Sub2API contract frozen at `b0b77933716487da5fca00329443f88ce9a1c3db`. Task 7 copies these exact lifecycle objects, arrays, and counts into the closed catalog; it must not regenerate or update them implicitly. Any observed drift blocks Phase 1 and requires an explicit reviewed plan/catalog revision.
+
+<!-- PHASE1_RED_FAILURE_INVENTORY_START -->
+```json
+{
+  "cc-b4-b6-red": {
+    "failure_parser": "node_test_tap_v1",
+    "expected_parser_lifecycle": {
+      "parser": "node_test_tap_v1",
+      "tap_version_count": 1,
+      "terminal_plan_count": 1,
+      "declared_test_count": 68,
+      "observed_test_count": 68,
+      "pass_count": 7,
+      "fail_count": 61,
+      "cancelled_count": 0,
+      "skipped_count": 0,
+      "todo_count": 0,
+      "unexplained_stderr_line_count": 0
+    },
+    "expected_failure_count": 61,
+    "expected_failure_families": ["B4", "B5", "B6"],
+    "expected_failure_names": [
+      "B4 handleRequest denies direct fallback configuration before DNS socket or dial",
+      "B4 handleRequest denies mismatched proxy generation before DNS socket or dial",
+      "B4 handleRequest denies missing manifest authority before DNS socket or dial",
+      "B4 handleRequest denies missing proxy generation before DNS socket or dial",
+      "B4 handleRequest denies missing sidecar before DNS socket or dial",
+      "B4 handleRequest denies missing verified context before DNS socket or dial",
+      "B4 handleRequest denies unknown manifest authority before DNS socket or dial",
+      "B5 authentication changes after absolute deadline mutation",
+      "B5 authentication changes after account identity mutation",
+      "B5 authentication changes after attempt ID mutation",
+      "B5 authentication changes after content encoding mutation",
+      "B5 authentication changes after content length mutation",
+      "B5 authentication changes after envelope version mutation",
+      "B5 authentication changes after expected summary mutation",
+      "B5 authentication changes after final forwarded-header hash mutation",
+      "B5 authentication changes after final request-body hash mutation",
+      "B5 authentication changes after key epoch mutation",
+      "B5 authentication changes after manifest authority mutation",
+      "B5 authentication changes after method mutation",
+      "B5 authentication changes after nonce mutation",
+      "B5 authentication changes after profile ref mutation",
+      "B5 authentication changes after proxy generation mutation",
+      "B5 authentication changes after response policy mutation",
+      "B5 authentication changes after route mutation",
+      "B5 authentication changes after target path mutation",
+      "B5 authentication changes after target scheme mutation",
+      "B5 authentication changes after timestamp mutation",
+      "B5 authentication changes after verified context mutation",
+      "B5 complete control includes absolute_deadline_ms",
+      "B5 complete control includes account_identity_ref",
+      "B5 complete control includes attempt_id",
+      "B5 complete control includes content_encoding",
+      "B5 complete control includes content_length",
+      "B5 complete control includes envelope_version",
+      "B5 complete control includes expected_response_policy_ref",
+      "B5 complete control includes final_headers_hash",
+      "B5 complete control includes key_epoch",
+      "B5 complete control includes manifest_authority_ref",
+      "B5 complete control includes nonce",
+      "B5 complete control includes proxy_generation",
+      "B5 complete control includes request_body_hash",
+      "B5 complete control includes timestamp_ms",
+      "B5 complete control includes verified_context_ref",
+      "B6 permits private proxy only through an explicit approved-range policy",
+      "B6 rejects DNS rebinding without pinned resolution",
+      "B6 rejects IPv4 link-local",
+      "B6 rejects IPv4 loopback",
+      "B6 rejects IPv4 multicast",
+      "B6 rejects IPv4 unspecified",
+      "B6 rejects IPv4-mapped IPv6 loopback",
+      "B6 rejects IPv6 link-local",
+      "B6 rejects IPv6 loopback",
+      "B6 rejects IPv6 multicast",
+      "B6 rejects IPv6 unspecified",
+      "B6 rejects alternate dial target",
+      "B6 rejects cloud metadata",
+      "B6 rejects expanded IPv4-mapped IPv6",
+      "B6 rejects nested proxy directive",
+      "B6 rejects private IPv4 without explicit policy",
+      "B6 rejects redirect directive",
+      "B6 rejects scheme confusion"
+    ]
+  },
+  "sidecar-b5-b6-red": {
+    "failure_parser": "go_test_json_leaf_v1",
+    "expected_parser_lifecycle": {
+      "parser": "go_test_json_leaf_v1",
+      "packages": [
+        {
+          "package_suffix": "internal/control",
+          "start_count": 1,
+          "run_test_count": 4,
+          "terminal_test_count": 4,
+          "pass_test_count": 2,
+          "fail_test_count": 2,
+          "skip_test_count": 0,
+          "package_fail_terminal_count": 1,
+          "post_terminal_event_count": 0
+        },
+        {
+          "package_suffix": "internal/server",
+          "start_count": 1,
+          "run_test_count": 64,
+          "terminal_test_count": 64,
+          "pass_test_count": 11,
+          "fail_test_count": 53,
+          "skip_test_count": 0,
+          "package_fail_terminal_count": 1,
+          "post_terminal_event_count": 0
+        }
+      ],
+      "unexplained_stderr_line_count": 0,
+      "malformed_or_unparsed_event_count": 0
+    },
+    "expected_failure_count": 51,
+    "expected_failure_families": ["TestPhase0B5", "TestPhase0B6"],
+    "expected_failure_names": [
+      "TestPhase0B5BindingRejectsEveryControlMutation/expected_tls_summary_bucket",
+      "TestPhase0B5BindingRejectsEveryControlMutation/method",
+      "TestPhase0B5BindingRejectsEveryControlMutation/profile_ref",
+      "TestPhase0B5BindingRejectsEveryControlMutation/route",
+      "TestPhase0B5BindingRejectsEveryControlMutation/target_path",
+      "TestPhase0B5BindingRejectsEveryControlMutation/target_scheme",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/absolute_deadline_ms",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/account_identity_ref",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/attempt_id",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/content_encoding",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/content_length",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/envelope_version",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/expected_response_policy_ref",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/expected_tls_summary_bucket",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/final_headers_hash",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/key_epoch",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/manifest_authority_ref",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/method",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/nonce",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/profile_ref",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/proxy_generation",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/request_body_hash",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/route",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/target_path",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/target_scheme",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/timestamp_ms",
+      "TestPhase0B5CompleteAuthenticatedEnvelopeRejectsIndependentMutations/verified_context_ref",
+      "TestPhase0B5ControlRejectsLegacyIncompleteControl",
+      "TestPhase0B5ControlRequiresCompleteV2Envelope",
+      "TestPhase0B5RejectsLegacyPartialProxyBinding",
+      "TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange/distinct_replica_with_shared_replay_state",
+      "TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange/restart_with_persistent_replay_state",
+      "TestPhase0B5ReplayRejectedAfterCompletionRestartAndReplicaChange/same_instance_after_successful_completion",
+      "TestPhase0B6RebindingResolutionIsPinnedBeforeDial",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/alternate_dial_target",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/dns_rebinding_unpinned",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/expanded_mapped_ipv6",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv4_link_local",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv4_loopback",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv4_mapped_ipv6",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv4_multicast",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv4_unspecified",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv6_link_local",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv6_loopback",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv6_multicast",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/ipv6_unspecified",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/metadata",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/nested_proxy_directive",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/private_without_policy",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/redirect_directive",
+      "TestPhase0B6RejectsUnsafeProxyDestinationsBeforeDial/scheme_confusion"
+    ]
+  }
+}
+```
+<!-- PHASE1_RED_FAILURE_INVENTORY_END -->
+
+The acceptance function is closed by the following truth table. Any row not explicitly accepted fails the transaction before result artifacts are written.
+
+| Command kind | Exit | Parser lifecycle | Event multiset duplicate | Canonical names/count/families | Classification |
+| --- | --- | --- | --- | --- | --- |
+| GREEN | `0` | not applicable | not applicable | empty RED fields | `pass` |
+| GREEN | nonzero | any | any | any | `unexpected_fail` |
+| RED | `0` | complete | none | any | `unexpected_pass` |
+| RED | nonzero | complete | none | all exact | `expected_fail` |
+| RED | nonzero | incomplete/ambiguous | any | any | `unexpected_fail` |
+| RED | nonzero | complete | present | otherwise exact or not | `unexpected_fail` |
+| RED | nonzero | complete | none | missing/extra/reordered-persisted/count/family mismatch | `unexpected_fail` |
+
+Permuting complete raw runner events must produce the same deterministic sorted multiset, unique canonical array, lifecycle summary, result digest, and `expected_fail`. Permuting either persisted sorted array is invalid. Tests cover missing leaf, added unrelated leaf, added same-prefix leaf, duplicate event retained in the multiset, wrong event/unique count, wrong family/parser/lifecycle, raw-event permutation, persisted multiset/unique-array permutation, malformed TAP/JSON, TAP missing/duplicate plan or ordinal, Go missing package/test/package terminal, JSON-valid truncation, package/build failure, terminal-after-terminal event, nonempty unexplained stderr, unexpected Go package, and failed Go parent/child container handling.
 
 - [ ] **Step 4: Add the exact Phase 1 command catalog**
 
@@ -1288,11 +1595,11 @@ cc-build: ${CC_GATEWAY_ROOT} :: npm run build :: exit 0
 cc-tests: ${CC_GATEWAY_ROOT} :: npm test :: exit 0
 sidecar-tests: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test ./... -count=1 :: exit 0
 joint-local-chain: ${SUB2API_ROOT}/backend :: go test ./internal/service -run ^(TestClaudePlatformAWSLocalFullChainE2EUsesCCGatewayAndSafeMockUpstream|TestJointLocalCaptureAcceptanceArtifact)$ -count=1 -v :: exit 0
-cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: node --import tsx --test --test-name-pattern=^(B4|B5|B6)(\\s|$) tests/red/phase0-boundary.red.test.ts :: env SUB2API_ROOT=${SUB2API_CONTRACT_ROOT} :: nonzero :: failure families [B4,B5,B6] :: allowed failing prefixes [B4 ,B5 ,B6 ]
-sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -tags=phase0red ./internal/control ./internal/server -run ^TestPhase0B[56] -count=1 :: nonzero :: failure families [TestPhase0B5,TestPhase0B6] :: allowed failing prefixes [TestPhase0B5,TestPhase0B6]
+cc-b4-b6-red: ${CC_GATEWAY_ROOT} :: node --import tsx --test --test-reporter=tap --test-name-pattern=^(B4|B5|B6)(\\s|$) tests/red/phase0-boundary.red.test.ts :: env SUB2API_ROOT=${SUB2API_CONTRACT_ROOT} :: nonzero :: parser node_test_tap_v1 :: lifecycle tests/pass/fail 68/7/61, zero cancelled/skipped/todo/stderr :: exact failing leaves/count 61 :: failure families [B4,B5,B6] :: allowed failing prefixes [B4 ,B5 ,B6 ]
+sidecar-b5-b6-red: ${CC_GATEWAY_ROOT}/sidecar/egress-tls-sidecar :: go test -json -tags=phase0red ./internal/control ./internal/server -run ^TestPhase0B[56] -count=1 :: nonzero :: parser go_test_json_leaf_v1 :: lifecycle control run/pass/fail 4/2/2, server 64/11/53, zero skip/stderr :: exact failing leaves/count 51 :: failure families [TestPhase0B5,TestPhase0B6] :: allowed failing prefixes [TestPhase0B5,TestPhase0B6]
 ```
 
-The first twelve entries use `phase1-green`; the final two use `phase1-red`. `SUB2API_ROOT` normally expands to the tested implementation root; only `cc-b4-b6-red` overrides it with `${SUB2API_CONTRACT_ROOT}` so the existing fail-closed resolver sees a committed `main` contract clone rather than rejecting the feature branch before test registration. Catalog validation forbids this override on every other row. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The CC RED name filter excludes the separate `HA-P0-009` Phase 2 corpus instead of ignoring its failures; the sidecar filter excludes unrelated Go tests. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes exact argv, environment, family arrays, and failing-name prefixes per command ID rather than trusting arbitrary catalog strings.
+The first twelve entries use `phase1-green`; the final two use `phase1-red`. `SUB2API_ROOT` normally expands to the tested implementation root; only `cc-b4-b6-red` overrides it with `${SUB2API_CONTRACT_ROOT}` so the existing fail-closed resolver sees a committed `main` contract clone rather than rejecting the feature branch before test registration. Catalog validation forbids this override on every other row. Every implemented requirement ID appears on at least one GREEN command. `cc-listener-h1`, `cc-upstream-tls-h1`, and `sidecar-tests` jointly bind `RA-P0-008`. The CC RED name filter excludes the separate `HA-P0-009` Phase 2 corpus instead of ignoring its failures; the sidecar filter excludes unrelated Go tests. The RED entries carry only `AV-B4-001`, `AV-B5-001`, and `AV-B6-001` links and never satisfy a Phase 1 requirement. Catalog validation hard-codes exact argv, environment, parser, canonical name arrays, exact counts, family arrays, and failing-name prefixes per command ID rather than trusting arbitrary catalog strings. Both schemas and semantic validation reject a catalog whose count differs from its array length, whose array is not canonical and unique, or whose derived family set differs from the declared set.
 
 - [ ] **Step 5: Implement one `run-all` capture transaction**
 
@@ -1317,7 +1624,7 @@ export function captureAndRunPhase1(options: {
 
 `feature-candidate` requires both `entryPath` and `executionContextPath`, forbids `integrationEntryPath`, and requires `controllerRoot === ccGatewayRoot` with a clean pre-run status. `post-integration` requires `integrationEntryPath`, forbids both `entryPath` and `executionContextPath`, requires `controllerRoot !== ccGatewayRoot`, and requires the controller HEAD to equal the frozen CC integrated-main commit with exactly one allowed pre-run delta: untracked `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`. In both stages, `ccGatewayRoot` and `sub2apiRoot` are the tested roots and must be entirely clean before and after every catalog command; only declared output writes in the controller root may change during the transaction. Output paths must resolve inside `controllerRoot`, be absent before capture, and be included in its declared after-status. Both stages also require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
 
-Before the first command, validate the selected stage authority and parse the closed plan-review provenance. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then enforce the stage-specific controller rule above; verify both tested roots are on the declared feature heads or exact integrated-main heads, are clean, have current CodeGraph indexes, and remain byte/status stable around each command; validate parent receipts, shared-contract bytes, and absent production/canary flags. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture controller/tested heads, root-identity/status digests, CodeGraph digests, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, reject every unclassified failing leaf and compare the exact frozen failure-family set before accepting `expected_fail`. Reject any sandbox violation, root/status change, family/name mismatch, unexpected status, or unsafe output, then atomically write the two declared outputs under `controllerRoot`. No result evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the selected stage authority and parse the closed plan-review provenance. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then enforce the stage-specific controller rule above; verify both tested roots are on the declared feature heads or exact integrated-main heads, are clean, have current CodeGraph indexes, and remain byte/status stable around each command; validate parent receipts, shared-contract bytes, and absent production/canary flags. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture controller/tested heads, root-identity/status digests, CodeGraph digests, catalog digest, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, require a complete command-specific machine parser/lifecycle, preserve and sort the full safe leaf-event multiset, derive duplicates/unique names/counts/families, and compare exact catalog constants before accepting `expected_fail`. Reject any sandbox violation, root/status change, parser/lifecycle/event/name/count/family mismatch, unexpected status, or unsafe output, then atomically write the two declared outputs under `controllerRoot`. Results persist the catalog digest, closed lifecycle summary, sorted `failure_event_names` multiset/event count, canonical unique names/count, and derived families. No result evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1329,7 +1636,7 @@ Before the first command, validate the selected stage authority and parse the cl
 }
 ```
 
-Supported subcommands are exact: `validate-catalog`, `run-all`, `validate-results`, `build-integration-entry`, `build-handoff`, `validate-handoff`, `build-integration-receipt`, and `validate-integration-receipt`. Their closed parsers accept only the flags shown verbatim in Task 8. `build-integration-entry` requires controller/tested/contract roots, execution context, plan review, feature results/review, both reviewed feature heads and merge references, both expected remote names/refs/origin digests, and one output path. `build-integration-receipt` requires controller root, integrated Sub2API root, artifact commit, entry/baseline/results/handoff/report/three registries, and receipt output. `validate-integration-receipt` requires the same bound inputs plus the receipt path; it forbids `--receipt-commit` before commit and requires it for the post-commit child check. Unknown commands, missing or duplicate arguments, undeclared flags, path traversal, symlink artifacts, expired inputs, and absolute persisted paths fail with stable error codes. The entry builder writes exactly one exclusive file and leaves the controller delta allowlist exact. The receipt builder accepts only a clean exact artifact commit; the validator enforces its one-path child commit when supplied.
+Supported subcommands are exact: `validate-catalog`, `run-all`, `validate-results`, `build-integration-entry`, `build-handoff`, `validate-handoff`, `build-integration-receipt`, and `validate-integration-receipt`. Their closed parsers accept only the flags shown verbatim in Task 8. `build-integration-entry` requires controller/tested/contract roots, execution context, plan review, catalog, feature results/review, both reviewed feature heads and merge references, both expected remote names/refs/origin digests, and one output path; it revalidates feature results against that catalog and binds the catalog digest for post-integration capture. Every results, integration-entry, handoff, and receipt build/validation command requires the explicit catalog path; it reloads the catalog, validates the command-specific parser lifecycle, event multiset/count, canonical unique leaf array/count, and families, and binds its digest rather than trusting an embedded digest alone. `build-integration-receipt` additionally requires controller root, integrated Sub2API root, artifact commit, entry/baseline/results/handoff/report/three registries, and receipt output. `validate-integration-receipt` requires the same bound inputs plus the receipt path; it forbids `--receipt-commit` before commit and requires it for the post-commit child check. Unknown commands, missing or duplicate arguments, undeclared flags, path traversal, symlink artifacts, expired inputs, and absolute persisted paths fail with stable error codes. The entry builder writes exactly one exclusive file and leaves the controller delta allowlist exact. The receipt builder accepts only a clean exact artifact commit; the validator enforces its one-path child commit when supplied.
 
 - [ ] **Step 7: Run adapter, planning, P0.1, and full CC regression**
 
@@ -1386,7 +1693,7 @@ npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpow
 npm run oracle:phase1 -- validate-results --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
 ```
 
-Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, zero unclassified failure names, zero sandbox violations, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
+Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, exact parser lifecycles, zero unclassified or duplicate failure events, zero sandbox violations, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
 
 - [ ] **Step 3: Commit feature-candidate evidence and obtain independent implementation review**
 
@@ -1416,7 +1723,7 @@ Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, o
 Run from `CC_GATEWAY_EVIDENCE_ROOT` with values captured from the reviewed feature PRs and freshly fetched remote configuration:
 
 ```bash
-npm run oracle:phase1 -- build-integration-entry --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --plan-review docs/superpowers/evidence/phase-1/phase-1-plan-review.json --feature-results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json --feature-review docs/superpowers/evidence/phase-1/phase-1-feature-review.md --reviewed-cc-feature-head ${CC_GATEWAY_FEATURE_HEAD} --reviewed-sub2api-feature-head ${SUB2API_FEATURE_HEAD} --cc-merge-reference ${CC_GATEWAY_PR_MERGE_REF} --sub2api-merge-reference ${SUB2API_PR_MERGE_REF} --cc-remote muqihang --cc-remote-ref refs/remotes/muqihang/main --cc-origin-digest ${CC_GATEWAY_ORIGIN_DIGEST} --sub2api-remote muqihang --sub2api-remote-ref refs/remotes/muqihang/main --sub2api-origin-digest ${SUB2API_ORIGIN_DIGEST} --out docs/superpowers/evidence/phase-1/phase-1-integration-entry.json
+npm run oracle:phase1 -- build-integration-entry --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --plan-review docs/superpowers/evidence/phase-1/phase-1-plan-review.json --feature-results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json --feature-review docs/superpowers/evidence/phase-1/phase-1-feature-review.md --reviewed-cc-feature-head ${CC_GATEWAY_FEATURE_HEAD} --reviewed-sub2api-feature-head ${SUB2API_FEATURE_HEAD} --cc-merge-reference ${CC_GATEWAY_PR_MERGE_REF} --sub2api-merge-reference ${SUB2API_PR_MERGE_REF} --cc-remote muqihang --cc-remote-ref refs/remotes/muqihang/main --cc-origin-digest ${CC_GATEWAY_ORIGIN_DIGEST} --sub2api-remote muqihang --sub2api-remote-ref refs/remotes/muqihang/main --sub2api-origin-digest ${SUB2API_ORIGIN_DIGEST} --out docs/superpowers/evidence/phase-1/phase-1-integration-entry.json
 ```
 
 Each `${...}` value is a required nonempty pre-captured scalar, not a default: heads are 40-lower-hex commits, merge references are the recorded ordinary-merge PR references, and origin digests are `sha256:<64-lower-hex>` of canonical remote URLs. The parser rejects environment fallback for an omitted flag. Expected: exit 0, exactly one untracked entry path in the controller, no tested-root delta, and a valid closed integration-entry schema.
@@ -1428,7 +1735,7 @@ npm run oracle:phase1 -- run-all --stage post-integration --integration-entry do
 npm run oracle:phase1 -- validate-results --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json
 ```
 
-Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, zero unclassified names, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the entry plus the two declared result files. Validate results before changing governance state.
+Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, exact parser lifecycles, zero unclassified or duplicate events, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the entry plus the two declared result files. Validate results before changing governance state.
 
 - [ ] **Step 7: Transition only the four Phase 1 requirement rows**
 
@@ -1439,8 +1746,8 @@ Add claims only at `local_structural` or `local_observational`. Do not add `upst
 - [ ] **Step 8: Build and validate the deterministic final handoff/report**
 
 ```bash
-npm run oracle:phase1 -- build-handoff --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
-npm run oracle:phase1 -- validate-handoff --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md
+npm run oracle:phase1 -- build-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
+npm run oracle:phase1 -- validate-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md
 ```
 
 The handoff contains exactly:
@@ -1458,7 +1765,7 @@ export const PHASE2_ENTRY_CONDITIONS = [
 ] as const
 ```
 
-It expires exactly 24 hours after generation and binds the exact two fetched integrated main heads, integration-entry/result digests, safe command/failure names, requirement IDs, and repository-relative paths. Validate the handoff/report pair, planning tests, Phase 1 evidence tests, full CC tests, and build before committing.
+It expires exactly 24 hours after generation and binds the exact two fetched integrated main heads, catalog/integration-entry/result digests, both parser lifecycles, sorted event multisets/counts, canonical unique RED arrays/counts, derived families, safe command/failure names, requirement IDs, and repository-relative paths. The builder and validator both accept `--catalog`, independently rerun catalog and result semantics, and regenerate the Markdown; a catalog/parser/lifecycle/event/name/count/family mutation invalidates both handoff and report even when all mutated artifacts are rehashed. Validate the handoff/report pair, planning tests, Phase 1 evidence tests, full CC tests, and build before committing.
 
 - [ ] **Step 9: Commit the exact post-integration artifact set**
 
@@ -1473,14 +1780,14 @@ Because `CC_GATEWAY_EVIDENCE_ROOT` has received no prior commit, the validator r
 
 - [ ] **Step 10: Generate a self-reference-safe receipt and commit only it**
 
-At the clean artifact commit, generate `phase-1-integration-receipt.json`. It binds the artifact commit, exact CC/Sub2API integrated main heads, reviewed feature heads, integration-entry/results/handoff/report/registry digests, sandbox digests, disabled capabilities, and Phase 2 gates. Validate it both before and after commit.
+At the clean artifact commit, generate `phase-1-integration-receipt.json`. It binds the artifact commit, exact CC/Sub2API integrated main heads, reviewed feature heads, catalog/integration-entry/results/handoff/report/registry digests, parser lifecycle plus RED event/unique inventory counts/digests, sandbox digests, disabled capabilities, and Phase 2 gates. Validate it both before and after commit.
 
 ```bash
-npm run oracle:phase1 -- build-integration-receipt --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt-out docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
-npm run oracle:phase1 -- validate-integration-receipt --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+npm run oracle:phase1 -- build-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt-out docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
 git add docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
 git commit -m "docs(oracle): publish Phase 1 integration receipt"
-npm run oracle:phase1 -- validate-integration-receipt --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --receipt-commit HEAD --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --receipt-commit HEAD --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
 ```
 
 Set `PHASE1_ARTIFACT_COMMIT` from `git rev-parse HEAD` immediately after Step 9 and require it to equal the receipt builder's independently derived clean controller HEAD. The pre-commit validator forbids `--receipt-commit` and requires controller status to contain only the untracked receipt. The post-commit validator requires `--receipt-commit HEAD`, proves that commit has the artifact commit as its sole parent, and proves its delta adds exactly one path. This two-commit chain is the only permitted solution to the artifact self-reference problem; the receipt never claims to contain its own commit hash.
@@ -1520,7 +1827,7 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 | CC Gateway full tests and build | GREEN |
 | Joint local chain | GREEN |
 | OS network boundary | reviewed loopback-only sandbox and canaries; proxy environment alone is insufficient |
-| CC B4-B6 and sidecar B5-B6 | filtered command, exact failing-name allowlist and families; any extra/unparsed failure is unexpected |
+| CC B4-B6 and sidecar B5-B6 | machine-readable complete lifecycles; sorted event multiset and unique counts `61/61`, `51/51`; exact canonical unique arrays/families; missing, extra same-prefix, duplicate event, malformed/truncated lifecycle, count, or persisted-order drift is unexpected |
 | Post-integration authority | final results bind exact fetched `muqihang/main` heads after both implementation PRs merge |
 | Receipt chain | artifact commit exact delta plus one-path receipt child; final CC remote main descends receipt commit |
 | Shared contract digest | unchanged |
@@ -1545,7 +1852,8 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 - [ ] `RA-P0-008` closure includes approved exposure policy and both direct/sidecar certificate verification without claiming production observation.
 - [ ] Listener/upstream negative integration calls `startProxy` directly and proves both resolvers precede TLS reads, server creation, and listen through zero observed startup effects.
 - [ ] Every H1 subprocess is OS-sandboxed to loopback after passing allow/deny canaries; proxy variables alone never authorize capture.
-- [ ] Every Phase 1 RED result binds the command-specific exact failing-name allowlist and failure-family set; nonzero or an extra unrelated leaf never yields `expected_fail`.
+- [ ] Every Phase 1 RED result binds the command-specific complete parser lifecycle, deterministic sorted leaf-event multiset/count, canonical unique array/count, and derived family set; nonzero, missing, added same-prefix, duplicate event, malformed/truncated lifecycle, count drift, or persisted-order drift never yields `expected_fail`, while raw event permutations canonicalize to byte-identical results.
+- [ ] Integration-entry, handoff/report, and pre/post-commit receipt builders and validators each rerun catalog/results semantics and reject every rehashed RED parser/lifecycle/event/name/count/family mutation.
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.
