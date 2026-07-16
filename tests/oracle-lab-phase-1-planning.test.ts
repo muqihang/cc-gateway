@@ -20,6 +20,69 @@ const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-r
 const executionContextPath = 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
+const redInventoryStart = '<!-- PHASE1_RED_FAILURE_INVENTORY_START -->'
+const redInventoryEnd = '<!-- PHASE1_RED_FAILURE_INVENTORY_END -->'
+const expectedRedInventoryDigest = 'sha256:11a27ce9a1d0081a544363978bbd616a36ac2a2f6d50e06c6e673a1e83c97c34'
+const expectedRedRowKeys = [
+  'failure_parser', 'expected_parser_lifecycle', 'expected_failure_count',
+  'expected_failure_families', 'expected_failure_names',
+]
+const expectedRedInventory = {
+  'cc-b4-b6-red': {
+    failure_parser: 'node_test_tap_v1',
+    expected_parser_lifecycle: {
+      parser: 'node_test_tap_v1',
+      tap_version_count: 1,
+      terminal_plan_count: 1,
+      declared_test_count: 68,
+      observed_test_count: 68,
+      pass_count: 7,
+      fail_count: 61,
+      cancelled_count: 0,
+      skipped_count: 0,
+      todo_count: 0,
+      unexplained_stderr_line_count: 0,
+    },
+    expected_failure_count: 61,
+    expected_failure_families: ['B4', 'B5', 'B6'],
+    names_digest: 'sha256:0ac491f7f3ab3c22d1f89f62c9be85e1e81bf93909ffcbb0968055daaf5fd387',
+  },
+  'sidecar-b5-b6-red': {
+    failure_parser: 'go_test_json_leaf_v1',
+    expected_parser_lifecycle: {
+      parser: 'go_test_json_leaf_v1',
+      packages: [
+        {
+          package_suffix: 'internal/control',
+          start_count: 1,
+          run_test_count: 4,
+          terminal_test_count: 4,
+          pass_test_count: 2,
+          fail_test_count: 2,
+          skip_test_count: 0,
+          package_fail_terminal_count: 1,
+          post_terminal_event_count: 0,
+        },
+        {
+          package_suffix: 'internal/server',
+          start_count: 1,
+          run_test_count: 64,
+          terminal_test_count: 64,
+          pass_test_count: 11,
+          fail_test_count: 53,
+          skip_test_count: 0,
+          package_fail_terminal_count: 1,
+          post_terminal_event_count: 0,
+        },
+      ],
+      unexplained_stderr_line_count: 0,
+      malformed_or_unparsed_event_count: 0,
+    },
+    expected_failure_count: 51,
+    expected_failure_families: ['TestPhase0B5', 'TestPhase0B6'],
+    names_digest: 'sha256:319a965a36b691987ffa7eb38b12ba380cb5fafc549e6d072ff50468cb562903',
+  },
+} as const
 const expectedGateCommandIDs = [
   'cc-build', 'p0-1-focused', 'cc-tests', 'cc-cross-repo-baseline', 'sidecar-tests',
   'sub2api-formal-pool', 'sub2api-joint-local-chain', 'cc-boundary-red',
@@ -74,6 +137,29 @@ function compile(schema: Value) {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
+}
+
+function phase1RedInventory(plan: string): Value {
+  assert.equal(plan.split(redInventoryStart).length, 2, 'RED inventory start marker must occur exactly once')
+  assert.equal(plan.split(redInventoryEnd).length, 2, 'RED inventory end marker must occur exactly once')
+  const start = plan.indexOf(redInventoryStart) + redInventoryStart.length
+  const end = plan.indexOf(redInventoryEnd)
+  const body = plan.slice(start, end).trim()
+  const match = body.match(/^```json\n([\s\S]*?)\n```$/)
+  assert(match, 'RED inventory marker body must be exactly one JSON code block')
+  return JSON.parse(match[1]) as Value
+}
+
+function canonicalFailureNames(names: string[]): string[] {
+  return [...names].sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')))
+}
+
+function failureFamily(name: string): string {
+  for (const family of ['B4', 'B5', 'B6', 'TestPhase0B5', 'TestPhase0B6']) {
+    if (name === family || name.startsWith(`${family} `) || name.startsWith(`${family}/`)
+      || (family.startsWith('TestPhase0') && name.startsWith(family))) return family
+  }
+  return 'unclassified'
 }
 
 function planningEntrySemantics(entry: Value, sourceResults: Value): boolean {
@@ -347,7 +433,7 @@ test('Phase 1 plan classifies exact consumed-proof replay after owner but before
   assert.match(plan, /owner, different proof, old consume-input version \| `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`/)
 })
 
-test('Phase 1 plan proves defensive startProxy ordering and exact RED failure families', async () => {
+test('Phase 1 plan proves defensive startProxy ordering and exact RED leaf inventories', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
   const listenerValidation = plan.indexOf('const listenerBoundary = resolveListenerBoundary(config)')
   const upstreamValidation = plan.indexOf('const upstreamTLSBoundary = resolveUpstreamTLSBoundary(config, process.env)')
@@ -364,8 +450,37 @@ test('Phase 1 plan proves defensive startProxy ordering and exact RED failure fa
   assert.match(plan, /assert\.deepEqual\(observed\.calls, \[\]\)/)
   assert.match(plan, /failure families \[B4,B5,B6\]/)
   assert.match(plan, /failure families \[TestPhase0B5,TestPhase0B6\]/)
-  assert.match(plan, /ordered unique observed family set exactly equals the catalog set/)
-  assert.match(plan, /valid B4-B6 set plus `HA-P0-009` or any other failure is always unexpected/)
+  assert.match(plan, /failure_parser: null \| Phase1FailureParser/)
+  assert.match(plan, /expected_failure_count: number/)
+  assert.match(plan, /expected_failure_names: string\[\]/)
+  assert.match(plan, /expected_parser_lifecycle: null \| Phase1ParserLifecycle/)
+  assert.match(plan, /failure_event_count: number/)
+  assert.match(plan, /failure_event_names: string\[\]/)
+  assert.match(plan, /failure_count: number/)
+  assert.match(plan, /node_test_tap_v1/)
+  assert.match(plan, /go_test_json_leaf_v1/)
+  assert.match(plan, /All safe leaf events, including repeats, are UTF-8-byte-sorted into deterministic `failure_event_names`/)
+  assert.match(plan, /Missing, added same-prefix, duplicate, reordered persisted multiset\/unique array/)
+  assert.match(plan, /validatePhase1IntegrationEntryValue.*buildPhase1Handoff.*validatePhase1HandoffValue.*buildPhase1IntegrationReceipt/s)
+
+  const inventory = phase1RedInventory(plan)
+  assert.deepEqual(Object.keys(inventory), Object.keys(expectedRedInventory))
+  assert.equal(digest(JSON.stringify(inventory)), expectedRedInventoryDigest)
+  for (const [commandID, expected] of Object.entries(expectedRedInventory)) {
+    const row = inventory[commandID]
+    const names = row.expected_failure_names as string[]
+    assert.deepEqual(Object.keys(row), expectedRedRowKeys)
+    assert.equal(row.failure_parser, expected.failure_parser)
+    assert.deepEqual(row.expected_parser_lifecycle, expected.expected_parser_lifecycle)
+    assert.equal(row.expected_failure_count, expected.expected_failure_count)
+    assert.deepEqual(row.expected_failure_families, expected.expected_failure_families)
+    assert.equal(names.length, expected.expected_failure_count)
+    assert.equal(new Set(names).size, names.length)
+    assert.deepEqual(names, canonicalFailureNames(names))
+    assert.equal(digest(JSON.stringify(names)), expected.names_digest)
+    assert.deepEqual([...new Set(names.map(failureFamily))], row.expected_failure_families)
+    assert.equal(names.includes('unclassified'), false)
+  }
   assert.match(plan, /const host = configuredHost === '\[::1\]' \? '::1' : configuredHost/)
   assert.match(plan, /createHTTPServer: \(handler: ProxyRequestListener\) => ReturnType<typeof createHttpServer>/)
   assert.match(plan, /createHTTPSServer: \(options: ServerOptions, handler: ProxyRequestListener\) => ReturnType<typeof createHttpsServer>/)
@@ -423,9 +538,14 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
 
 test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
-  assert.match(plan, /valid family set plus any unrelated failing leaf/)
+  assert.match(plan, /CC_RED_FAILURE_NAMES\.slice\(1\)/)
+  assert.match(plan, /B4 invented same-prefix leaf/)
+  assert.match(plan, /\[\.\.\.CC_RED_FAILURE_NAMES, CC_RED_FAILURE_NAMES\[0\]\]/)
+  assert.match(plan, /\[\.\.\.CC_RED_FAILURE_NAMES\]\.reverse\(\)/)
   assert.match(plan, /unclassified_failure_names/)
+  assert.match(plan, /--test-reporter=tap/)
   assert.match(plan, /--test-name-pattern=\^\(B4\|B5\|B6\)\(\\\\s\|\$\)/)
+  assert.match(plan, /go test -json -tags=phase0red/)
   assert.match(plan, /-run \^TestPhase0B\[56\]/)
   assert.match(plan, /allowed failing prefixes \[B4 ,B5 ,B6 \]/)
   assert.match(plan, /`\/usr\/bin\/sandbox-exec`/)
@@ -457,6 +577,22 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.match(plan, /post-integration separates the declared controller delta from clean tested roots/)
   assert.match(plan, /controllerRoot !== ccGatewayRoot/)
   assert.match(plan, /capture_root_not_authorized/)
+  assert.match(plan, /The review is holistic, not limited to the latest patch/)
+  assert.match(plan, /missing\/extra-same-prefix\/duplicate-event\/raw-permutation\/persisted-multiset-or-unique-permutation\/event-or-unique-count\/family\/parser\/lifecycle mutation/)
+  assert.match(plan, /tap_missing_plan/)
+  assert.match(plan, /go_missing_package_terminal/)
+  assert.match(plan, /go_json_valid_truncation/)
+  assert.match(plan, /nonempty_unexplained_stderr/)
+  assert.match(plan, /rehashEveryAffectedArtifact/)
+  assert.match(plan, /buildPhase1IntegrationEntry\(fixture\.integrationEntryInputs\)/)
+  assert.match(plan, /buildPhase1Handoff\(fixture\.handoffInputs\)/)
+  assert.match(plan, /buildPhase1IntegrationReceipt\(fixture\.receiptInputs\)/)
+  assert.match(plan, /validatePhase1IntegrationReceiptValue\(fixture\.receiptPostCommit\)/)
+  assert.match(plan, /build-integration-entry --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /build-handoff --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /validate-handoff --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /build-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /validate-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
   assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
@@ -471,13 +607,13 @@ test('Phase 1 final handoff is minted only after merged-main recapture and a rec
   assert(merge >= 0 && freeze > merge && recapture > freeze && artifact > recapture && receipt > artifact && finalRemote > receipt)
   assert.match(plan, /phase-1-integration-entry\.json/)
   assert.match(plan, /phase-1-integration-receipt\.json/)
-  assert.match(plan, /build-integration-entry --controller-root/)
+  assert.match(plan, /build-integration-entry --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
   assert.match(plan, /validate-catalog --catalog/)
   assert.match(plan, /validate-results --stage feature-candidate/)
   assert.match(plan, /validate-results --stage post-integration/)
-  assert.match(plan, /validate-handoff --controller-root/)
-  assert.match(plan, /build-integration-receipt --controller-root/)
-  assert.match(plan, /validate-integration-receipt --controller-root/)
+  assert.match(plan, /validate-handoff --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
+  assert.match(plan, /build-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
+  assert.match(plan, /validate-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
   assert.match(plan, /--receipt-commit HEAD/)
   assert.match(plan, /CC_GATEWAY_EVIDENCE_ROOT/)
   assert.match(plan, /CC_GATEWAY_INTEGRATION_ROOT/)
