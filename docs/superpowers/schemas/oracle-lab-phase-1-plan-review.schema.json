@@ -30,14 +30,14 @@
     },
     "reviewer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
     "review_round": {"type": "integer", "minimum": 1},
-    "decision": {"const": "approved"},
+    "decision": {"enum": ["approved", "changes_requested"]},
     "finding_counts": {
       "type": "object",
       "additionalProperties": false,
       "required": ["critical", "important", "minor"],
       "properties": {
-        "critical": {"const": 0},
-        "important": {"const": 0},
+        "critical": {"type": "integer", "minimum": 0},
+        "important": {"type": "integer", "minimum": 0},
         "minor": {"type": "integer", "minimum": 0}
       }
     },
@@ -52,6 +52,35 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"decision": {"const": "approved"}},
+        "required": ["decision"]
+      },
+      "then": {
+        "properties": {
+          "finding_counts": {
+            "properties": {
+              "critical": {"const": 0},
+              "important": {"const": 0}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "decision": {"const": "changes_requested"},
+          "finding_counts": {
+            "anyOf": [
+              {"properties": {"critical": {"type": "integer", "minimum": 1}}},
+              {"properties": {"important": {"type": "integer", "minimum": 1}}}
+            ]
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}

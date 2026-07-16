@@ -6,11 +6,17 @@
   "required": [
     "schema_version",
     "context_kind",
+    "context_mode",
+    "sequence",
+    "stage",
+    "artifact_path",
+    "predecessor",
     "generated_at",
     "expires_at",
     "plan",
     "planning_provenance",
     "approval_receipt",
+    "gate_schemas",
     "repositories",
     "shared_contract",
     "authority_order",
@@ -19,8 +25,23 @@
     "disabled_capabilities"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "context_kind": {"const": "phase_1_execution_context"},
+    "context_mode": {"enum": ["initial", "successor"]},
+    "sequence": {"type": "integer", "minimum": 0, "maximum": 9999},
+    "stage": {"enum": ["implementation_entry", "implementation", "feature_capture"]},
+    "artifact_path": {
+      "oneOf": [
+        {"const": "docs/superpowers/evidence/phase-1/phase-1-execution-context.json"},
+        {"type": "string", "pattern": "^docs/superpowers/evidence/phase-1/phase-1-execution-context-[0-9]{4}\\.json$"}
+      ]
+    },
+    "predecessor": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/predecessor"}
+      ]
+    },
     "generated_at": {"type": "string", "format": "date-time"},
     "expires_at": {"type": "string", "format": "date-time"},
     "plan": {
@@ -72,6 +93,25 @@
         "important_findings": {"const": 0}
       }
     },
+    "gate_schemas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_context", "plan_review"],
+      "properties": {
+        "execution_context": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json"}}}
+          ]
+        },
+        "plan_review": {
+          "allOf": [
+            {"$ref": "#/$defs/path_digest"},
+            {"properties": {"path": {"const": "docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json"}}}
+          ]
+        }
+      }
+    },
     "repositories": {
       "type": "object",
       "additionalProperties": false,
@@ -80,13 +120,13 @@
         "cc_gateway": {
           "allOf": [
             {"$ref": "#/$defs/repository"},
-            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-cc-gateway"}}}
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-cc-gateway"}, "remote_url_digest": {"const": "sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a"}}}
           ]
         },
         "sub2api": {
           "allOf": [
             {"$ref": "#/$defs/repository"},
-            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-sub2api"}}}
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-sub2api"}, "remote_url_digest": {"const": "sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9"}}}
           ]
         }
       }
@@ -144,6 +184,8 @@
         "conditions": {
           "const": [
             "fresh_unexpired_execution_context",
+            "contiguous_immutable_context_chain",
+            "exact_stage_and_repository_state",
             "exact_plan_digest_bound",
             "independent_plan_approval_bound",
             "critical_and_important_findings_zero",
@@ -171,6 +213,31 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"context_mode": {"const": "initial"}},
+        "required": ["context_mode"]
+      },
+      "then": {
+        "properties": {
+          "sequence": {"const": 0},
+          "stage": {"const": "implementation_entry"},
+          "artifact_path": {"const": "docs/superpowers/evidence/phase-1/phase-1-execution-context.json"},
+          "predecessor": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "context_mode": {"const": "successor"},
+          "sequence": {"type": "integer", "minimum": 1, "maximum": 9999},
+          "stage": {"enum": ["implementation", "feature_capture"]},
+          "artifact_path": {"type": "string", "pattern": "^docs/superpowers/evidence/phase-1/phase-1-execution-context-[0-9]{4}\\.json$"},
+          "predecessor": {"$ref": "#/$defs/predecessor"}
+        }
+      }
+    }
+  ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
@@ -183,16 +250,54 @@
         "digest": {"$ref": "#/$defs/digest"}
       }
     },
+    "predecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest", "sequence", "stage", "artifact_commit"],
+      "properties": {
+        "path": {
+          "oneOf": [
+            {"const": "docs/superpowers/evidence/phase-1/phase-1-execution-context.json"},
+            {"type": "string", "pattern": "^docs/superpowers/evidence/phase-1/phase-1-execution-context-[0-9]{4}\\.json$"}
+          ]
+        },
+        "digest": {"$ref": "#/$defs/digest"},
+        "sequence": {"type": "integer", "minimum": 0, "maximum": 9998},
+        "stage": {"enum": ["implementation_entry", "implementation", "feature_capture"]},
+        "artifact_commit": {"$ref": "#/$defs/commit"}
+      }
+    },
     "repository": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["baseline_main_head", "tracking_ref", "implementation_branch", "clean", "dirty_digest"],
+      "required": ["baseline_main_head", "authorized_parent_head", "observed_remote_main_head", "remote_name", "remote_url_digest", "tracking_ref", "implementation_branch", "pre_issue_clean", "validation_status"],
       "properties": {
         "baseline_main_head": {"$ref": "#/$defs/commit"},
+        "authorized_parent_head": {"$ref": "#/$defs/commit"},
+        "observed_remote_main_head": {"$ref": "#/$defs/commit"},
+        "remote_name": {"const": "muqihang"},
+        "remote_url_digest": {"$ref": "#/$defs/digest"},
         "tracking_ref": {"const": "refs/remotes/muqihang/main"},
         "implementation_branch": {"type": "string", "minLength": 1},
-        "clean": {"const": true},
-        "dirty_digest": {"const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+        "pre_issue_clean": {"const": true},
+        "validation_status": {"$ref": "#/$defs/validation_status"}
+      }
+    },
+    "validation_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "digest"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^\\?\\? docs/superpowers/evidence/phase-1/[A-Za-z0-9._/-]+$"
+          }
+        },
+        "digest": {"$ref": "#/$defs/digest"}
       }
     }
   }
