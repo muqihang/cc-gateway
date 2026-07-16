@@ -4,7 +4,7 @@
 
 **Goal:** Close B1-B3 and the complete local Phase 1 `RA-P0-008` deployment boundary with server-side authority, deterministic failures, always-on H1 fixtures, and no expansion into Phase 2 contracts or Phase 4 runtime controls.
 
-**Architecture:** Sub2API remains the durable authority. Its admin handler resolves a principal from server-side user state, injects a typed request authority into the service context, and every onboarding mutation checks owner dimensions plus an expected version. Mutations with external effects acquire a CAS-backed single-operation reservation before the first dependency call, then finalize from that reservation without retrying unknown outcomes. Browser egress uses the existing public nonce/IP/proxy verifier, followed by a single-use server proof finalization; absolute browser URLs come only from configured public origin. CC Gateway resolves its deployment boundary before creating a socket: omitted host becomes `127.0.0.1`, non-loopback binds require an explicit capability, inbound TLS, strong authentication, and a code-approved exposure-policy reference, while real upstream modes require HTTPS, system trust, explicit certificate verification, and rejection of unsafe trust-environment overrides. The sidecar keeps `InsecureSkipVerify` confined to explicit loopback test overrides and proves production verification structurally.
+**Architecture:** Sub2API remains the durable authority. Its admin guard resolves a principal from server-side user state before the compliance oracle, the handler injects that typed request authority into the service context, and a separate narrow service dependency revalidates current status, role, token version, and JWT expiry after static owner comparison and immediately before version/state/CAS work. Every onboarding mutation checks owner dimensions plus an expected version. Mutations with external effects acquire a CAS-backed single-operation reservation before the first dependency call, then finalize from that reservation without retrying unknown outcomes. Browser egress uses the existing public nonce/IP/proxy verifier, followed by a single-use server proof finalization; absolute browser URLs come only from configured public origin. CC Gateway resolves its deployment boundary before creating a socket: omitted host becomes `127.0.0.1`, non-loopback binds require an explicit capability, inbound TLS, strong authentication, and a code-approved exposure-policy reference, while real upstream modes require HTTPS, system trust, explicit certificate verification, and rejection of unsafe trust-environment overrides. The sidecar keeps `InsecureSkipVerify` confined to explicit loopback test overrides and proves production verification structurally.
 
 **Tech Stack:** Go 1.26, Gin, Testify, TypeScript, Node.js 24, Vue 3, Vitest, Node `http`/`https`/`net`, Ajv 2020, CodeGraph 1.1.6, existing Oracle Lab H0 command/result schemas.
 
@@ -19,7 +19,8 @@
 - Tests use loopback, `httptest`, fake resolvers, and mock upstreams only. No command in this plan may contact a real provider or public host.
 - Authorization denials occur before state/version/dependency evaluation and use one stable 401 class plus one stable 403 class, without revealing which owner dimension mismatched.
 - Missing or malformed `If-Match` on an onboarding mutation returns `428 FORMAL_POOL_ONBOARDING_VERSION_REQUIRED`; a stale version reuses the existing `409 FORMAL_POOL_ONBOARDING_VERSION_CONFLICT`.
-- `AttestBrowserEgress` is the sole ordering exception after authentication and owner authorization. Its exact order is: `context -> record -> owner -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS`. An exact replay of the persisted consumed-proof safe digest returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` with either the old or current version; cross-owner requests still return the common 403 first, and nonmatching proofs do not bypass version/state checks.
+- `AttestBrowserEgress` is the sole ordering exception after authentication and owner authorization. Its exact order is: `context -> record -> static owner -> service-level principal revalidation -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS`. An exact replay of the persisted consumed-proof safe digest returns `FORMAL_POOL_BROWSER_PROOF_REJECTED` with either the old or current version; cross-owner requests still return the common 403 first, revoked/expired/inactive or role-lost owners receive the common 401/403 before replay classification, and nonmatching proofs do not bypass version/state checks.
+- The principal guard and service revalidator are intentionally distinct authority checks. The guard's single `Resolve` is the pre-compliance authorization oracle; it does not satisfy reservation-adjacent current-authority revalidation. No `FormalPoolOnboardingHandler` business method or constructor parses credentials or stores or calls either interface; the separate guard middleware owns the resolver call. The service receives only the typed principal plus a narrow `FormalPoolOnboardingPrincipalRevalidator` and must fail closed when that dependency is absent.
 - Any mutation that can call OAuth, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler dependencies must first acquire a CAS reservation. A concurrent request with the same version fails before a second dependency call; an ambiguous external outcome becomes `operation_outcome_unknown` and is never automatically retried.
 - Public browser-check responses remain enumeration-resistant and do not distinguish unknown, expired, replayed, mismatched, or cross-session nonces in their response body.
 - Listener and upstream negative integration must invoke `startProxy` directly and observe zero TLS-read, server-create, and listen effects; calling a pure resolver before `startProxy` is not startup-order evidence.
@@ -42,13 +43,13 @@
 
 - Create `backend/internal/service/formal_pool_onboarding_authorization.go`: typed principal/request authority, owner comparison, state/version ordering, CAS operation reservations, and stable errors.
 - Create `backend/internal/service/formal_pool_onboarding_authorization_test.go`: authority ordering and version unit tests.
-- Create `backend/internal/handler/admin/formal_pool_onboarding_principal.go`: server-side principal resolver and `If-Match` parser.
+- Create `backend/internal/handler/admin/formal_pool_onboarding_principal.go`: server-side principal resolver, narrow service-level principal revalidator adapter, and `If-Match` parser.
 - Modify `backend/internal/server/middleware/auth_subject.go` and `jwt_auth.go`: retain only safe JWT expiry/token-version/auth-method claims for downstream revalidation.
 - Modify `backend/internal/server/router.go` and `backend/internal/server/routes/admin.go`: keep the same onboarding URLs but move only that route group from broad `adminAuth` to JWT auth plus the onboarding principal gate while preserving `AdminComplianceGuard` after principal authorization.
 - Modify `backend/internal/service/formal_pool_onboarding_store.go`: owner envelope, proof lifecycle, account lookup, active-operation reservation, and CAS-only mutations.
 - Modify `backend/internal/service/formal_pool_onboarding_service.go`: authority enforcement, response version, B1 two-step verification/finalization.
 - Modify `backend/internal/handler/admin/formal_pool_onboarding_handler.go`: inject authority for every admin route and stop request-derived origin construction.
-- Modify `backend/internal/handler/wire.go`: register the production principal resolver provider for direct router injection; do not inject it into the onboarding handler.
+- Modify `backend/internal/handler/wire.go`: register separate production interface providers for the guard resolver and service revalidator; inject neither into the onboarding handler.
 - Regenerate `backend/cmd/server/wire_gen.go`: commit the deterministic Wire graph after provider and router signature changes.
 - Modify `backend/internal/config/config.go`: `authority_tenant_id` and `public_origin` configuration.
 - Modify `backend/internal/service/formal_pool_config.go` and `backend/internal/service/wire.go`: normalize public origin and wire it into onboarding service.
@@ -161,12 +162,13 @@ Every live-gate rejection is raised through `failContextGate(code, message)` wit
 - Create: `backend/internal/service/formal_pool_onboarding_authorization_test.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_store.go:34-168`
 - Modify: `backend/internal/service/formal_pool_onboarding_service.go:62-149,297-415,1661-1702`
+- Modify: `backend/internal/service/formal_pool_onboarding_service_test.go`
 - Modify: `backend/internal/service/formal_pool_onboarding_flow_test.go`
 - Test: `backend/internal/service/formal_pool_onboarding_authorization_test.go`
 - Test: `backend/internal/service/formal_pool_onboarding_store_test.go`
 
 **Interfaces:**
-- Produces: `FormalPoolOnboardingPrincipal`, exact `CallerKindHumanJWT = "human_jwt"`, `FormalPoolRequestAuthority`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
+- Produces: `FormalPoolOnboardingPrincipal`, exact `CallerKindHumanJWT = "human_jwt"`, `FormalPoolRequestAuthority`, `FormalPoolOnboardingPrincipalRevalidator`, `WithFormalPoolRequestAuthority`, `FormalPoolRequestAuthorityFromContext`, `authorizeCreate`, `authorizeSession`, and `authorizeAccount`.
 - Produces: `FormalPoolOnboardingGroupReader` as a narrow adapter over the existing `GroupRepository` for active-group validation during creation.
 - Produces: `FormalPoolOnboardingSession.Version int64`, owner fields, `FormalPoolOperationReservation`, `beginReservedMutation`, `finishReservedMutation`, and `failReservedMutation`.
 - Consumes: existing `FormalPoolOnboardingStore.get`, `casUpdate`, session `Version`, `GroupID`, and status constants.
@@ -175,7 +177,8 @@ Every live-gate rejection is raised through `failContextGate(code, message)` wit
 
 ```go
 func TestFormalPoolAuthorizeSessionOrdersOwnerBeforeVersionAndState(t *testing.T) {
-    svc, owner, session := newAuthorizedOnboardingFixture(t)
+    svc, owner, session, revalidator := newAuthorizedOnboardingFixture(t)
+    revalidator.calls.Store(0)
     intruder := owner
     intruder.SubjectID++
     stale := int64(0)
@@ -187,6 +190,23 @@ func TestFormalPoolAuthorizeSessionOrdersOwnerBeforeVersionAndState(t *testing.T
     require.ErrorIs(t, err, ErrFormalPoolOnboardingForbidden)
     require.NotErrorIs(t, err, ErrFormalPoolOnboardingVersionConflict)
     require.NotErrorIs(t, err, ErrFormalPoolOnboardingInvalidState)
+    require.Zero(t, revalidator.calls.Load())
+}
+
+func TestFormalPoolAuthorizeSessionRevalidatesAfterOwnerBeforeVersionStateAndReservation(t *testing.T) {
+    svc, owner, session, revalidator := newAuthorizedOnboardingFixture(t)
+    revalidator.calls.Store(0)
+    revalidator.err = ErrFormalPoolOnboardingAuthenticationRequired
+    stale := int64(0)
+    ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{
+        Principal: owner, ExpectedVersion: &stale,
+    })
+    _, err := svc.authorizeSession(ctx, session.ID, true, "wrong_state")
+    require.ErrorIs(t, err, ErrFormalPoolOnboardingAuthenticationRequired)
+    require.Equal(t, int64(1), revalidator.calls.Load())
+    rec, ok := svc.store.get(session.ID)
+    require.True(t, ok)
+    require.Nil(t, rec.ActiveOperation)
 }
 
 func TestFormalPoolStartSessionRequiresSystemAdminTenantAndActiveGroup(t *testing.T) {
@@ -197,10 +217,11 @@ func TestFormalPoolStartSessionRequiresSystemAdminTenantAndActiveGroup(t *testin
     require.ErrorIs(t, err, ErrFormalPoolOnboardingAuthenticationRequired)
 }
 
-func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService, FormalPoolOnboardingPrincipal, *FormalPoolOnboardingSession) {
+func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService, FormalPoolOnboardingPrincipal, *FormalPoolOnboardingSession, *formalPrincipalRevalidatorFake) {
     t.Helper()
+    revalidator := &formalPrincipalRevalidatorFake{}
     svc := NewFormalPoolOnboardingService(FormalPoolOnboardingDeps{
-        Proxy: &formalProxyFake{},
+        Proxy: &formalProxyFake{}, PrincipalRevalidator: revalidator,
         Groups: &formalGroupReaderFake{groups: map[int64]*Group{
             101: {ID: 101, Status: StatusActive, Hydrated: true},
         }},
@@ -208,7 +229,7 @@ func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService,
     owner := FormalPoolOnboardingPrincipal{
         SubjectID: 1001, AdministratorID: 1001, TenantID: "tenant-one",
         CreatorID: 1001, Role: RoleAdmin, CallerKind: CallerKindHumanJWT,
-        AuthorityRevision: 1, Active: true, SystemAdmin: true,
+        AuthorityRevision: 1, ExpiresAtUnix: 4102444800, Active: true, SystemAdmin: true,
     }
     zero := int64(0)
     ctx := WithFormalPoolRequestAuthority(context.Background(), FormalPoolRequestAuthority{
@@ -219,7 +240,15 @@ func newAuthorizedOnboardingFixture(t *testing.T) (*FormalPoolOnboardingService,
         ProxyMode: "existing", ProxyID: &proxyID, GroupID: 101, AccountName: "authority-fixture",
     })
     require.NoError(t, err)
-    return svc, owner, session
+    return svc, owner, session, revalidator
+}
+
+type formalPrincipalRevalidatorFake struct { err error; calls atomic.Int64 }
+func (f *formalPrincipalRevalidatorFake) Revalidate(ctx context.Context, principal FormalPoolOnboardingPrincipal) error {
+    _ = ctx
+    _ = principal
+    f.calls.Add(1)
+    return f.err
 }
 
 type formalGroupReaderFake struct { groups map[int64]*Group }
@@ -249,6 +278,7 @@ type FormalPoolOnboardingPrincipal struct {
     Role            string
     CallerKind      string
     AuthorityRevision int64
+    ExpiresAtUnix     int64
     Active          bool
     SystemAdmin     bool
 }
@@ -265,8 +295,13 @@ type FormalPoolOnboardingGroupReader interface {
     GetByID(ctx context.Context, id int64) (*Group, error)
 }
 
-// Add Groups FormalPoolOnboardingGroupReader to FormalPoolOnboardingDeps and
-// store it as groups FormalPoolOnboardingGroupReader on the service.
+type FormalPoolOnboardingPrincipalRevalidator interface {
+    Revalidate(ctx context.Context, principal FormalPoolOnboardingPrincipal) error
+}
+
+// Add Groups FormalPoolOnboardingGroupReader and
+// PrincipalRevalidator FormalPoolOnboardingPrincipalRevalidator to FormalPoolOnboardingDeps;
+// store both narrow dependencies on the service.
 
 func WithFormalPoolRequestAuthority(ctx context.Context, authority FormalPoolRequestAuthority) context.Context
 func FormalPoolRequestAuthorityFromContext(ctx context.Context) (FormalPoolRequestAuthority, bool)
@@ -284,7 +319,11 @@ var ErrFormalPoolOnboardingVersionRequired = infraerrors.New(http.StatusPrecondi
 
 Reuse the existing `ErrFormalPoolOnboardingVersionConflict`; do not declare a second conflict error or change its reason code.
 
-Implement exact validation order in `authorizeSession`: context presence; active human-JWT/system-admin shape; record lookup; subject/admin/tenant/creator/role ownership plus immutable record-group integrity; current user status/role/token-version revalidation through the Task 2 resolver; expected-version requirement for mutations; expected-version equality; then allowed-state membership. Expired/revoked/inactive JWT authority returns the common 401, while caller/owner/role mismatches return the common 403. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner authorization from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
+Implement the generic `authorizeSession` order exactly as `context -> active human-JWT/system-admin shape -> record lookup -> static owner comparison -> service-level principal revalidation -> expected-version requirement -> expected-version equality -> allowed-state membership`. The static owner comparison includes subject/admin/tenant/creator/role plus immutable record-group integrity. `authorizeSession`, `authorizeAccount`, and `authorizeBrowserEgressOwner` each perform exactly one reservation-adjacent revalidation after static owner comparison; there is no repository/dependency call, goroutine, or asynchronous boundary between that revalidation and subsequent version/state/CAS work. A nil revalidator fails closed. Missing, malformed, expired, revoked, inactive, token-version-changed, and non-human/service authorities map to the common 401; static-owner, tenant-envelope, and current-role mismatches map to the common 403.
+
+Creation has no persisted owner to compare and active-group validation is a repository read, so `authorizeCreate` performs two live revalidation calls. Its exact order is `context -> active human-JWT/system-admin shape -> first service revalidation -> active-group lookup result buffered -> second service revalidation -> buffered group result classification -> provisional CAS reservation -> proxy dependency`. The first call preserves authorization-first error ordering and prevents an already revoked caller from probing group validity. The group adapter call buffers both the group value and lookup error without classifying or returning. The second revalidation runs regardless of whether the buffered result is success, error, missing, or inactive. Only after the second revalidation succeeds may creation classify the buffered group result and return its safe validation error. The second call is synchronous and immediately reservation-adjacent, with no repository/dependency call, goroutine, or asynchronous boundary before group classification and provisional CAS. Either revalidation failure returns the same 401/403 mapping and leaves provisional reservation and proxy counters at zero. This remains the generic path for every operation except Task 3 `AttestBrowserEgress`, which must split owner/revalidation from version/state evaluation only to perform the narrow consumed-proof replay check defined in Global Constraints.
+
+The revalidator consumes only the server-created `FormalPoolOnboardingPrincipal`; it never accepts headers, request labels, object owner fields, or raw JWT material. It re-fetches `SubjectID`, verifies `ExpiresAtUnix`, active status, current system-admin role, and `AuthorityRevision == user.TokenVersion`, and verifies that the immutable subject/administrator/tenant/creator/role envelope has not changed. It returns only the common 401/403 classes and no user or owner detail. Unit tests cover nil revalidator, missing/inactive/revoked/expired user, role loss, token-version drift, subject mismatch, revalidator error before stale-version/wrong-state disclosure, and zero CAS/dependency effects. A creation-specific table uses a blocking `FormalPoolOnboardingGroupReader`: it waits for the first revalidation and the group lookup, revokes or changes the principal while the group read is blocked, then releases it with success, repository error, missing group, and inactive group results. In every row the second revalidation must win with 401/403, no group-result detail, no provisional record/reservation, and zero proxy calls. A control proves two successful revalidations, one group read, subsequent safe group classification, one provisional reservation, and one proxy call.
 
 - [ ] **Step 4: Extend the record and response without exposing owner identifiers**
 
@@ -323,9 +362,9 @@ Add a concurrent creation test with a blocking proxy fake: two requests sharing 
 
 - [ ] **Step 6: Migrate the direct flow harness and run authority/store/service regression tests**
 
-Add one `authorizedFlowContext(t, sessionVersion)` helper to `formal_pool_onboarding_flow_test.go`. Migrate every direct `StartSession` and mutation call in that file to an owner-bound authority plus the current response version; do not weaken production authorization for test compatibility. Add this file to the focused command so Task 1 cannot commit while the direct flow harness still uses the old API.
+Add one `authorizedFlowContext(t, sessionVersion)` helper to `formal_pool_onboarding_flow_test.go`. Migrate every direct `StartSession` and mutation call in that file to an owner-bound authority plus the current response version; do not weaken production authorization for test compatibility. Migrate every affected fixture in `formal_pool_onboarding_service_test.go`, `formal_pool_onboarding_store_test.go`, and the rest of `internal/service` to an explicit fake group reader and principal revalidator where authorization is expected to succeed. Keep dedicated nil-dependency cases as fail-closed negatives.
 
-Run: `cd backend && go test ./internal/service -run 'FormalPoolOnboarding(Store|Authorize|Reservation|StartSession|GetSession|Abort|Flow)' -count=1`
+Run: `cd backend && go test ./internal/service -count=1`
 
 Expected: PASS with no owner identifiers in serialized sessions.
 
@@ -370,12 +409,12 @@ git commit -m "feat(formal-pool): bind onboarding sessions to server authority"
 
 **Interfaces:**
 - Consumes: Task 1 authority context and response version.
-- Produces: `FormalPoolOnboardingJWTAuthMiddleware`, `RegisterFormalPoolOnboardingAdminRoutes`, an `AuthSubject` safe claims snapshot, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `FormalPoolOnboardingPrincipalGuard(resolver)`, `FormalPoolOnboardingPrincipalFromGin`, and `parseFormalPoolIfMatch`.
+- Produces: `FormalPoolOnboardingJWTAuthMiddleware`, `RegisterFormalPoolOnboardingAdminRoutes`, an `AuthSubject` safe claims snapshot, `FormalPoolOnboardingPrincipalResolver.Resolve(*gin.Context)`, `FormalPoolOnboardingPrincipalGuard(resolver)`, the production adapter for `service.FormalPoolOnboardingPrincipalRevalidator`, `FormalPoolOnboardingPrincipalFromGin`, and `parseFormalPoolIfMatch`.
 - Produces: every mutating frontend API function accepts the current `FormalPoolSession` and sends its version.
 
 - [ ] **Step 1: Make the existing B2 RED corpus always-on and complete**
 
-Remove only `//go:build phase0red` from `formal_pool_onboarding_phase0_red_test.go`; keep the filename for history. Replace test-only `X-Phase0-*` authority headers with a fake `FormalPoolOnboardingPrincipalResolver` whose current principal is set by the fixture before each request.
+Remove only `//go:build phase0red` from `formal_pool_onboarding_phase0_red_test.go`; keep the filename for history. Replace test-only `X-Phase0-*` authority headers with a fake `FormalPoolOnboardingPrincipalResolver` whose current principal is set by the fixture before each request. Inject a separate fake `FormalPoolOnboardingPrincipalRevalidator` into the service for every matrix fixture; its default mirrors the resolver principal and succeeds, while the concurrent-revocation rows mutate its result at the named boundary. A nil revalidator is tested only by the focused fail-closed unit row and must not make the route matrix pass for the wrong reason.
 
 Freeze `formalPoolAdminOperationCases` as these exact 15 existing non-public object operations: `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateOAuth`, `ExchangeOAuth`, `ExchangeSetupToken`, `Acceptance`, `RefreshOnly`, `RuntimeRegistration`, `SessionHealthcheck`, `AccountHealthcheck`, `StartWarming`, `Abort`, `Activation`, and `Promotion`. Each operation must execute every row in `formalPoolAuthorityCases`; sampling six dimensions on `GetSession` is forbidden. `CreateSession` is a separately frozen sixteenth route and executes the same authentication/caller/session/role/tenant/group matrix, with creator/object-owner and stale-tab cases marked structurally not applicable rather than silently omitted:
 
@@ -385,25 +424,29 @@ Freeze `formalPoolAdminOperationCases` as these exact 15 existing non-public obj
 | active ordinary user, creator and non-creator | common 403 |
 | would-be group administrator: active non-admin JWT with existing `AllowedGroups`, same/cross requested tenant or group | common 403; `AllowedGroups` is a binding permission, not an administrator grant, and this repository has no group-admin production role |
 | would-be tenant administrator: active non-admin JWT with same/cross requested tenant labels | common 403; request labels grant no authority and this repository has no tenant-admin production role |
-| revoked session; expired session | common 401 before record/state/version |
+| initially revoked session; initially expired session | common 401 in JWT middleware/guard before compliance or record lookup |
 | stale browser tab | 409 only after authority succeeds |
 | service-to-service/admin-API-key caller | common 401; onboarding is JWT-human-only in Phase 1 |
-| concurrent user status, role, or token-version change after JWT middleware | common 401/403 before reservation or dependency |
+| concurrent user status, role, or token-version change after JWT middleware, including after the principal guard succeeds but before the service revalidator runs | common 401/403 before CAS reservation or dependency |
 | duplicated OAuth callback and concurrent promote with the same operation key/fingerprint | idempotent pending/completed result; one dependency invocation |
 
 For every mutation family, add a combined negative in which owner mismatch, stale version, and wrong state are simultaneously true. It must return the common 403 and leave its proxy/OAuth/account/healthcheck/cache/scheduler dependency counter at zero. The table also asserts the exact route inventory; adding a route without a matrix row fails the test.
+
+Freeze the two revocation timing classes separately: an initially expired or revoked JWT is rejected by middleware/guard before compliance or record lookup. A post-guard change for a statically matching owner is rejected after record/static-owner checks but before version, state, CAS, or dependency work; inactive/deleted/token-version drift returns 401 and role loss returns 403. If post-guard revocation is combined with a static cross-owner mismatch, the static owner check remains first and returns the common 403 without invoking the service revalidator. Tests must not collapse these timing classes into one impossible “before record” claim.
 
 - [ ] **Step 2: Run B2 tests and capture the expected failures**
 
 Run: `cd backend && go test ./internal/server/routes -run 'TestFormalPoolOnboardingAuthorization' -count=1`
 
-Expected: FAIL because onboarding still inherits `adminAuth`, `AuthSubject` lacks the safe JWT claims snapshot, and the handler neither revalidates the principal nor parses `If-Match`.
+Expected: FAIL because onboarding still inherits `adminAuth`, `AuthSubject` lacks the safe JWT claims snapshot, the service has no `FormalPoolOnboardingPrincipalRevalidator`, and the handler does not transport typed authority or parse `If-Match`.
 
 - [ ] **Step 3: Put onboarding behind JWT auth and add the production principal resolver**
 
 This phase deliberately authorizes only an active system `RoleAdmin` using a nonexpired, nonrevoked human JWT. Group/tenant administrators remain mandatory denial cases; Phase 1 does not invent new role tables, tenant grants, or group-policy persistence. Extract the existing role-agnostic JWT validation/user-active/token-version logic into a shared internal helper. Keep `NewJWTAuthMiddleware` behavior unchanged. Add `FormalPoolOnboardingJWTAuthMiddleware`, which calls the same helper but maps every missing/malformed/expired/revoked/inactive credential failure to the one `401 FORMAL_POOL_AUTH_REQUIRED` envelope and allows every valid human JWT role to reach the onboarding principal resolver.
 
 Move only the onboarding admin route registration out of the broad `RegisterAdminRoutes(... adminAuth ...)` group. Export `RegisterFormalPoolOnboardingAdminRoutes(v1, h, formalPoolJWTAuth, principalResolver, settingService)` and register its unchanged `/api/v1/admin/claude-onboarding/...` paths directly from `server/router.go`. Its exact middleware order is: `FormalPoolOnboardingJWTAuthMiddleware` -> `admin.FormalPoolOnboardingPrincipalGuard(principalResolver)` -> existing `middleware.AdminComplianceGuard(settingService)` -> handler. The principal guard calls `Resolve` once, writes only the typed principal to a private Gin key, maps ordinary/would-be delegated users to the common 403, and aborts before compliance; the handler consumes that stored principal through `FormalPoolOnboardingPrincipalFromGin` and never resolves it again. Therefore an unacknowledged system admin receives the existing `423 ADMIN_COMPLIANCE_ACK_REQUIRED`, while an ordinary unacknowledged JWT still receives the onboarding common 403 and cannot use compliance state as an authorization oracle. Wire the JWT middleware and resolver through `middleware.ProviderSet`, `ProvideRouter`, and `SetupRouter`; pass the existing `SettingService` into route registration. The public nonce route remains unchanged. All other admin routes retain `AdminAuthMiddleware` plus the same compliance guard, including Admin API Key support.
+
+The guard and service checks have noninterchangeable scopes. The guard's one `Resolve` call decides whether the request may observe the compliance result and captures a safe principal snapshot. The handler only transports that snapshot. Each service authorization path then calls `FormalPoolOnboardingPrincipalRevalidator.Revalidate` against current durable user state after static owner comparison and immediately before version/state/CAS or other dependency work. “Resolve exactly once” applies only to the guard method; it does not limit, replace, or count the service revalidator call.
 
 Extend the safe middleware context snapshot without storing the raw JWT:
 
@@ -430,28 +473,73 @@ type formalPoolOnboardingPrincipalResolver struct {
     now      func() time.Time
 }
 
+func NewFormalPoolOnboardingPrincipalResolver(users *service.UserService, tenantID string, now func() time.Time) FormalPoolOnboardingPrincipalResolver {
+    return &formalPoolOnboardingPrincipalResolver{users: users, tenantID: strings.TrimSpace(tenantID), now: now}
+}
+
+func NewFormalPoolOnboardingPrincipalRevalidator(users *service.UserService, tenantID string, now func() time.Time) service.FormalPoolOnboardingPrincipalRevalidator {
+    return &formalPoolOnboardingPrincipalResolver{users: users, tenantID: strings.TrimSpace(tenantID), now: now}
+}
+
 func (r *formalPoolOnboardingPrincipalResolver) Resolve(c *gin.Context) (service.FormalPoolOnboardingPrincipal, error) {
+    if r == nil || r.users == nil || r.now == nil || c == nil || c.Request == nil {
+        return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired
+    }
     subject, ok := middleware.GetAuthSubjectFromContext(c)
     if !ok || subject.UserID <= 0 { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
     if subject.AuthMethod != "jwt" || subject.ExpiresAtUnix <= r.now().Unix() { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
+    if r.tenantID == "" { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
     user, err := r.users.GetByID(c.Request.Context(), subject.UserID)
     if err != nil || user == nil || !user.IsActive() || user.TokenVersion != subject.TokenVersion { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingAuthenticationRequired }
     if !user.IsAdmin() { return service.FormalPoolOnboardingPrincipal{}, service.ErrFormalPoolOnboardingForbidden }
     return service.FormalPoolOnboardingPrincipal{
         SubjectID: user.ID, AdministratorID: user.ID, TenantID: r.tenantID,
         CreatorID: user.ID, Role: user.Role, CallerKind: service.CallerKindHumanJWT,
-        AuthorityRevision: user.TokenVersion, Active: true, SystemAdmin: true,
+        AuthorityRevision: user.TokenVersion, ExpiresAtUnix: subject.ExpiresAtUnix,
+        Active: true, SystemAdmin: true,
     }, nil
+}
+
+func (r *formalPoolOnboardingPrincipalResolver) Revalidate(ctx context.Context, principal service.FormalPoolOnboardingPrincipal) error {
+    if r == nil || r.users == nil || r.now == nil || ctx == nil {
+        return service.ErrFormalPoolOnboardingAuthenticationRequired
+    }
+    if principal.SubjectID <= 0 || principal.CallerKind != service.CallerKindHumanJWT || principal.ExpiresAtUnix <= r.now().Unix() {
+        return service.ErrFormalPoolOnboardingAuthenticationRequired
+    }
+    if r.tenantID == "" { return service.ErrFormalPoolOnboardingForbidden }
+    user, err := r.users.GetByID(ctx, principal.SubjectID)
+    if err != nil || user == nil || !user.IsActive() || user.TokenVersion != principal.AuthorityRevision {
+        return service.ErrFormalPoolOnboardingAuthenticationRequired
+    }
+    if !user.IsAdmin() || user.Role != principal.Role || principal.AdministratorID != user.ID || principal.CreatorID != user.ID || principal.TenantID != r.tenantID {
+        return service.ErrFormalPoolOnboardingForbidden
+    }
+    return nil
 }
 ```
 
-Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. Empty tenant ID makes the production resolver fail closed; it is never accepted from a request header, query, or body. `StartSession` validates the requested group exists and is active through the existing trusted group repository; system-admin scope does not turn a client-supplied group ID into authority.
+`formalPoolOnboardingPrincipalResolver` implements two narrow interfaces, but no consumer outside package `admin` receives or names the concrete type. The two exported constructors above are the only construction boundary and return narrow interfaces. Table tests cover nil receiver, nil user service, nil clock, nil Gin context, and nil Gin request for `Resolve`, plus nil receiver/user service/clock/context for `Revalidate`; every case returns the common 401 without panic or repository access. `Resolve` and `Revalidate` share one private current-user classification helper so status/token-version/role mappings cannot drift; each valid public invocation performs exactly one current-user fetch. The resolver receives Gin and safe middleware claims only at the guard boundary. The service revalidator receives `context.Context` plus the already typed principal only and therefore cannot parse or trust request credentials.
 
-Register the exact provider `ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver` in `handler.ProviderSet`, then inject that resolver directly into `ProvideRouter`, `SetupRouter`, and `RegisterFormalPoolOnboardingAdminRoutes`. `ProvideFormalPoolOnboardingHandler` keeps its existing constructor signature and never receives a resolver or fallback option. Production resolver construction sets `now: time.Now`; tests inject a fixed clock.
+Add `AuthorityTenantID string \`mapstructure:"authority_tenant_id"\`` to `FormalPoolRuntimeConfig`. An empty `AuthorityTenantID` returns the common 403 from `Resolve` before compliance and from `Revalidate` before service work; a valid-shaped principal with empty tenant returns 403 with zero user-repository fetch. Missing/malformed/expired principal shape still returns 401 before this configuration check. The tenant is never accepted from a request header, query, or body. `StartSession` validates the requested group exists and is active through the existing trusted group repository; system-admin scope does not turn a client-supplied group ID into authority.
+
+Register these exact parent-package providers in `handler.ProviderSet`:
+
+```go
+func ProvideFormalPoolOnboardingPrincipalResolver(userService *service.UserService, cfg *config.Config) admin.FormalPoolOnboardingPrincipalResolver {
+    return admin.NewFormalPoolOnboardingPrincipalResolver(userService, cfg.FormalPool.AuthorityTenantID, time.Now)
+}
+
+func ProvideFormalPoolOnboardingPrincipalRevalidator(userService *service.UserService, cfg *config.Config) service.FormalPoolOnboardingPrincipalRevalidator {
+    return admin.NewFormalPoolOnboardingPrincipalRevalidator(userService, cfg.FormalPool.AuthorityTenantID, time.Now)
+}
+```
+
+Inject only the resolver into `ProvideRouter`, `SetupRouter`, and `RegisterFormalPoolOnboardingAdminRoutes`; add the revalidator as an explicit parameter to `service.ProvideFormalPoolOnboardingService` and set `FormalPoolOnboardingDeps.PrincipalRevalidator`. `ProvideFormalPoolOnboardingHandler` keeps its existing constructor signature and never receives either interface or a fallback option. Tests call the exported admin constructors with fixed clocks. Wire must construct the revalidator before the onboarding service, and the service must not import the handler package. Provider tests compile both exported constructor paths, assert their narrow interface types, and require generated `wire_gen.go` to call `handler.ProvideFormalPoolOnboardingPrincipalRevalidator` before `service.ProvideFormalPoolOnboardingService`.
 
 After changing middleware/handler/server/service ProviderSets or provider signatures, run `cd backend && go generate ./cmd/server`. This repository commits `backend/cmd/server/wire_gen.go`; omitting it is a build failure. Record its SHA-256, run the same generation command a second time, and require the digest to remain identical. Then run `git diff --check -- cmd/server/wire_gen.go` and `go test ./cmd/server -count=1` so the generated call graph must compile with the new `ProvideFormalPoolOnboardingHandler`, middleware provider, `ProvideRouter`, and `SetupRouter` signatures.
 
-Add a production-route integration test that mounts the real JWT middleware, principal guard, existing compliance guard, router registration, stored-principal handler path, and handler. It proves: an acknowledged valid system-admin JWT reaches the handler; an unacknowledged valid system-admin receives exact `423 ADMIN_COMPLIANCE_ACK_REQUIRED`; ordinary JWTs, non-admin users with `AllowedGroups`, and non-admin users carrying same/cross request tenant/group labels receive the common 403 whether compliance is acknowledged or not; expired/revoked/inactive JWTs receive the common 401; Admin API Key does not authenticate; and a hook that changes user role/status/token version after JWT middleware but before the principal guard returns 401/403 with zero service/dependency calls. These are the executable group/tenant-administrator denial rows: no test may fabricate a production role or policy table that the repository does not have. Assert the 16-route inventory so a path cannot silently remain under `adminAuth` or lose its compliance gate.
+Add a production-route integration test that mounts the real JWT middleware, principal guard, existing compliance guard, router registration, stored-principal handler path, handler, and service revalidator. It proves: an acknowledged valid system-admin JWT reaches the handler; an unacknowledged valid system-admin receives exact `423 ADMIN_COMPLIANCE_ACK_REQUIRED`; ordinary JWTs, non-admin users with `AllowedGroups`, and non-admin users carrying same/cross request tenant/group labels receive the common 403 whether compliance is acknowledged or not; expired/revoked/inactive JWTs receive the common 401; and Admin API Key does not authenticate. An unacknowledged system-admin JWT with empty tenant configuration still receives 403 with zero compliance, handler, service, and dependency calls. One hook changes user role/status/token version after JWT middleware but before the principal guard and must return 401/403 with zero service calls. A second deterministic compliance-fixture hook changes status, role, or token version after the principal guard succeeds but before the service revalidator runs; each of the 16 routes must return the common 401/403, and CAS reservation, proxy, OAuth, account, healthcheck, cache, and scheduler counters all remain zero. The `CreateSession` row additionally blocks the active-group reader after its first successful service revalidation, mutates current authority, releases the group read, and proves the second revalidation rejects before provisional CAS or proxy creation. The role-loss row is 403; inactive, deleted, expired, token-version-drift, non-human, and service-caller rows are 401. These are the executable group/tenant-administrator denial rows: no test may fabricate a production role or policy table that the repository does not have. Assert the 16-route inventory so a path cannot silently remain under `adminAuth`, lose its compliance gate, or bypass service revalidation.
 
 - [ ] **Step 4: Parse optimistic versions centrally**
 
@@ -470,7 +558,7 @@ func parseFormalPoolIfMatch(c *gin.Context, required bool) (*int64, error) {
 
 - [ ] **Step 5: Consume the guard-stored principal in all admin handler calls**
 
-Add one handler helper that reads the already authorized principal only through `FormalPoolOnboardingPrincipalFromGin`, parses `If-Match`, and returns `service.WithFormalPoolRequestAuthority(c.Request.Context(), ...)`. A missing private Gin principal is the common 401 and must not trigger resolver lookup. No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalResolver`; a code-search assertion over `backend/internal/handler/admin/formal_pool_onboarding_handler.go` permits only `FormalPoolOnboardingPrincipalFromGin`. Apply the helper to these exact operations: `CreateSession`, `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateAuthURL`, `ExchangeCodeAndCreate`, `SetupTokenCookieAuthAndCreate`, `Acceptance`, `Activate`, `RefreshOnly`, `RuntimeRegister`, `Healthcheck`, `StartWarming`, `PromoteProduction`, `Abort`, and `AccountHealthcheck`. `BrowserEgressCheck` remains public nonce-capability handling and never uses admin principal headers.
+Add one handler helper that reads the already authorized principal only through `FormalPoolOnboardingPrincipalFromGin`, parses `If-Match`, and returns `service.WithFormalPoolRequestAuthority(c.Request.Context(), ...)`. A missing private Gin principal is the common 401 and must not trigger resolver lookup. No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalResolver`. No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalRevalidator`. A code-search assertion over `backend/internal/handler/admin/formal_pool_onboarding_handler.go` permits only `FormalPoolOnboardingPrincipalFromGin` and rejects both authority interface names. Apply the helper to these exact operations: `CreateSession`, `GetSession`, `TestProxy`, `BrowserEgressAttestation`, `GenerateAuthURL`, `ExchangeCodeAndCreate`, `SetupTokenCookieAuthAndCreate`, `Acceptance`, `Activate`, `RefreshOnly`, `RuntimeRegister`, `Healthcheck`, `StartWarming`, `PromoteProduction`, `Abort`, and `AccountHealthcheck`. `BrowserEgressCheck` remains public nonce-capability handling and never uses admin principal headers.
 
 - [ ] **Step 6: Enforce owner/state/version before dependencies in every service operation**
 
@@ -490,7 +578,7 @@ Use this state contract exactly:
 | `AbortSession` | every nonterminal state |
 | `AccountHealthcheck` | owner session resolved through `snapshotByAccountID` |
 
-Before state/version evaluation, the handler resolver re-fetches the current user and compares active status, system-admin role, and `TokenVersion` with the safe JWT snapshot before constructing request authority. A concurrent status/role/token-version change returns the same 401/403 before reservation and before any business dependency. Classify operations before implementation:
+The handler transports the guard-created authority snapshot without re-fetching or resolving. For every object read and mutation, the service first performs static identity/owner checks, then synchronously calls its narrow revalidator before state/version evaluation, reservation, or dependency work. `authorizeCreate` revalidates once before active-group lookup and again after that lookup immediately before provisional creation reservation; `authorizeSession` revalidates after record/static-owner checks; `authorizeAccount` revalidates after resolving and statically authorizing the owning session. A concurrent status/role/token-version/expiry change returns the same 401/403 before reservation and before any business dependency. Classify operations before implementation:
 
 - no external effect (`AbortSession`, proof finalization after a server proof already exists): one final `casUpdate` is sufficient;
 - any OAuth, proxy, account persistence, refresh, CC Gateway, healthcheck, cache, or scheduler call: call `beginReservedMutation` before the first dependency invocation, execute the dependency sequence once, then call `finishReservedMutation` from the reservation version;
@@ -576,6 +664,8 @@ Add an exact error-reason matrix after the first successful consume:
 | owner, exact consumed proof, old consume-input version | `FORMAL_POOL_BROWSER_PROOF_REJECTED` |
 | owner, exact consumed proof, current post-consume version | `FORMAL_POOL_BROWSER_PROOF_REJECTED` |
 | different owner, exact consumed proof, either version | `FORMAL_POOL_FORBIDDEN` |
+| statically matching owner revoked/inactive/expired/token-version-changed after guard, exact consumed proof | `FORMAL_POOL_AUTH_REQUIRED` |
+| statically matching owner loses system-admin role after guard, exact consumed proof | `FORMAL_POOL_FORBIDDEN` |
 | owner, different proof, old consume-input version | `FORMAL_POOL_ONBOARDING_VERSION_CONFLICT` |
 
 ```go
@@ -660,8 +750,8 @@ func (s *FormalPoolOnboardingService) AttestBrowserEgress(ctx context.Context, i
     if err != nil { return nil, err }
     proof := strings.TrimSpace(req.VerificationCode)
 
-    // Sole exception: owner is already proven, so an exact consumed proof is
-    // classified as replay before stale-version or terminal-state handling.
+    // Sole exception: static owner and current authority are already proven, so
+    // exact consumed proof is classified before version or terminal state.
     if proof != "" && consumedBrowserProofMatches(snap, proof) {
         return nil, ErrFormalPoolOnboardingProofRejected
     }
@@ -694,7 +784,7 @@ func consumedBrowserProofMatches(rec *formalPoolOnboardingSessionRecord, proof s
 }
 ```
 
-`authorizeBrowserEgressOwner` performs context presence, record lookup, and the complete subject/admin/tenant/group/creator/role comparison, returning the common authentication/forbidden errors. It does not inspect proof, expected version, or state. `authorizeBrowserEgressVersionAndState` then requires `ExpectedVersion`, compares it, and validates `proxy_verified`. Do not call generic `authorizeSession` before `consumedBrowserProofMatches`, and do not reuse this split ordering for any other mutation.
+`authorizeBrowserEgressOwner` performs context presence, record lookup, the complete static subject/admin/tenant/group/creator/role comparison, and then exactly one service-level `PrincipalRevalidator.Revalidate` call. It returns the common authentication/forbidden errors and does not inspect proof, expected version, or state. `authorizeBrowserEgressVersionAndState` then requires `ExpectedVersion`, compares it, and validates `proxy_verified`. Its complete order is `context -> record -> static owner -> service-level principal revalidation -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS`. Do not call generic `authorizeSession` before `consumedBrowserProofMatches`, and do not reuse this split ordering for any other mutation. Tests revoke/inactivate/expire the owner, change token version, and remove the admin role after the guard snapshot; all must beat exact consumed-proof classification and leave the attestation CAS counter at zero.
 
 Use `crypto/subtle.ConstantTimeCompare`. Define `formalPoolProofDigest(proof string) string { return formalPoolSafeRef("browser_proof_consumed", proof) }`; it persists only the existing HMAC safe-ref form, never a raw proof. When the supplied digest equals the consumed digest, return the same safe `FORMAL_POOL_BROWSER_PROOF_REJECTED` reason for both old and current versions. A nonmatching proof continues through the generic version/state ordering and cannot use this exception to hide a stale version or wrong state.
 
@@ -2170,6 +2260,7 @@ Tests cover exact-exclusion descendants (accepted), implementation descendants (
 
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
 - [ ] No task or feature capture starts without the unique latest contiguous execution-context chain head at the required stage; expired predecessors remain immutable history, while an expired latest lease blocks the next boundary.
+- [ ] The guard resolves once before compliance; `authorizeCreate` revalidates before group lookup and again immediately before provisional CAS, while `authorizeSession`, `authorizeAccount`, and `authorizeBrowserEgressOwner` revalidate once after static owner checks and immediately before version/state/CAS work. `FormalPoolOnboardingHandler` business code stores or calls neither authority interface.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
 - [ ] Every one of the 15 non-public routes executes every caller/session matrix row: active system-admin JWT allowed; ordinary and would-be group/tenant administrator JWT fixtures denied 403; Admin API Key and revoked/expired/inactive JWTs denied 401; concurrent status/role/token-version changes denied before dependency work.
 - [ ] OAuth callback and promote duplicates are idempotent by safe operation key/fingerprint and invoke dependencies once.

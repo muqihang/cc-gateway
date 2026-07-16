@@ -1308,7 +1308,7 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
     'active ordinary user, creator and non-creator',
     'would-be group administrator: active non-admin JWT with existing `AllowedGroups`',
     'would-be tenant administrator: active non-admin JWT with same/cross requested tenant labels',
-    'revoked session; expired session',
+    'initially revoked session; initially expired session',
     'service-to-service/admin-API-key caller',
     'concurrent user status, role, or token-version change after JWT middleware',
     'duplicated OAuth callback and concurrent promote',
@@ -1320,6 +1320,7 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
   assert.match(plan, /FormalPoolOnboardingPrincipalGuard/)
   assert.doesNotMatch(plan, /WithFormalPoolOnboardingPrincipalResolver/)
   assert.match(plan, /No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalResolver`/)
+  assert.match(plan, /No handler method or constructor stores or calls `FormalPoolOnboardingPrincipalRevalidator`/)
   assert.match(plan, /AdminComplianceGuard\(settingService\)/)
   assert.match(plan, /ordinary unacknowledged JWT still receives the onboarding common 403/)
   assert.match(plan, /423 ADMIN_COMPLIANCE_ACK_REQUIRED/)
@@ -1337,6 +1338,40 @@ test('Phase 1 plan freezes the complete authorization matrix and executable task
   assert.match(plan, /svc\.authorizeSession\(ctx, session\.ID, true, FormalPoolOnboardingStatusWarming\)/)
   assert.match(plan, /formal_pool_onboarding_flow_test\.go/)
   assert.match(plan, /Task 4 adds only server-proof auto-finalization behavior/)
+
+  assert.match(plan, /type FormalPoolOnboardingPrincipalRevalidator interface/)
+  assert.match(plan, /Revalidate\(ctx context\.Context, principal FormalPoolOnboardingPrincipal\) error/)
+  assert.match(plan, /PrincipalRevalidator FormalPoolOnboardingPrincipalRevalidator/)
+  assert.match(plan, /The guard's single `Resolve` is the pre-compliance authorization oracle; it does not satisfy reservation-adjacent current-authority revalidation/)
+  assert.match(plan, /static owner comparison -> service-level principal revalidation -> expected-version requirement -> expected-version equality -> allowed-state membership/)
+  assert.match(plan, /`authorizeSession`, `authorizeAccount`, and `authorizeBrowserEgressOwner` each perform exactly one reservation-adjacent revalidation/)
+  assert.match(plan, /`authorizeCreate` performs two live revalidation calls/)
+  assert.match(plan, /blocking `FormalPoolOnboardingGroupReader`/)
+  assert.match(plan, /first revalidation and the group lookup, revokes or changes the principal while the group read is blocked, then releases it/)
+  assert.match(plan, /buffers both the group value and lookup error without classifying or returning/)
+  assert.match(plan, /second revalidation runs regardless of whether the buffered result is success, error, missing, or inactive/)
+  assert.match(plan, /Only after the second revalidation succeeds may creation classify the buffered group result/)
+  assert.match(plan, /Missing, malformed, expired, revoked, inactive, token-version-changed, and non-human\/service authorities map to the common 401/)
+  assert.match(plan, /static-owner, tenant-envelope, and current-role mismatches map to the common 403/)
+  assert.match(plan, /No `FormalPoolOnboardingHandler` business method or constructor parses credentials or stores or calls either interface/)
+  assert.match(plan, /context -> record -> static owner -> service-level principal revalidation -> consumed-proof replay -> expected-version -> allowed-state -> remaining-proof-validation -> CAS/)
+  assert.match(plan, /after the principal guard succeeds but before the service revalidator runs/)
+  assert.match(plan, /CAS reservation, proxy, OAuth, account, healthcheck, cache, and scheduler counters all remain zero/)
+  assert.match(plan, /func NewFormalPoolOnboardingPrincipalResolver\(users \*service\.UserService, tenantID string, now func\(\) time\.Time\) FormalPoolOnboardingPrincipalResolver/)
+  assert.match(plan, /func NewFormalPoolOnboardingPrincipalRevalidator\(users \*service\.UserService, tenantID string, now func\(\) time\.Time\) service\.FormalPoolOnboardingPrincipalRevalidator/)
+  assert.match(plan, /admin\.NewFormalPoolOnboardingPrincipalResolver\(userService, cfg\.FormalPool\.AuthorityTenantID, time\.Now\)/)
+  assert.match(plan, /admin\.NewFormalPoolOnboardingPrincipalRevalidator\(userService, cfg\.FormalPool\.AuthorityTenantID, time\.Now\)/)
+  assert.match(plan, /if r == nil \|\| r\.users == nil \|\| r\.now == nil \|\| c == nil \|\| c\.Request == nil/)
+  assert.match(plan, /if r == nil \|\| r\.users == nil \|\| r\.now == nil \|\| ctx == nil \{/)
+  assert.match(plan, /nil receiver, nil user service, nil clock, nil Gin context, and nil Gin request/)
+  assert.match(plan, /empty `AuthorityTenantID` returns the common 403 from `Resolve` before compliance/)
+  assert.match(plan, /valid-shaped principal with empty tenant returns 403 with zero user-repository fetch/)
+  assert.match(plan, /unacknowledged system-admin JWT with empty tenant configuration still receives 403 with zero compliance, handler, service, and dependency calls/)
+  assert.match(plan, /go test \.\/internal\/service -count=1/)
+  assert.match(plan, /initially expired or revoked JWT is rejected by middleware\/guard before compliance or record lookup/)
+  assert.match(plan, /post-guard change for a statically matching owner is rejected after record\/static-owner checks but before version, state, CAS, or dependency work/)
+  assert.doesNotMatch(plan, /current user status\/role\/token-version revalidation through the Task 2 resolver/)
+  assert.doesNotMatch(plan, /Before state\/version evaluation, the handler resolver re-fetches the current user/)
 
   const task2 = plan.slice(plan.indexOf('### Task 2:'), plan.indexOf('### Task 3:'))
   const task4 = plan.slice(plan.indexOf('### Task 4:'), plan.indexOf('### Task 5:'))
