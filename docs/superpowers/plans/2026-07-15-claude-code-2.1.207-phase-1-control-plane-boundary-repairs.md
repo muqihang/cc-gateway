@@ -29,7 +29,9 @@
 - The final Phase 1 handoff is never minted from feature branches. Both implementation PRs must first merge. Post-integration uses one CC evidence/controller worktree whose HEAD remains the exact fetched CC main plus two distinct clean tested roots (detached CC integrated main and Sub2API integrated main); the uncommitted integration entry exists only in the controller root. This preserves clean capture inputs and lets the eventual artifact commit retain the exact integrated CC main as its parent.
 - Never commit changes from the operator-owned `backend/internal/service/openai_compact_sse_keepalive_test.go` working copy. Implementation uses a clean Sub2API worktree from `muqihang/main`.
 - Before each task, run `codegraph status`; if stale, run `codegraph sync`. Use CodeGraph before locating or reading code.
-- The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate a fresh `phase-1-execution-context.json` against `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings. Refresh it whenever its 24-hour window expires.
+- The planning entry/context expires at `2026-07-16T08:56:22Z` and is planning provenance only. Before any implementation edit, create and validate the sequence-zero `phase-1-execution-context.json` against schema version 2 of `oracle-lab-phase-1-execution-context.schema.json`; it must bind the exact merged plan digest/commit and an independent approval receipt with zero Critical/Important findings.
+- Execution-context freshness is a renewable task-boundary lease, not permission to overwrite history. Sequence zero is immutable; each renewal adds `phase-1-execution-context-0001.json`, then the next contiguous four-digit path. A successor is issued only when both implementation roots are clean, before a new task or feature capture starts. If a lease expires mid-task, finish only the already-started task to a clean checkpoint commit; no next task or evidence capture starts until a successor is validated and committed.
+- Feature capture must select the unique latest contiguous context chain head. Post-integration capture does not create another successor stage: `build-integration-entry` seals the latest feature context chain, and the resulting integration entry becomes the sole post-integration stage authority.
 - Each repository uses its own branch and worktree: `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`. Do not mix commits across repositories.
 
 ---
@@ -74,15 +76,15 @@
 
 ### H1 Evidence
 
-- Consume `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` and `oracle-lab-phase-1-plan-review.schema.json`, which are delivered with this reviewed plan.
-- Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.json` and `phase-1-execution-context.json` before implementation; they are authorization inputs, not implementation evidence.
+- Consume schema version 2 of `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` and the conditional `oracle-lab-phase-1-plan-review.schema.json`, which are delivered with this reviewed plan.
+- Create `docs/superpowers/evidence/phase-1/phase-1-plan-review.json` and sequence-zero `phase-1-execution-context.json` before implementation; later renewals add immutable numbered successors. They are authorization inputs, not implementation evidence.
 - Create `docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json`: exact GREEN and preserved-RED commands, including the two normative parser lifecycles, canonical failing-leaf arrays, and counts frozen in Task 7.
-- Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, `oracle-lab-phase-1-handoff.schema.json`, `oracle-lab-phase-1-integration-entry.schema.json`, and `oracle-lab-phase-1-integration-receipt.schema.json`: closed Phase 1 evidence contracts.
+- Create `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`, `oracle-lab-phase-1-exit.schema.json`, `oracle-lab-phase-1-results.schema.json`, `oracle-lab-phase-1-feature-review.schema.json`, `oracle-lab-phase-1-handoff.schema.json`, `oracle-lab-phase-1-integration-entry.schema.json`, and `oracle-lab-phase-1-integration-receipt.schema.json`: closed Phase 1 evidence contracts.
 - Create `tools/oracle-lab/phase-1-evidence.ts`: a small Phase 1 adapter over the reviewed `runBoundedProcess`, hermetic environment, safe artifact writer, and digest helpers already delivered by H0/P0.1.
 - Create `tools/oracle-lab/phase-1-loopback-sandbox.ts`: fail-closed OS sandbox selection, loopback/public-socket canaries, wrapped argv, policy/binary digests, and violation classification.
 - Create `tests/oracle-lab-phase-1-evidence.test.ts`: schema, binding, dirty-tree, RED leaf-inventory metamorphic cases, unexpected-result, unsafe-output, ancestry, and handoff tests.
 - Modify `package.json`: add only `oracle:phase1` for the new adapter; do not alter Phase 0/P0.1 scripts.
-- Create feature-candidate evidence first, then `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`, `phase-1-command-results.json`, `phase-1-exit-baseline.json`, `phase-1-handoff.json`, `phase-1-exit-report.md`, and `phase-1-integration-receipt.json` only through Task 8's post-merge chain.
+- Create feature-candidate evidence and the closed `phase-1-feature-review.json` first. Task 8 post-merge artifacts live under one immutable `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/` namespace, beginning with `attempt-0001`; retries never overwrite or reuse an earlier attempt.
 - Modify `docs/superpowers/registry/oracle-lab-requirements.json`, `docs/superpowers/registry/oracle-lab-claims.json`, and `docs/superpowers/registry/oracle-lab-current-observations.json` only after all exit commands pass.
 
 ## Dependency Order
@@ -108,26 +110,49 @@ Fetch `muqihang/main` in both repositories without rebasing or rewriting history
 
 - [ ] **Step 2: Independently review the exact merged plan bytes**
 
-The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. The review is holistic, not limited to the latest patch: under `harness_and_evidence_bindings`, explicitly audit the complete acceptance truth table across catalog schema, TAP/Go lifecycle parsing, capture classification, results schema/semantic validation, integration-entry, handoff/report, pre/post-commit receipt binding, and every missing/extra-same-prefix/duplicate-event/raw-permutation/persisted-multiset-or-unique-permutation/event-or-unique-count/family/parser/lifecycle mutation. On the exact frozen roots, rerun both machine-readable RED commands and independently compare their lifecycle summaries, event/unique counts, canonical name digests, and families to the normative JSON before approval. Persist a closed JSON receipt at `phase-1-plan-review.json` with the exact plan path, reviewed commit/digest, reviewer ID, review round, decision, finding counts, and exact six-item review scope from its schema. The review cannot be `approved` if any acceptance layer, named mutation, or live inventory comparison was not checked; `approved` is valid only when Critical and Important counts are zero. A review of an earlier commit or different plan digest is invalid.
+The reviewer must inspect the merged plan commit, current authority documents, and current code anchors. The review is holistic, not limited to the latest patch: under `harness_and_evidence_bindings`, explicitly audit the complete acceptance truth table across catalog schema, TAP/Go lifecycle parsing, capture classification, results schema/semantic validation, integration-entry, handoff/report, pre/post-commit receipt binding, and every missing/extra-same-prefix/duplicate-event/raw-permutation/persisted-multiset-or-unique-permutation/event-or-unique-count/family/parser/lifecycle mutation. On the exact frozen roots, rerun both machine-readable RED commands and independently compare their lifecycle summaries, event/unique counts, canonical name digests, and families to the normative JSON before approval. Each blocked round is retained in the controller's external decision package as closed JSON using the plan-review schema and `changes_requested` with at least one Critical or Important finding; blocked-round files are not written into the implementation worktree and cannot authorize an execution context. Only the final zero-Critical/zero-Important round is written once to the authoritative `phase-1-plan-review.json` path with `approved`. A review of an earlier commit or different plan digest is invalid.
 
 - [ ] **Step 3: Build the fresh execution context**
 
-Create `phase-1-execution-context.json` with a window greater than zero and no more than 24 hours. Bind the exact plan path/digest/reviewed commit, exact planning entry/context bytes as provenance, the review artifact digest, both current main heads and implementation branch names, authority precedence bytes, unchanged shared-contract digest, selected requirement IDs, disabled capabilities, and all seven authorization conditions from the closed schema. These fields are claims until Step 4 verifies them against live reviewed-Git observations.
+Create schema-v2 sequence zero at `phase-1-execution-context.json`. Set `context_mode: initial`, `sequence: 0`, `stage: implementation_entry`, the exact `artifact_path`, and `predecessor: null`. Its window is greater than zero and no more than 24 hours. Bind the exact plan path/digest/reviewed commit, exact planning entry/context bytes as provenance, the approved review artifact digest, authority precedence bytes, unchanged shared-contract digest, selected requirement IDs, disabled capabilities, and all nine authorization conditions from the closed schema. Bind `gate_schemas.execution_context` to `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` at `sha256:5c0f18f3614b30fe82907a74746b1ce2ed7887868bfed1854715297c8e445086` and `gate_schemas.plan_review` to `docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json` at `sha256:9c4262da2cc8620f6297ecdaacb39c6741fdaba3564a4c795da3d5149abab65a`. The planning test also hard-codes those two digests outside either mutable schema, verifies them before schema compilation, and compares working, reviewed-plan-commit, and observed-remote bytes; a context cannot authorize a schema that was loosened by an implementation commit. For each repository bind immutable `baseline_main_head`, pre-commit `authorized_parent_head`, freshly fetched `observed_remote_main_head`, branch/ref, the clean pre-issue fact, and the exact live validation-status entries/digest. Also bind `remote_name: muqihang` and SHA-256 of the reviewed-Git UTF-8 `git remote get-url muqihang` output after removing its command terminator (no surrounding shell text): `sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a` for exact URL `https://github.com/muqihang/cc-gateway.git` and `sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9` for exact URL `https://github.com/muqihang/sub2api.git`. Initial CC validation status is exactly the untracked plan review plus this context; Sub2API status is empty. These fields are claims until Step 4 verifies them against live reviewed-Git observations.
 
 - [ ] **Step 4: Validate the authorization artifact before implementation**
 
-Run: `PHASE1_REQUIRE_EXECUTION_CONTEXT=1 SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
+Run: `PHASE1_REQUIRE_EXECUTION_CONTEXT=1 PHASE1_EXECUTION_CONTEXT_GATE=pre-commit PHASE1_EXECUTION_CONTEXT_MODE=initial PHASE1_EXECUTION_CONTEXT_PATH=docs/superpowers/evidence/phase-1/phase-1-execution-context.json SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts`
 
-Expected: PASS. Every Git query uses `runReviewedGit`, which selects a reviewed absolute Git executable, supplies the hermetic Git environment, and calls `assertNoGitReplacementRefs`; raw `git`/`execFileSync` is forbidden in this gate. The semantic check parses the review receipt, compares every duplicated approval field, hashes `git show <reviewed_commit>:<plan.path>`, and requires those committed bytes, current plan bytes, context digest, and review receipt digest to agree. It also proves the exact authority path order, exact planning-provenance paths, both baseline heads equal freshly fetched `muqihang/main`, current branches are exactly `codex/oracle-phase-1-cc-gateway` and `codex/oracle-phase-1-sub2api`, CC status contains only the two untracked preflight artifacts, Sub2API status is empty, the context is unexpired, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
+Expected: PASS. Every Git query uses `runReviewedGit`, which selects a reviewed absolute Git executable, supplies the hermetic Git environment, and calls `assertNoGitReplacementRefs`; raw `git`/`execFileSync` is forbidden in this gate. The semantic check parses the review receipt, compares every duplicated approval field, hashes `git show <reviewed_commit>:<plan.path>`, and requires those committed bytes, current plan bytes, context digest, and review receipt digest to agree. It rejects a `generated_at` more than five minutes beyond the observed clock skew, requires the live time to precede `expires_at`, and hashes the Sub2API shared-contract bytes live from both the implementation root and freshly fetched remote-main commit. It also proves the exact authority path order and bytes, exact planning-provenance paths, initial baseline/authorized/observed-remote heads all equal freshly fetched `muqihang/main`, current branches are exactly `codex/oracle-phase-1-cc-gateway` and `codex/oracle-phase-1-sub2api`, CC status contains only the two declared untracked preflight artifacts, Sub2API status is empty, and Critical/Important counts are zero. Any mismatch leaves implementation blocked.
 
 - [ ] **Step 5: Commit authorization provenance as the first CC Gateway Phase 1 commit**
 
 ```bash
 git add docs/superpowers/evidence/phase-1/phase-1-plan-review.json docs/superpowers/evidence/phase-1/phase-1-execution-context.json
 git commit -m "docs(oracle): authorize exact Phase 1 plan bytes"
+PHASE1_REQUIRE_EXECUTION_CONTEXT=1 PHASE1_EXECUTION_CONTEXT_GATE=post-commit PHASE1_EXECUTION_CONTEXT_MODE=initial PHASE1_EXECUTION_CONTEXT_PATH=docs/superpowers/evidence/phase-1/phase-1-execution-context.json SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts
 ```
 
-No Sub2API or runtime source file may change before this commit. If the execution context expires during implementation, stop before the next edit/capture, repeat Steps 1-4 against current main/authority state, and commit a successor context; do not silently extend timestamps.
+No Sub2API or runtime source file may change before this commit. Record the resulting CC commit as `PHASE1_CONTEXT_COMMIT_0000`; its sole parent must be the context's CC `authorized_parent_head`, and its exact delta adds only the approved plan review plus sequence-zero context. The `post-commit` gate derives that commit without self-reference, requires both worktrees clean, verifies both committed artifact digests with `git show`, rejects symlinks, and requires the Sub2API HEAD to remain the bound authorized parent. Task 1 remains blocked until both the pre-commit and post-commit commands pass.
+
+### Execution Context Renewal State Machine
+
+Renewal never repeats or overwrites Steps 1-4. It reuses the exact approved plan review and creates the next immutable successor only at a clean task boundary or immediately before feature capture:
+
+1. Enumerate only `phase-1-execution-context.json` plus `phase-1-execution-context-[0-9]{4}.json`; reject symlinks, alternate spellings, duplicate sequence, missing sequence, more than one sequence zero, or any path not matching its numeric sequence.
+2. Validate every artifact under schema version 2. The unique latest contiguous context chain head is the highest sequence, never lexical order or mtime. Every successor has `context_mode: successor`, stage `implementation` or `feature_capture`, and a predecessor binding containing exact path, raw-byte digest, previous sequence/stage, and predecessor artifact commit.
+3. Prove the predecessor artifact commit is an ancestor of the new CC `authorized_parent_head`, `git show` contains the exact predecessor bytes, the predecessor path was introduced by that commit and has not changed afterward, and the predecessor commit's sole parent/delta match its own context rules. The new successor commit must later have sole parent equal to its `authorized_parent_head` and add exactly its one numbered context path. This derived commit check closes the context self-reference without putting the new commit hash inside its own bytes.
+4. Keep both `baseline_main_head` values, remote names/refs/URL digests, implementation branches, and both `gate_schemas` bindings immutable across the chain. Bind current clean feature heads as `authorized_parent_head`; bind freshly fetched refs separately as `observed_remote_main_head`. Initial mode requires each repository's `authorized_parent_head == baseline_main_head == observed_remote_main_head`, and CC must also equal the reviewed plan commit. Every successor requires the previous CC and Sub2API authorized feature heads to be ancestors of the corresponding new authorized heads. Each observed remote must equal or fast-forward its predecessor. Remote movement does not silently replace the frozen feature baseline or `SUB2API_CONTRACT_ROOT`, but a rewind, force-push, unrelated feature head, changed `muqihang` URL, changed gate schema, or changed remote plan/authority/shared-contract byte blocks renewal and requires a reviewed new plan/preflight.
+5. Require monotonically nondecreasing stage and generation time, a window in `(0, 24h]`, `generated_at` no more than five minutes beyond observed clock skew, and a currently unexpired latest head. Earlier immutable predecessors may be expired. All plan, approval, authority, planning-provenance, requirement, disabled-capability, and shared-contract bindings remain byte-identical.
+6. Before writing a successor both roots are clean. The `pre-commit` gate requires CC status to contain exactly `?? <new-successor-path>` and Sub2API status to be empty. Commit only that path, then run the `post-commit` gate: CC HEAD must be the unique one-parent child of `authorized_parent_head`, its delta must add only the selected successor, committed bytes must match, and both roots must be clean with Sub2API still at its authorized head. Record the derived artifact commit and only then start the next task or capture. A lease that expires during an already-started task allows only completion to the next clean checkpoint; it never authorizes another task or evidence capture.
+
+For sequence one, the path is `docs/superpowers/evidence/phase-1/phase-1-execution-context-0001.json`. Validate each renewal with:
+
+```bash
+PHASE1_REQUIRE_EXECUTION_CONTEXT=1 PHASE1_EXECUTION_CONTEXT_GATE=pre-commit PHASE1_EXECUTION_CONTEXT_MODE=successor PHASE1_EXECUTION_CONTEXT_PATH=${PHASE1_EXECUTION_CONTEXT_PATH} PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH=${PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH} SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts
+git add ${PHASE1_EXECUTION_CONTEXT_PATH}
+git commit -m "docs(oracle): renew Phase 1 execution context"
+PHASE1_REQUIRE_EXECUTION_CONTEXT=1 PHASE1_EXECUTION_CONTEXT_GATE=post-commit PHASE1_EXECUTION_CONTEXT_MODE=successor PHASE1_EXECUTION_CONTEXT_PATH=${PHASE1_EXECUTION_CONTEXT_PATH} PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH=${PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH} SUB2API_ROOT=${SUB2API_ROOT} npm exec tsx tests/oracle-lab-phase-1-planning.test.ts
+```
+
+Every live-gate rejection is raised through `failContextGate(code, message)` with a machine-readable stable `code`; raw assertion, JSON, filesystem, and child-process errors do not escape the gate boundary. `readGateArtifact`, `readGateJsonArtifact`, `gateDirectoryNames`, and `reviewedGitGate` translate missing/unreadable files, final or ancestor symlinks, malformed JSON, missing refs/objects, and reviewed-Git process failures before semantic validation. Negative tests use real temporary directories, regular files, malformed files, final/ancestor symlinks, and invalid Git refs and bind at least `context_schema_invalid`, `context_schema_binding_drift`, `context_chain_gap`, `stale_execution_context`, `context_not_yet_valid`, `predecessor_context_mutated`, `context_sequence_mismatch`, `context_stage_regression`, `context_timestamp_regression`, `context_head_not_descendant`, `context_initial_head_mismatch`, `context_head_mismatch`, `context_commit_parent_mismatch`, `context_remote_rewind`, `context_remote_authority_drift`, `context_remote_origin_drift`, `context_git_object_invalid`, `context_branch_mismatch`, `context_shared_contract_drift`, `context_binding_drift`, `context_approval_invalid`, `context_symlink`, `context_dirty_tree`, `context_unexpected_delta`, `context_window_invalid`, `context_future_timestamp`, and `context_gate_mode_invalid`. Timestamps up to the clock-skew ceiling may be structurally well formed, but a task or capture cannot start until `generated_at <= now`; it fails `context_not_yet_valid` rather than producing evidence that downstream historical validation cannot consume. `PHASE1_EXECUTION_CONTEXT_PATH` must name the unique latest contiguous context chain head; the previous path must name its immediate predecessor. A caller may not replay an older still-unexpired context after a successor exists.
 
 ### Task 1: Sub2API Authority Envelope and Optimistic Version Foundation
 
@@ -1043,6 +1068,7 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json`
+- Create: `docs/superpowers/schemas/oracle-lab-phase-1-feature-review.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json`
 - Create: `docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json`
@@ -1053,7 +1079,7 @@ git commit -m "fix(security): fail closed on listener and upstream TLS boundarie
 
 **Interfaces:**
 - Consumes: reviewed `runBoundedProcess`, `classifyBoundedProcess`, `runReviewedGit`, `assertNoGitReplacementRefs`, `HERMETIC_NETWORK_ENV`, `DISABLED_CAPABILITIES`, `writeExclusiveArtifact`, `canonicalJson`, `digestFile`, and `sha256` from P0.1/H0. The older `tools/claude-native-oracle-matrix.ts` profile is a discovery reference only; H1 accepts only the exact profile below after live canaries pass.
-- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `parsePhase1RedFailureLeaves`, `canonicalizePhase1FailureEvents`, `validatePhase1CatalogValue`, `validatePhase1CaptureInputs`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `buildPhase1IntegrationEntry`, `validatePhase1IntegrationEntryValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, `buildPhase1IntegrationReceipt`, `validatePhase1IntegrationReceiptValue`, and deterministic Markdown rendering.
+- Produces: `resolvePhase1LoopbackSandbox`, `runPhase1SandboxCanaries`, `wrapPhase1Command`, `parsePhase1RedFailureLeaves`, `canonicalizePhase1FailureEvents`, `parsePhase1TrackedTree`, `derivePhase1ImplementationTreeBinding`, `validatePhase1CatalogValue`, `validatePhase1CaptureInputs`, `captureAndRunPhase1`, `validatePhase1ResultsValue`, `validatePhase1FeatureEvidenceCommit`, `validatePhase1FeatureReviewValue`, `validatePhase1FeatureReviewAttestation`, `buildPhase1IntegrationEntry`, `validatePhase1IntegrationEntryValue`, `buildPhase1Handoff`, `validatePhase1HandoffValue`, `buildPhase1IntegrationReceipt`, `validatePhase1IntegrationReceiptValue`, `verifyPhase1FinalRemote`, `authorizePhase1Retry`, and deterministic Markdown rendering.
 - Does not modify the Phase 0 command catalog, Registry v1 validators, P0.1 CLI, or their schemas.
 
 - [ ] **Step 1: Write RED tests for the Phase 1 adapter contract**
@@ -1074,6 +1100,31 @@ const RED_SEMANTIC_MUTATIONS = [
   'missing_leaf', 'same_prefix_extra_leaf', 'unrelated_extra_leaf', 'duplicate_leaf_event',
   'wrong_event_count', 'wrong_unique_count', 'wrong_family', 'wrong_parser', 'wrong_lifecycle',
   'reordered_event_multiset', 'reordered_unique_names',
+] as const
+
+const IMPLEMENTATION_TREE_MUTATIONS = [
+  'source_add', 'source_modify', 'source_delete', 'source_rename',
+  'config_modify', 'test_modify', 'nonexcluded_docs_modify',
+  'executable_mode_change', 'symlink_target_change', 'submodule_pointer_change',
+  'excluded_evidence_change', 'excluded_governance_change', 'untracked_dirty_path',
+] as const
+
+const RAW_TREE_STREAM_MUTATIONS = [
+  'missing_nul', 'missing_tab', 'bad_field_count', 'invalid_oid', 'duplicate_path',
+  'invalid_utf8_path', 'absolute_path', 'dotdot_path', 'non_normalized_path',
+  'unsupported_mode', 'blob_with_submodule_mode', 'commit_without_submodule_mode',
+  'phase1_prefix_collision', 'governance_suffix_collision',
+] as const
+
+const FEATURE_REVIEW_MUTATIONS = [
+  'wrong_tested_cc_head', 'wrong_tested_sub2api_head',
+  'wrong_candidate_cc_head', 'wrong_candidate_sub2api_head',
+  'wrong_baseline_path', 'wrong_baseline_digest', 'wrong_results_path', 'wrong_results_digest',
+  'wrong_context_path', 'wrong_context_digest', 'wrong_context_sequence', 'wrong_context_artifact_commit',
+  'wrong_plan_review_path', 'wrong_plan_review_digest', 'wrong_plan_commit',
+  'changes_requested', 'approved_nonzero_critical', 'approved_nonzero_important',
+  'wrong_reviewer_identity', 'missing_review_scope', 'extra_review_scope', 'unknown_field',
+  'tested_candidate_tree_mismatch',
 ] as const
 
 test('Phase 1 catalog has exact IDs, groups, repositories, argv and expected exits', async () => {
@@ -1184,17 +1235,121 @@ test('capture rejects a dirty repository before running the first command', () =
   assert.throws(() => captureAndRunPhase1(dirtyFixture), hasCode('dirty_repository'))
 })
 
-test('capture rejects missing, expired, tampered, or unapproved execution context before spawning', () => {
-  for (const fixture of invalidExecutionContexts) {
-    assert.throws(() => captureAndRunPhase1({ ...baseOptions, executionContextPath: fixture }),
-      hasCode('execution_context_not_authorized'))
+test('capture preserves exact execution-context failure codes before spawning', () => {
+  for (const [mutation, code] of [
+    ['missing_initial', 'context_chain_gap'],
+    ['expired_latest', 'stale_execution_context'],
+    ['captured_before_generated_at', 'context_not_yet_valid'],
+    ['schema_invalid', 'context_schema_invalid'],
+    ['gate_schema_drift', 'context_schema_binding_drift'],
+    ['bad_predecessor_digest', 'predecessor_context_mutated'],
+    ['unapproved_review', 'context_approval_invalid'],
+    ['remote_origin_substitution', 'context_remote_origin_drift'],
+  ] as const) {
+    assert.throws(() => captureAndRunPhase1({
+      ...baseOptions,
+      executionContextPath: invalidExecutionContext(mutation),
+    }), hasCode(code))
   }
   assert.equal(spawnObserver.count, 0)
 })
 
+test('feature capture selects only the latest contiguous immutable context chain head', () => {
+  const valid = contextChainFixture({ stages: ['implementation_entry', 'implementation', 'feature_capture'] })
+  assert.doesNotThrow(() => selectLatestPhase1ExecutionContext(valid, valid.paths[2]))
+  for (const mutation of [
+    'expired_latest', 'missing_predecessor', 'bad_predecessor_digest', 'bad_predecessor_commit',
+    'gap', 'jump', 'duplicate_sequence', 'stale_context_replay', 'path_sequence_mismatch',
+    'stage_regression', 'wrong_branch', 'wrong_authorized_parent_head', 'head_not_descendant',
+    'predecessor_path_later_modified', 'dirty_cc', 'dirty_sub2api', 'unexpected_delta',
+    'remote_ref_stale', 'remote_rewind', 'remote_authority_drift', 'future_generated_at',
+    'plan_drift', 'review_drift', 'shared_contract_drift', 'symlink_context',
+  ]) assert.throws(() => selectLatestPhase1ExecutionContext(contextChainMutation(valid, mutation), valid.paths[2]))
+})
+
+test('feature review is closed and ordinary merge commits have exact two-parent topology', () => {
+  assert.doesNotThrow(() => validatePhase1FeatureEvidenceCommit(validFeatureEvidenceCommit))
+  for (const mutation of ['evidence_wrong_parent', 'evidence_extra_delta', 'evidence_wrong_bytes', 'sub2api_head_changed']) {
+    assert.throws(() => validatePhase1FeatureEvidenceCommit(featureEvidenceCommitMutation(validFeatureEvidenceCommit, mutation)),
+      hasCode('feature_evidence_commit_mismatch'))
+  }
+  assert.equal(validatePhase1FeatureReviewValue(validFeatureReview).ok, true)
+  for (const mutation of FEATURE_REVIEW_MUTATIONS) {
+    const changed = rehashFeatureReviewChain(featureReviewMutation(validFeatureReview, mutation))
+    assert.equal(validatePhase1FeatureReviewValue(changed.featureReview).ok, false)
+    assert.throws(() => buildPhase1IntegrationEntry({
+      ...validIntegrationEntryInputs,
+      featureReview: changed.featureReview,
+      featureBaseline: changed.featureBaseline,
+      featureResults: changed.featureResults,
+    }), hasCode('feature_review_mismatch'))
+  }
+  assert.doesNotThrow(() => validatePhase1FeatureReviewAttestation(validFeatureReviewAttestation))
+  for (const mutation of [
+    'review_attestation_wrong_parent', 'review_attestation_extra_delta',
+    'review_attestation_wrong_bytes', 'review_path_later_mutated',
+  ]) {
+    const changed = featureReviewAttestationMutation(validFeatureReviewAttestation, mutation)
+    assert.throws(() => validatePhase1FeatureReviewAttestation(changed),
+      hasCode('feature_review_attestation_mismatch'))
+    assert.throws(() => buildPhase1IntegrationEntry({ ...validIntegrationEntryInputs, featureReviewAttestation: changed }),
+      hasCode('feature_review_attestation_mismatch'))
+  }
+  assert.doesNotThrow(() => validatePhase1MergeTopology(validMergeTopology))
+  for (const mutation of ['squash', 'rebase', 'wrong_first_parent', 'wrong_second_parent', 'non_ancestor_merge']) {
+    assert.throws(() => validatePhase1MergeTopology(mergeTopologyMutation(validMergeTopology, mutation)),
+      hasCode('merge_commit_parent_mismatch'))
+  }
+})
+
+test('closed implementation-tree bindings detect every nonexcluded tracked change and stale review', () => {
+  const baseline = derivePhase1ImplementationTreeBinding(implementationTreeFixture('baseline'))
+  for (const mutation of IMPLEMENTATION_TREE_MUTATIONS.filter((name) =>
+    !['excluded_evidence_change', 'excluded_governance_change', 'untracked_dirty_path'].includes(name))) {
+    const changed = derivePhase1ImplementationTreeBinding(implementationTreeFixture(mutation))
+    assert.notEqual(changed.entries_digest, baseline.entries_digest, mutation)
+    const downstream = rehashEveryAffectedArtifact(implementationTreeDownstreamMutation(validDownstreamChain, mutation))
+    assert.throws(() => buildPhase1IntegrationEntry(downstream.integrationEntryInputs), hasCode('phase1_implementation_drift'))
+    assert.equal(validatePhase1FeatureReviewValue(downstream.featureReview).ok, false)
+    assert.equal(validatePhase1HandoffValue(downstream.handoff).ok, false)
+    assert.equal(validatePhase1IntegrationReceiptValue(downstream.receiptPostCommit).ok, false)
+  }
+  for (const mutation of ['excluded_evidence_change', 'excluded_governance_change'] as const) {
+    assert.equal(
+      derivePhase1ImplementationTreeBinding(implementationTreeFixture(mutation)).entries_digest,
+      baseline.entries_digest,
+    )
+  }
+  assert.throws(() => validatePhase1CaptureInputs(implementationTreeFixture('untracked_dirty_path')),
+    hasCode('dirty_repository'))
+  for (const mutation of [
+    'broaden_exclusion', 'remove_exclusion', 'replace_exclusion',
+    'reorder_exclusion', 'duplicate_exclusion',
+  ]) {
+    assert.throws(() => derivePhase1ImplementationTreeBinding(implementationTreeFixture(mutation)),
+      hasCode('implementation_tree_policy_invalid'))
+  }
+})
+
+test('raw ls-tree parser is NUL-safe and exact exclusion boundaries cannot widen', () => {
+  assert.deepEqual(parsePhase1TrackedTree(validRawTreeStream), validTrackedTreeEntries)
+  for (const mutation of RAW_TREE_STREAM_MUTATIONS.slice(0, 12)) {
+    assert.throws(() => parsePhase1TrackedTree(rawTreeStreamMutation(validRawTreeStream, mutation)),
+      hasCode('implementation_tree_stream_invalid'))
+  }
+  const prefixCollision = derivePhase1ImplementationTreeBinding(
+    implementationTreeFixture('phase1_prefix_collision'),
+  )
+  const governanceCollision = derivePhase1ImplementationTreeBinding(
+    implementationTreeFixture('governance_suffix_collision'),
+  )
+  assert.notEqual(prefixCollision.entries_digest, baselineImplementationTree.entries_digest)
+  assert.notEqual(governanceCollision.entries_digest, baselineImplementationTree.entries_digest)
+})
+
 test('post-integration separates the declared controller delta from clean tested roots', () => {
   const allowed = postIntegrationFixture({
-    controllerStatus: ['?? docs/superpowers/evidence/phase-1/phase-1-integration-entry.json'],
+    controllerStatus: ['?? docs/superpowers/evidence/phase-1/attempt-0001/phase-1-integration-entry.json'],
     ccTestedStatus: [], sub2apiTestedStatus: [],
   })
   assert.doesNotThrow(() => validatePhase1CaptureInputs(allowed))
@@ -1204,6 +1359,93 @@ test('post-integration separates the declared controller delta from clean tested
     postIntegrationFixture({ sub2apiTestedStatus: ['?? stray.txt'] }),
     postIntegrationFixture({ controllerEqualsCCTestedRoot: true }),
   ]) assert.throws(() => validatePhase1CaptureInputs(fixture), hasCode('capture_root_not_authorized'))
+})
+
+test('post-integration attempts select the next contiguous committed receipt chain node', () => {
+  const initial = attemptChainFixture({ committed: [], requested: 'attempt-0001', predecessor: null })
+  assert.doesNotThrow(() => validatePhase1AttemptChain(initial))
+  const successor = attemptChainFixture({
+    committed: [committedAttemptReceipt('attempt-0001')],
+    requested: 'attempt-0002',
+    predecessor: predecessorAttemptBinding('attempt-0001'),
+  })
+  assert.doesNotThrow(() => validatePhase1AttemptChain(successor))
+  for (const mutation of [
+    'missing_predecessor', 'unexpected_initial_predecessor', 'attempt_gap', 'attempt_jump',
+    'duplicate_attempt', 'stale_attempt_replay', 'wrong_predecessor_id', 'wrong_receipt_path',
+    'wrong_receipt_digest', 'wrong_receipt_commit', 'receipt_commit_not_ancestor',
+    'receipt_commit_wrong_parent', 'receipt_commit_extra_delta', 'predecessor_receipt_mutated',
+    'historical_receipt_deleted', 'historical_receipt_deleted_readded',
+    'historical_receipt_replaced', 'attempt_chain_reset_to_0001',
+  ]) assert.throws(() => validatePhase1AttemptChain(attemptChainMutation(successor, mutation)),
+    hasCode('attempt_chain_invalid'))
+})
+
+test('pre-merge draft and post-merge canonical retries advance different counters', () => {
+  const preMerge = authorizePhase1Retry(validPreMergeEvidenceOnlyFailure)
+  assert.equal(preMerge.attempt_id, 'attempt-0002')
+  assert.deepEqual(preMerge.predecessor, predecessorAttemptBinding('attempt-0001'))
+  assert.equal(preMerge.draft_run_id, 'run-0002')
+  assert.deepEqual(preMerge.preserve_paths, validPreMergeEvidenceOnlyFailure.immutablePaths)
+  assert.equal(preMerge.require_new_roots, true)
+  const postMerge = authorizePhase1Retry(validPostMergeEvidenceOnlyFailure)
+  assert.equal(postMerge.attempt_id, 'attempt-0003')
+  assert.deepEqual(postMerge.predecessor, predecessorAttemptBinding('attempt-0002'))
+  assert.equal(postMerge.draft_run_id, 'run-0001')
+  assert.deepEqual(postMerge.preserve_paths, [
+    validPostMergeEvidenceOnlyFailure.previousReceiptPath,
+    validPostMergeEvidenceOnlyFailure.featureReviewPath,
+  ])
+  assert.equal(postMerge.require_new_roots, true)
+  assert.match(preMerge.root_identity_digest, /^sha256:[0-9a-f]{64}$/)
+  assert.match(postMerge.root_identity_digest, /^sha256:[0-9a-f]{64}$/)
+  assert.notEqual(preMerge.root_identity_digest, validPreMergeEvidenceOnlyFailure.root_identity_digest)
+  assert.notEqual(postMerge.root_identity_digest, validPostMergeEvidenceOnlyFailure.root_identity_digest)
+  assert.notEqual(postMerge.root_identity_digest, preMerge.root_identity_digest)
+})
+
+test('final remote verifier has exact outcomes and unsafe outcomes cannot allocate an attempt', () => {
+  assert.deepEqual(verifyPhase1FinalRemote(validFinalRemoteState).decision, 'ready')
+  assert.deepEqual(verifyPhase1FinalRemote(validSupersededRemoteState).decision, 'superseded')
+  for (const [mutation, code] of [
+    ['remote_rewind', 'context_remote_rewind'],
+    ['remote_non_descendant', 'context_remote_rewind'],
+    ['remote_url_substitution', 'context_remote_origin_drift'],
+    ['receipt_commit_not_ancestor', 'attempt_chain_invalid'],
+    ['historical_receipt_deleted', 'attempt_chain_invalid'],
+    ['historical_receipt_deleted_readded', 'attempt_chain_invalid'],
+    ['attempt_chain_reset_to_0001', 'attempt_chain_invalid'],
+    ['implementation_tree_policy_drift', 'implementation_tree_policy_invalid'],
+    ['implementation_tree_drift', 'phase1_implementation_drift'],
+    ['dirty_final_root', 'dirty_repository'],
+    ['final_root_head_mismatch', 'context_head_mismatch'],
+  ] as const) {
+    attemptAllocationObserver.reset()
+    artifactWriteObserver.reset()
+    assert.throws(() => verifyPhase1FinalRemote(finalRemoteMutation(validFinalRemoteState, mutation)), hasCode(code))
+    assert.equal(attemptAllocationObserver.count, 0)
+    assert.equal(artifactWriteObserver.count, 0)
+  }
+  for (const [mutation, code] of [
+    ['remote_rewind', 'context_remote_rewind'],
+    ['remote_url_substitution', 'context_remote_origin_drift'],
+    ['historical_receipt_deleted_readded', 'attempt_chain_invalid'],
+    ['implementation_tree_drift', 'phase1_implementation_drift'],
+  ] as const) {
+    assert.throws(() => verifyPhase1FinalRemote(
+      finalRemoteMutation(validSupersededRemoteState, mutation),
+    ), hasCode(code))
+  }
+})
+
+test('verify-final-remote CLI accepts only its complete explicit flag set', () => {
+  assert.doesNotThrow(() => parsePhase1CLI(validFinalRemoteArgv))
+  for (const mutation of [
+    'missing_catalog', 'missing_cc_root', 'missing_sub2api_root', 'missing_attempt_id',
+    'missing_receipt', 'missing_receipt_commit', 'missing_remote_name', 'missing_remote_ref',
+    'missing_origin_digest', 'duplicate_flag', 'unknown_flag', 'environment_fallback',
+  ]) assert.throws(() => parsePhase1CLI(cliMutation(validFinalRemoteArgv, mutation)),
+    hasCode('invalid_arguments'))
 })
 
 test('capture refuses proxy-only networking and requires an OS loopback sandbox', async () => {
@@ -1343,6 +1585,41 @@ export type Phase1ContractRootBinding = {
   contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
 }
 
+export type Phase1ImplementationRepository = 'cc_gateway' | 'sub2api'
+export type Phase1TrackedTreeEntry = {
+  path: string
+  mode: '100644' | '100755' | '120000' | '160000'
+  object_type: 'blob' | 'commit'
+  object_oid: string
+}
+export type Phase1ImplementationTreeBinding = {
+  algorithm: 'git_ls_tree_v1_sha256_canonical_json'
+  repository: Phase1ImplementationRepository
+  source_commit: string
+  exclusion_policy: 'phase1_evidence_governance_only_v1'
+  excluded_prefixes: string[]
+  excluded_paths: string[]
+  entry_count: number
+  entries_digest: string
+}
+
+export type Phase1Digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9'
+export type Phase1FourDigits = `${Phase1Digit}${Phase1Digit}${Phase1Digit}${Phase1Digit}`
+export type Phase1AttemptID = `attempt-${Phase1FourDigits}`
+export type Phase1FeatureAttemptID = `feature-${Phase1FourDigits}`
+
+export type Phase1AttemptPredecessor = null | {
+  attempt_id: Phase1AttemptID
+  receipt: { path: string; digest: string }
+  receipt_commit: string
+}
+
+export type Phase1AttemptAuthority = {
+  attempt_id: Phase1AttemptID
+  sequence: number
+  predecessor: Phase1AttemptPredecessor
+}
+
 export type Phase1ControllerRootBinding =
   | {
       stage: 'feature-candidate'
@@ -1351,8 +1628,8 @@ export type Phase1ControllerRootBinding =
       same_as_tested_cc_root: true
       preexisting_delta_paths: []
       declared_output_paths: [
-        'docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json',
-        'docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json',
+        `docs/superpowers/evidence/phase-1/${Phase1FeatureAttemptID}/phase-1-feature-baseline.json`,
+        `docs/superpowers/evidence/phase-1/${Phase1FeatureAttemptID}/phase-1-feature-command-results.json`,
       ]
     }
   | {
@@ -1361,21 +1638,33 @@ export type Phase1ControllerRootBinding =
       root_identity_digest: string
       same_as_tested_cc_root: false
       preexisting_delta_paths: [
-        'docs/superpowers/evidence/phase-1/phase-1-integration-entry.json',
+        `docs/superpowers/evidence/phase-1/${Phase1AttemptID}/phase-1-integration-entry.json`,
       ]
       declared_output_paths: [
-        'docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json',
-        'docs/superpowers/evidence/phase-1/phase-1-command-results.json',
+        `docs/superpowers/evidence/phase-1/${Phase1AttemptID}/phase-1-exit-baseline.json`,
+        `docs/superpowers/evidence/phase-1/${Phase1AttemptID}/phase-1-command-results.json`,
       ]
     }
 
 export type Phase1CaptureRootEnvelope = {
   controller_root: Phase1ControllerRootBinding
   sub2api_contract_root: Phase1ContractRootBinding
+  implementation_trees: {
+    cc_gateway: Phase1ImplementationTreeBinding
+    sub2api: Phase1ImplementationTreeBinding
+  }
 }
 ```
 
-`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1CaptureRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact controller and contract-root unions with `additionalProperties: false`. The controller union freezes each stage's only legal preexisting delta and output paths. Every `root_identity_digest` is the SHA-256 of canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. Contract `clone_kind`, branch, path, and digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves contract `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects forbidden root equality, and rechecks the same bindings before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `failure_parser: null`, `expected_parser_lifecycle: null`, `expected_failure_count: 0`, `expected_failure_names: []`, and `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific parser/lifecycle, exact count, exact canonical name array, and exact nonempty family array below. The schema uses command-ID-specific closed branches, `const`/`prefixItems`, `minItems == maxItems`, and `uniqueItems: true` for the unique catalog/result arrays. `failure_event_names` is the only deliberate non-unique array: it is a deterministic UTF-8-sorted multiset retaining repeated safe leaf events so downstream validation can detect parser de-duplication; `failure_event_count` must equal its length. Semantic validation independently requires canonical ordering, derives duplicate multiplicity, unique `failure_names`, `failure_count`, families, and lifecycle consistency from that multiset, and compares all derived values to the catalog. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+`git_ls_tree_v1_sha256_canonical_json` is closed and commit-independent. For the bound commit, run reviewed Git as `git ls-tree -r -z --full-tree <commit>`, parse every NUL-delimited leaf as exact `{mode, object_type, object_oid, path}` without shell or quoted-path decoding, reject malformed records, invalid UTF-8/non-round-tripping path bytes, non-normalized or absolute paths, duplicate paths, modes outside `100644|100755|120000|160000`, and inconsistent mode/type pairs. Filter only the exact policy below, byte-sort the remaining `path` values as UTF-8 without Unicode normalization, and compute `entries_digest = sha256(canonicalJson(entries))`; `source_commit`, counts, policy, and exclusions are separately schema-bound and are not included in that digest, so an allowed evidence-only descendant can retain the same tree digest. The binding therefore detects content, add/delete/rename, executable-bit, symlink-target, and submodule-pointer changes.
+
+The only CC exclusions are prefix `docs/superpowers/evidence/phase-1/` and exact paths `docs/superpowers/registry/oracle-lab-requirements.json`, `docs/superpowers/registry/oracle-lab-claims.json`, and `docs/superpowers/registry/oracle-lab-current-observations.json`. Sub2API has `excluded_prefixes: []` and `excluded_paths: []`. No source, test, config, tool, schema, plan, non-Phase-1 evidence, or other documentation path is excluded. Schemas use repository-specific `const`/`prefixItems` branches for those arrays. Semantic validation recomputes the complete in-memory entry list and digest at each candidate, reviewed, integrated, artifact, receipt, and live remote head; it never trusts a persisted digest or a changed exclusion list.
+
+The integration-entry, post-integration results, handoff, and receipt schemas all embed the same closed `Phase1AttemptAuthority`. `attempt-0001` is sequence `1` with `predecessor: null`. For sequence `N > 1`, predecessor is required and binds exactly `attempt-(N-1)` plus its canonical receipt path, raw-byte digest, and receipt commit. Semantic validation walks the full commit graph reachable from the current integrated CC main and inspects tree entries for canonical `docs/superpowers/evidence/phase-1/attempt-[0-9]{4}/phase-1-integration-receipt.json` paths, not only paths present in the tip tree. For each path, an introduction is a commit whose tree contains the blob while none of its parents contains that same path/blob; a deletion omits a path present in any parent; a mutation contains a different blob from a parent that contains the path. This graph-aware definition does not double-count an ordinary merge whose second parent already carries the receipt. Require exactly one introduction, zero deletion/mutation events, one blob identity across every reachable tree containing the path, and the same blob still present at the tip. IDs are contiguous from `0001`; deletion, re-addition, replacement, rename, duplicate introduction, and reset-to-`attempt-0001` are forbidden. The validator selects only the next ID, proves the predecessor receipt commit is an ancestor of main, proves it is the one-path child of the artifact commit named inside the validated predecessor receipt, compares `git show` bytes and digest, and proves no later commit changed the predecessor path. Missing, duplicate, deleted/re-added, gap, jump, reset, replay, wrong path/digest/commit, non-ancestor, wrong-parent/delta, and mutated predecessor all fail `attempt_chain_invalid` before any output write.
+
+`Phase1ExitBaseline` and `Phase1Results` both extend `Phase1CaptureRootEnvelope`; the exit/results/integration-entry/handoff schemas require the exact controller and contract-root unions with `additionalProperties: false`. The controller union freezes each stage's only legal preexisting delta and output paths. The template path segment is not arbitrary: feature-candidate paths must share one `feature-[0-9]{4}` ID and post-integration paths must share one `attempt-[0-9]{4}` ID supplied by the closed CLI; cross-attempt paths, extra nesting, and mixed IDs fail schema and semantic validation. Every `root_identity_digest` is the SHA-256 of canonical realpath bytes; no absolute host path is persisted. `clean_status_digest` must equal SHA-256 of empty bytes. Contract `clone_kind`, branch, path, and digest are schema constants. Semantic validation independently derives every field with reviewed Git and filesystem APIs, proves contract `--git-dir` and `--git-common-dir` resolve to the same clone-local `.git` directory, rejects forbidden root equality, and rechecks the same bindings before and after all commands. The catalog schema makes the group-to-requirement split structural: `phase1-green` entries may contain only `Phase1ImplementedRequirement` and require `failure_parser: null`, `expected_parser_lifecycle: null`, `expected_failure_count: 0`, `expected_failure_names: []`, and `expected_failure_families: []`; `phase1-red` entries may contain only `Phase1PreservedRedRequirement` and require the command-specific parser/lifecycle, exact count, exact canonical name array, and exact nonempty family array below. The schema uses command-ID-specific closed branches, `const`/`prefixItems`, `minItems == maxItems`, and `uniqueItems: true` for the unique catalog/result arrays. `failure_event_names` is the only deliberate non-unique array: it is a deterministic UTF-8-sorted multiset retaining repeated safe leaf events so downstream validation can detect parser de-duplication; `failure_event_count` must equal its length. Semantic validation independently requires canonical ordering, derives duplicate multiplicity, unique `failure_names`, `failure_count`, families, and lifecycle consistency from that multiset, and compares all derived values to the catalog. Every implemented ID must appear on at least one GREEN row, and no RED row contributes satisfaction evidence for Phase 1.
+
+The feature baseline/results, closed feature review, integration entry, post-integration baseline/results, handoff, artifact set, and integration receipt all bind both closed implementation-tree objects without commit self-reference. Feature baseline/results use the clean pre-capture `CC_GATEWAY_TESTED_HEAD` and `SUB2API_TESTED_HEAD` as `source_commit`. After those result files are committed, the feature review uses the resulting `CC_GATEWAY_CANDIDATE_HEAD` and unchanged `SUB2API_CANDIDATE_HEAD`; it proves the CC candidate is the one-parent child of the tested head whose entire delta adds only the two excluded feature evidence files, then requires algorithm, policy/arrays, count, and digest to remain equal. The review-attestation commit is proven separately and contains no implementation change. Integration and post-integration artifacts use merge/integrated heads, and Step 12 bindings use live remote heads. `source_commit` therefore advances by stage and is never compared as tree content; every validator instead recomputes it at the named head and compares the algorithm, exclusion policy/arrays, entry count, and entry digest with the previous reviewed stage. Mutation tests exercise every `IMPLEMENTATION_TREE_MUTATIONS` member: all source/config/test/nonexcluded-doc add/modify/delete/rename/mode/symlink/submodule changes fail `phase1_implementation_drift`; only the exact CC evidence prefix and three exact governance paths may preserve the digest; any untracked path still fails the independent clean-tree gate. Added, removed, reordered, duplicated, or broadened exclusions fail schema or `implementation_tree_policy_invalid`.
 
 The adapter accepts no shell strings. It expands only `${CC_GATEWAY_ROOT}`, `${SUB2API_ROOT}`, and `${SUB2API_CONTRACT_ROOT}`, caps output at 8 MiB, records digests and safe test names only, and writes artifacts with `writeExclusiveArtifact` under `docs/superpowers/evidence/phase-1`. `HERMETIC_NETWORK_ENV` plus offline package-manager variables remain defense in depth, but raw argv never goes directly to `runBoundedProcess`: `wrapPhase1Command` places every command and all descendants inside the reviewed OS loopback-only sandbox.
 
@@ -1622,9 +1911,9 @@ export function captureAndRunPhase1(options: {
 }): { baseline: Phase1ExitBaseline; results: Phase1Results }
 ```
 
-`feature-candidate` requires both `entryPath` and `executionContextPath`, forbids `integrationEntryPath`, and requires `controllerRoot === ccGatewayRoot` with a clean pre-run status. `post-integration` requires `integrationEntryPath`, forbids both `entryPath` and `executionContextPath`, requires `controllerRoot !== ccGatewayRoot`, and requires the controller HEAD to equal the frozen CC integrated-main commit with exactly one allowed pre-run delta: untracked `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`. In both stages, `ccGatewayRoot` and `sub2apiRoot` are the tested roots and must be entirely clean before and after every catalog command; only declared output writes in the controller root may change during the transaction. Output paths must resolve inside `controllerRoot`, be absent before capture, and be included in its declared after-status. Both stages also require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the context/review pair for feature capture or the integration entry plus its bound provenance for post-integration capture.
+`feature-candidate` requires both `entryPath` and `executionContextPath`, forbids `integrationEntryPath`, and requires `controllerRoot === ccGatewayRoot` with a clean pre-run status. The supplied path is not trusted: enumerate the exact initial/numbered artifacts, validate their schemas and raw bytes, prove contiguous sequence plus Git introduction/immutability/ancestry, and require the argument to equal the unique latest contiguous context chain head at stage `feature_capture`; otherwise fail `stale_execution_context` before spawn. `post-integration` requires `integrationEntryPath`, forbids both `entryPath` and `executionContextPath`, requires `controllerRoot !== ccGatewayRoot`, and requires the controller HEAD to equal the frozen CC integrated-main commit with exactly one allowed pre-run delta: the attempt-scoped untracked integration entry. In both stages, `ccGatewayRoot` and `sub2apiRoot` are the tested roots and must be entirely clean before and after every catalog command; only declared output writes in the controller root may change during the transaction. Output paths must resolve inside `controllerRoot`, be absent before capture, and be included in its declared after-status. Both stages also require a distinct clean `sub2apiContractRoot` that is an independent Git clone on branch `main`, bound to the applicable frozen Sub2API remote-main head, origin-URL digest, and shared-contract digest. Before any spawn, validate that root as a clean clone with no replacement refs or alternate object-store injection, exact bound HEAD, expected origin, and the frozen contract path/digest; include the closed `Phase1ContractRootBinding` in before/after snapshots. Reject a linked worktree, the implementation root, or the operator's original repository root. The closed schema rejects every other combination, and only post-integration results may feed `build-handoff`. In the next paragraph, "execution context" means the selected stage authority: the latest context/review chain for feature capture or the integration entry plus its bound provenance for post-integration capture.
 
-Before the first command, validate the selected stage authority and parse the closed plan-review provenance. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. Then enforce the stage-specific controller rule above; verify both tested roots are on the declared feature heads or exact integrated-main heads, are clean, have current CodeGraph indexes, and remain byte/status stable around each command; validate parent receipts, shared-contract bytes, and absent production/canary flags. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture controller/tested heads, root-identity/status digests, CodeGraph digests, catalog digest, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, require a complete command-specific machine parser/lifecycle, preserve and sort the full safe leaf-event multiset, derive duplicates/unique names/counts/families, and compare exact catalog constants before accepting `expected_fail`. Reject any sandbox violation, root/status change, parser/lifecycle/event/name/count/family mismatch, unexpected status, or unsafe output, then atomically write the two declared outputs under `controllerRoot`. Results persist the catalog digest, closed lifecycle summary, sorted `failure_event_names` multiset/event count, canonical unique names/count, and derived families. No result evidence file is written before the last command completes. The expired planning context alone can never authorize capture.
+Before the first command, validate the selected stage authority and parse the closed plan-review provenance. All Git inspection uses `runReviewedGit`; replacement refs and inherited Git/PATH/object-store configuration fail closed. Re-derive the digests of planning provenance, review receipt, current plan, and `git show <reviewed_commit>:<plan.path>`; all plan digests and commits must match exactly, not merely by ancestry. Require `approved`, zero Critical/Important findings, and the exact authority/provenance paths. For feature capture, the selected latest `feature_capture` context is still an untracked claim during its live gate: derive its CC artifact commit as the unique one-parent child of `repositories.cc_gateway.authorized_parent_head` whose entire delta is `A\t<selected-context-path>`, then require the tested CC feature HEAD to equal that derived artifact commit. Require the tested Sub2API feature HEAD to equal `repositories.sub2api.authorized_parent_head` exactly. Prove the selected bytes at the derived CC HEAD and prove no later commit changes that path; do not compare the post-commit CC HEAD directly to the pre-issue `authorized_parent_head`. Persist `{path,digest,sequence,stage,artifact_commit}` for that context chain head in both baseline and results. Then enforce the stage-specific controller rule above; verify both tested roots are on those exact derived feature heads or exact integrated-main heads, are clean, have current CodeGraph indexes, and remain byte/status stable around each command; validate parent receipts, shared-contract bytes, and absent production/canary flags. Resolve the OS sandbox and run both canaries before spawning a catalog command. Capture controller/tested heads, root-identity/status digests, CodeGraph digests, catalog digest, sandbox executable/policy digests, and canary verdicts in memory; run all fourteen commands sequentially only through `wrapPhase1Command`. For each RED command, require a complete command-specific machine parser/lifecycle, preserve and sort the full safe leaf-event multiset, derive duplicates/unique names/counts/families, and compare exact catalog constants before accepting `expected_fail`. Reject any sandbox violation, root/status change, parser/lifecycle/event/name/count/family mismatch, unexpected status, or unsafe output, then atomically write the two declared outputs under `controllerRoot`. Results persist the catalog digest, context-chain-head binding, closed lifecycle summary, sorted `failure_event_names` multiset/event count, canonical unique names/count, and derived families. No result evidence file is written before the last command completes. An expired or non-latest context can never authorize capture.
 
 - [ ] **Step 6: Add CLI subcommands and package entry**
 
@@ -1636,7 +1925,9 @@ Before the first command, validate the selected stage authority and parse the cl
 }
 ```
 
-Supported subcommands are exact: `validate-catalog`, `run-all`, `validate-results`, `build-integration-entry`, `build-handoff`, `validate-handoff`, `build-integration-receipt`, and `validate-integration-receipt`. Their closed parsers accept only the flags shown verbatim in Task 8. `build-integration-entry` requires controller/tested/contract roots, execution context, plan review, catalog, feature results/review, both reviewed feature heads and merge references, both expected remote names/refs/origin digests, and one output path; it revalidates feature results against that catalog and binds the catalog digest for post-integration capture. Every results, integration-entry, handoff, and receipt build/validation command requires the explicit catalog path; it reloads the catalog, validates the command-specific parser lifecycle, event multiset/count, canonical unique leaf array/count, and families, and binds its digest rather than trusting an embedded digest alone. `build-integration-receipt` additionally requires controller root, integrated Sub2API root, artifact commit, entry/baseline/results/handoff/report/three registries, and receipt output. `validate-integration-receipt` requires the same bound inputs plus the receipt path; it forbids `--receipt-commit` before commit and requires it for the post-commit child check. Unknown commands, missing or duplicate arguments, undeclared flags, path traversal, symlink artifacts, expired inputs, and absolute persisted paths fail with stable error codes. The entry builder writes exactly one exclusive file and leaves the controller delta allowlist exact. The receipt builder accepts only a clean exact artifact commit; the validator enforces its one-path child commit when supplied.
+Supported subcommands are exact: `validate-catalog`, `validate-feature-review`, `run-all`, `validate-results`, `build-integration-entry`, `build-handoff`, `validate-handoff`, `build-integration-receipt`, `validate-integration-receipt`, and `verify-final-remote`. Their closed parsers accept only the flags shown verbatim in Task 8. `build-integration-entry` requires controller/tested/contract roots, latest execution-context chain head, plan review, catalog, feature results, closed feature-review JSON, exact reviewed candidate/review-attestation heads, both merge commit SHAs plus their captured pre-merge main heads, both expected remote names/refs/origin digests, attempt ID, and one output path. It reselects the latest chain and requires the results context either to equal it or to be an immutable predecessor followed only by `feature_capture` renewals with identical authorized feature heads. It validates the review receipt, proves ordinary merge topology, revalidates feature results, and binds every digest for post-integration capture. Every results, integration-entry, handoff, and receipt build/validation command requires the explicit catalog path; it reloads the catalog, validates the command-specific parser lifecycle, event multiset/count, canonical unique leaf array/count, and families, and binds its digest rather than trusting an embedded digest alone. Both handoff commands require explicit controller, tested CC, integrated Sub2API, and contract roots so both implementation trees and the contract can be recomputed without persisted absolute paths or environment fallback. `build-integration-receipt` additionally requires controller root, integrated Sub2API root, artifact commit, entry/baseline/results/handoff/report/three registries, and receipt output. `validate-integration-receipt` requires the same bound inputs plus the receipt path; it forbids `--receipt-commit` before commit and requires it for the post-commit child check. Starting or rerunning feature capture requires an unexpired latest feature context. `build-integration-entry` may consume an expired feature context only as immutable historical provenance when the accepted results prove capture occurred inside its validity window and every later renewal satisfies the identical-head rule; the newly built integration entry is the fresh post-integration authority. Every other live builder rejects expired current-stage authority. A committed receipt later validates the bound `historical_valid_at` relationships instead of comparing historical source expiry to the current wall clock. Unknown commands, missing or duplicate arguments, undeclared flags, path traversal, symlink artifacts, invalid historical validity, live expired current-stage inputs, and absolute persisted paths fail with stable error codes. Each attempt builder writes only absent paths within its immutable attempt namespace. The receipt builder accepts only a clean exact artifact commit; the validator enforces its one-path child commit when supplied. `verify-final-remote` is read-only, writes no repository artifact, and emits one canonical JSON object to stdout after the exact live checks in Step 12.
+
+For attempt authority, `build-integration-entry` always accepts the exact four flags `--previous-attempt-id`, `--previous-attempt-receipt`, `--previous-attempt-receipt-digest`, and `--previous-attempt-receipt-commit`. On `attempt-0001`, all four values must be the literal `none` and the schema writes `predecessor: null`. On `attempt-N` for `N > 1`, `none` is forbidden and all four values must bind the validated `attempt-(N-1)` receipt tuple selected from integrated main. Partial tuples, environment fallback, an ID other than the next contiguous committed attempt, and an old receipt replay fail `attempt_chain_invalid` before integration-entry creation.
 
 - [ ] **Step 7: Run adapter, planning, P0.1, and full CC regression**
 
@@ -1653,22 +1944,22 @@ Expected: all PASS. The Phase 0 and P0.1 artifacts and tools remain byte-for-byt
 - [ ] **Step 8: Commit Task 7 in CC Gateway**
 
 ```bash
-git add docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json tools/oracle-lab/phase-1-evidence.ts tools/oracle-lab/phase-1-loopback-sandbox.ts tests/oracle-lab-phase-1-evidence.test.ts package.json
+git add docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json docs/superpowers/schemas/oracle-lab-phase-1-feature-review.schema.json docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json tools/oracle-lab/phase-1-evidence.ts tools/oracle-lab/phase-1-loopback-sandbox.ts tests/oracle-lab-phase-1-evidence.test.ts package.json
 git commit -m "test(oracle): add bounded Phase 1 H1 evidence adapter"
 ```
 
 ### Task 8: Feature Review, Post-Integration Evidence, Registry Transition, and Handoff
 
 **Files:**
-- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-feature-review.md`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-command-results.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-handoff.json`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-exit-report.md`
-- Create: `docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-baseline.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-review.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md`
+- Create: `docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json`
 - Modify: `docs/superpowers/registry/oracle-lab-requirements.json`
 - Modify: `docs/superpowers/registry/oracle-lab-claims.json`
 - Modify: `docs/superpowers/registry/oracle-lab-current-observations.json`
@@ -1676,66 +1967,80 @@ git commit -m "test(oracle): add bounded Phase 1 H1 evidence adapter"
 - Test: `tests/oracle-lab-phase-1-planning.test.ts`
 
 **Interfaces:**
-- Consumes: Task 7 `run-all`, both clean feature heads, the exact plan approval/execution context, the two merged implementation PRs, and four selected requirement rows.
-- Produces: non-authoritative feature-candidate results, a fresh integration entry bound to exact fetched `muqihang/main` heads, complete post-integration results, a descendant artifact commit, a one-file receipt commit, and final Phase 2 entry conditions.
+- Consumes: Task 7 `run-all`, both clean feature heads, the exact plan approval/latest execution-context chain head, a closed independent feature review, two proven ordinary merge commits, and four selected requirement rows.
+- Produces: immutable attempt-scoped non-authoritative feature-candidate results, a fresh integration entry bound to exact fetched `muqihang/main` heads and merge topology, complete post-integration results, a descendant artifact commit, a one-file receipt commit, and final Phase 2 entry conditions.
 
 - [ ] **Step 1: Update CodeGraph and prove both feature worktrees are clean**
 
-Run `codegraph sync` then `codegraph status` in each implementation worktree. Run `git status --porcelain=v1 --untracked-files=all` in each worktree.
+Set `PHASE1_FEATURE_ATTEMPT_ID=feature-0001`; later retries increment the four-digit suffix and never overwrite prior paths. Run `codegraph sync` then `codegraph status` in each implementation worktree. Run `git status --porcelain=v1 --untracked-files=all` in each worktree. Expected: both CodeGraph statuses are up to date and both Git status outputs are empty. Do not run evidence capture from the operator's original dirty Sub2API main worktree.
 
-Expected: both CodeGraph statuses are up to date and both Git status outputs are empty. Do not run evidence capture from the operator's original dirty Sub2API main worktree.
+Issue the next successor with `stage: feature_capture`, pass the successor `pre-commit` gate, commit only that numbered context, and pass the `post-commit` gate. Derive its `artifact_commit` from Git after commit. Immediately before capture, CC HEAD must equal that context-only commit and is frozen as `CC_GATEWAY_TESTED_HEAD`; Sub2API HEAD must equal the successor's Sub2API `authorized_parent_head` and is frozen as `SUB2API_TESTED_HEAD`. Both roots must be clean, and no newer numbered context may exist.
 
 - [ ] **Step 2: Execute and validate one feature-candidate H1 capture**
 
 ```bash
 npm run oracle:phase1 -- validate-catalog --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json
-npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
-npm run oracle:phase1 -- validate-results --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json
+npm run oracle:phase1 -- run-all --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context ${PHASE1_EXECUTION_CONTEXT_PATH} --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-baseline.json --results-out docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json
+npm run oracle:phase1 -- validate-results --stage feature-candidate --entry docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json --execution-context ${PHASE1_EXECUTION_CONTEXT_PATH} --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --cc-gateway-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json
 ```
 
-Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the execution context's frozen Sub2API remote-main commit with local branch name exactly `main`; do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, exact parser lifecycles, zero unclassified or duplicate failure events, zero sandbox violations, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Validate with `validate-results`. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
+Before this command, create or refresh `SUB2API_CONTRACT_ROOT` as a separate clean local Git clone of the context chain's immutable Sub2API `baseline_main_head` with local branch name exactly `main`; a newer `observed_remote_main_head` never silently retargets this feature capture. Explicitly do not use `git worktree` because `main` may already be checked out elsewhere. Require the expected origin-URL digest and frozen shared-contract digest, make no edits in it, and finish all clone/fetch operations before entering the network sandbox. Expected: twelve `pass`, two `expected_fail`, exact parser lifecycles, zero unclassified or duplicate failure events, zero sandbox violations, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, exact RED families `[B4,B5,B6]` and `[TestPhase0B5,TestPhase0B6]`, and a proven loopback-only sandbox. Before the first spawn the adapter requires `context.generated_at <= capture_started_at`; results require `context.generated_at <= captured_at < context.expires_at`, and `captured_before_generated_at` fails `context_not_yet_valid` with zero spawned commands or persisted evidence. The feature baseline/results bind `CC_GATEWAY_TESTED_HEAD` and `SUB2API_TESTED_HEAD` as repository commits and implementation-tree `source_commit` values and bind the exact latest context chain head. They do not claim the future evidence commit that will contain their own bytes. These results authorize review of the feature heads only; schemas forbid using `stage: feature-candidate` to mint a handoff or transition Registry rows.
 
 - [ ] **Step 3: Commit feature-candidate evidence and obtain independent implementation review**
 
+First commit only the captured baseline/results and record that commit plus the unchanged clean Sub2API tested head as `CC_GATEWAY_CANDIDATE_HEAD` and `SUB2API_CANDIDATE_HEAD`:
+
 ```bash
-git add docs/superpowers/evidence/phase-1/phase-1-feature-baseline.json docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json docs/superpowers/evidence/phase-1/phase-1-feature-review.md
+git add docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-baseline.json docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json
 git commit -m "test(oracle): bind Phase 1 feature candidate results"
 ```
 
-The independent reviewer checks full goal coverage, the exact route-by-authority matrix, authority-before-state/version/dependency ordering, role-revision races, duplicate callback/promote idempotency, replay behavior, frontend version continuity, origin trust, direct `startProxy` startup ordering, direct and sidecar certificate verification, exact RED leaves/families, sandbox enforcement, secret leakage, and scope. Critical and Important findings must be zero before either PR is merged.
+Before review, prove `CC_GATEWAY_CANDIDATE_HEAD` is the unique one-parent child of `CC_GATEWAY_TESTED_HEAD`, its exact delta is `A` for only the two feature baseline/results paths, and the committed bytes equal the validated pre-commit artifacts. Require `SUB2API_CANDIDATE_HEAD == SUB2API_TESTED_HEAD`. Recompute both candidate implementation trees and require their algorithm, exact exclusion policy/arrays, count, and digest to equal the results-bound tested-tree values while their `source_commit` fields equal the candidate heads. This is the self-reference-safe evidence boundary.
+
+The independent reviewer checks those exact two candidate heads, full goal coverage, the route-by-authority matrix, ordering/races/idempotency/replay, frontend version continuity, origin trust, direct `startProxy` ordering, certificate verification, exact RED evidence, sandbox enforcement, leakage, and scope. Persist the sole authoritative review artifact under `oracle-lab-phase-1-feature-review.schema.json` as `phase-1-feature-review.json`; no optional report is part of this boundary. The JSON binds tested heads, candidate heads, both tested and candidate implementation-tree bindings, exact evidence-commit topology, feature baseline/results, latest context chain head, plan approval, reviewer identity, review scope, decision, and finding counts. Only `approved` with zero Critical/Important is accepted. A later integrated head with a different implementation-tree digest has never been reviewed by this artifact and cannot consume it.
+
+Validate, then commit only the JSON as the direct child of `CC_GATEWAY_CANDIDATE_HEAD`:
+
+```bash
+npm run oracle:phase1 -- validate-feature-review --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_ROOT} --sub2api-root ${SUB2API_ROOT} --execution-context ${PHASE1_EXECUTION_CONTEXT_PATH} --plan-review docs/superpowers/evidence/phase-1/phase-1-plan-review.json --feature-baseline docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-baseline.json --feature-results docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json --feature-review docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-review.json --reviewed-cc-candidate-head ${CC_GATEWAY_CANDIDATE_HEAD} --reviewed-sub2api-candidate-head ${SUB2API_CANDIDATE_HEAD}
+git add docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-review.json
+git commit -m "docs(oracle): attest Phase 1 feature review"
+```
+
+Record this commit as `CC_GATEWAY_REVIEW_ATTESTATION_HEAD` and expose the field name `review_attestation_head`. Its sole parent is `CC_GATEWAY_CANDIDATE_HEAD`, and its exact delta adds only the one review JSON path whose committed bytes equal the validated artifact; no later commit before the merge may change that path. `validatePhase1FeatureReviewAttestation` and `build-integration-entry` independently prove those facts and return `feature_review_attestation_mismatch` for wrong parent, extra delta, byte mismatch, or later mutation before any output write. The review commit does not change implementation paths or retroactively change the reviewed candidate heads. The closed validator rejects unknown flags, a dirty Sub2API root, any extra CC delta, review/candidate/context/result drift, and every decision other than `approved` with zero Critical/Important.
 
 - [ ] **Step 4: Merge both implementation PRs before final evidence**
 
-Push `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`, create reviewable PRs, and merge each with an ordinary merge commit after required checks. Do not squash, rebase, force-push, or commit directly to `main`. Record the exact reviewed feature heads and PR merge references. A feature-branch handoff is prohibited.
+Push `codex/oracle-phase-1-sub2api` and `codex/oracle-phase-1-cc-gateway`, create reviewable PRs, and merge each with an ordinary merge commit after required checks. Do not squash, rebase, force-push, or commit directly to `main`. Immediately before each merge fetch and record that repository's `PRE_MERGE_MAIN_HEAD`. Record exact `CC_MERGE_COMMIT` and `SUB2API_MERGE_COMMIT` SHAs. Each must have exactly two parents: the first is its recorded pre-merge main; the CC second parent is `CC_GATEWAY_REVIEW_ATTESTATION_HEAD`; the Sub2API second parent is `SUB2API_CANDIDATE_HEAD`. The commit must be an ancestor of the fetched integrated main. Squash, rebase, octopus, wrong-parent, or ancestry-only substitutes fail `merge_commit_parent_mismatch`. A feature-branch handoff is prohibited.
 
 - [ ] **Step 5: Freeze exact integrated mains in new clean worktrees**
 
 Fetch `muqihang/main` in both repositories after both PRs merge. Create these three distinct roots, all initially at the exact fetched integrated commits:
 
-- `CC_GATEWAY_EVIDENCE_ROOT`: a CC worktree on branch `codex/oracle-phase-1-post-integration`; this is the controller/output root and the eventual artifact/receipt branch.
+- `CC_GATEWAY_EVIDENCE_ROOT`: a CC worktree on uniquely named draft branch `codex/oracle-phase-1-post-integration-${PHASE1_ATTEMPT_ID}-${PHASE1_DRAFT_RUN_ID}` where run IDs match `run-[0-9]{4}`; this is the controller/output root and the eventual artifact/receipt branch.
 - `CC_GATEWAY_INTEGRATION_ROOT`: a separate detached CC worktree at fetched `muqihang/main`; this is the clean tested CC root and is never written by evidence generation.
 - `SUB2API_INTEGRATION_ROOT`: a separate detached Sub2API worktree at fetched `muqihang/main`; this is the clean tested Sub2API root and is never written by evidence generation.
 
-Initialize or sync CodeGraph in all three and require current indexes. Before building the integration entry, all three statuses are empty. `CC_GATEWAY_EVIDENCE_ROOT` and `CC_GATEWAY_INTEGRATION_ROOT` must have different canonical realpaths but the same exact integrated CC HEAD and implementation-path tree digest.
+Enumerate the full reachable-history receipt chain defined in Task 7, including tombstoned canonical paths, from the freshly fetched integrated CC main. Treat the chain as empty only when no canonical receipt path has ever appeared in that reachable history. If empty, set `PHASE1_ATTEMPT_ID=attempt-0001` and all four `PHASE1_PREVIOUS_ATTEMPT_*` values to literal `none`. Otherwise require every historical receipt to remain present and byte-identical at the tip and the committed IDs to be contiguous from `0001`; set `PHASE1_ATTEMPT_ID` to the next four-digit ID, and set `PHASE1_PREVIOUS_ATTEMPT_ID`, `PHASE1_PREVIOUS_ATTEMPT_RECEIPT`, `PHASE1_PREVIOUS_ATTEMPT_RECEIPT_DIGEST`, and `PHASE1_PREVIOUS_ATTEMPT_RECEIPT_COMMIT` from the validated last receipt. Any deletion/re-add/reset fails before attempt allocation. Set `PHASE1_DRAFT_RUN_ID=run-0001`; a pre-merge restart increments only this run ID because an unmerged draft never consumes a canonical attempt sequence. A successor canonical attempt or restarted draft always uses a new branch/root from the newly frozen mains. Initialize or sync CodeGraph in all three and require current indexes. Before building the integration entry, all three statuses are empty. `CC_GATEWAY_EVIDENCE_ROOT` and `CC_GATEWAY_INTEGRATION_ROOT` must have different canonical realpaths but the same exact integrated CC HEAD and the same recomputed `git_ls_tree_v1_sha256_canonical_json` binding.
 
-Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, on branch `main` at the exact integrated Sub2API remote-main commit; it must not be a linked worktree or either tested repository root. From `CC_GATEWAY_EVIDENCE_ROOT`, create the untracked `docs/superpowers/evidence/phase-1/phase-1-integration-entry.json` under its closed schema. It binds: exact remote URLs by digest; exact `refs/remotes/muqihang/main` commits; controller and both tested root identity/head/status digests; proof the CC controller/tested roots start at the same integrated main; the closed contract-root clone-kind/origin-URL/root-identity/head/branch/clean-status/contract binding; the reviewed feature heads and proof each is an ancestor of its integrated main; exact plan/review/context digests; unchanged shared-contract digest; sandbox executable/policy digests; disabled capabilities; and the exact implementation-path tree digests. Generation fails if either tested HEAD differs from fetched remote main, either remote advances during freezing, either tested root is dirty, the controller has any other delta, or any feature head is not an ancestor. Do not commit the entry yet: immediately before Step 6, controller status must contain exactly that one untracked path while both tested roots remain empty.
+Create or refresh a separate clean local Git clone as `SUB2API_CONTRACT_ROOT`, on branch `main` at the exact integrated Sub2API remote-main commit; it must not be a linked worktree or either tested repository root. From `CC_GATEWAY_EVIDENCE_ROOT`, create the untracked attempt-scoped integration entry under its closed schema. It binds: attempt ID; exact remote URLs/refs/commits; controller and tested root identities; the closed clone-kind/origin-URL/root-identity/head/branch/clean-status/contract binding; reviewed candidate and review-attestation heads; closed feature review; exact merge commits and two-parent topology; exact plan/review/latest-context-chain digests; feature results context chain head; unchanged shared contract; sandbox policy; disabled capabilities; and both complete implementation-tree bindings. The builder reselects the latest contiguous context chain head from integrated main and rejects any numbered artifact beyond that selected head. It accepts an expired results-bound feature context only as historical provenance when results prove `context.generated_at <= captured_at < context.expires_at`, the review binds those exact results/heads and implementation trees, and every intervening context through the selected head is a contiguous immutable `feature_capture` renewal with identical authorized feature heads; current integration-entry generation has its own fresh 24-hour window. Generation fails on remote movement, dirty roots, controller delta, stale context selection, changed feature heads or implementation trees, review mismatch, or merge topology mismatch. Immediately before Step 6, controller status must contain exactly that one untracked path while both tested roots remain empty; that path is the current attempt-scoped entry.
 
 Run from `CC_GATEWAY_EVIDENCE_ROOT` with values captured from the reviewed feature PRs and freshly fetched remote configuration:
 
 ```bash
-npm run oracle:phase1 -- build-integration-entry --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --execution-context docs/superpowers/evidence/phase-1/phase-1-execution-context.json --plan-review docs/superpowers/evidence/phase-1/phase-1-plan-review.json --feature-results docs/superpowers/evidence/phase-1/phase-1-feature-command-results.json --feature-review docs/superpowers/evidence/phase-1/phase-1-feature-review.md --reviewed-cc-feature-head ${CC_GATEWAY_FEATURE_HEAD} --reviewed-sub2api-feature-head ${SUB2API_FEATURE_HEAD} --cc-merge-reference ${CC_GATEWAY_PR_MERGE_REF} --sub2api-merge-reference ${SUB2API_PR_MERGE_REF} --cc-remote muqihang --cc-remote-ref refs/remotes/muqihang/main --cc-origin-digest ${CC_GATEWAY_ORIGIN_DIGEST} --sub2api-remote muqihang --sub2api-remote-ref refs/remotes/muqihang/main --sub2api-origin-digest ${SUB2API_ORIGIN_DIGEST} --out docs/superpowers/evidence/phase-1/phase-1-integration-entry.json
+npm run oracle:phase1 -- build-integration-entry --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --attempt-id ${PHASE1_ATTEMPT_ID} --previous-attempt-id ${PHASE1_PREVIOUS_ATTEMPT_ID} --previous-attempt-receipt ${PHASE1_PREVIOUS_ATTEMPT_RECEIPT} --previous-attempt-receipt-digest ${PHASE1_PREVIOUS_ATTEMPT_RECEIPT_DIGEST} --previous-attempt-receipt-commit ${PHASE1_PREVIOUS_ATTEMPT_RECEIPT_COMMIT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --execution-context ${PHASE1_EXECUTION_CONTEXT_PATH} --plan-review docs/superpowers/evidence/phase-1/phase-1-plan-review.json --feature-results docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-command-results.json --feature-review docs/superpowers/evidence/phase-1/${PHASE1_FEATURE_ATTEMPT_ID}/phase-1-feature-review.json --reviewed-cc-candidate-head ${CC_GATEWAY_CANDIDATE_HEAD} --reviewed-sub2api-candidate-head ${SUB2API_CANDIDATE_HEAD} --cc-review-attestation-head ${CC_GATEWAY_REVIEW_ATTESTATION_HEAD} --cc-pre-merge-main-head ${CC_PRE_MERGE_MAIN_HEAD} --sub2api-pre-merge-main-head ${SUB2API_PRE_MERGE_MAIN_HEAD} --cc-merge-commit ${CC_MERGE_COMMIT} --sub2api-merge-commit ${SUB2API_MERGE_COMMIT} --cc-remote muqihang --cc-remote-ref refs/remotes/muqihang/main --cc-origin-digest ${CC_GATEWAY_ORIGIN_DIGEST} --sub2api-remote muqihang --sub2api-remote-ref refs/remotes/muqihang/main --sub2api-origin-digest ${SUB2API_ORIGIN_DIGEST} --out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json
 ```
 
-Each `${...}` value is a required nonempty pre-captured scalar, not a default: heads are 40-lower-hex commits, merge references are the recorded ordinary-merge PR references, and origin digests are `sha256:<64-lower-hex>` of canonical remote URLs. The parser rejects environment fallback for an omitted flag. Expected: exit 0, exactly one untracked entry path in the controller, no tested-root delta, and a valid closed integration-entry schema.
+Each `${...}` value is a required nonempty pre-captured scalar, not a default: attempt IDs match `^attempt-[0-9]{4}$`, heads/merge commits are lower-hex commits, and origin digests are SHA-256 of canonical remote URLs. The parser rejects environment fallback for an omitted flag. It validates the all-`none` initial predecessor tuple or the complete successor tuple, enumerates the committed attempt chain, and returns `attempt_chain_invalid` for gap, jump, duplicate, replay, wrong receipt bytes/commit/topology, or partial tuple. It validates merge commits through reviewed Git with exact parent order and returns `merge_commit_parent_mismatch` for any substitute. Expected: exit 0, exactly one attempt-scoped untracked entry path in the controller, no tested-root delta, and a valid closed integration-entry schema.
 
 - [ ] **Step 6: Rerun the complete catalog on the exact integrated main heads**
 
 ```bash
-npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/phase-1-command-results.json
-npm run oracle:phase1 -- validate-results --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json
+npm run oracle:phase1 -- run-all --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline-out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results-out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json
+npm run oracle:phase1 -- validate-results --stage post-integration --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json
 ```
 
-Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, exact parser lifecycles, zero unclassified or duplicate events, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the entry plus the two declared result files. Validate results before changing governance state.
+Run this command from `CC_GATEWAY_EVIDENCE_ROOT`. Expected: the same twelve `pass` and two exact `expected_fail` results, exact parser lifecycles, zero unclassified or duplicate events, event and unique counts `61/61` and `51/51`, exact canonical RED leaf inventories, zero sandbox violations, repository commits exactly equal the integration entry's two fetched main heads, and no status/HEAD change in either tested root. The adapter re-fetches remote refs before and after the run; any movement invalidates the transaction. The controller after-status contains exactly the three paths in the current attempt namespace: entry, baseline, and results. Validate results before changing governance state.
 
 - [ ] **Step 7: Transition only the four Phase 1 requirement rows**
 
@@ -1746,8 +2051,8 @@ Add claims only at `local_structural` or `local_observational`. Do not add `upst
 - [ ] **Step 8: Build and validate the deterministic final handoff/report**
 
 ```bash
-npm run oracle:phase1 -- build-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/phase-1-exit-report.md
-npm run oracle:phase1 -- validate-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md
+npm run oracle:phase1 -- build-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json --registry docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff-out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json --report-out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md
+npm run oracle:phase1 -- validate-handoff --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --cc-gateway-root ${CC_GATEWAY_INTEGRATION_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --sub2api-contract-root ${SUB2API_CONTRACT_ROOT} --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --handoff docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md
 ```
 
 The handoff contains exactly:
@@ -1765,14 +2070,14 @@ export const PHASE2_ENTRY_CONDITIONS = [
 ] as const
 ```
 
-It expires exactly 24 hours after generation and binds the exact two fetched integrated main heads, catalog/integration-entry/result digests, both parser lifecycles, sorted event multisets/counts, canonical unique RED arrays/counts, derived families, safe command/failure names, requirement IDs, and repository-relative paths. The builder and validator both accept `--catalog`, independently rerun catalog and result semantics, and regenerate the Markdown; a catalog/parser/lifecycle/event/name/count/family mutation invalidates both handoff and report even when all mutated artifacts are rehashed. Validate the handoff/report pair, planning tests, Phase 1 evidence tests, full CC tests, and build before committing.
+It expires exactly 24 hours after generation for live handoff/receipt construction and binds the attempt ID, exact integrated main heads, merge topology, catalog/integration-entry/result digests, context-chain bindings, parser lifecycles, RED evidence, safe command/failure names, requirement IDs, and repository-relative paths. Receipt construction must occur before handoff expiry and persists `historical_valid_at: {validated_at, source_generated_at, source_expires_at}` with `source_generated_at <= validated_at < source_expires_at`. After the receipt is committed, later validation proves that historical relation and immutable bytes; it does not invalidate a reviewed receipt merely because the wall clock passed the source handoff expiry. The builder and validator both accept `--catalog`, independently rerun catalog and result semantics, and regenerate the Markdown. Validate the pair, planning/evidence/full tests, and build before committing.
 
 - [ ] **Step 9: Commit the exact post-integration artifact set**
 
 Run the scope/leak audits from the prior plan, then commit all final artifacts and governance transitions in one artifact commit:
 
 ```bash
-git add docs/superpowers/evidence/phase-1/phase-1-integration-entry.json docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json docs/superpowers/evidence/phase-1/phase-1-command-results.json docs/superpowers/evidence/phase-1/phase-1-handoff.json docs/superpowers/evidence/phase-1/phase-1-exit-report.md docs/superpowers/registry/oracle-lab-requirements.json docs/superpowers/registry/oracle-lab-claims.json docs/superpowers/registry/oracle-lab-current-observations.json
+git add docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md docs/superpowers/registry/oracle-lab-requirements.json docs/superpowers/registry/oracle-lab-claims.json docs/superpowers/registry/oracle-lab-current-observations.json
 git commit -m "docs(oracle): bind Phase 1 to integrated main heads"
 ```
 
@@ -1780,25 +2085,45 @@ Because `CC_GATEWAY_EVIDENCE_ROOT` has received no prior commit, the validator r
 
 - [ ] **Step 10: Generate a self-reference-safe receipt and commit only it**
 
-At the clean artifact commit, generate `phase-1-integration-receipt.json`. It binds the artifact commit, exact CC/Sub2API integrated main heads, reviewed feature heads, catalog/integration-entry/results/handoff/report/registry digests, parser lifecycle plus RED event/unique inventory counts/digests, sandbox digests, disabled capabilities, and Phase 2 gates. Validate it both before and after commit.
+At the clean artifact commit, generate the attempt-scoped `phase-1-integration-receipt.json`. It binds the artifact commit, attempt ID, exact integrated mains, reviewed candidate/review-attestation heads, merge commits/topology, latest context chain, catalog/entry/results/handoff/report/registry digests, `historical_valid_at`, RED evidence, sandbox digests, disabled capabilities, and Phase 2 gates. Validate it both before and after commit.
 
 ```bash
-npm run oracle:phase1 -- build-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt-out docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
-npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
-git add docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+npm run oracle:phase1 -- build-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt-out docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json
+npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json
+git add docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json
 git commit -m "docs(oracle): publish Phase 1 integration receipt"
-npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --receipt-commit HEAD --integration-entry docs/superpowers/evidence/phase-1/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/phase-1-integration-receipt.json
+PHASE1_RECEIPT_COMMIT=$(git rev-parse HEAD)
+npm run oracle:phase1 -- validate-integration-receipt --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --controller-root ${CC_GATEWAY_EVIDENCE_ROOT} --sub2api-root ${SUB2API_INTEGRATION_ROOT} --artifact-commit ${PHASE1_ARTIFACT_COMMIT} --receipt-commit HEAD --integration-entry docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-entry.json --baseline docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-baseline.json --results docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-command-results.json --handoff docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-handoff.json --report docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-exit-report.md --requirements docs/superpowers/registry/oracle-lab-requirements.json --claims docs/superpowers/registry/oracle-lab-claims.json --observations docs/superpowers/registry/oracle-lab-current-observations.json --receipt docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json
 ```
 
-Set `PHASE1_ARTIFACT_COMMIT` from `git rev-parse HEAD` immediately after Step 9 and require it to equal the receipt builder's independently derived clean controller HEAD. The pre-commit validator forbids `--receipt-commit` and requires controller status to contain only the untracked receipt. The post-commit validator requires `--receipt-commit HEAD`, proves that commit has the artifact commit as its sole parent, and proves its delta adds exactly one path. This two-commit chain is the only permitted solution to the artifact self-reference problem; the receipt never claims to contain its own commit hash.
+Set `PHASE1_ARTIFACT_COMMIT` from `git rev-parse HEAD` immediately after Step 9 and require it to equal the receipt builder's independently derived clean controller HEAD. Immediately after the receipt commit, set `PHASE1_RECEIPT_COMMIT=$(git rev-parse HEAD)` and use that exact immutable commit in the post-commit validator and Step 12. The pre-commit validator forbids `--receipt-commit` and requires controller status to contain only the untracked receipt. The post-commit validator requires `--receipt-commit HEAD`, proves that commit has the artifact commit as its sole parent, and proves its delta adds exactly one path. This two-commit chain is the only permitted solution to the artifact self-reference problem; the receipt never claims to contain its own commit hash.
 
 - [ ] **Step 11: Independently review and merge the post-integration evidence PR**
 
-The reviewer reruns receipt validation and verifies the integrated-main bindings, feature-head ancestry, exact artifact/receipt commit deltas, complete command set, sandbox proof, Registry transitions, leak audit, and no-production/no-canary boundary. Require zero Critical/Important findings, then merge `codex/oracle-phase-1-post-integration` through an ordinary PR merge commit.
+The reviewer reruns receipt validation and verifies the integrated-main bindings, attempt predecessor chain, context/review/merge topology, exact artifact/receipt commit deltas, complete command set, sandbox proof, Registry transitions, leak audit, and no-production/no-canary boundary. Require zero Critical/Important findings, then merge the exact `codex/oracle-phase-1-post-integration-${PHASE1_ATTEMPT_ID}-${PHASE1_DRAFT_RUN_ID}` draft through an ordinary PR merge commit.
 
 - [ ] **Step 12: Perform final remote-main verification without minting a false receipt**
 
-Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain exactly the receipt's integrated Sub2API head. Require the CC remote main to descend from the receipt commit, and require the only paths changed after the receipted integrated CC code head to be the declared Phase 1 evidence/governance paths plus the reviewed PR merge. Revalidate receipt bytes from remote main, rerun the focused planning/receipt validators, and report the final remote heads plus receipt digest. If either implementation tree changed after capture, the handoff is invalid and Steps 5-12 repeat from new integrated heads.
+Fetch both `muqihang/main` refs again, then create or refresh clean detached `CC_GATEWAY_FINAL_VERIFY_ROOT` and `SUB2API_FINAL_VERIFY_ROOT` worktrees at those exact fetched commits. Their repository `muqihang` remotes must be the exact canonical URLs/digests frozen by this plan; an equivalent mirror is not accepted. Run the read-only verifier from the CC final root:
+
+```bash
+npm run oracle:phase1 -- verify-final-remote --catalog docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json --cc-gateway-root ${CC_GATEWAY_FINAL_VERIFY_ROOT} --sub2api-root ${SUB2API_FINAL_VERIFY_ROOT} --attempt-id ${PHASE1_ATTEMPT_ID} --receipt docs/superpowers/evidence/phase-1/${PHASE1_ATTEMPT_ID}/phase-1-integration-receipt.json --receipt-commit ${PHASE1_RECEIPT_COMMIT} --cc-remote muqihang --cc-remote-ref refs/remotes/muqihang/main --cc-origin-digest sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a --sub2api-remote muqihang --sub2api-remote-ref refs/remotes/muqihang/main --sub2api-origin-digest sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9
+```
+
+`PHASE1_RECEIPT_COMMIT` is the exact one-file commit recorded in Step 10, not the later PR merge commit. The verifier accepts no environment fallback and writes no file. It first validates both clean detached roots, exact one-line remote URL digests, names, refs, and fetched HEAD/ref equality. From reachable CC history it revalidates the full immutable receipt chain including tombstones, loads the requested receipt bytes from `PHASE1_RECEIPT_COMMIT`, and revalidates its artifact/receipt topology plus all catalog/result/handoff bindings from committed Git bytes. If a later valid receipt exists, the verifier selects that unique latest receipt and commit as the effective authority, fully validates its predecessor chain and committed bytes, and then runs every URL, ancestry, tree, and changed-path check below against that later authority before it may return `decision: superseded`; superseded is never an early bypass. It requires each remote main to equal or descend from the effective receipt's corresponding integrated head and the CC remote main additionally to descend from the effective receipt commit. It recomputes `git_ls_tree_v1_sha256_canonical_json` at each current remote head and compares its exact policy/arrays, count, and digest with the effective receipt. A descendant is accepted only when all changed CC paths are under the exact Phase 1 evidence prefix or are one of the three exact governance paths, Sub2API has no changed tracked path, and both recomputed implementation-tree digests remain exact. Success is `decision: ready` when the requested receipt remains latest or `decision: superseded` only after the later effective receipt passes the same checks. Every other tracked change, including source, config, tests, tools, schemas, plans, and nonexcluded documentation, is implementation drift.
+
+On success stdout is exactly one canonical JSON object containing `schema_version`, `verification_kind: phase_1_final_remote`, `verified_at`, `decision: ready|superseded`, `attempt_id`, receipt path/digest/commit, both observed remote heads and URL digests, both implementation-tree bindings, and the latest receipt-chain head; it contains no absolute path. Remote URL/name/ref mismatch returns `context_remote_origin_drift`; rewind/non-descendant returns `context_remote_rewind`; missing/deleted/re-added/reset receipt history or receipt-commit ancestry failure returns `attempt_chain_invalid`; tree policy drift returns `implementation_tree_policy_invalid`; any nonexcluded tracked change returns `phase1_implementation_drift`; dirty/detached-head mismatch returns `dirty_repository` or `context_head_mismatch`. All failures exit nonzero before success output. The Phase 2 preflight reruns this exact command. Do not mint a self-invalidating successor receipt merely to record an allowed evidence/governance descendant.
+
+Step 12 uses closed recovery classes and allocates no attempt until its class explicitly permits one:
+
+- `dirty_repository` or `context_head_mismatch`: abandon that verification root, create a new clean detached root at the already fetched ref, and rerun the same command. Do not clean/reset the failed root and do not allocate an attempt.
+- `context_remote_origin_drift`: restore the exact configured `muqihang` URL, fetch again, recreate both clean final roots, and rerun. Remote configuration repair alone never allocates an attempt.
+- `context_remote_rewind` or a non-descendant remote: no successor attempt is legal. Restore both remote lineages through reviewed non-force reconciliation commits that descend from the effective receipted integrated heads and, for CC, the effective receipt commit; then revise the plan and repeat Mandatory Preflight. If ancestry cannot be restored, Phase 1 remains blocked.
+- `attempt_chain_invalid` caused by receipt deletion, re-addition, replacement, reset, gap, or broken receipt topology: later reconciliation cannot erase the bad reachable history, so the current chain remains blocked. Recovery requires an explicit reviewed governance/ADR decision and a revised versioned receipt-chain namespace; no current-chain attempt or old receipt may be reused.
+- `implementation_tree_policy_invalid` or `phase1_implementation_drift`: the old feature review is invalid. Stop this plan, preserve prior evidence, revise and merge an authoritative plan, repeat Mandatory Preflight on the new heads, and obtain fresh capture plus independent implementation review before any new integration entry. The revised plan must explicitly define its new branch/merge topology and, for policy changes, the new closed policy version.
+- Only an evidence-capture or packaging retry whose remote identity/ancestry, receipt history, implementation policy, and implementation-tree bindings are all unchanged may preserve the prior valid receipt, select the next contiguous canonical `PHASE1_ATTEMPT_ID`, bind its exact predecessor tuple, and rerun Steps 5-12 in a new immutable namespace; a pre-merge retry increments only `PHASE1_DRAFT_RUN_ID`.
+
+Tests cover exact-exclusion descendants (accepted), implementation descendants (`phase1_implementation_drift` and mandatory re-review), rewind/non-ancestor movement (no attempt allocation), stale replay, remote URL substitution, and both pre/post-merge evidence-only retry branches. No path may reuse an old feature review after implementation-tree drift, and no path may allocate an attempt before remote ancestry is restored. This committed-attempt/draft-run split prevents exclusive-write, receipt-predecessor, review-provenance, and sole-parent deadlocks.
 
 ## Final Verification Matrix
 
@@ -1821,15 +2146,16 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 | Remote-listen prerequisite and approved-policy mutation corpus | GREEN fail-closed through direct `startProxy`; zero TLS-read/server-create/listen effects |
 | Direct upstream HTTPS/system-trust/unsafe-env corpus | GREEN fail-closed; `rejectUnauthorized: true` |
 | Sidecar production TLS config | `InsecureSkipVerify == false`; unsafe trust env rejected before listen |
-| Execution authorization | exact plan/context/review digests; zero Critical/Important; unexpired |
+| Execution authorization | schema-v2 contiguous immutable context chain; unique latest stage head; exact plan/review/live-contract bindings; zero Critical/Important; latest lease unexpired at task start or feature capture |
 | Sub2API full Go regression | GREEN |
 | Frontend focused tests, typecheck, build | GREEN |
 | CC Gateway full tests and build | GREEN |
 | Joint local chain | GREEN |
 | OS network boundary | reviewed loopback-only sandbox and canaries; proxy environment alone is insufficient |
 | CC B4-B6 and sidecar B5-B6 | machine-readable complete lifecycles; sorted event multiset and unique counts `61/61`, `51/51`; exact canonical unique arrays/families; missing, extra same-prefix, duplicate event, malformed/truncated lifecycle, count, or persisted-order drift is unexpected |
-| Post-integration authority | final results bind exact fetched `muqihang/main` heads after both implementation PRs merge |
-| Receipt chain | artifact commit exact delta plus one-path receipt child; final CC remote main descends receipt commit |
+| Feature review and merge authority | closed review JSON binds exact candidate heads/results/context; ordinary merge commit two-parent topology proven |
+| Post-integration authority | attempt-scoped final results bind exact fetched `muqihang/main` heads after both implementation PRs merge |
+| Receipt chain | artifact commit exact delta plus one-path receipt child; `historical_valid_at` proves source freshness at receipt construction; final CC remote main descends receipt commit |
 | Shared contract digest | unchanged |
 | Production and real canary | disabled |
 
@@ -1843,7 +2169,7 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 ## Self-Review Checklist
 
 - [ ] Every Phase 1 requirement maps to at least one implementation task and one exit command.
-- [ ] No implementation or capture can run from the expired planning context without an exact-plan independent approval and fresh execution context.
+- [ ] No task or feature capture starts without the unique latest contiguous execution-context chain head at the required stage; expired predecessors remain immutable history, while an expired latest lease blocks the next boundary.
 - [ ] Every external-effect mutation reserves its version before the first dependency call and returns the final version.
 - [ ] Every one of the 15 non-public routes executes every caller/session matrix row: active system-admin JWT allowed; ordinary and would-be group/tenant administrator JWT fixtures denied 403; Admin API Key and revoked/expired/inactive JWTs denied 401; concurrent status/role/token-version changes denied before dependency work.
 - [ ] OAuth callback and promote duplicates are idempotent by safe operation key/fingerprint and invoke dependencies once.
@@ -1857,6 +2183,8 @@ Fetch both `muqihang/main` refs again. Require the Sub2API remote main to remain
 - [ ] B4-B6, Phase 2 manifest authority, reverse/oracle capture, profile synthesis, real canary, and production deployment remain out of scope.
 - [ ] All named types and function signatures are consistent between backend, handler, frontend, tests, and H1 catalog.
 - [ ] No placeholder language or unspecified test command remains.
-- [ ] Both implementation PRs merge before final capture; the post-integration artifact/receipt chain binds fetched mains and is independently reviewable and revertible.
-- [ ] Post-integration keeps the controller/evidence branch distinct from clean detached CC/Sub2API tested roots, allows only the untracked integration entry before capture, and preserves the exact integrated CC main as the artifact commit parent.
+- [ ] Feature review is a closed JSON receipt generated after the candidate-results commit, and the review-attestation commit changes only review artifacts.
+- [ ] Both implementation PRs merge before final capture; each exact merge commit proves first/second-parent topology rather than ancestry alone.
+- [ ] Post-integration keeps the attempt controller/evidence branch distinct from clean detached CC/Sub2API tested roots, allows only the attempt-scoped integration entry before capture, and preserves the exact integrated CC main as the artifact commit parent.
+- [ ] Handoff freshness is live during receipt construction and historical afterward; retry increments `PHASE1_ATTEMPT_ID` and never overwrites a tracked artifact path.
 - [ ] Every Wire provider/signature change regenerates and commits deterministic `backend/cmd/server/wire_gen.go`, and `go test ./cmd/server` passes.

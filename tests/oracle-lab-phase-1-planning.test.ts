@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
@@ -18,6 +19,17 @@ const contextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-context.s
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextPath = 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
+const executionContextSuccessorPrefix = 'docs/superpowers/evidence/phase-1/phase-1-execution-context-'
+const executionContextStages = ['implementation_entry', 'implementation', 'feature_capture'] as const
+const maxContextClockSkewMs = 5 * 60 * 1000
+const expectedRemoteUrlDigests = {
+  cc_gateway: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
+  sub2api: 'sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9',
+} as const
+const expectedGateSchemaDigests = {
+  execution_context: 'sha256:5c0f18f3614b30fe82907a74746b1ce2ed7887868bfed1854715297c8e445086',
+  plan_review: 'sha256:9c4262da2cc8620f6297ecdaacb39c6741fdaba3564a4c795da3d5149abab65a',
+} as const
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
 const redInventoryStart = '<!-- PHASE1_RED_FAILURE_INVENTORY_START -->'
@@ -186,13 +198,47 @@ function planningEntrySemantics(entry: Value, sourceResults: Value): boolean {
   })
 }
 
+function executionContextPathFor(sequence: number): string {
+  return sequence === 0
+    ? executionContextPath
+    : `${executionContextSuccessorPrefix}${String(sequence).padStart(4, '0')}.json`
+}
+
+function contextArtifactBytes(value: Value): Buffer {
+  return Buffer.from(`${JSON.stringify(value)}\n`)
+}
+
+function validationStatus(entries: string[]): Value {
+  const sorted = [...entries].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+  return { entries: sorted, digest: digest(Buffer.from(sorted.join('\0'))) }
+}
+
+function repositoryContextState(commit: string, statusEntries: string[], remoteUrlDigest = expectedRemoteUrlDigests.cc_gateway): Value {
+  return {
+    baseline_main_head: commit,
+    authorized_parent_head: commit,
+    observed_remote_main_head: commit,
+    remote_name: 'muqihang',
+    remote_url_digest: remoteUrlDigest,
+    tracking_ref: 'refs/remotes/muqihang/main',
+    implementation_branch: 'codex/oracle-phase-1-cc-gateway',
+    pre_issue_clean: true,
+    validation_status: validationStatus(statusEntries),
+  }
+}
+
 function executionContextFixture(): Value {
   const commit = 'a'.repeat(40)
   const digestValue = `sha256:${'b'.repeat(64)}`
   const pathDigest = (relative: string) => ({ path: relative, digest: digestValue })
   return {
-    schema_version: 1,
+    schema_version: 2,
     context_kind: 'phase_1_execution_context',
+    context_mode: 'initial',
+    sequence: 0,
+    stage: 'implementation_entry',
+    artifact_path: executionContextPath,
+    predecessor: null,
     generated_at: '2026-07-15T10:00:00Z',
     expires_at: '2026-07-16T10:00:00Z',
     plan: {
@@ -214,9 +260,19 @@ function executionContextFixture(): Value {
       critical_findings: 0,
       important_findings: 0,
     },
+    gate_schemas: {
+      execution_context: { path: executionContextSchemaPath, digest: expectedGateSchemaDigests.execution_context },
+      plan_review: { path: planReviewSchemaPath, digest: expectedGateSchemaDigests.plan_review },
+    },
     repositories: {
-      cc_gateway: { baseline_main_head: commit, tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: 'codex/oracle-phase-1-cc-gateway', clean: true, dirty_digest: digest(Buffer.alloc(0)) },
-      sub2api: { baseline_main_head: commit, tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: 'codex/oracle-phase-1-sub2api', clean: true, dirty_digest: digest(Buffer.alloc(0)) },
+      cc_gateway: repositoryContextState(commit, [
+        `?? ${executionContextPath}`,
+        '?? docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
+      ]),
+      sub2api: {
+        ...repositoryContextState(commit, [], expectedRemoteUrlDigests.sub2api),
+        implementation_branch: 'codex/oracle-phase-1-sub2api',
+      },
     },
     shared_contract: {
       repository: 'sub2api',
@@ -229,6 +285,8 @@ function executionContextFixture(): Value {
       status: 'authorized',
       conditions: [
         'fresh_unexpired_execution_context',
+        'contiguous_immutable_context_chain',
+        'exact_stage_and_repository_state',
         'exact_plan_digest_bound',
         'independent_plan_approval_bound',
         'critical_and_important_findings_zero',
@@ -244,6 +302,34 @@ function executionContextFixture(): Value {
       'external_network_requests',
     ],
   }
+}
+
+function successorExecutionContextFixture(previous: Value, sequence: number, stage: 'implementation' | 'feature_capture' = 'implementation'): Value {
+  const value = clone(previous)
+  const path = executionContextPathFor(sequence)
+  const generated = Date.parse(previous.generated_at) + 60 * 60 * 1000
+  const ccHead = String(sequence).repeat(40)
+  const subHead = String(sequence + 1).repeat(40)
+  value.context_mode = 'successor'
+  value.sequence = sequence
+  value.stage = stage
+  value.artifact_path = path
+  value.predecessor = {
+    path: previous.artifact_path,
+    digest: digest(contextArtifactBytes(previous)),
+    sequence: previous.sequence,
+    stage: previous.stage,
+    artifact_commit: 'c'.repeat(40),
+  }
+  value.generated_at = new Date(generated).toISOString()
+  value.expires_at = new Date(generated + 24 * 60 * 60 * 1000).toISOString()
+  value.repositories.cc_gateway.authorized_parent_head = ccHead
+  value.repositories.cc_gateway.observed_remote_main_head = previous.repositories.cc_gateway.observed_remote_main_head
+  value.repositories.cc_gateway.validation_status = validationStatus([`?? ${path}`])
+  value.repositories.sub2api.authorized_parent_head = subHead
+  value.repositories.sub2api.observed_remote_main_head = previous.repositories.sub2api.observed_remote_main_head
+  value.repositories.sub2api.validation_status = validationStatus([])
+  return value
 }
 
 function planReviewFixture(): Value {
@@ -274,6 +360,101 @@ function executionContextBindings(value: Value): boolean {
     && value.approval_receipt.decision === 'approved'
     && value.approval_receipt.critical_findings === 0
     && value.approval_receipt.important_findings === 0
+    && value.gate_schemas.execution_context.path === executionContextSchemaPath
+    && value.gate_schemas.execution_context.digest === expectedGateSchemaDigests.execution_context
+    && value.gate_schemas.plan_review.path === planReviewSchemaPath
+    && value.gate_schemas.plan_review.digest === expectedGateSchemaDigests.plan_review
+}
+
+function executionContextWindowValid(value: Value, now: number): boolean {
+  const generated = Date.parse(value.generated_at)
+  const expires = Date.parse(value.expires_at)
+  return Number.isFinite(generated)
+    && Number.isFinite(expires)
+    && generated <= now + maxContextClockSkewMs
+    && expires > generated
+    && expires - generated <= 24 * 60 * 60 * 1000
+}
+
+function executionContextFresh(value: Value, now: number): boolean {
+  return executionContextWindowValid(value, now)
+    && Date.parse(value.generated_at) <= now
+    && Date.parse(value.expires_at) > now
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function executionContextChainSemantics(
+  values: Value[],
+  selectedPath: string,
+  expectedStage: typeof executionContextStages[number],
+  now: number,
+): boolean {
+  try {
+    validateExecutionContextChainValues(values, selectedPath, expectedStage, now)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function validateExecutionContextChainValues(
+  values: Value[],
+  selectedPath: string,
+  expectedStage: typeof executionContextStages[number],
+  now: number,
+): void {
+  requireContextGate(values.length > 0, 'context_chain_gap', 'execution context chain is empty')
+  const ordered = [...values].sort((left, right) => Number(left.sequence) - Number(right.sequence))
+  requireContextGate(new Set(ordered.map((value) => value.sequence)).size === ordered.length, 'context_chain_gap', 'duplicate context sequence')
+  requireContextGate(new Set(ordered.map((value) => value.artifact_path)).size === ordered.length, 'context_sequence_mismatch', 'duplicate context path')
+
+  const initial = ordered[0]
+  requireContextGate(initial.sequence === 0 && initial.context_mode === 'initial' && initial.stage === 'implementation_entry', 'context_initial_head_mismatch', 'sequence zero mode or stage is invalid')
+  requireContextGate(initial.artifact_path === executionContextPath && initial.predecessor === null, 'context_sequence_mismatch', 'sequence zero path or predecessor is invalid')
+
+  for (let index = 0; index < ordered.length; index += 1) {
+    const value = ordered[index]
+    requireContextGate(value.sequence === index, 'context_chain_gap', 'context sequence is not contiguous')
+    requireContextGate(value.artifact_path === executionContextPathFor(index), 'context_sequence_mismatch', 'context path does not match sequence')
+    const generated = Date.parse(value.generated_at)
+    const expires = Date.parse(value.expires_at)
+    requireContextGate(Number.isFinite(generated) && Number.isFinite(expires) && expires > generated && expires - generated <= 24 * 60 * 60 * 1000, 'context_window_invalid', 'context validity window is invalid')
+    requireContextGate(generated <= now + maxContextClockSkewMs, 'context_future_timestamp', 'context is future-dated')
+    requireContextGate(executionContextBindings(value), 'context_binding_drift', 'approval binding drifted')
+    for (const repository of Object.values(value.repositories) as Value[]) {
+      const entries = repository.validation_status.entries as string[]
+      requireContextGate(sameValue(entries, [...entries].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))), 'context_unexpected_delta', 'status entries are not canonical')
+      requireContextGate(repository.validation_status.digest === digest(Buffer.from(entries.join('\0'))), 'context_unexpected_delta', 'status digest drifted')
+      requireContextGate(repository.pre_issue_clean === true, 'context_dirty_tree', 'pre-issue tree was not clean')
+    }
+    if (index === 0) continue
+
+    const previous = ordered[index - 1]
+    requireContextGate(value.context_mode === 'successor', 'context_sequence_mismatch', 'nonzero context must be successor')
+    requireContextGate(value.predecessor.sequence === previous.sequence && value.predecessor.path === previous.artifact_path, 'context_chain_gap', 'predecessor sequence or path is not immediate')
+    requireContextGate(value.predecessor.stage === previous.stage, 'context_stage_regression', 'predecessor stage binding drifted')
+    requireContextGate(value.predecessor.digest === digest(contextArtifactBytes(previous)), 'predecessor_context_mutated', 'predecessor digest drifted')
+    requireContextGate(Date.parse(value.generated_at) >= Date.parse(previous.generated_at), 'context_timestamp_regression', 'context timestamp regressed')
+    requireContextGate(executionContextStages.indexOf(value.stage) >= executionContextStages.indexOf(previous.stage), 'context_stage_regression', 'context stage regressed')
+    for (const field of ['plan', 'planning_provenance', 'approval_receipt', 'gate_schemas', 'shared_contract', 'authority_order', 'selected_requirements', 'implementation_entry', 'disabled_capabilities']) {
+      requireContextGate(sameValue(value[field], initial[field]), 'context_binding_drift', `${field} drifted`)
+    }
+    for (const name of ['cc_gateway', 'sub2api']) {
+      requireContextGate(value.repositories[name].baseline_main_head === initial.repositories[name].baseline_main_head, 'context_binding_drift', `${name} baseline drifted`)
+      for (const field of ['remote_name', 'remote_url_digest', 'tracking_ref', 'implementation_branch']) {
+        requireContextGate(value.repositories[name][field] === initial.repositories[name][field], 'context_binding_drift', `${name} ${field} drifted`)
+      }
+    }
+  }
+
+  const latest = ordered.at(-1)!
+  requireContextGate(latest.artifact_path === selectedPath, 'stale_execution_context', 'selected context is not latest')
+  requireContextGate(latest.stage === expectedStage, 'context_stage_regression', 'latest stage is not requested stage')
+  requireContextGate(Date.parse(latest.generated_at) <= now, 'context_not_yet_valid', 'latest context validity has not started')
+  requireContextGate(Date.parse(latest.expires_at) > now, 'stale_execution_context', 'latest context is expired')
 }
 
 test('Phase 1 planning entry and context satisfy their closed schemas', async () => {
@@ -331,12 +512,100 @@ test('Phase 1 execution context requires exact plan approval and closed authoriz
   const wrongPlan = clone(fixture)
   wrongPlan.approval_receipt.reviewed_plan_digest = `sha256:${'c'.repeat(64)}`
   assert.equal(executionContextBindings(wrongPlan), false)
+  const wrongGateSchema = clone(fixture)
+  wrongGateSchema.gate_schemas.execution_context.digest = `sha256:${'c'.repeat(64)}`
+  assert.equal(executionContextBindings(wrongGateSchema), false)
+  expectsGateCode(() => requireContextGate(executionContextBindings(wrongGateSchema), 'context_schema_binding_drift', 'gate schema drift'), 'context_schema_binding_drift')
   const wrongAuthority = clone(fixture)
   wrongAuthority.authority_order.reverse()
   assert.equal(validator(wrongAuthority), false)
   const duplicateAuthority = clone(fixture)
   duplicateAuthority.authority_order[1] = clone(duplicateAuthority.authority_order[0])
   assert.equal(validator(duplicateAuthority), false)
+
+  const changesRequested = clone(review)
+  changesRequested.decision = 'changes_requested'
+  changesRequested.finding_counts.important = 1
+  assert.equal(reviewValidator(changesRequested), true, JSON.stringify(reviewValidator.errors))
+  const blockedContext = clone(fixture)
+  blockedContext.approval_receipt.decision = 'changes_requested'
+  blockedContext.approval_receipt.important_findings = 1
+  assert.equal(validator(blockedContext), false)
+  expectsGateCode(() => requireContextGate(validator(blockedContext), 'context_schema_invalid', 'blocked context schema'), 'context_schema_invalid')
+  expectsGateCode(() => requireContextGate(reviewValidator({}), 'context_approval_invalid', 'invalid approval schema'), 'context_approval_invalid')
+})
+
+test('Phase 1 execution context successor chain is immutable, contiguous, fresh, and latest-only', async () => {
+  const validator = compile(await json(executionContextSchemaPath))
+  const initial = executionContextFixture()
+  const implementation = successorExecutionContextFixture(initial, 1)
+  const feature = successorExecutionContextFixture(implementation, 2, 'feature_capture')
+  const now = Date.parse('2026-07-15T12:30:00Z')
+
+  assert.equal(validator(initial), true, JSON.stringify(validator.errors))
+  assert.equal(validator(implementation), true, JSON.stringify(validator.errors))
+  assert.equal(validator(feature), true, JSON.stringify(validator.errors))
+  assert.equal(executionContextChainSemantics([initial, implementation, feature], feature.artifact_path, 'feature_capture', now), true)
+  assert.equal(executionContextChainSemantics([initial, implementation, feature], implementation.artifact_path, 'feature_capture', now), false)
+  assert.equal(executionContextChainSemantics([initial, feature], feature.artifact_path, 'feature_capture', now), false)
+  assert.equal(executionContextChainSemantics([initial, implementation, clone(implementation)], implementation.artifact_path, 'implementation', now), false)
+
+  for (const mutate of [
+    (value: Value) => { value.predecessor.digest = `sha256:${'f'.repeat(64)}` },
+    (value: Value) => { value.predecessor.path = executionContextPath },
+    (value: Value) => { value.predecessor.sequence = 0 },
+    (value: Value) => { value.sequence = 3 },
+    (value: Value) => { value.artifact_path = `${executionContextSuccessorPrefix}0003.json` },
+    (value: Value) => { value.stage = 'implementation' },
+    (value: Value) => { value.plan.digest = `sha256:${'f'.repeat(64)}` },
+    (value: Value) => { value.repositories.cc_gateway.baseline_main_head = 'f'.repeat(40) },
+    (value: Value) => { value.repositories.cc_gateway.validation_status.digest = `sha256:${'f'.repeat(64)}` },
+  ]) {
+    const changed = clone(feature)
+    mutate(changed)
+    assert.equal(executionContextChainSemantics([initial, implementation, changed], changed.artifact_path, 'feature_capture', now), false)
+  }
+
+  const future = clone(feature)
+  future.generated_at = '2026-07-15T13:00:01Z'
+  future.expires_at = '2026-07-16T13:00:01Z'
+  assert.equal(executionContextChainSemantics([initial, implementation, future], future.artifact_path, 'feature_capture', now), false)
+
+  const expired = clone(feature)
+  expired.generated_at = '2026-07-14T12:00:00Z'
+  expired.expires_at = '2026-07-15T12:00:00Z'
+  assert.equal(executionContextChainSemantics([initial, implementation, expired], expired.artifact_path, 'feature_capture', now), false)
+
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, feature], implementation.artifact_path, 'feature_capture', now), 'stale_execution_context')
+  expectsGateCode(() => validateExecutionContextChainValues([initial, feature], feature.artifact_path, 'feature_capture', now), 'context_chain_gap')
+  const badDigest = clone(feature)
+  badDigest.predecessor.digest = `sha256:${'f'.repeat(64)}`
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, badDigest], badDigest.artifact_path, 'feature_capture', now), 'predecessor_context_mutated')
+  const regressedStage = clone(feature)
+  regressedStage.stage = 'implementation'
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, regressedStage], regressedStage.artifact_path, 'feature_capture', now), 'context_stage_regression')
+  const regressedTime = clone(feature)
+  regressedTime.generated_at = '2026-07-15T10:30:00Z'
+  regressedTime.expires_at = '2026-07-16T10:30:00Z'
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, regressedTime], regressedTime.artifact_path, 'feature_capture', now), 'context_timestamp_regression')
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, future], future.artifact_path, 'feature_capture', now), 'context_future_timestamp')
+  const stale = clone(feature)
+  stale.expires_at = '2026-07-15T12:15:00Z'
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, stale], stale.artifact_path, 'feature_capture', now), 'stale_execution_context')
+  const wrongSequencePath = clone(feature)
+  wrongSequencePath.artifact_path = `${executionContextSuccessorPrefix}0003.json`
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, wrongSequencePath], wrongSequencePath.artifact_path, 'feature_capture', now), 'context_sequence_mismatch')
+  const invalidWindow = clone(feature)
+  invalidWindow.expires_at = invalidWindow.generated_at
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, invalidWindow], invalidWindow.artifact_path, 'feature_capture', now), 'context_window_invalid')
+  const bindingDrift = clone(feature)
+  bindingDrift.plan.digest = `sha256:${'f'.repeat(64)}`
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, bindingDrift], bindingDrift.artifact_path, 'feature_capture', now), 'context_binding_drift')
+
+  const notYetValid = clone(feature)
+  notYetValid.generated_at = new Date(now + 60_000).toISOString()
+  notYetValid.expires_at = new Date(now + 24 * 60 * 60 * 1000).toISOString()
+  expectsGateCode(() => validateExecutionContextChainValues([initial, implementation, notYetValid], notYetValid.artifact_path, 'feature_capture', now), 'context_not_yet_valid')
 })
 
 test('Phase 1 preflight Git inspection ignores inherited redirect state', () => {
@@ -362,52 +631,593 @@ test('Phase 1 preflight Git inspection ignores inherited redirect state', () => 
   }
 })
 
+function reviewedGitIsAncestor(cwd: string, ancestor: string, descendant: string): boolean {
+  try {
+    runReviewedGit(cwd, ['merge-base', '--is-ancestor', '--', ancestor, descendant])
+    return true
+  } catch {
+    return false
+  }
+}
+
+function failContextGate(code: string, message: string): never {
+  throw Object.assign(new Error(`${code}: ${message}`), { code })
+}
+
+function requireContextGate(condition: unknown, code: string, message: string): asserts condition {
+  if (!condition) failContextGate(code, message)
+}
+
+function hasGateCode(code: string): (error: unknown) => boolean {
+  return (error: unknown) => Boolean(error && typeof error === 'object' && (error as Value).code === code)
+}
+
+function gateArtifactPath(base: string, relative: string, invalidCode: string): string {
+  requireContextGate(
+    relative.length > 0 && !path.isAbsolute(relative) && path.normalize(relative) === relative && !relative.startsWith(`..${path.sep}`),
+    invalidCode,
+    'gate artifact path is not a normalized repository-relative path',
+  )
+  const resolved = path.resolve(base, relative)
+  requireContextGate(resolved.startsWith(`${path.resolve(base)}${path.sep}`), invalidCode, 'gate artifact path escapes its root')
+  return resolved
+}
+
+async function readGateArtifact(base: string, relative: string, missingCode: string, invalidCode: string): Promise<Buffer> {
+  const absolute = gateArtifactPath(base, relative, invalidCode)
+  const components = relative.split(path.sep)
+  for (let index = 0; index < components.length - 1; index += 1) {
+    const component = path.join(base, ...components.slice(0, index + 1))
+    let componentMetadata
+    try {
+      componentMetadata = await lstat(component)
+    } catch {
+      failContextGate(missingCode, `${relative} has a missing or unreadable ancestor`)
+    }
+    requireContextGate(!componentMetadata.isSymbolicLink(), 'context_symlink', `${relative} has a symbolic-link ancestor`)
+    requireContextGate(componentMetadata.isDirectory(), invalidCode, `${relative} has a non-directory ancestor`)
+  }
+  let metadata
+  try {
+    metadata = await lstat(absolute)
+  } catch {
+    failContextGate(missingCode, `${relative} is missing or unreadable`)
+  }
+  requireContextGate(!metadata.isSymbolicLink(), 'context_symlink', `${relative} must not be a symbolic link`)
+  requireContextGate(metadata.isFile(), invalidCode, `${relative} is not a regular file`)
+  try {
+    return await readFile(absolute)
+  } catch {
+    failContextGate(invalidCode, `${relative} is unreadable`)
+  }
+}
+
+async function readGateJsonArtifact(
+  base: string,
+  relative: string,
+  missingCode: string,
+  invalidCode: string,
+): Promise<{ bytes: Buffer; value: Value }> {
+  const bytes = await readGateArtifact(base, relative, missingCode, invalidCode)
+  try {
+    return { bytes, value: JSON.parse(bytes.toString('utf8')) as Value }
+  } catch {
+    failContextGate(invalidCode, `${relative} is not valid JSON`)
+  }
+}
+
+async function gateDirectoryNames(base: string, relative: string, code: string): Promise<string[]> {
+  const absolute = gateArtifactPath(base, relative, code)
+  const components = relative.split(path.sep)
+  for (let index = 0; index < components.length; index += 1) {
+    const component = path.join(base, ...components.slice(0, index + 1))
+    let metadata
+    try {
+      metadata = await lstat(component)
+    } catch {
+      failContextGate(code, `${relative} has a missing or unreadable component`)
+    }
+    requireContextGate(!metadata.isSymbolicLink(), 'context_symlink', `${relative} has a symbolic-link component`)
+    requireContextGate(metadata.isDirectory(), code, `${relative} has a non-directory component`)
+  }
+  try {
+    return await readdir(absolute)
+  } catch {
+    failContextGate(code, `${relative} is missing or unreadable`)
+  }
+}
+
+function reviewedGitGate(cwd: string, args: string[], code: string): Buffer {
+  try {
+    return runReviewedGit(cwd, args).stdout
+  } catch {
+    failContextGate(code, `reviewed Git command failed: ${args[0] ?? 'unknown'}`)
+  }
+}
+
+function reviewedGitTextGate(cwd: string, args: string[], code: string): string {
+  return reviewedGitGate(cwd, args, code).toString('utf8').trim()
+}
+
+function reviewedRemoteUrlDigest(cwd: string): string {
+  const output = reviewedGitGate(cwd, ['remote', 'get-url', 'muqihang'], 'context_remote_origin_drift').toString('utf8')
+  const value = output.replace(/\r?\n$/, '')
+  requireContextGate(
+    value.length > 0 && value.trim() === value && !/[\r\n]/.test(value),
+    'context_remote_origin_drift',
+    'muqihang remote URL output is not one canonical line',
+  )
+  return digest(value)
+}
+
+function reviewedGitStatusGate(cwd: string): string[] {
+  return reviewedGitGate(
+    cwd,
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none'],
+    'context_dirty_tree',
+  ).toString('utf8').split('\0').filter(Boolean)
+    .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+}
+
+function reviewedGitIsAncestorGate(cwd: string, ancestor: string, descendant: string): boolean {
+  reviewedGitGate(cwd, ['rev-parse', '--verify', '--end-of-options', `${ancestor}^{commit}`], 'context_git_object_invalid')
+  reviewedGitGate(cwd, ['rev-parse', '--verify', '--end-of-options', `${descendant}^{commit}`], 'context_git_object_invalid')
+  return reviewedGitIsAncestor(cwd, ancestor, descendant)
+}
+
+function validateAuthorizedHeadTransition(
+  previous: Value,
+  current: Value,
+  isAncestor: (repository: 'cc_gateway' | 'sub2api', ancestor: string, descendant: string) => boolean,
+): void {
+  for (const repository of ['cc_gateway', 'sub2api'] as const) {
+    requireContextGate(
+      isAncestor(
+        repository,
+        previous.repositories[repository].authorized_parent_head,
+        current.repositories[repository].authorized_parent_head,
+      ),
+      'context_head_not_descendant',
+      `${repository} authorized feature head does not descend from its predecessor`,
+    )
+  }
+}
+
+function validateObservedRemoteTransition(
+  previous: Value,
+  current: Value,
+  isAncestor: (repository: 'cc_gateway' | 'sub2api', ancestor: string, descendant: string) => boolean,
+): void {
+  for (const repository of ['cc_gateway', 'sub2api'] as const) {
+    requireContextGate(
+      isAncestor(
+        repository,
+        previous.repositories[repository].observed_remote_main_head,
+        current.repositories[repository].observed_remote_main_head,
+      ),
+      'context_remote_rewind',
+      `${repository} observed remote rewound`,
+    )
+  }
+}
+
+function currentRemoteObservation(context: Value): Value {
+  return {
+    cc_remote_main: context.repositories.cc_gateway.observed_remote_main_head,
+    sub2api_remote_main: context.repositories.sub2api.observed_remote_main_head,
+    cc_branch: context.repositories.cc_gateway.implementation_branch,
+    sub2api_branch: context.repositories.sub2api.implementation_branch,
+    cc_remote_url_digest: context.repositories.cc_gateway.remote_url_digest,
+    sub2api_remote_url_digest: context.repositories.sub2api.remote_url_digest,
+    local_contract_digest: context.shared_contract.digest,
+    remote_contract_digest: context.shared_contract.digest,
+  }
+}
+
+function validateCurrentRemoteObservation(context: Value, observation: Value): void {
+  requireContextGate(
+    observation.cc_remote_main === context.repositories.cc_gateway.observed_remote_main_head
+      && observation.sub2api_remote_main === context.repositories.sub2api.observed_remote_main_head,
+    'context_remote_authority_drift',
+    'current remote main differs from context binding',
+  )
+  requireContextGate(
+    observation.cc_branch === context.repositories.cc_gateway.implementation_branch
+      && observation.sub2api_branch === context.repositories.sub2api.implementation_branch,
+    'context_branch_mismatch',
+    'implementation branch differs from context binding',
+  )
+  requireContextGate(
+    observation.cc_remote_url_digest === context.repositories.cc_gateway.remote_url_digest
+      && observation.sub2api_remote_url_digest === context.repositories.sub2api.remote_url_digest,
+    'context_remote_origin_drift',
+    'muqihang remote URL digest differs from context binding',
+  )
+  requireContextGate(
+    observation.local_contract_digest === context.shared_contract.digest
+      && observation.remote_contract_digest === context.shared_contract.digest,
+    'context_shared_contract_drift',
+    'shared contract bytes differ from context binding',
+  )
+}
+
+function selectedContextGateObservation(context: Value, gateMode: 'pre-commit' | 'post-commit'): Value {
+  const initial = context.context_mode === 'initial'
+  const expectedPreStatus = initial
+    ? [`?? ${context.artifact_path}`, `?? ${context.approval_receipt.artifact.path}`].sort()
+    : [`?? ${context.artifact_path}`]
+  const artifactCommit = 'd'.repeat(40)
+  return {
+    gate_mode: gateMode,
+    context: clone(context),
+    selected_context_regular_file: true,
+    selected_context_digest: digest(contextArtifactBytes(context)),
+    approval_receipt_regular_file: true,
+    cc_gateway_head: gateMode === 'pre-commit' ? context.repositories.cc_gateway.authorized_parent_head : artifactCommit,
+    sub2api_head: context.repositories.sub2api.authorized_parent_head,
+    cc_status: gateMode === 'pre-commit' ? expectedPreStatus : [],
+    sub2api_status: [],
+    cc_commit_parents: gateMode === 'post-commit' ? [context.repositories.cc_gateway.authorized_parent_head] : [],
+    cc_commit_delta: gateMode === 'post-commit'
+      ? (initial
+          ? [`A\t${context.artifact_path}`, `A\t${context.approval_receipt.artifact.path}`].sort()
+          : [`A\t${context.artifact_path}`])
+      : [],
+    committed_context_digest: gateMode === 'post-commit' ? digest(contextArtifactBytes(context)) : null,
+    committed_review_digest: gateMode === 'post-commit' && initial ? context.approval_receipt.artifact.digest : null,
+  }
+}
+
+function validateSelectedContextGateObservation(expectedContext: Value, observation: Value): void {
+  const context = observation.context as Value
+  requireContextGate(sameValue(context, expectedContext), 'context_binding_drift', 'selected context observation drifted')
+  requireContextGate(observation.selected_context_regular_file === true, 'context_symlink', 'selected context is not a regular file')
+  requireContextGate(observation.approval_receipt_regular_file === true, 'context_symlink', 'approval receipt is not a regular file')
+
+  if (context.context_mode === 'initial') {
+    for (const repository of ['cc_gateway', 'sub2api'] as const) {
+      const state = context.repositories[repository]
+      requireContextGate(
+        state.authorized_parent_head === state.baseline_main_head
+          && state.baseline_main_head === state.observed_remote_main_head,
+        'context_initial_head_mismatch',
+        `${repository} initial authorized, baseline, and observed remote heads differ`,
+      )
+    }
+    requireContextGate(
+      context.repositories.cc_gateway.authorized_parent_head === context.plan.reviewed_commit,
+      'context_initial_head_mismatch',
+      'initial CC authorized parent differs from reviewed plan commit',
+    )
+  }
+
+  const expectedPreStatus = context.context_mode === 'initial'
+    ? [`?? ${context.artifact_path}`, `?? ${context.approval_receipt.artifact.path}`].sort()
+    : [`?? ${context.artifact_path}`]
+  requireContextGate(sameValue(context.repositories.cc_gateway.validation_status.entries, expectedPreStatus), 'context_unexpected_delta', 'context does not bind exact pre-commit CC status')
+  requireContextGate(sameValue(context.repositories.sub2api.validation_status.entries, []), 'context_unexpected_delta', 'context does not bind clean Sub2API status')
+  const gateMode = observation.gate_mode
+  requireContextGate(gateMode === 'pre-commit' || gateMode === 'post-commit', 'context_gate_mode_invalid', 'unknown task-boundary gate mode')
+  requireContextGate(observation.sub2api_head === context.repositories.sub2api.authorized_parent_head, 'context_head_mismatch', 'Sub2API HEAD differs from authorized parent')
+  requireContextGate(sameValue(observation.sub2api_status, []), 'context_dirty_tree', 'Sub2API must be clean')
+
+  if (gateMode === 'pre-commit') {
+    requireContextGate(observation.cc_gateway_head === context.repositories.cc_gateway.authorized_parent_head, 'context_head_mismatch', 'pre-commit CC HEAD differs from authorized parent')
+    requireContextGate(sameValue(observation.cc_status, expectedPreStatus), 'context_dirty_tree', 'pre-commit CC status is not the exact authorization delta')
+    return
+  }
+
+  requireContextGate(sameValue(observation.cc_status, []), 'context_dirty_tree', 'post-commit CC must be clean')
+  requireContextGate(
+    sameValue(observation.cc_commit_parents, [context.repositories.cc_gateway.authorized_parent_head]),
+    'context_commit_parent_mismatch',
+    'context artifact commit must have the authorized parent as its sole parent',
+  )
+  const expectedDelta = context.context_mode === 'initial'
+    ? [`A\t${context.artifact_path}`, `A\t${context.approval_receipt.artifact.path}`].sort()
+    : [`A\t${context.artifact_path}`]
+  requireContextGate(sameValue(observation.cc_commit_delta, expectedDelta), 'context_unexpected_delta', 'context artifact commit delta is not exact')
+  requireContextGate(observation.committed_context_digest === observation.selected_context_digest, 'predecessor_context_mutated', 'committed context bytes differ from working artifact bytes')
+  if (context.context_mode === 'initial') {
+    requireContextGate(observation.committed_review_digest === context.approval_receipt.artifact.digest, 'predecessor_context_mutated', 'committed approval bytes differ')
+  }
+}
+
+function expectsGateCode(action: () => unknown, code: string): void {
+  assert.throws(action, (error: unknown) => Boolean(error && typeof error === 'object' && (error as Value).code === code))
+}
+
+test('Phase 1 context task-boundary gate closes both repository lineage and post-commit topology', () => {
+  const initial = executionContextFixture()
+  const successor = successorExecutionContextFixture(initial, 1)
+  assert.doesNotThrow(() => validateAuthorizedHeadTransition(initial, successor, () => true))
+  expectsGateCode(
+    () => validateAuthorizedHeadTransition(initial, successor, (repository) => repository !== 'sub2api'),
+    'context_head_not_descendant',
+  )
+  assert.doesNotThrow(() => validateObservedRemoteTransition(initial, successor, () => true))
+  expectsGateCode(
+    () => validateObservedRemoteTransition(initial, successor, (repository) => repository !== 'sub2api'),
+    'context_remote_rewind',
+  )
+
+  const initialPreCommit = selectedContextGateObservation(initial, 'pre-commit')
+  assert.doesNotThrow(() => validateSelectedContextGateObservation(initial, initialPreCommit))
+  const unrelatedInitialContext = clone(initial)
+  unrelatedInitialContext.repositories.sub2api.authorized_parent_head = 'f'.repeat(40)
+  const unrelatedInitialSub = selectedContextGateObservation(unrelatedInitialContext, 'pre-commit')
+  expectsGateCode(() => validateSelectedContextGateObservation(unrelatedInitialContext, unrelatedInitialSub), 'context_initial_head_mismatch')
+
+  const initialPostCommit = selectedContextGateObservation(initial, 'post-commit')
+  assert.doesNotThrow(() => validateSelectedContextGateObservation(initial, initialPostCommit))
+  for (const [mutation, code] of [
+    [(value: Value) => { value.cc_commit_parents = ['f'.repeat(40)] }, 'context_commit_parent_mismatch'],
+    [(value: Value) => { value.cc_commit_delta.push('A\tunrelated.txt') }, 'context_unexpected_delta'],
+    [(value: Value) => { value.committed_context_digest = `sha256:${'f'.repeat(64)}` }, 'predecessor_context_mutated'],
+    [(value: Value) => { value.selected_context_regular_file = false }, 'context_symlink'],
+    [(value: Value) => { value.cc_status = ['?? stray.txt'] }, 'context_dirty_tree'],
+    [(value: Value) => { value.sub2api_head = 'f'.repeat(40) }, 'context_head_mismatch'],
+  ] as Array<[(value: Value) => void, string]>) {
+    const changed = clone(initialPostCommit)
+    mutation(changed)
+    expectsGateCode(() => validateSelectedContextGateObservation(initial, changed), code)
+  }
+  const invalidGateMode = clone(initialPreCommit)
+  invalidGateMode.gate_mode = 'other'
+  expectsGateCode(() => validateSelectedContextGateObservation(initial, invalidGateMode), 'context_gate_mode_invalid')
+
+  const remote = currentRemoteObservation(initial)
+  assert.doesNotThrow(() => validateCurrentRemoteObservation(initial, remote))
+  for (const [mutation, code] of [
+    [(value: Value) => { value.sub2api_remote_main = 'f'.repeat(40) }, 'context_remote_authority_drift'],
+    [(value: Value) => { value.cc_branch = 'wrong-branch' }, 'context_branch_mismatch'],
+    [(value: Value) => { value.cc_remote_url_digest = `sha256:${'f'.repeat(64)}` }, 'context_remote_origin_drift'],
+    [(value: Value) => { value.remote_contract_digest = `sha256:${'f'.repeat(64)}` }, 'context_shared_contract_drift'],
+  ] as Array<[(value: Value) => void, string]>) {
+    const changed = clone(remote)
+    mutation(changed)
+    expectsGateCode(() => validateCurrentRemoteObservation(initial, changed), code)
+  }
+})
+
+test('Phase 1 live gate maps filesystem and reviewed-Git boundary failures to stable codes', async () => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'phase1-context-gate-'))
+  await mkdir(path.join(fixtureRoot, 'gate'))
+  await writeFile(path.join(fixtureRoot, 'gate', 'valid.json'), '{"valid":true}\n')
+  await writeFile(path.join(fixtureRoot, 'gate', 'malformed.json'), '{not-json}\n')
+  await symlink('valid.json', path.join(fixtureRoot, 'gate', 'linked.json'))
+  await symlink('gate', path.join(fixtureRoot, 'linked-gate'))
+
+  await assert.rejects(
+    readGateJsonArtifact(fixtureRoot, 'gate/missing.json', 'context_chain_gap', 'context_schema_invalid'),
+    hasGateCode('context_chain_gap'),
+  )
+  await assert.rejects(
+    readGateJsonArtifact(fixtureRoot, 'gate/malformed.json', 'context_chain_gap', 'context_schema_invalid'),
+    hasGateCode('context_schema_invalid'),
+  )
+  await assert.rejects(
+    readGateJsonArtifact(fixtureRoot, 'gate/linked.json', 'context_chain_gap', 'context_schema_invalid'),
+    hasGateCode('context_symlink'),
+  )
+  await assert.rejects(
+    readGateJsonArtifact(fixtureRoot, 'linked-gate/valid.json', 'context_chain_gap', 'context_schema_invalid'),
+    hasGateCode('context_symlink'),
+  )
+  assert.deepEqual((await readGateJsonArtifact(fixtureRoot, 'gate/valid.json', 'context_chain_gap', 'context_schema_invalid')).value, { valid: true })
+  assert.equal(reviewedRemoteUrlDigest(root), expectedRemoteUrlDigests.cc_gateway)
+  expectsGateCode(
+    () => reviewedGitGate(root, ['rev-parse', '--verify', '--end-of-options', 'refs/does-not-exist^{commit}'], 'context_remote_authority_drift'),
+    'context_remote_authority_drift',
+  )
+})
+
+async function liveExecutionContextChain(selectedPath: string, now: number): Promise<Value[]> {
+  const directoryRelative = path.dirname(executionContextPath)
+  const directoryNames = await gateDirectoryNames(root, directoryRelative, 'context_chain_gap')
+  const names = directoryNames.filter((name) =>
+    name === path.basename(executionContextPath) || /^phase-1-execution-context-[0-9]{4}\.json$/.test(name))
+  const nearMatch = directoryNames.find((name) => name.startsWith('phase-1-execution-context') && !names.includes(name))
+  requireContextGate(nearMatch === undefined, 'context_sequence_mismatch', `unexpected context-like path ${nearMatch}`)
+  const schemaArtifact = await readGateJsonArtifact(root, executionContextSchemaPath, 'context_schema_invalid', 'context_schema_invalid')
+  requireContextGate(digest(schemaArtifact.bytes) === expectedGateSchemaDigests.execution_context, 'context_schema_binding_drift', 'execution-context schema bytes differ from the reviewed gate engine')
+  let validator: ReturnType<typeof compile>
+  try {
+    validator = compile(schemaArtifact.value)
+  } catch {
+    failContextGate('context_schema_invalid', 'execution-context schema cannot be compiled')
+  }
+  const contexts: Value[] = []
+  for (const name of names) {
+    const relative = path.posix.join(path.posix.dirname(executionContextPath), name)
+    const artifact = await readGateJsonArtifact(root, relative, 'context_chain_gap', 'context_schema_invalid')
+    const value = artifact.value
+    requireContextGate(validator(value), 'context_schema_invalid', `${relative}: ${JSON.stringify(validator.errors)}`)
+    requireContextGate(value.artifact_path === relative, 'context_sequence_mismatch', `${relative} does not match artifact_path`)
+    contexts.push(value)
+  }
+  contexts.sort((left, right) => left.sequence - right.sequence)
+  requireContextGate(contexts.length > 0, 'context_chain_gap', 'execution context chain is empty')
+  requireContextGate(
+    sameValue(contexts.map((value) => value.sequence), Array.from({ length: contexts.length }, (_, index) => index)),
+    'context_chain_gap',
+    'execution context sequence is not contiguous',
+  )
+  requireContextGate(contexts.at(-1)!.artifact_path === selectedPath, 'stale_execution_context', 'selected context is not the latest chain head')
+
+  const initial = contexts[0]
+  for (let index = 0; index < contexts.length; index += 1) {
+    const value = contexts[index]
+    requireContextGate(value.artifact_path === executionContextPathFor(index), 'context_sequence_mismatch', 'artifact path does not match sequence')
+    const generated = Date.parse(value.generated_at)
+    const expires = Date.parse(value.expires_at)
+    requireContextGate(Number.isFinite(generated) && Number.isFinite(expires) && expires > generated && expires - generated <= 24 * 60 * 60 * 1000, 'context_window_invalid', 'execution context window is invalid')
+    requireContextGate(generated <= now + maxContextClockSkewMs, 'context_future_timestamp', 'execution context is future-dated')
+    requireContextGate(executionContextBindings(value), 'context_binding_drift', 'execution context approval binding drifted')
+    for (const field of ['plan', 'planning_provenance', 'approval_receipt', 'gate_schemas', 'shared_contract', 'authority_order', 'selected_requirements', 'implementation_entry', 'disabled_capabilities']) {
+      requireContextGate(sameValue(value[field], initial[field]), 'context_binding_drift', `${field} drifted across context chain`)
+    }
+    for (const repository of Object.values(value.repositories) as Value[]) {
+      const entries = repository.validation_status.entries as string[]
+      requireContextGate(sameValue(entries, [...entries].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))), 'context_unexpected_delta', 'validation status is not canonical')
+      requireContextGate(repository.validation_status.digest === digest(Buffer.from(entries.join('\0'))), 'context_unexpected_delta', 'validation status digest drifted')
+      requireContextGate(repository.pre_issue_clean === true, 'context_dirty_tree', 'pre-issue repository was not clean')
+    }
+    if (index === 0) continue
+
+    const previous = contexts[index - 1]
+    validateAuthorizedHeadTransition(previous, value, (repository, ancestor, descendant) => reviewedGitIsAncestorGate(
+      repository === 'cc_gateway' ? root : String(process.env.SUB2API_ROOT),
+      ancestor,
+      descendant,
+    ))
+    requireContextGate(value.predecessor.sequence === previous.sequence, 'context_chain_gap', 'predecessor sequence is not contiguous')
+    requireContextGate(value.predecessor.path === previous.artifact_path, 'context_chain_gap', 'predecessor path does not bind previous context')
+    requireContextGate(value.predecessor.stage === previous.stage, 'context_stage_regression', 'predecessor stage binding drifted')
+    requireContextGate(value.predecessor.digest === digest(await readGateArtifact(root, previous.artifact_path, 'context_chain_gap', 'predecessor_context_mutated')), 'predecessor_context_mutated', 'predecessor bytes drifted')
+    requireContextGate(executionContextStages.indexOf(value.stage) >= executionContextStages.indexOf(previous.stage), 'context_stage_regression', 'context stage regressed')
+    requireContextGate(Date.parse(value.generated_at) >= Date.parse(previous.generated_at), 'context_timestamp_regression', 'context timestamp regressed')
+    for (const name of ['cc_gateway', 'sub2api']) {
+      requireContextGate(value.repositories[name].baseline_main_head === initial.repositories[name].baseline_main_head, 'context_binding_drift', `${name} baseline drifted`)
+      for (const field of ['remote_name', 'remote_url_digest', 'tracking_ref', 'implementation_branch']) {
+        requireContextGate(value.repositories[name][field] === initial.repositories[name][field], 'context_binding_drift', `${name} ${field} drifted`)
+      }
+    }
+    validateObservedRemoteTransition(previous, value, (repository, ancestor, descendant) => reviewedGitIsAncestorGate(
+      repository === 'cc_gateway' ? root : String(process.env.SUB2API_ROOT),
+      ancestor,
+      descendant,
+    ))
+
+    const artifactCommit = value.predecessor.artifact_commit
+    requireContextGate(reviewedGitIsAncestorGate(root, artifactCommit, value.repositories.cc_gateway.authorized_parent_head), 'context_head_not_descendant', 'CC authorized parent does not descend from predecessor artifact commit')
+    const committedBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${artifactCommit}:${previous.artifact_path}`], 'predecessor_context_mutated')
+    requireContextGate(digest(committedBytes) === value.predecessor.digest, 'predecessor_context_mutated', 'committed predecessor bytes drifted')
+    const parents = reviewedGitTextGate(root, ['rev-list', '--parents', '-n', '1', artifactCommit], 'context_git_object_invalid').split(/\s+/)
+    requireContextGate(parents.length === 2 && parents[1] === previous.repositories.cc_gateway.authorized_parent_head, 'context_commit_parent_mismatch', 'predecessor context commit parent is not exact')
+    const delta = reviewedGitTextGate(root, ['diff-tree', '--no-commit-id', '--name-status', '-r', artifactCommit], 'context_git_object_invalid').split('\n').filter(Boolean).sort()
+    const expectedDelta = previous.sequence === 0
+      ? [`A\t${previous.artifact_path}`, 'A\tdocs/superpowers/evidence/phase-1/phase-1-plan-review.json'].sort()
+      : [`A\t${previous.artifact_path}`]
+    requireContextGate(sameValue(delta, expectedDelta), 'context_unexpected_delta', 'predecessor context commit delta mismatch')
+    const laterChanges = reviewedGitTextGate(root, ['log', '--format=%H', `${artifactCommit}..${value.repositories.cc_gateway.authorized_parent_head}`, '--', previous.artifact_path], 'context_git_object_invalid')
+    requireContextGate(laterChanges === '', 'predecessor_context_mutated', 'predecessor context changed after its artifact commit')
+    if (previous.sequence === 0) {
+      const reviewPath = previous.approval_receipt.artifact.path
+      const committedReviewBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${artifactCommit}:${reviewPath}`], 'predecessor_context_mutated')
+      requireContextGate(digest(committedReviewBytes) === previous.approval_receipt.artifact.digest, 'predecessor_context_mutated', 'plan approval commit bytes drifted')
+      const laterReviewChanges = reviewedGitTextGate(root, ['log', '--format=%H', `${artifactCommit}..${value.repositories.cc_gateway.authorized_parent_head}`, '--', reviewPath], 'context_git_object_invalid')
+      requireContextGate(laterReviewChanges === '', 'predecessor_context_mutated', 'plan approval receipt mutated after authorization')
+    }
+  }
+  requireContextGate(Date.parse(contexts.at(-1)!.generated_at) <= now, 'context_not_yet_valid', 'latest execution context validity has not started')
+  requireContextGate(Date.parse(contexts.at(-1)!.expires_at) > now, 'stale_execution_context', 'latest execution context is expired')
+  return contexts
+}
+
 test('required Phase 1 execution context binds live bytes, approval, expiry, and both main heads', async (t) => {
   if (process.env.PHASE1_REQUIRE_EXECUTION_CONTEXT !== '1') {
     t.skip('execution context is created just in time after the reviewed plan merges')
     return
   }
   const sub2apiRoot = process.env.SUB2API_ROOT
-  assert(sub2apiRoot, 'SUB2API_ROOT is required with PHASE1_REQUIRE_EXECUTION_CONTEXT=1')
-  const context = await validate(executionContextSchemaPath, executionContextPath)
-  const review = await validate(planReviewSchemaPath, context.approval_receipt.artifact.path)
-  assert.equal(executionContextBindings(context), true)
-  const currentPlanBytes = await readFile(path.join(root, context.plan.path))
-  const reviewedPlanBytes = runReviewedGit(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${context.plan.path}`]).stdout
-  assert.equal(context.plan.digest, digest(currentPlanBytes))
-  assert.equal(context.plan.digest, digest(reviewedPlanBytes))
-  assert.equal(context.approval_receipt.artifact.digest, digest(await readFile(path.join(root, context.approval_receipt.artifact.path))))
-  assert.deepEqual(review.plan, context.plan)
-  assert.equal(review.reviewer_id, context.approval_receipt.reviewer_id)
-  assert.equal(review.review_round, context.approval_receipt.review_round)
-  assert.equal(review.decision, context.approval_receipt.decision)
-  assert.equal(review.finding_counts.critical, context.approval_receipt.critical_findings)
-  assert.equal(review.finding_counts.important, context.approval_receipt.important_findings)
-  assert.equal(context.planning_provenance.entry.digest, digest(await readFile(path.join(root, context.planning_provenance.entry.path))))
-  assert.equal(context.planning_provenance.context.digest, digest(await readFile(path.join(root, context.planning_provenance.context.path))))
-  for (const binding of context.authority_order as Value[]) {
-    assert.equal(binding.digest, digest(await readFile(path.join(root, binding.path))), binding.path)
+  requireContextGate(typeof sub2apiRoot === 'string' && sub2apiRoot.length > 0, 'context_gate_mode_invalid', 'SUB2API_ROOT is required')
+  const contextMode = process.env.PHASE1_EXECUTION_CONTEXT_MODE
+  const gateMode = process.env.PHASE1_EXECUTION_CONTEXT_GATE
+  const selectedPath = process.env.PHASE1_EXECUTION_CONTEXT_PATH
+  requireContextGate(contextMode === 'initial' || contextMode === 'successor', 'context_gate_mode_invalid', 'PHASE1_EXECUTION_CONTEXT_MODE must be initial or successor')
+  requireContextGate(gateMode === 'pre-commit' || gateMode === 'post-commit', 'context_gate_mode_invalid', 'PHASE1_EXECUTION_CONTEXT_GATE must be pre-commit or post-commit')
+  requireContextGate(typeof selectedPath === 'string' && selectedPath.length > 0, 'context_gate_mode_invalid', 'PHASE1_EXECUTION_CONTEXT_PATH is required')
+  const contexts = await liveExecutionContextChain(selectedPath, Date.now())
+  const context = contexts.at(-1)!
+  requireContextGate(context.context_mode === contextMode, 'context_gate_mode_invalid', 'selected context mode does not match requested mode')
+  if (contextMode === 'initial') {
+    requireContextGate(contexts.length === 1, 'context_chain_gap', 'initial mode must contain only sequence zero')
+    requireContextGate(process.env.PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH === undefined, 'context_gate_mode_invalid', 'initial mode forbids predecessor path')
+  } else {
+    requireContextGate(contexts.length > 1, 'context_chain_gap', 'successor mode requires a predecessor')
+    requireContextGate(process.env.PHASE1_PREVIOUS_EXECUTION_CONTEXT_PATH === contexts.at(-2)!.artifact_path, 'context_chain_gap', 'declared predecessor is not immediate')
   }
-  const window = Date.parse(context.expires_at) - Date.parse(context.generated_at)
-  assert(window > 0 && window <= 24 * 60 * 60 * 1000)
-  assert(Date.now() < Date.parse(context.expires_at), 'execution context is expired')
-  const ccRemoteMain = reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
-  const subRemoteMain = reviewedGitText(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
-  assert.equal(context.repositories.cc_gateway.baseline_main_head, ccRemoteMain)
-  assert.equal(context.repositories.sub2api.baseline_main_head, subRemoteMain)
-  assert.equal(reviewedGitText(root, ['branch', '--show-current']), context.repositories.cc_gateway.implementation_branch)
-  assert.equal(reviewedGitText(sub2apiRoot, ['branch', '--show-current']), context.repositories.sub2api.implementation_branch)
-  assert.equal(reviewedGitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']), context.plan.reviewed_commit)
-  assert.equal(reviewedGitText(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']), subRemoteMain)
+  const selectedArtifact = await readGateJsonArtifact(root, selectedPath, 'context_chain_gap', 'context_schema_invalid')
+  const reviewArtifact = await readGateJsonArtifact(root, context.approval_receipt.artifact.path, 'context_approval_invalid', 'context_approval_invalid')
+  const review = reviewArtifact.value
+  const reviewSchemaArtifact = await readGateJsonArtifact(root, planReviewSchemaPath, 'context_approval_invalid', 'context_approval_invalid')
+  requireContextGate(digest(reviewSchemaArtifact.bytes) === expectedGateSchemaDigests.plan_review, 'context_schema_binding_drift', 'plan-review schema bytes differ from the reviewed gate engine')
+  let reviewValidator: ReturnType<typeof compile>
+  try {
+    reviewValidator = compile(reviewSchemaArtifact.value)
+  } catch {
+    failContextGate('context_approval_invalid', 'plan-review schema cannot be compiled')
+  }
+  requireContextGate(reviewValidator(review), 'context_approval_invalid', JSON.stringify(reviewValidator.errors))
+  requireContextGate(executionContextBindings(context), 'context_binding_drift', 'execution context approval binding drifted')
+  const currentPlanBytes = await readGateArtifact(root, context.plan.path, 'context_binding_drift', 'context_binding_drift')
+  const reviewedPlanBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${context.plan.path}`], 'context_binding_drift')
+  const remotePlanBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${context.plan.path}`], 'context_remote_authority_drift')
+  requireContextGate(context.plan.digest === digest(currentPlanBytes), 'context_binding_drift', 'current plan bytes drifted')
+  requireContextGate(context.plan.digest === digest(reviewedPlanBytes), 'context_binding_drift', 'reviewed plan bytes drifted')
+  requireContextGate(context.plan.digest === digest(remotePlanBytes), 'context_remote_authority_drift', 'remote plan bytes drifted')
+  for (const binding of Object.values(context.gate_schemas) as Value[]) {
+    const expectedDigest = binding.path === executionContextSchemaPath
+      ? expectedGateSchemaDigests.execution_context
+      : expectedGateSchemaDigests.plan_review
+    requireContextGate(binding.digest === expectedDigest, 'context_schema_binding_drift', `${binding.path} context binding drifted`)
+    requireContextGate(binding.digest === digest(await readGateArtifact(root, binding.path, 'context_schema_binding_drift', 'context_schema_binding_drift')), 'context_schema_binding_drift', `${binding.path} working bytes drifted`)
+    const reviewedSchemaBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${binding.path}`], 'context_schema_binding_drift')
+    const remoteSchemaBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${binding.path}`], 'context_remote_authority_drift')
+    requireContextGate(binding.digest === digest(reviewedSchemaBytes), 'context_schema_binding_drift', `${binding.path} reviewed bytes drifted`)
+    requireContextGate(binding.digest === digest(remoteSchemaBytes), 'context_remote_authority_drift', `${binding.path} remote bytes drifted`)
+  }
+  requireContextGate(context.approval_receipt.artifact.digest === digest(reviewArtifact.bytes), 'context_binding_drift', 'approval receipt bytes drifted')
+  requireContextGate(sameValue(review.plan, context.plan), 'context_binding_drift', 'review plan binding drifted')
+  requireContextGate(review.reviewer_id === context.approval_receipt.reviewer_id, 'context_binding_drift', 'reviewer binding drifted')
+  requireContextGate(review.review_round === context.approval_receipt.review_round, 'context_binding_drift', 'review round drifted')
+  requireContextGate(review.decision === context.approval_receipt.decision, 'context_binding_drift', 'review decision drifted')
+  requireContextGate(review.finding_counts.critical === context.approval_receipt.critical_findings, 'context_binding_drift', 'critical finding count drifted')
+  requireContextGate(review.finding_counts.important === context.approval_receipt.important_findings, 'context_binding_drift', 'important finding count drifted')
+  requireContextGate(context.planning_provenance.entry.digest === digest(await readGateArtifact(root, context.planning_provenance.entry.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', 'planning entry bytes drifted')
+  requireContextGate(context.planning_provenance.context.digest === digest(await readGateArtifact(root, context.planning_provenance.context.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', 'planning context bytes drifted')
+  for (const binding of context.authority_order as Value[]) {
+    requireContextGate(binding.digest === digest(await readGateArtifact(root, binding.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', `${binding.path} bytes drifted`)
+    const remoteBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${binding.path}`], 'context_remote_authority_drift')
+    requireContextGate(binding.digest === digest(remoteBytes), 'context_remote_authority_drift', `remote authority drift: ${binding.path}`)
+  }
+  const ccRemoteMain = reviewedGitTextGate(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'], 'context_remote_authority_drift')
+  const subRemoteMain = reviewedGitTextGate(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'], 'context_remote_authority_drift')
+  const remoteObservation = currentRemoteObservation(context)
+  remoteObservation.cc_remote_main = ccRemoteMain
+  remoteObservation.sub2api_remote_main = subRemoteMain
+  remoteObservation.cc_branch = reviewedGitTextGate(root, ['branch', '--show-current'], 'context_branch_mismatch')
+  remoteObservation.sub2api_branch = reviewedGitTextGate(sub2apiRoot, ['branch', '--show-current'], 'context_branch_mismatch')
+  remoteObservation.cc_remote_url_digest = reviewedRemoteUrlDigest(root)
+  remoteObservation.sub2api_remote_url_digest = reviewedRemoteUrlDigest(sub2apiRoot)
+  const ccHead = reviewedGitTextGate(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'], 'context_git_object_invalid')
+  const subHead = reviewedGitTextGate(sub2apiRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'], 'context_git_object_invalid')
+  const gateObservation = selectedContextGateObservation(context, gateMode)
+  gateObservation.context = clone(context)
+  gateObservation.selected_context_regular_file = true
+  gateObservation.selected_context_digest = digest(selectedArtifact.bytes)
+  gateObservation.approval_receipt_regular_file = true
+  gateObservation.cc_gateway_head = ccHead
+  gateObservation.sub2api_head = subHead
+  gateObservation.cc_status = reviewedGitStatusGate(root)
+  gateObservation.sub2api_status = reviewedGitStatusGate(sub2apiRoot)
+  if (gateMode === 'post-commit') {
+    gateObservation.cc_commit_parents = reviewedGitTextGate(root, ['rev-list', '--parents', '-n', '1', ccHead], 'context_commit_parent_mismatch').split(/\s+/).slice(1)
+    gateObservation.cc_commit_delta = reviewedGitTextGate(root, ['diff-tree', '--no-commit-id', '--name-status', '-r', ccHead], 'context_unexpected_delta').split('\n').filter(Boolean).sort()
+    gateObservation.committed_context_digest = digest(reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${ccHead}:${selectedPath}`], 'predecessor_context_mutated'))
+    gateObservation.committed_review_digest = contextMode === 'initial'
+      ? digest(reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${ccHead}:${context.approval_receipt.artifact.path}`], 'predecessor_context_mutated'))
+      : null
+  }
+  validateSelectedContextGateObservation(context, gateObservation)
 
-  const ccStatus = runReviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
-    .toString('utf8').split('\0').filter(Boolean).sort()
-  assert.deepEqual(ccStatus, [
-    '?? docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
-    '?? docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
-  ])
-  const subStatus = runReviewedGit(sub2apiRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
-  assert.equal(subStatus.length, 0, 'Sub2API implementation worktree must be clean before Phase 1 edits')
+  const contractPath = context.shared_contract.path
+  const localContractBytes = await readGateArtifact(sub2apiRoot, contractPath, 'context_shared_contract_drift', 'context_shared_contract_drift')
+  const remoteContractBytes = reviewedGitGate(sub2apiRoot, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${subRemoteMain}:${contractPath}`], 'context_shared_contract_drift')
+  remoteObservation.local_contract_digest = digest(localContractBytes)
+  remoteObservation.remote_contract_digest = digest(remoteContractBytes)
+  validateCurrentRemoteObservation(context, remoteObservation)
 })
 
 test('Phase 1 planning context binds the exact entry bytes and governing source bytes', async () => {
@@ -596,6 +1406,91 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
+test('Phase 1 plan closes context refresh, review, merge-topology, and retry lifecycles', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  for (const required of [
+    'context_mode',
+    'authorized_parent_head',
+    'observed_remote_main_head',
+    'predecessor artifact commit',
+    'phase-1-execution-context-0001.json',
+    'PHASE1_EXECUTION_CONTEXT_MODE=successor',
+    'PHASE1_EXECUTION_CONTEXT_GATE=pre-commit',
+    'PHASE1_EXECUTION_CONTEXT_GATE=post-commit',
+    'PHASE1_EXECUTION_CONTEXT_PATH',
+    'stale_execution_context',
+    'context_chain_gap',
+    'predecessor_context_mutated',
+    'phase-1-feature-review.json',
+    'oracle-lab-phase-1-feature-review.schema.json',
+    'review_attestation_head',
+    '--cc-merge-commit',
+    '--sub2api-merge-commit',
+    'merge_commit_parent_mismatch',
+    'historical_valid_at',
+    'PHASE1_ATTEMPT_ID',
+    '--previous-attempt-id',
+    '--previous-attempt-receipt',
+    '--previous-attempt-receipt-digest',
+    '--previous-attempt-receipt-commit',
+    'attempt_chain_invalid',
+    'PHASE1_DRAFT_RUN_ID',
+    'an unmerged draft never consumes a canonical attempt sequence',
+    'git_ls_tree_v1_sha256_canonical_json',
+    'phase1_evidence_governance_only_v1',
+    'phase1_implementation_drift',
+    'context_remote_origin_drift',
+    'context_git_object_invalid',
+    'feature-[0-9]{4}',
+    'attempt-[0-9]{4}',
+    'derive its CC artifact commit as the unique one-parent child',
+    'tested Sub2API feature HEAD to equal `repositories.sub2api.authorized_parent_head` exactly',
+    'CC_GATEWAY_TESTED_HEAD',
+    'SUB2API_TESTED_HEAD',
+    'feature_evidence_commit_mismatch',
+  ]) assert(plan.includes(required), required)
+
+  assert.doesNotMatch(plan, /repeat Steps 1-4/)
+  assert.doesNotMatch(plan, /--execution-context docs\/superpowers\/evidence\/phase-1\/phase-1-execution-context\.json/)
+  assert.match(plan, /latest contiguous context chain head/)
+  assert.match(plan, /generated_at.*clock skew/i)
+  assert.match(plan, /shared-contract bytes.*live/i)
+  assert.match(plan, /sole parent.*authorized_parent_head/i)
+  assert.match(plan, /feature results.*context chain head/i)
+  assert.match(plan, /changes_requested/)
+  assert.match(plan, /attempt-0001` is sequence `1` with `predecessor: null`/)
+  assert.match(plan, /missing_predecessor.*attempt_gap.*attempt_jump/s)
+  assert.match(plan, /validate-feature-review --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /context_commit_parent_mismatch/)
+  assert.match(plan, /failContextGate\(code, message\)/)
+  assert.match(plan, /git remote get-url muqihang/)
+  assert.match(plan, /remote names\/refs\/URL digests, implementation branches, and both `gate_schemas` bindings immutable across the chain/)
+  assert.match(plan, /hard-codes those two digests outside either mutable schema/)
+  assert.match(plan, /context_schema_binding_drift/)
+  assert.match(plan, /readGateArtifact.*readGateJsonArtifact.*gateDirectoryNames.*reviewedGitGate/)
+  assert.match(plan, /git ls-tree -r -z --full-tree <commit>/)
+  assert.match(plan, /docs\/superpowers\/evidence\/phase-1\//)
+  assert.match(plan, /docs\/superpowers\/registry\/oracle-lab-requirements\.json/)
+  assert.match(plan, /Sub2API has `excluded_prefixes: \[\]` and `excluded_paths: \[\]`/)
+  assert.match(plan, /source_add.*source_modify.*source_delete.*source_rename/s)
+  assert.match(plan, /executable_mode_change.*symlink_target_change.*submodule_pointer_change/s)
+  assert.match(plan, /RAW_TREE_STREAM_MUTATIONS/)
+  assert.match(plan, /implementation_tree_stream_invalid/)
+  assert.match(plan, /phase1_prefix_collision.*governance_suffix_collision/s)
+  assert.match(plan, /No path may reuse an old feature review after implementation-tree drift/)
+  assert.match(plan, /They do not claim the future evidence commit that will contain their own bytes/)
+  assert.match(plan, /unique one-parent child of `CC_GATEWAY_TESTED_HEAD`/)
+  assert.match(plan, /exact delta is `A` for only the two feature baseline\/results paths/)
+  assert.match(plan, /sole authoritative review artifact.*phase-1-feature-review\.json/)
+  assert.doesNotMatch(plan, /phase-1-feature-review\.md/)
+  assert.match(plan, /verify-final-remote --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json/)
+  assert.match(plan, /Remote URL\/name\/ref mismatch returns `context_remote_origin_drift`/)
+  assert.match(plan, /superseded is never an early bypass/)
+  assert.match(plan, /historical_receipt_deleted.*historical_receipt_deleted_readded.*attempt_chain_reset_to_0001/s)
+  assert.match(plan, /Stop this plan, preserve prior evidence/)
+  assert.match(plan, /no successor attempt is legal/)
+})
+
 test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
   const merge = plan.indexOf('Step 4: Merge both implementation PRs before final evidence')
@@ -611,7 +1506,9 @@ test('Phase 1 final handoff is minted only after merged-main recapture and a rec
   assert.match(plan, /validate-catalog --catalog/)
   assert.match(plan, /validate-results --stage feature-candidate/)
   assert.match(plan, /validate-results --stage post-integration/)
+  assert.match(plan, /build-handoff --catalog[^\n]+--controller-root[^\n]+--cc-gateway-root[^\n]+--sub2api-root[^\n]+--sub2api-contract-root/)
   assert.match(plan, /validate-handoff --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
+  assert.match(plan, /validate-handoff --catalog[^\n]+--controller-root[^\n]+--cc-gateway-root[^\n]+--sub2api-root[^\n]+--sub2api-contract-root/)
   assert.match(plan, /build-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
   assert.match(plan, /validate-integration-receipt --catalog docs\/superpowers\/registry\/oracle-lab-phase-1-command-catalog\.json --controller-root/)
   assert.match(plan, /--receipt-commit HEAD/)
@@ -620,8 +1517,14 @@ test('Phase 1 final handoff is minted only after merged-main recapture and a rec
   assert.match(plan, /controller status must contain exactly that one untracked path while both tested roots remain empty/)
   assert.match(plan, /artifact commit's sole parent to be the exact captured CC integrated main head/)
   assert.match(plan, /post-commit validator requires `--receipt-commit HEAD`, proves that commit has the artifact commit as its sole parent, and proves its delta adds exactly one path/)
-  assert.match(plan, /Sub2API remote main to remain exactly the receipt's integrated Sub2API head/)
-  assert.match(plan, /CC remote main to descend from the receipt commit/)
+  assert.match(plan, /each remote main to equal or descend from the effective receipt's corresponding integrated head/)
+  assert.match(plan, /CC remote main additionally to descend from the effective receipt commit/)
+  assert.match(plan, /A descendant is accepted only when all changed CC paths are under the exact Phase 1 evidence prefix/)
+  assert.match(plan, /Sub2API has no changed tracked path/)
+  assert.match(plan, /implementation descendants \(`phase1_implementation_drift` and mandatory re-review\)/)
+  assert.match(plan, /rewind\/non-ancestor movement \(no attempt allocation\)/)
+  assert.doesNotMatch(plan, /implementation-path tree digest/)
+  assert.doesNotMatch(plan, /Sub2API remote main to remain exactly the receipt's integrated Sub2API head/)
 })
 
 test('Phase 1 scope owns only B1-B3 and the Phase 1 listener slice', async () => {
