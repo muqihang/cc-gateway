@@ -1441,6 +1441,67 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
+test('Phase 1 full regression uses a serial process-isolation boundary', async () => {
+  const [runner, processRunner, packageManifest] = await Promise.all([
+    readFile(path.join(root, 'tests/run-all.ts'), 'utf8'),
+    readFile(path.join(root, 'tests/suite-process-runner.ts'), 'utf8'),
+    readFile(path.join(root, 'package.json'), 'utf8'),
+  ])
+
+  assert.match(runner, /runSerialSuiteProcesses/)
+  assert.match(runner, /--exclude-oracle-p0-1/)
+  assert.match(processRunner, /spawnSync/)
+  assert.match(processRunner, /run-p0-1\.ts/)
+  assert.match(processRunner, /run-all\.ts.*--exclude-oracle-p0-1/s)
+  assert.match(processRunner, /env: \{ \.\.\.\(options\.environment \?\? process\.env\) \}/)
+  assert.equal(JSON.parse(packageManifest).scripts.test, 'node --import tsx tests/run-all.ts')
+})
+
+test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  for (const required of [
+    'Phase1IgnoredStateBinding',
+    'git_exclude_standard_recursive_v1',
+    'computeIgnoredPathInventory',
+    'compareIgnoredPathInventories',
+    'cc_build_dist_v1',
+    'sub_frontend_build_v1',
+    'sub2api_joint_safe_deliverable_v1',
+    'sub-frontend-build-repeat',
+    'cc-tests-repeat',
+    'IGNORED_STATE_MUTATIONS',
+    'ignored_create',
+    'ignored_modify',
+    'ignored_delete',
+    'ignored_rename',
+    'ignored_mode_change',
+    'ignored_type_change',
+    'ignored_symlink_target_change',
+    'ignored_state_drift',
+    'ignored_state_symlink_escape',
+    'final_verify_ignored_profile_invalid',
+    'Phase1IgnoredStateChainBinding',
+    'Phase1IgnoredStateEvidenceReference',
+  ]) assert(plan.includes(required), required)
+
+  assert.match(plan, /ignored_output_policies: \{\s*cc_gateway: Phase1IgnoredOutputPolicy\s*sub2api: Phase1IgnoredOutputPolicy/s)
+  assert.match(plan, /ignored_state_transitions: \{\s*controller: Phase1ControllerIgnoredStateTransition\s*cc_gateway: Phase1IgnoredStateTransition\s*sub2api: Phase1IgnoredStateTransition/s)
+  assert.match(plan, /controller_alias_cc_gateway_v1/)
+  assert.match(plan, /transition_count: 17/)
+  assert.match(plan, /does not follow symbolic links/)
+  assert.match(plan, /absolute targets.*repository escape.*same ignored endpoint root.*dangling targets.*cross-endpoint targets.*cycles/s)
+  assert.match(plan, /`node_modules` and `\.codegraph`.*before and after every command/s)
+  assert.match(plan, /`cc-build`.*exact `dist` directory and descendants.*regular files and directories/s)
+  assert.match(plan, /`sub-frontend-build`.*exact `backend\/internal\/web\/dist` directory.*frontend\/tsconfig\.node\.tsbuildinfo/s)
+  assert.match(plan, /immediate second builds.*ignored-state digests identical/s)
+  assert.match(plan, /captureAndRunPhase1.*validatePhase1ResultsValue.*buildPhase1IntegrationEntry.*validatePhase1IntegrationEntryValue.*buildPhase1Handoff.*validatePhase1HandoffValue.*buildPhase1IntegrationReceipt.*validatePhase1IntegrationReceiptValue.*verifyPhase1FinalRemote/s)
+  assert.match(plan, /fifteen `pass`, two `expected_fail`/)
+  assert.match(plan, /does not compare fresh-root `\.codegraph` or `node_modules` digests.*does not claim evidence about a mutation that occurred before/s)
+  assert.match(plan, /Mutation tests for final remote inject each ignored operation after the before snapshot/)
+  assert.match(plan, /three consecutive isolated `npm test` runs/)
+  assert.match(plan, /npm test && npm test && npm test && npm run build/)
+})
+
 test('Phase 1 plan closes context refresh, review, merge-topology, and retry lifecycles', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
   for (const required of [
