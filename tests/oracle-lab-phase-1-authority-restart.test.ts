@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -371,13 +371,14 @@ const wrongParentCommit = git(wrongParent.cc, 'commit-tree', tree, '-p', wrongPa
 git(wrongParent.cc, 'update-ref', 'refs/heads/codex/oracle-phase-1-cc-gateway', wrongParentCommit)
 expectCode(() => tool.validatePhase1AuthorityRestartPostCommit(wrongParent.artifact, artifactBytes, { ccGatewayRoot: wrongParent.cc, sub2apiRoot: wrongParent.sub, bindings: wrongParent.bindings }), 'authority_restart_artifact_parent_mismatch')
 
-console.log('oracle-lab Phase 1 authority restart tests passed')
-
 const launcherPath = path.join(root, 'tools/oracle-lab/oracle-phase1-authority-restart')
 const launcher = readFileSync(launcherPath, 'utf8')
 for (const required of [
   '/usr/bin/env -i',
   'ci --offline --ignore-scripts',
+  'npm_config_cache="$command_cache"',
+  '/bin/cp -cRP',
+  'ORACLE_PHASE1_AUTHORITY_CACHE=command_scoped_lockfile_verified_v1',
   'ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1',
   'NODE_OPTIONS NODE_PATH',
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
@@ -390,3 +391,31 @@ const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'],
 })
 assert.equal(injectedLauncher.status, 1)
 assert.equal(injectedLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
+
+const positiveParent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-launcher-positive-'))
+const positiveRoot = path.join(positiveParent, 'cc')
+execFileSync('git', ['clone', '--shared', '--quiet', root, positiveRoot], { stdio: 'pipe' })
+for (const relative of [
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+]) copyFileSync(path.join(root, relative), path.join(positiveRoot, relative))
+write(positiveRoot, 'launcher-positive-fixture.txt', 'positive launcher fixture\n')
+git(positiveRoot, 'add', '--',
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+  'launcher-positive-fixture.txt',
+)
+git(positiveRoot, 'commit', '-qm', 'positive launcher fixture')
+git(positiveRoot, 'update-ref', 'refs/remotes/muqihang/main', git(positiveRoot, 'rev-parse', 'HEAD'))
+const positiveLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime',
+  '--cc-replacement-root', positiveRoot,
+], {
+  cwd: positiveRoot,
+  encoding: 'utf8',
+  env: { ...process.env, npm_config_cache: '/dev/null/forged-cache' },
+})
+assert.equal(positiveLauncher.status, 0, `${positiveLauncher.stdout}\n${positiveLauncher.stderr}`)
+assert.equal(existsSync(path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs')), true)
+
+console.log('oracle-lab Phase 1 authority restart tests passed')

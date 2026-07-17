@@ -164,7 +164,7 @@ type SourceValidateOptions = Readonly<{
   bindings?: AuthorityRestartBindings
 }>
 
-type AuthorityRestartCommand = 'validate-source' | 'build' | 'validate-pre-commit' | 'validate-post-commit'
+type AuthorityRestartCommand = 'validate-runtime' | 'validate-source' | 'build' | 'validate-pre-commit' | 'validate-post-commit'
 
 export type ParsedAuthorityRestartCli = Readonly<{
   command: AuthorityRestartCommand
@@ -641,6 +641,7 @@ export function validatePhase1AuthorityRestartPostCommit(value: unknown, expecte
 
 const COMMON_CLI_FLAGS = Object.freeze(['cc-source-root', 'cc-replacement-root', 'sub2api-source-root', 'sub2api-replacement-root'])
 const COMMAND_FLAGS: Readonly<Record<AuthorityRestartCommand, readonly string[]>> = Object.freeze({
+  'validate-runtime': Object.freeze(['cc-replacement-root']),
   'validate-source': COMMON_CLI_FLAGS,
   build: Object.freeze([...COMMON_CLI_FLAGS, 'plan-path', 'plan-review-path', 'execution-context-path', 'output']),
   'validate-pre-commit': Object.freeze([...COMMON_CLI_FLAGS, 'artifact']),
@@ -687,7 +688,7 @@ function assertCanonicalCliPaths(parsed: ParsedAuthorityRestartCli, bindings: Au
       || path.resolve(parsed.values['cc-replacement-root'], parsed.values.output) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
       fail('authority_restart_cli_arguments_invalid', 'authority or output path differs from the compiled contract')
     }
-  } else if (parsed.command !== 'validate-source'
+  } else if (parsed.command !== 'validate-source' && parsed.command !== 'validate-runtime'
     && path.resolve(parsed.values['cc-replacement-root'], parsed.values.artifact) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
     fail('authority_restart_cli_arguments_invalid', 'artifact path differs from the compiled contract')
   }
@@ -703,6 +704,7 @@ const AUTHORITY_RESTART_RUNTIME_PATHS = Object.freeze([
 
 function assertAuthorityRestartCliStartup(ccRootInput: string): void {
   if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
+    || process.env.ORACLE_PHASE1_AUTHORITY_CACHE !== 'command_scoped_lockfile_verified_v1'
     || process.env.HOME !== '/dev/null'
     || process.env.TMPDIR !== '/tmp'
     || realpathSync(process.execPath) !== REVIEWED_NODE_EXECUTABLE) {
@@ -730,6 +732,7 @@ export function runAuthorityRestartCli(argv: readonly string[]): void {
   const bindings = AUTHORITY_RESTART_BINDINGS
   assertCanonicalCliPaths(parsed, bindings)
   assertAuthorityRestartCliStartup(parsed.values['cc-replacement-root'])
+  if (parsed.command === 'validate-runtime') return
   validatePhase1AuthorityRestartSource({ ccGatewayRoot: parsed.values['cc-source-root'], sub2apiRoot: parsed.values['sub2api-source-root'], bindings })
   if (parsed.command === 'validate-source') return
   const ccRoot = realpathSync(parsed.values['cc-replacement-root'])

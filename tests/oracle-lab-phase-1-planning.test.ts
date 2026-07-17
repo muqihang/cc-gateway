@@ -1649,6 +1649,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'validatePhase1AuthorityRestart',
     'validatePhase1AuthorityRestartSource',
     'oracle-phase1-authority-restart',
+    'validate-runtime',
+    'command_scoped_lockfile_verified_v1',
+    'canonical OS account',
+    'untrusted content seed only',
     'initial-authority child of repaired remote main',
     'Sub2API replay base equals frozen remote main',
     '0403674d4c812e1a14704bfc890d66aac75f0325',
@@ -1667,6 +1671,8 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /intentionally omits the restart artifact's own digest and commit to avoid Git self-reference/)
   assert.match(plan, /rejects Node\/tsx, dynamic-library, and Git startup injection before Node starts/)
   assert.match(plan, /npm ci --offline --ignore-scripts/)
+  assert.match(plan, /exclusive mode-0700 command-scoped cache/)
+  assert.match(plan, /Inherited `HOME`, `npm_config_cache`.*cannot select dependency bytes/)
   assert.match(plan, /strict pre-commit gate requires the artifact to be the sole untracked delta and rejects a fully clean tree/)
   assert.match(plan, /external controller decision package is informational only/)
   assert.match(plan, /pinned checkpoint's exact changed-path set is disjoint from every authority-repair and historical exclusion/)
