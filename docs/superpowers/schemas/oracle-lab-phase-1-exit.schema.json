@@ -1031,14 +1031,26 @@
         }
       }
     },
+    "npm_cache_preparation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policy", "source_before_digest", "source_after_digest", "command_before_digest", "command_after_digest", "entry_count", "regular_file_count", "regular_file_bytes", "install_result_digest"],
+      "properties": {
+        "policy": {"const": "os_account_cow_cache_v1"},
+        "source_before_digest": {"$ref": "#/$defs/digest"}, "source_after_digest": {"$ref": "#/$defs/digest"},
+        "command_before_digest": {"$ref": "#/$defs/digest"}, "command_after_digest": {"$ref": "#/$defs/digest"},
+        "entry_count": {"type": "integer", "minimum": 1}, "regular_file_count": {"type": "integer", "minimum": 1},
+        "regular_file_bytes": {"type": "integer", "minimum": 1}, "install_result_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
     "external_dependency_binding": {
       "type": "object", "additionalProperties": false,
-      "required": ["algorithm", "repository", "preparation", "node_binary_digest", "npm_binary_digest", "go_binary_digest", "node_dependency_manifests", "go_module_manifests", "binding_digest"],
+      "required": ["algorithm", "repository", "preparation", "node_binary_digest", "npm_binary_digest", "go_binary_digest", "npm_cache_preparation", "node_dependency_manifests", "go_module_manifests", "binding_digest"],
       "properties": {
         "algorithm": {"const": "phase1_external_dependency_content_v1"},
         "repository": {"enum": ["cc_gateway", "sub2api"]},
-        "preparation": {"const": "npm_ci_offline_ignore_scripts_and_go_mod_verify_v1"},
+        "preparation": {"const": "npm_ci_offline_authenticated_cache_and_go_mod_verify_v2"},
         "node_binary_digest": {"$ref": "#/$defs/digest"}, "npm_binary_digest": {"$ref": "#/$defs/digest"}, "go_binary_digest": {"$ref": "#/$defs/digest"},
+        "npm_cache_preparation": {"$ref": "#/$defs/npm_cache_preparation"},
         "node_dependency_manifests": {
           "type": "array", "minItems": 1, "maxItems": 1,
           "prefixItems": [{"type": "object", "additionalProperties": false,

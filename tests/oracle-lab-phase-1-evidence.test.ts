@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -27,6 +27,7 @@ import {
   parsePhase1RedFailureLeaves,
   parsePhase1TrackedTree,
   preparePhase1ExternalDependencies,
+  selectPhase1GoModuleContentDirectory,
   selectLatestPhase1ExecutionContext,
   validatePhase1AttemptChain,
   validatePhase1IgnoredSymlinkClosure,
@@ -298,6 +299,8 @@ test('closed command environments omit capture authority from CC full-suite chil
   }
   assert.throws(() => buildPhase1CommandEnvironment(catalog[11] as never, roots, runtime, { NODE_OPTIONS: '--import=/tmp/evil.mjs' }),
     (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'unsafe_full_suite_environment')
+  const inheritedCache = buildPhase1CommandEnvironment(catalog[11] as never, roots, runtime, { npm_config_cache: '/tmp/caller-selected' })
+  assert.equal(inheritedCache.npm_config_cache, undefined)
   assert.throws(() => buildPhase1CommandEnvironment(catalog[11] as never, roots, { ...runtime, goBuildCache: '/tmp/caller-selected' }),
     (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'unsafe_full_suite_build_cache')
 })
@@ -521,13 +524,19 @@ function transition(repository: 'cc_gateway' | 'sub2api', policy: string) {
 }
 
 function dependencyBinding(repository: 'cc_gateway' | 'sub2api') {
+  const cacheDigest = digest(repository === 'cc_gateway' ? 'f' : '0')
   return derivePhase1ExternalDependencyBinding({
     algorithm: 'phase1_external_dependency_content_v1',
     repository,
-    preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    preparation: 'npm_ci_offline_authenticated_cache_and_go_mod_verify_v2',
     node_binary_digest: digest(repository === 'cc_gateway' ? '1' : '2'),
     npm_binary_digest: digest(repository === 'cc_gateway' ? '3' : '4'),
     go_binary_digest: digest(repository === 'cc_gateway' ? '5' : '6'),
+    npm_cache_preparation: {
+      policy: 'os_account_cow_cache_v1', source_before_digest: cacheDigest, source_after_digest: cacheDigest,
+      command_before_digest: cacheDigest, command_after_digest: cacheDigest,
+      entry_count: 4, regular_file_count: 1, regular_file_bytes: 24, install_result_digest: digest('e'),
+    },
     node_dependency_manifests: [{
       repository_relative_root: repository === 'cc_gateway' ? '.' : 'frontend',
       package_json_digest: digest('7'), package_lock_digest: digest('8'),
@@ -555,6 +564,8 @@ test('external dependency bindings are closed, signed, and reject rehashed field
     (value: any) => { value.cc_gateway.node_dependency_manifests[0].repository_relative_root = 'frontend' },
     (value: any) => { value.sub2api.go_module_manifests[0].repository_relative_root = 'sidecar/egress-tls-sidecar' },
     (value: any) => { value.sub2api.preparation = 'npm_install' },
+    (value: any) => { value.cc_gateway.npm_cache_preparation.command_after_digest = digest('a') },
+    (value: any) => { value.cc_gateway.npm_cache_preparation.extra = true },
   ]) {
     const changed: any = structuredClone(dependencies)
     mutate(changed)
@@ -571,7 +582,9 @@ test('external dependency bindings are closed, signed, and reject rehashed field
 function dependencyPreparationFixture() {
   const base = mkdtempSync(path.join(os.tmpdir(), 'phase1-dependencies-'))
   const cc = path.join(base, 'cc'); const sub = path.join(base, 'sub'); const moduleCache = path.join(base, 'gomodcache')
-  for (const directory of [cc, path.join(sub, 'frontend'), path.join(cc, 'sidecar/egress-tls-sidecar'), path.join(sub, 'backend'), moduleCache]) mkdirSync(directory, { recursive: true })
+  const npmCache = path.join(base, 'account-npm', '_cacache')
+  for (const directory of [cc, path.join(sub, 'frontend'), path.join(cc, 'sidecar/egress-tls-sidecar'), path.join(sub, 'backend'), moduleCache, path.join(npmCache, 'content-v2/sha512/aa')]) mkdirSync(directory, { recursive: true })
+  writeFileSync(path.join(npmCache, 'content-v2/sha512/aa/seed'), 'authenticated cache seed\n')
   for (const directory of [cc, path.join(sub, 'frontend')]) {
     writeFileSync(path.join(directory, 'package.json'), '{"name":"fixture","version":"1.0.0"}\n')
     writeFileSync(path.join(directory, 'package-lock.json'), '{"name":"fixture","version":"1.0.0","lockfileVersion":3,"packages":{}}\n')
@@ -580,9 +593,9 @@ function dependencyPreparationFixture() {
     writeFileSync(path.join(directory, 'go.mod'), 'module example.invalid/fixture\n\ngo 1.24\n')
     writeFileSync(path.join(directory, 'go.sum'), '')
   }
-  const calls: Array<{ argv: string[]; cwd: string }> = []
+  const calls: Array<{ argv: string[]; cwd: string; env: Record<string, string> }> = []
   const runner = (options: any) => {
-    calls.push({ argv: options.argv, cwd: options.cwd })
+    calls.push({ argv: options.argv, cwd: options.cwd, env: options.env })
     if (options.argv.includes('ci')) {
       const modules = path.join(options.cwd, 'node_modules')
       mkdirSync(path.join(modules, 'pkg'), { recursive: true })
@@ -590,7 +603,7 @@ function dependencyPreparationFixture() {
     }
     return { exitCode: 0, signal: null, durationMs: 1, stdoutDigest: digest('1'), stderrDigest: digest('2'), outputBytes: 0, outputExcerpt: '', outputOverflow: false, timedOut: false, failureNames: [], infrastructureFailure: false, unsafeOutputDetected: false }
   }
-  return { cc, sub, moduleCache, calls, runner }
+  return { base, cc, sub, moduleCache, npmCache: realpathSync(npmCache), calls, runner }
 }
 
 test('dependency preparation runs exact offline installs and Go verification before deriving live bindings', () => {
@@ -599,13 +612,25 @@ test('dependency preparation runs exact offline installs and Go verification bef
     ccGatewayRoot: fixture.cc, sub2apiRoot: fixture.sub,
     sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable: '/usr/bin/sandbox-exec', executable_digest: digest('3'), profile_path: '/tmp/profile', profile_digest: digest('4') },
     runner: fixture.runner as never,
-  })
+    npmCacheSourceRoot: fixture.npmCache,
+    npmCacheExpectedUID: typeof process.getuid === 'function' ? process.getuid() : 0,
+  } as never)
   assert.deepEqual(validatePhase1ExternalDependencySet(prepared.dependencies), { ok: true, errors: [] })
+  const persisted = canonicalJson(prepared.dependencies)
+  assert.doesNotMatch(persisted, /(?:\/private)?\/tmp\/oracle-lab-phase1-npm-cache-/)
+  assert.equal(persisted.includes(os.homedir()), false)
   assert.equal(fixture.calls.length, 4)
-  assert.deepEqual(fixture.calls.slice(0, 2).map((call) => call.argv.slice(-3)), [
-    ['ci', '--offline', '--ignore-scripts'],
-    ['ci', '--offline', '--ignore-scripts'],
+  const npmCalls = fixture.calls.slice(0, 2)
+  assert.deepEqual(npmCalls.map((call) => call.argv.slice(-5, -1)), [
+    ['ci', '--offline', '--ignore-scripts', '--cache'],
+    ['ci', '--offline', '--ignore-scripts', '--cache'],
   ])
+  assert.equal(new Set(npmCalls.map((call) => call.argv.at(-1))).size, 2)
+  for (const call of npmCalls) {
+    assert.equal(call.env.npm_config_cache, call.argv.at(-1))
+    assert.notEqual(call.env.npm_config_cache, '/tmp/.npm')
+    assert.match(call.env.npm_config_cache, /^\/(?:private\/)?tmp\/oracle-lab-phase1-npm-cache-/)
+  }
   assert.deepEqual(fixture.calls.slice(2).map((call) => call.argv.slice(-2)), [
     ['mod', 'verify'],
     ['mod', 'verify'],
@@ -616,9 +641,51 @@ test('dependency preparation runs exact offline installs and Go verification bef
     ccGatewayRoot: fixture.cc, sub2apiRoot: fixture.sub,
     sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable: '/usr/bin/sandbox-exec', executable_digest: digest('3'), profile_path: '/tmp/profile', profile_digest: digest('4') },
     runner: fixture.runner as never,
-  })
+    npmCacheSourceRoot: fixture.npmCache,
+    npmCacheExpectedUID: typeof process.getuid === 'function' ? process.getuid() : 0,
+  } as never)
   assert.deepEqual(validatePhase1ExternalDependencySet(rebuilt.dependencies), { ok: true, errors: [] })
-  assert.equal(fixture.calls.filter((call) => call.argv.slice(-3).join(' ') === 'ci --offline --ignore-scripts').length, 4)
+  assert.equal(fixture.calls.filter((call) => call.argv.includes('ci') && call.argv.includes('--cache')).length, 4)
+})
+
+test('npm cache preparation rejects unsafe roots, races, install misses, and command-cache drift', () => {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0
+  const invoke = (fixture: ReturnType<typeof dependencyPreparationFixture>, runner = fixture.runner) => preparePhase1ExternalDependencies({
+    ccGatewayRoot: fixture.cc, sub2apiRoot: fixture.sub,
+    sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable: '/usr/bin/sandbox-exec', executable_digest: digest('3'), profile_path: '/tmp/profile', profile_digest: digest('4') },
+    runner: runner as never, npmCacheSourceRoot: fixture.npmCache, npmCacheExpectedUID: uid,
+  } as never)
+  const rejected = (run: () => unknown) => assert.throws(run, (error: unknown) =>
+    error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
+
+  const writable = dependencyPreparationFixture()
+  chmodSync(writable.npmCache, 0o777)
+  rejected(() => invoke(writable))
+
+  const symlink = dependencyPreparationFixture()
+  symlinkSync('/tmp', path.join(symlink.npmCache, 'unsafe-link'))
+  rejected(() => invoke(symlink))
+
+  const special = dependencyPreparationFixture()
+  execFileSync('/usr/bin/mkfifo', [path.join(special.npmCache, 'unsafe-fifo')])
+  rejected(() => invoke(special))
+
+  const sourceRace = dependencyPreparationFixture()
+  rejected(() => invoke(sourceRace, ((options: any) => {
+    if (options.argv.includes('ci')) writeFileSync(path.join(sourceRace.npmCache, 'source-race'), 'changed\n')
+    return sourceRace.runner(options)
+  }) as never))
+
+  const commandDrift = dependencyPreparationFixture()
+  rejected(() => invoke(commandDrift, ((options: any) => {
+    if (options.argv.includes('ci')) writeFileSync(path.join(String(options.env.npm_config_cache), '_cacache', 'command-drift'), 'changed\n')
+    return commandDrift.runner(options)
+  }) as never))
+
+  const cacheMiss = dependencyPreparationFixture()
+  rejected(() => invoke(cacheMiss, ((options: any) => options.argv.includes('ci')
+    ? { exitCode: 1, signal: null, durationMs: 1, stdoutDigest: digest('1'), stderrDigest: digest('2'), outputBytes: 0, outputExcerpt: 'ENOTCACHED', outputOverflow: false, timedOut: false, failureNames: [], infrastructureFailure: false, unsafeOutputDetected: false }
+    : cacheMiss.runner(options)) as never))
 })
 
 test('Go module cache authority is the OS account cache with closed metadata', () => {
@@ -641,6 +708,10 @@ test('Go module list parser closes concatenated JSON and rejects malformed strea
   for (const raw of ['', '{"Path":"a"', '{not-json}', '[{"Path":"a"}]']) {
     assert.throws(() => parsePhase1GoModuleList(raw), (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
   }
+  assert.equal(selectPhase1GoModuleContentDirectory({ Path: 'unused', Version: 'v1.0.0' }), null)
+  assert.equal(selectPhase1GoModuleContentDirectory({ Path: 'selected', Dir: '/cache/selected' }), '/cache/selected')
+  assert.throws(() => selectPhase1GoModuleContentDirectory({ Path: 'replaced', Replace: { Path: 'local' } }),
+    (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
 })
 
 async function validResultsFixture() {
@@ -721,6 +792,11 @@ test('external dependency transition chain and evidence reference reject rehashe
     (value: any) => { delete value.command_results[0].external_dependency_transition },
     (value: any) => { value.command_results[0].external_dependency_transition.extra = true },
     (value: any) => { value.command_results[0].external_dependency_transition.ephemeral_build_cache_token = '/tmp/caller-selected' },
+    (value: any) => {
+      const binding = value.command_results[0].external_dependency_transition.before.cc_gateway
+      binding.npm_cache_preparation.command_after_digest = digest('a')
+      binding.binding_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(binding).filter(([key]) => key !== 'binding_digest'))))
+    },
     (value: any) => { value.command_results[1].external_dependency_transition.before = structuredClone(dependencySet()); value.command_results[1].external_dependency_transition.before.cc_gateway.node_binary_digest = digest('f') },
     (value: any) => { value.external_dependency_chain.transition_count = 16 },
     (value: any) => { value.external_dependency_chain.transitions_digest = digest('f') },
@@ -985,6 +1061,19 @@ test('downstream builders and validators reject a rehashed RED source mutation',
     () => buildPhase1Handoff({ source: { catalog, results: changed }, payload: {} }),
     () => buildPhase1IntegrationReceipt({ source: { catalog, results: changed }, payload: {} }),
   ]) assert.throws(invoke, (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'red_evidence_mismatch')
+
+  const cacheChanged: any = structuredClone(results)
+  const binding = cacheChanged.command_results[0].external_dependency_transition.before.cc_gateway
+  binding.npm_cache_preparation.command_after_digest = digest('a')
+  binding.binding_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(binding).filter(([key]) => key !== 'binding_digest'))))
+  cacheChanged.command_results[0].result_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(cacheChanged.command_results[0]).filter(([key]) => key !== 'result_digest'))))
+  cacheChanged.external_dependency_chain.transitions_digest = sha256(canonicalJson(cacheChanged.command_results.map((record: any) => record.external_dependency_transition)))
+  cacheChanged.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(cacheChanged).filter(([key]) => key !== 'results_digest'))))
+  for (const [name, invoke] of [
+    ['entry', () => buildPhase1IntegrationEntry({ source: { catalog, results: cacheChanged }, payload: {} })],
+    ['handoff', () => buildPhase1Handoff({ source: { catalog, results: cacheChanged }, payload: {} })],
+    ['receipt', () => buildPhase1IntegrationReceipt({ source: { catalog, results: cacheChanged }, payload: {} })],
+  ] as const) assert.throws(invoke, (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift', name)
 })
 
 test('committed artifact chain reload rejects source, reference, and receipt binding drift after rehash', async () => {

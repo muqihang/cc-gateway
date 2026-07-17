@@ -1,6 +1,7 @@
 import {
   chmodSync,
   closeSync,
+  copyFileSync,
   constants as fsConstants,
   existsSync,
   linkSync,
@@ -185,10 +186,11 @@ export type Phase1IgnoredStateTransition = {
 export type Phase1ExternalDependencyBinding = {
   algorithm: 'phase1_external_dependency_content_v1'
   repository: 'cc_gateway' | 'sub2api'
-  preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1'
+  preparation: 'npm_ci_offline_authenticated_cache_and_go_mod_verify_v2'
   node_binary_digest: string
   npm_binary_digest: string
   go_binary_digest: string
+  npm_cache_preparation: Phase1NpmCachePreparation
   node_dependency_manifests: Array<{
     repository_relative_root: string
     package_json_digest: string
@@ -206,6 +208,18 @@ export type Phase1ExternalDependencyBinding = {
     go_mod_verify_digest: string
   }>
   binding_digest: string
+}
+
+export type Phase1NpmCachePreparation = {
+  policy: 'os_account_cow_cache_v1'
+  source_before_digest: string
+  source_after_digest: string
+  command_before_digest: string
+  command_after_digest: string
+  entry_count: number
+  regular_file_count: number
+  regular_file_bytes: number
+  install_result_digest: string
 }
 
 export type Phase1ExternalDependencySet = {
@@ -291,7 +305,11 @@ function utf8Sort(values: readonly string[]): string[] {
 
 const EXTERNAL_BINDING_FIELDS = [
   'algorithm', 'repository', 'preparation', 'node_binary_digest', 'npm_binary_digest', 'go_binary_digest',
-  'node_dependency_manifests', 'go_module_manifests', 'binding_digest',
+  'npm_cache_preparation', 'node_dependency_manifests', 'go_module_manifests', 'binding_digest',
+] as const
+const NPM_CACHE_PREPARATION_FIELDS = [
+  'policy', 'source_before_digest', 'source_after_digest', 'command_before_digest', 'command_after_digest',
+  'entry_count', 'regular_file_count', 'regular_file_bytes', 'install_result_digest',
 ] as const
 const NODE_DEPENDENCY_FIELDS = [
   'repository_relative_root', 'package_json_digest', 'package_lock_digest', 'entry_count', 'content_digest',
@@ -304,11 +322,24 @@ const GO_DEPENDENCY_FIELDS = [
 function externalDependencyBindingErrors(value: unknown, repository: 'cc_gateway' | 'sub2api', where: string, errors: HarnessErrorRecord[]): void {
   if (!exact(value, EXTERNAL_BINDING_FIELDS, where, errors)) return
   if (value.algorithm !== 'phase1_external_dependency_content_v1' || value.repository !== repository
-    || value.preparation !== 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1') {
+    || value.preparation !== 'npm_ci_offline_authenticated_cache_and_go_mod_verify_v2') {
     add(errors, 'external_dependency_drift', where, 'external dependency authority header drifted')
   }
   for (const field of ['node_binary_digest', 'npm_binary_digest', 'go_binary_digest']) {
     if (!validDigest(value[field])) add(errors, 'external_dependency_drift', `${where}.${field}`, `${field} is not a digest`)
+  }
+  const cache = value.npm_cache_preparation
+  if (exact(cache, NPM_CACHE_PREPARATION_FIELDS, `${where}.npm_cache_preparation`, errors)) {
+    const digests = ['source_before_digest', 'source_after_digest', 'command_before_digest', 'command_after_digest'] as const
+    const commonDigest = cache.source_before_digest
+    if (cache.policy !== 'os_account_cow_cache_v1'
+      || !digests.every((field) => validDigest(cache[field]) && cache[field] === commonDigest)
+      || !validDigest(cache.install_result_digest)
+      || !Number.isSafeInteger(cache.entry_count) || Number(cache.entry_count) < 1
+      || !Number.isSafeInteger(cache.regular_file_count) || Number(cache.regular_file_count) < 1
+      || !Number.isSafeInteger(cache.regular_file_bytes) || Number(cache.regular_file_bytes) < 1) {
+      add(errors, 'external_dependency_drift', `${where}.npm_cache_preparation`, 'npm cache preparation evidence drifted')
+    }
   }
   const expectedNodeRoot = repository === 'cc_gateway' ? '.' : 'frontend'
   const expectedGoRoot = repository === 'cc_gateway' ? 'sidecar/egress-tls-sidecar' : 'backend'
@@ -1464,7 +1495,7 @@ type DownstreamSource = { catalog: unknown; results: unknown }
 function validatedDownstreamSource(source: unknown): asserts source is DownstreamSource {
   if (!isObject(source)) fail('red_evidence_mismatch', 'downstream source is absent')
   const validation = validatePhase1ResultsValue(source.results, { catalog: source.catalog })
-  if (!validation.ok) fail('red_evidence_mismatch', JSON.stringify(validation.errors))
+  if (!validation.ok) fail(validation.errors[0]?.code ?? 'red_evidence_mismatch', JSON.stringify(validation.errors))
 }
 
 function buildDownstream(kind: 'integration_entry' | 'handoff' | 'integration_receipt', options: unknown): Record<string, unknown> {
@@ -2239,6 +2270,150 @@ function reviewedTool(name: string): string {
   fail('missing_reviewed_tool', `${name} executable is unavailable at a reviewed absolute path`)
 }
 
+type Phase1NpmCacheRecord = Readonly<{
+  path: string
+  type: 'directory' | 'regular_file'
+  mode: number
+  size?: number
+  digest?: string
+}>
+
+type Phase1NpmCacheInventory = Readonly<{
+  records: readonly Phase1NpmCacheRecord[]
+  digest: string
+  entryCount: number
+  regularFileCount: number
+  regularFileBytes: number
+}>
+
+type Phase1NpmCacheRuntime = Readonly<{
+  commandRoot: string
+  sourceRoot: string
+  sourceBefore: Phase1NpmCacheInventory
+  commandBefore: Phase1NpmCacheInventory
+}>
+
+function sameCacheMetadata(left: ReturnType<typeof lstatSync>, right: ReturnType<typeof lstatSync>): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode
+    && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs
+}
+
+function assertPhase1NpmCacheDirectory(target: string, expectedUID: number, privateRoot = false): string {
+  let metadata
+  try { metadata = lstatSync(target) } catch { return fail('external_dependency_drift', 'npm cache authority is unavailable') }
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== expectedUID
+    || (metadata.mode & 0o022) !== 0 || (privateRoot && (metadata.mode & 0o777) !== 0o700)) {
+    fail('external_dependency_drift', 'npm cache authority has unsafe metadata')
+  }
+  const canonical = realpathSync(target)
+  if (canonical !== path.resolve(target)) fail('external_dependency_drift', 'npm cache authority is not a canonical directory')
+  return canonical
+}
+
+function inventoryPhase1NpmCache(rootInput: string): Phase1NpmCacheInventory {
+  const root = realpathSync(rootInput)
+  const records: Phase1NpmCacheRecord[] = []
+  const visit = (relative: string): void => {
+    const absolute = relative === '.' ? root : path.join(root, relative)
+    const before = lstatSync(absolute)
+    if (before.isSymbolicLink()) fail('external_dependency_drift', 'npm cache contains a symlink')
+    const mode = before.mode & 0o777
+    if (before.isDirectory()) {
+      records.push({ path: relative, type: 'directory', mode })
+      for (const entry of readdirSync(absolute).sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))) {
+        visit(relative === '.' ? entry : path.join(relative, entry))
+      }
+    } else if (before.isFile()) {
+      const bytes = readFileSync(absolute)
+      records.push({ path: relative, type: 'regular_file', mode, size: bytes.length, digest: sha256(bytes) })
+    } else fail('external_dependency_drift', 'npm cache contains a special file')
+    const after = lstatSync(absolute)
+    if (!sameCacheMetadata(before, after)) fail('external_dependency_drift', 'npm cache changed during inventory')
+  }
+  visit('.')
+  const regularFiles = records.filter((record) => record.type === 'regular_file')
+  return Object.freeze({
+    records: Object.freeze(records), digest: sha256(canonicalJson(records)), entryCount: records.length,
+    regularFileCount: regularFiles.length,
+    regularFileBytes: regularFiles.reduce((total, record) => total + Number(record.size ?? 0), 0),
+  })
+}
+
+function copyPhase1NpmCacheFile(source: string, destination: string): void {
+  try {
+    copyFileSync(source, destination, fsConstants.COPYFILE_FICLONE_FORCE)
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOSYS') throw error
+  }
+  try {
+    execFileSync('/bin/cp', ['-c', source, destination], {
+      encoding: 'buffer', env: { HOME: '/dev/null', PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch { fail('external_dependency_drift', 'npm cache copy-on-write clone failed') }
+}
+
+function clonePhase1NpmCache(sourceRoot: string, destinationRoot: string, inventory: Phase1NpmCacheInventory): void {
+  const rootRecord = inventory.records[0]
+  if (rootRecord?.path !== '.' || rootRecord.type !== 'directory') fail('external_dependency_drift', 'npm cache inventory root is invalid')
+  mkdirSync(destinationRoot, { mode: rootRecord.mode })
+  chmodSync(destinationRoot, rootRecord.mode)
+  for (const record of inventory.records.slice(1)) {
+    const source = path.join(sourceRoot, record.path)
+    const destination = path.join(destinationRoot, record.path)
+    const metadata = lstatSync(source)
+    if (metadata.isSymbolicLink()) fail('external_dependency_drift', 'npm cache contains a symlink')
+    if (record.type === 'directory') {
+      if (!metadata.isDirectory()) fail('external_dependency_drift', 'npm cache changed during clone')
+      mkdirSync(destination, { mode: record.mode }); chmodSync(destination, record.mode)
+    } else {
+      if (!metadata.isFile()) fail('external_dependency_drift', 'npm cache changed during clone')
+      copyPhase1NpmCacheFile(source, destination); chmodSync(destination, record.mode)
+    }
+  }
+}
+
+function canonicalPhase1NpmCacheSource(): { sourceRoot: string; expectedUID: number } {
+  const account = userInfo()
+  const accountHome = realpathSync(account.homedir)
+  const npmRoot = assertPhase1NpmCacheDirectory(path.join(accountHome, '.npm'), account.uid)
+  return { sourceRoot: assertPhase1NpmCacheDirectory(path.join(npmRoot, '_cacache'), account.uid), expectedUID: account.uid }
+}
+
+function preparePhase1NpmCommandCache(sourceRootInput: string, expectedUID: number): Phase1NpmCacheRuntime {
+  assertPhase1NpmCacheDirectory(path.dirname(sourceRootInput), expectedUID)
+  const sourceRoot = assertPhase1NpmCacheDirectory(sourceRootInput, expectedUID)
+  const sourceBefore = inventoryPhase1NpmCache(sourceRoot)
+  if (sourceBefore.regularFileCount < 1 || sourceBefore.regularFileBytes < 1) fail('external_dependency_drift', 'npm cache source is empty')
+  const commandRoot = realpathSync(mkdtempSync('/tmp/oracle-lab-phase1-npm-cache-'))
+  chmodSync(commandRoot, 0o700)
+  assertPhase1NpmCacheDirectory(commandRoot, expectedUID, true)
+  const commandCache = path.join(commandRoot, '_cacache')
+  clonePhase1NpmCache(sourceRoot, commandCache, sourceBefore)
+  const sourceAfter = inventoryPhase1NpmCache(sourceRoot)
+  const commandBefore = inventoryPhase1NpmCache(commandCache)
+  if (sourceBefore.digest !== sourceAfter.digest || sourceBefore.digest !== commandBefore.digest
+    || !same(sourceBefore.records, commandBefore.records)) fail('external_dependency_drift', 'npm cache clone or source stability check failed')
+  return Object.freeze({ commandRoot, sourceRoot, sourceBefore, commandBefore })
+}
+
+function finalizePhase1NpmCommandCache(runtime: Phase1NpmCacheRuntime, installResultDigest: string): Phase1NpmCachePreparation {
+  const sourceAfter = inventoryPhase1NpmCache(runtime.sourceRoot)
+  const commandAfter = inventoryPhase1NpmCache(path.join(runtime.commandRoot, '_cacache'))
+  if (runtime.sourceBefore.digest !== sourceAfter.digest || runtime.commandBefore.digest !== commandAfter.digest
+    || runtime.sourceBefore.digest !== runtime.commandBefore.digest || !same(runtime.sourceBefore.records, commandAfter.records)) {
+    fail('external_dependency_drift', 'npm cache source or command clone drifted during install')
+  }
+  return Object.freeze({
+    policy: 'os_account_cow_cache_v1',
+    source_before_digest: runtime.sourceBefore.digest, source_after_digest: sourceAfter.digest,
+    command_before_digest: runtime.commandBefore.digest, command_after_digest: commandAfter.digest,
+    entry_count: runtime.sourceBefore.entryCount, regular_file_count: runtime.sourceBefore.regularFileCount,
+    regular_file_bytes: runtime.sourceBefore.regularFileBytes, install_result_digest: installResultDigest,
+  })
+}
+
 export function validatePhase1GoModuleCacheMetadata(
   metadata: { is_directory: boolean; is_symlink: boolean; uid: number; mode: number },
   expectedUID: number,
@@ -2358,6 +2533,13 @@ export function parsePhase1GoModuleList(raw: string): Array<Record<string, unkno
   return values
 }
 
+export function selectPhase1GoModuleContentDirectory(module: Record<string, unknown>): string | null {
+  const replacement = isObject(module.Replace) ? module.Replace : undefined
+  const selected = String(replacement?.Dir ?? module.Dir ?? '')
+  if (replacement && !selected) fail('external_dependency_drift', 'Go replacement has no authenticated directory')
+  return selected || null
+}
+
 function goManifestSummary(root: string, moduleRoot: string, verificationDigest: string, goModuleCache: string): Phase1ExternalDependencyBinding['go_module_manifests'][number] {
   const moduleDirectory = path.resolve(root, moduleRoot)
   const goMod = readFileSync(path.join(moduleDirectory, 'go.mod'))
@@ -2386,10 +2568,10 @@ function goManifestSummary(root: string, moduleRoot: string, verificationDigest:
     if (!modulePath || seen.has(key)) fail('external_dependency_drift', 'listed Go module identity is missing or duplicated')
     seen.add(key)
     const replacement = isObject(module.Replace) ? module.Replace : undefined
-    const effectiveDirectory = String(replacement?.Dir ?? module.Dir ?? '')
+    const effectiveDirectory = selectPhase1GoModuleContentDirectory(module)
     const manifest = { path: modulePath, version, replacement_path: replacement ? String(replacement.Path ?? '') : '', replacement_version: replacement ? String(replacement.Version ?? '') : '' }
     manifests.push(manifest)
-    if (!effectiveDirectory) fail('external_dependency_drift', 'listed Go module has no authenticated directory')
+    if (!effectiveDirectory) continue
     const canonicalDirectory = realpathSync(effectiveDirectory)
     const repositoryRelative = path.relative(root, canonicalDirectory)
     const cacheRelative = path.relative(goModuleCache, canonicalDirectory)
@@ -2415,6 +2597,7 @@ function liveExternalDependencyBinding(
   root: string,
   verificationDigest: string,
   goModuleCache: string,
+  npmCachePreparation: Phase1NpmCachePreparation,
 ): Phase1ExternalDependencyBinding {
   const nodeRoot = repository === 'cc_gateway' ? '.' : 'frontend'
   const goRoot = repository === 'cc_gateway' ? 'sidecar/egress-tls-sidecar' : 'backend'
@@ -2422,10 +2605,11 @@ function liveExternalDependencyBinding(
   const nodeRecords = dependencyTreeRecords(root, nodeModulesRoot)
   return derivePhase1ExternalDependencyBinding({
     algorithm: 'phase1_external_dependency_content_v1', repository,
-    preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    preparation: 'npm_ci_offline_authenticated_cache_and_go_mod_verify_v2',
     node_binary_digest: sha256(readFileSync(reviewedTool('node'))),
     npm_binary_digest: sha256(readFileSync(reviewedTool('npm'))),
     go_binary_digest: sha256(readFileSync(reviewedTool('go'))),
+    npm_cache_preparation: npmCachePreparation,
     node_dependency_manifests: [{
       repository_relative_root: nodeRoot,
       package_json_digest: sha256(readFileSync(path.join(root, nodeRoot, 'package.json'))),
@@ -2437,10 +2621,28 @@ function liveExternalDependencyBinding(
   })
 }
 
-function liveExternalDependencySet(roots: { cc: string; sub: string }, verification: Phase1PreparationDigests, goModuleCache: string): Phase1ExternalDependencySet {
+type Phase1NpmCachePreparationSet = { cc_gateway: Phase1NpmCachePreparation; sub2api: Phase1NpmCachePreparation }
+
+function npmCachePreparationsFrom(value: unknown): Phase1NpmCachePreparationSet {
+  const validation = validatePhase1ExternalDependencySet(value)
+  if (!validation.ok || !isObject(value) || !isObject(value.cc_gateway) || !isObject(value.sub2api)) {
+    fail('external_dependency_drift', 'persisted npm cache preparation authority is invalid')
+  }
   return {
-    cc_gateway: liveExternalDependencyBinding('cc_gateway', roots.cc, verification.cc_gateway, goModuleCache),
-    sub2api: liveExternalDependencyBinding('sub2api', roots.sub, verification.sub2api, goModuleCache),
+    cc_gateway: structuredClone(value.cc_gateway.npm_cache_preparation) as Phase1NpmCachePreparation,
+    sub2api: structuredClone(value.sub2api.npm_cache_preparation) as Phase1NpmCachePreparation,
+  }
+}
+
+function liveExternalDependencySet(
+  roots: { cc: string; sub: string },
+  verification: Phase1PreparationDigests,
+  goModuleCache: string,
+  npmCachePreparations: Phase1NpmCachePreparationSet,
+): Phase1ExternalDependencySet {
+  return {
+    cc_gateway: liveExternalDependencyBinding('cc_gateway', roots.cc, verification.cc_gateway, goModuleCache, npmCachePreparations.cc_gateway),
+    sub2api: liveExternalDependencyBinding('sub2api', roots.sub, verification.sub2api, goModuleCache, npmCachePreparations.sub2api),
   }
 }
 
@@ -2450,7 +2652,9 @@ export function preparePhase1ExternalDependencies(options: {
   sandbox: Phase1LoopbackSandbox
   runner?: typeof runBoundedProcess
   goModuleCache?: string
-}): { dependencies: Phase1ExternalDependencySet; verification: Phase1PreparationDigests } {
+  npmCacheSourceRoot?: string
+  npmCacheExpectedUID?: number
+}): { dependencies: Phase1ExternalDependencySet; verification: Phase1PreparationDigests; npmCachePreparations: Phase1NpmCachePreparationSet } {
   const roots = { cc: realpathSync(options.ccGatewayRoot), sub: realpathSync(options.sub2apiRoot) }
   const runner = options.runner ?? runBoundedProcess
   const reviewedCache = reviewedGoModuleCache()
@@ -2460,15 +2664,29 @@ export function preparePhase1ExternalDependencies(options: {
   const cache = createPhase1ExclusiveBuildCache()
   const env = buildPhase1CommandEnvironment({ id: 'dependency-preparation', env: {} } as Phase1Command,
     { ...roots, contract: roots.sub }, { goBuildCache: cache, goModuleCache })
-  const npmRoots = [roots.cc, path.join(roots.sub, 'frontend')]
-  for (const cwd of npmRoots) {
+  const canonicalCache = canonicalPhase1NpmCacheSource()
+  const npmCacheSourceRoot = options.npmCacheSourceRoot === undefined
+    ? canonicalCache.sourceRoot
+    : assertPhase1NpmCacheDirectory(options.npmCacheSourceRoot, options.npmCacheExpectedUID ?? canonicalCache.expectedUID)
+  const npmCacheExpectedUID = options.npmCacheSourceRoot === undefined
+    ? canonicalCache.expectedUID
+    : options.npmCacheExpectedUID ?? canonicalCache.expectedUID
+  const npmCachePreparations = {} as Phase1NpmCachePreparationSet
+  for (const [repository, cwd] of [
+    ['cc_gateway', roots.cc],
+    ['sub2api', path.join(roots.sub, 'frontend')],
+  ] as const) {
+    const npmCache = preparePhase1NpmCommandCache(npmCacheSourceRoot, npmCacheExpectedUID)
+    const npmEnv = { ...env, npm_config_cache: npmCache.commandRoot }
     const observed = runner({
-      argv: wrapPhase1Command({ executable: options.sandbox.executable, profilePath: options.sandbox.profile_path, argv: [reviewedTool('npm'), 'ci', '--offline', '--ignore-scripts'] }),
-      cwd, env, timeoutMs: 900_000, maxOutputBytes: 8 * 1024 * 1024,
+      argv: wrapPhase1Command({ executable: options.sandbox.executable, profilePath: options.sandbox.profile_path, argv: [reviewedTool('npm'), 'ci', '--offline', '--ignore-scripts', '--cache', npmCache.commandRoot] }),
+      cwd, env: npmEnv, timeoutMs: 900_000, maxOutputBytes: 8 * 1024 * 1024,
     })
     if (observed.exitCode !== 0 || observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) {
       fail('external_dependency_drift', 'offline npm preparation failed')
     }
+    const installResultDigest = sha256(canonicalJson({ stdout_digest: observed.stdoutDigest, stderr_digest: observed.stderrDigest, exit_code: observed.exitCode }))
+    npmCachePreparations[repository] = finalizePhase1NpmCommandCache(npmCache, installResultDigest)
   }
   const verification = {} as Phase1PreparationDigests
   for (const [repository, cwd] of [
@@ -2484,7 +2702,7 @@ export function preparePhase1ExternalDependencies(options: {
     }
     verification[repository] = sha256(canonicalJson({ stdout_digest: observed.stdoutDigest, stderr_digest: observed.stderrDigest, exit_code: observed.exitCode }))
   }
-  return { dependencies: liveExternalDependencySet(roots, verification, goModuleCache), verification }
+  return { dependencies: liveExternalDependencySet(roots, verification, goModuleCache, npmCachePreparations), verification, npmCachePreparations }
 }
 
 function verifyCurrentPhase1ExternalDependencies(options: {
@@ -2493,6 +2711,7 @@ function verifyCurrentPhase1ExternalDependencies(options: {
   sandbox: Phase1LoopbackSandbox
   runner?: typeof runBoundedProcess
   goModuleCache?: string
+  npmCachePreparations: Phase1NpmCachePreparationSet
 }): Phase1ExternalDependencySet {
   const roots = { cc: realpathSync(options.ccGatewayRoot), sub: realpathSync(options.sub2apiRoot) }
   const runner = options.runner ?? runBoundedProcess
@@ -2515,7 +2734,7 @@ function verifyCurrentPhase1ExternalDependencies(options: {
     if (observed.exitCode !== 0 || observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) fail('external_dependency_drift', 'live go mod verify failed')
     verification[repository] = sha256(canonicalJson({ stdout_digest: observed.stdoutDigest, stderr_digest: observed.stderrDigest, exit_code: observed.exitCode }))
   }
-  return liveExternalDependencySet(roots, verification, goModuleCache)
+  return liveExternalDependencySet(roots, verification, goModuleCache, options.npmCachePreparations)
 }
 
 const STARTUP_INJECTION_KEYS = [
@@ -2915,7 +3134,7 @@ export function captureAndRunPhase1(options: {
     immutableSnapshot(initialCC, beforeCC, [])
     immutableSnapshot(initialSub, beforeSub, [])
     if (!same(beforeController.ignored, controllerIgnored) || !same(beforeCC.ignored, ccIgnored) || !same(beforeSub.ignored, subIgnored)) fail('ignored_state_drift', 'ignored state changed between catalog rows')
-    const beforeDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache)
+    const beforeDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache, prepared.npmCachePreparations)
     if (!same(beforeDependencies, externalDependencies)) fail('external_dependency_drift', 'external dependency state changed between catalog rows')
     const processResult = runCatalogProcess(command, roots, sandbox, runner, {
       goBuildCache: createPhase1ExclusiveBuildCache(),
@@ -2930,7 +3149,7 @@ export function captureAndRunPhase1(options: {
     const ccTransition = comparePhase1IgnoredState({ repository: 'cc_gateway', before: beforeCC.ignored, after: afterCC.ignored, policy: command.ignored_output_policies.cc_gateway })
     const subTransition = comparePhase1IgnoredState({ repository: 'sub2api', before: beforeSub.ignored, after: afterSub.ignored, policy: command.ignored_output_policies.sub2api })
     const controllerIgnoredTransition = controllerTransition(options.stage, beforeController.ignored, afterController.ignored, controllerRoot === ccRoot ? ccTransition : undefined)
-    const afterDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache)
+    const afterDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache, prepared.npmCachePreparations)
     if (!same(beforeDependencies, afterDependencies)) fail('external_dependency_drift', `${command.id} changed external dependency authority`)
     const externalDependencyTransition: Phase1ExternalDependencyTransition = {
       before: beforeDependencies, after: afterDependencies,
@@ -3235,9 +3454,12 @@ function finalRemoteLive(values: Readonly<Record<string, string>>): Record<strin
   const afterCC = ignoredInventory(ccRoot, 'cc_gateway'); const afterSub = ignoredInventory(subRoot, 'sub2api')
   if (!same(beforeCC, afterCC) || !same(beforeSub, afterSub)) fail('ignored_state_drift', 'ignored state changed during final verification')
   const sandbox = resolvePhase1LoopbackSandbox()
-  const currentDependencies = verifyCurrentPhase1ExternalDependencies({ ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox })
-  if (!isObject(receipt.external_dependency_reference)
-    || !same(receipt.external_dependency_reference.final, currentDependencies)) fail('external_dependency_drift', 'live dependencies differ from the effective receipt')
+  if (!isObject(receipt.external_dependency_reference)) fail('external_dependency_drift', 'effective receipt dependency authority is absent')
+  const currentDependencies = verifyCurrentPhase1ExternalDependencies({
+    ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox,
+    npmCachePreparations: npmCachePreparationsFrom(receipt.external_dependency_reference.final),
+  })
+  if (!same(receipt.external_dependency_reference.final, currentDependencies)) fail('external_dependency_drift', 'live dependencies differ from the effective receipt')
   return {
     schema_version: 1, verification_kind: 'phase_1_final_remote', verified_at: new Date().toISOString(), decision: effective === requested ? 'ready' : 'superseded',
     attempt_id: effective.attempt_id, receipt: { path: receiptPath, digest: sha256(receiptBytes), commit: receiptCommit },
@@ -3280,7 +3502,13 @@ function runCli(tokens: readonly string[]): void {
       sub2api: { head: subSnapshot.head, root_identity_digest: subSnapshot.root_identity_digest, clean_status_digest: sha256('') },
     }
     const sandbox = resolvePhase1LoopbackSandbox()
-    const dependencies = verifyCurrentPhase1ExternalDependencies({ ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox })
+    const persistedDependencies = isObject(resultsValue.external_dependency_chain)
+      ? resultsValue.external_dependency_chain.final
+      : undefined
+    const dependencies = verifyCurrentPhase1ExternalDependencies({
+      ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox,
+      npmCachePreparations: npmCachePreparationsFrom(persistedDependencies),
+    })
     const validation = validatePhase1LoadedResultsAuthority({
       stage, catalog, baseline, results: resultsValue, authority: authority.binding, roots, contract,
       implementationTrees: { cc_gateway: ccSnapshot.implementation_tree, sub2api: subSnapshot.implementation_tree },
