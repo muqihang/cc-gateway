@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -272,6 +272,20 @@ const policyMidnightRoot = policyFixture('midnight')
 const policyMidnightBefore = inventory(policyMidnightRoot)
 writePair(policyMidnightRoot, { date: '2026-07-14' })
 assert.ok(compareIgnoredPathInventories(policyMidnightBefore, inventory(policyMidnightRoot), 'sub2api_joint_safe_deliverable_v1', new Date('2026-07-13T23:59:00'), new Date('2026-07-14T00:01:00')).observation)
+
+const freshBuildRoot = fixture('fresh-build-repeat', 'cc_gateway')
+assert.equal(existsSync(path.join(freshBuildRoot, 'dist')), false)
+const freshBuildBefore = inventory(freshBuildRoot)
+mkdirSync(path.join(freshBuildRoot, 'dist'))
+writeFileSync(path.join(freshBuildRoot, 'dist/output.js'), 'deterministic build output\n')
+const freshBuildSeeded = inventory(freshBuildRoot)
+assert.notDeepEqual(freshBuildSeeded.summary, freshBuildBefore.summary)
+writeFileSync(path.join(freshBuildRoot, 'dist/output.js'), 'deterministic build output\n')
+const freshBuildRepeated = inventory(freshBuildRoot)
+assert.deepEqual(
+  compareIgnoredPathInventories(freshBuildSeeded, freshBuildRepeated, 'none', new Date('2026-07-13T00:01:00'), new Date('2026-07-13T00:02:00')),
+  { before_protected: freshBuildSeeded.summary, after_protected: freshBuildRepeated.summary },
+)
 
 const projectRoot = path.resolve(new URL('..', import.meta.url).pathname)
 const projectBuildEnvironment = { ...process.env, npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false' }

@@ -1451,9 +1451,13 @@ test('Phase 1 Task 7 binds GREEN full-suite contract discovery without substitut
   assert.match(plan, /only `cc-tests` and `cc-tests-repeat` may set `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
   assert.match(plan, /the exact catalog value is `\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json`/)
   assert.match(plan, /all other catalog rows forbid `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
-  assert.match(plan, /`SUB2API_ROOT` remains bound to the tested Sub2API implementation root for both GREEN full-suite rows/)
-  assert.match(plan, /missing, relative, alternate-root, wrong-suffix, symlink, and cross-row environment mutations/)
-  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=/)
+  assert.match(plan, /[Tt]he capture envelope still binds the tested Sub2API implementation root/)
+  assert.match(plan, /the `cc-tests` and `cc-tests-repeat` child environments omit `SUB2API_ROOT`/)
+  assert.match(plan, /missing, relative, alternate-root, wrong-suffix, symlink, inherited-startup, and every forbidden-row environment mutation/)
+  assert.match(plan, /every forbidden command ID independently receives the variable and must fail `contract_root_not_authorized` with zero spawned commands/)
+  assert.match(plan, /Run serially three times from one unchanged clean HEAD: `env -i/)
+  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json \/opt\/homebrew\/bin\/npm test/)
+  assert.match(plan, /Do not combine or parallelize the three runs/)
 })
 
 test('Phase 1 full regression uses a serial process-isolation boundary', async () => {
@@ -1468,7 +1472,11 @@ test('Phase 1 full regression uses a serial process-isolation boundary', async (
   assert.match(processRunner, /spawnSync/)
   assert.match(processRunner, /run-p0-1\.ts/)
   assert.match(processRunner, /run-all\.ts.*--exclude-oracle-p0-1/s)
-  assert.match(processRunner, /env: \{ \.\.\.\(options\.environment \?\? process\.env\) \}/)
+  assert.match(processRunner, /buildClosedFullSuiteEnvironment\(process\.env\)/)
+  assert.match(processRunner, /unsafe_full_suite_environment/)
+  assert.match(processRunner, /npm_config_userconfig: '\/dev\/null'/)
+  assert.match(processRunner, /SUB2API_FORMAL_POOL_CONTRACT_PATH/)
+  assert.doesNotMatch(processRunner, /\{ \.\.\.process\.env \}/)
   assert.equal(JSON.parse(packageManifest).scripts.test, 'node --import tsx tests/run-all.ts')
 })
 
@@ -1497,6 +1505,9 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
     'final_verify_ignored_profile_invalid',
     'Phase1IgnoredStateChainBinding',
     'Phase1IgnoredStateEvidenceReference',
+    'Phase1ExternalDependencyBinding',
+    'phase1_go_module_content_v1',
+    'external_dependency_drift',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /ignored_output_policies: \{\s*cc_gateway: Phase1IgnoredOutputPolicy\s*sub2api: Phase1IgnoredOutputPolicy/s)
@@ -1513,8 +1524,9 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
   assert.match(plan, /fifteen `pass`, two `expected_fail`/)
   assert.match(plan, /does not compare fresh-root `\.codegraph` or `node_modules` digests.*does not claim evidence about a mutation that occurred before/s)
   assert.match(plan, /Mutation tests for final remote inject each ignored operation after the before snapshot/)
-  assert.match(plan, /three consecutive isolated `npm test` runs/)
-  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=.*npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=.*npm test && npm run build/)
+  assert.match(plan, /three consecutive `env -i` isolated `npm test` runs/)
+  assert.match(plan, /Run serially three times from one unchanged clean HEAD: `env -i/)
+  assert.match(plan, /Then run `npm run build` in the same frozen worktree/)
 })
 
 test('Phase 1 plan closes context refresh, review, merge-topology, and retry lifecycles', async () => {
@@ -1615,6 +1627,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'patch-id and implementation-tree equivalence',
     'must not cherry-pick the superseded plan review or execution-context artifacts',
     'Task 7 broad gate remains blocked',
+    'oracle-lab-phase-1-authority-restart.schema.json',
+    'phase-1-authority-restart-0001.json',
+    'buildPhase1AuthorityRestart',
+    'validatePhase1AuthorityRestart',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
@@ -1622,6 +1638,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /the replacement CC branch starts at the newly reviewed merged plan commit/)
   assert.match(plan, /the replacement Sub2API branch starts at freshly fetched `muqihang\/main`/)
   assert.match(plan, /replay only the enumerated reviewed Task 1-6 implementation commits and the Task 7 quarantine checkpoint/)
+  assert.match(plan, /stable patch-id, exact parent order, and exact changed-path\/mode set for every source-to-replacement mapping/)
+  assert.match(plan, /projected tracked-tree comparison excludes exactly the reviewed authority-repair path set and canonical old\/new review-context paths/)
+  assert.match(plan, /all nonexcluded projected path, mode, object-type, and object-ID tuples remain byte-identical/)
+  assert.match(plan, /restart artifact is committed as a one-path child before Task 7 broad capture/)
   assert.match(plan, /rerun the task-scoped tests plus planning, P0\.1, three isolated full-suite passes, and build/)
 })
 
