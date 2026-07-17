@@ -177,6 +177,7 @@ assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineParent, '49e463
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantinePatchId, 'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0')
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineChangedPaths.length, 12)
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.sourceCommits.at(-1), tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint)
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.projectedTreePolicy.authorityRepairPaths.includes('tools/oracle-lab/phase-1-authority-bootstrap.mjs'), true)
 
 const valid = fixture()
 assert.equal(validateSchema(valid.artifact), true, JSON.stringify(validateSchema.errors))
@@ -375,15 +376,20 @@ const launcherPath = path.join(root, 'tools/oracle-lab/oracle-phase1-authority-r
 const launcher = readFileSync(launcherPath, 'utf8')
 for (const required of [
   '/usr/bin/env -i',
-  'ci --offline --ignore-scripts',
-  'npm_config_cache="$command_cache"',
-  '/bin/cp -cRP',
-  'ORACLE_PHASE1_AUTHORITY_CACHE=command_scoped_lockfile_verified_v1',
   'ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1',
   ['NODE_OPTIONS', ['NODE', 'PATH'].join('_')].join(' '),
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
-  'phase-1-authority-restart.ts',
+  'phase-1-authority-bootstrap.mjs',
 ]) assert.ok(launcher.includes(required), required)
+const bootstrap = readFileSync(path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), 'utf8')
+for (const required of [
+  'COPYFILE_FICLONE_FORCE',
+  "spawnSync('/bin/cp', ['-c'",
+  "path.join(npmRoot, '_cacache')",
+  "['ci', '--offline', '--ignore-scripts'",
+  'ORACLE_PHASE1_AUTHORITY_BOOTSTRAP',
+  'sourceBefore.digest !== sourceAfter.digest',
+]) assert.ok(bootstrap.includes(required), required)
 const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'], {
   cwd: root,
   encoding: 'utf8',
@@ -397,11 +403,13 @@ const positiveRoot = path.join(positiveParent, 'cc')
 execFileSync('git', ['clone', '--shared', '--quiet', root, positiveRoot], { stdio: 'pipe' })
 for (const relative of [
   'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
   'tools/oracle-lab/phase-1-authority-restart.ts',
 ]) copyFileSync(path.join(root, relative), path.join(positiveRoot, relative))
 write(positiveRoot, 'launcher-positive-fixture.txt', 'positive launcher fixture\n')
 git(positiveRoot, 'add', '--',
   'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
   'tools/oracle-lab/phase-1-authority-restart.ts',
   'launcher-positive-fixture.txt',
 )
@@ -417,5 +425,43 @@ const positiveLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/ora
 })
 assert.equal(positiveLauncher.status, 0, `${positiveLauncher.stdout}\n${positiveLauncher.stderr}`)
 assert.equal(existsSync(path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs')), true)
+
+const directBypass = spawnSync(process.execPath, [
+  path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs'),
+  path.join(positiveRoot, 'tools/oracle-lab/phase-1-authority-restart.ts'),
+  'validate-runtime',
+  '--cc-replacement-root', positiveRoot,
+], {
+  cwd: positiveRoot,
+  encoding: 'utf8',
+  env: {
+    HOME: '/dev/null',
+    TMPDIR: '/tmp',
+    PATH: `${path.dirname(process.execPath)}:/opt/homebrew/bin:/usr/bin:/bin`,
+    LANG: 'C',
+    LC_ALL: 'C',
+    TZ: 'UTC',
+    ORACLE_PHASE1_AUTHORITY_LAUNCHER: 'posix-v1',
+    ORACLE_PHASE1_AUTHORITY_CACHE: 'command_scoped_lockfile_verified_v1',
+    ORACLE_P0_1_NODE: process.execPath,
+    ORACLE_P0_1_GIT: '/opt/homebrew/bin/git',
+  },
+})
+assert.notEqual(directBypass.status, 0, 'direct tsx invocation must not reach the authority CLI')
+assert.equal(directBypass.stderr.trim(), 'authority_restart_direct_invocation_forbidden')
+
+const bootstrapPath = path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs')
+assert.equal(existsSync(bootstrapPath), true)
+const unsafeCache = path.join(positiveParent, 'unsafe-cache')
+mkdirSync(path.join(unsafeCache, 'content'), { recursive: true })
+writeFileSync(path.join(positiveParent, 'outside-cache-entry'), 'outside\n')
+execFileSync('ln', ['-s', path.join(positiveParent, 'outside-cache-entry'), path.join(unsafeCache, 'content', 'escape')])
+const unsafeInventory = spawnSync(process.execPath, [bootstrapPath, 'inventory-cache', '--root', unsafeCache], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { HOME: '/dev/null', TMPDIR: '/tmp', PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+})
+assert.equal(unsafeInventory.status, 1)
+assert.equal(unsafeInventory.stderr.trim(), 'authority_restart_dependency_cache_unsafe')
 
 console.log('oracle-lab Phase 1 authority restart tests passed')

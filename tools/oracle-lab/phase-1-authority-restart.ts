@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import Ajv2020 from 'ajv/dist/2020.js'
 
@@ -92,6 +92,7 @@ export const AUTHORITY_RESTART_BINDINGS: AuthorityRestartBindings = Object.freez
       'tests/suite-process-runner.ts',
       'tests/suite-process-runner.test.ts',
       'tools/oracle-lab/oracle-phase1-authority-restart',
+      'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
       'tools/oracle-lab/phase-1-authority-restart.ts',
     ]),
     historicalAuthorityPaths: Object.freeze([
@@ -697,6 +698,7 @@ function assertCanonicalCliPaths(parsed: ParsedAuthorityRestartCli, bindings: Au
 const AUTHORITY_RESTART_RUNTIME_PATHS = Object.freeze([
   'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
   'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
   'tools/oracle-lab/phase-1-authority-restart.ts',
   'tools/oracle-lab/secure-runtime.ts',
   'package-lock.json',
@@ -704,6 +706,7 @@ const AUTHORITY_RESTART_RUNTIME_PATHS = Object.freeze([
 
 function assertAuthorityRestartCliStartup(ccRootInput: string): void {
   if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
+    || process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'verified-v1'
     || process.env.ORACLE_PHASE1_AUTHORITY_CACHE !== 'command_scoped_lockfile_verified_v1'
     || process.env.HOME !== '/dev/null'
     || process.env.TMPDIR !== '/tmp'
@@ -763,12 +766,12 @@ export function runAuthorityRestartCli(argv: readonly string[]): void {
   else validatePhase1AuthorityRestartPostCommit(artifact, bytes, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    runAuthorityRestartCli(process.argv.slice(2))
-  } catch (error) {
-    const code = String((error as { code?: string }).code ?? 'authority_restart_failed')
-    process.stderr.write(`${code}\n`)
-    process.exitCode = 1
-  }
+let invokedDirectly = false
+try {
+  invokedDirectly = process.argv[1] !== undefined
+    && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1])
+} catch { /* malformed or unavailable direct entry */ }
+if (invokedDirectly) {
+  process.stderr.write('authority_restart_direct_invocation_forbidden\n')
+  process.exitCode = 1
 }
