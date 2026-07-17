@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "context_kind": "phase_1_execution_context",
+  "context_mode": "successor",
+  "sequence": 1,
+  "stage": "feature_capture",
+  "artifact_path": "docs/superpowers/evidence/phase-1/phase-1-execution-context-0001.json",
+  "predecessor": {
+    "path": "docs/superpowers/evidence/phase-1/phase-1-execution-context.json",
+    "digest": "sha256:b278f74340ef737bd88b008ff25adce17910ca534c6cdd40c43a9f94387cbc34",
+    "sequence": 0,
+    "stage": "implementation_entry",
+    "artifact_commit": "4f67b26091e3279c0b82bb7e6b31b309be7b6304"
+  },
+  "generated_at": "2026-07-17T21:44:25.000Z",
+  "expires_at": "2026-07-18T21:44:25.000Z",
+  "plan": {
+    "path": "docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md",
+    "digest": "sha256:5279783bd00f2c62474bc038aa909df2393065cb2da11b718d05b90ff5ba9af9",
+    "reviewed_commit": "00c1bcc25dfc1d2c942c8d7cad9cd75e86271cce"
+  },
+  "planning_provenance": {
+    "entry": {
+      "path": "docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json",
+      "digest": "sha256:52513af20b65be69eb5984a2ee7b5c2103fd7d54c869781a53e1dda52e37b2af"
+    },
+    "context": {
+      "path": "docs/superpowers/evidence/phase-1/phase-1-context.json",
+      "digest": "sha256:6b572aa0e6909e5397ebdff7b6f6b0427296e1bb1d0e83d4408204a5751344b8"
+    }
+  },
+  "approval_receipt": {
+    "artifact": {
+      "path": "docs/superpowers/evidence/phase-1/phase-1-plan-review.json",
+      "digest": "sha256:0f56fe81a8ded380b1a4a1d118525d543143defb39d49419464dc63e46bccea5"
+    },
+    "decision": "approved",
+    "reviewer_id": "codex-p1-v7-holistic-reviewer",
+    "review_round": 1,
+    "reviewed_plan_commit": "00c1bcc25dfc1d2c942c8d7cad9cd75e86271cce",
+    "reviewed_plan_digest": "sha256:5279783bd00f2c62474bc038aa909df2393065cb2da11b718d05b90ff5ba9af9",
+    "critical_findings": 0,
+    "important_findings": 0
+  },
+  "gate_schemas": {
+    "execution_context": {
+      "path": "docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json",
+      "digest": "sha256:5c0f18f3614b30fe82907a74746b1ce2ed7887868bfed1854715297c8e445086"
+    },
+    "plan_review": {
+      "path": "docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json",
+      "digest": "sha256:9c4262da2cc8620f6297ecdaacb39c6741fdaba3564a4c795da3d5149abab65a"
+    }
+  },
+  "repositories": {
+    "cc_gateway": {
+      "baseline_main_head": "00c1bcc25dfc1d2c942c8d7cad9cd75e86271cce",
+      "authorized_parent_head": "540962ea9c068c82d5dbe07b5aeae172fa6258e6",
+      "observed_remote_main_head": "00c1bcc25dfc1d2c942c8d7cad9cd75e86271cce",
+      "remote_name": "muqihang",
+      "remote_url_digest": "sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a",
+      "tracking_ref": "refs/remotes/muqihang/main",
+      "implementation_branch": "codex/oracle-phase-1-cc-gateway",
+      "pre_issue_clean": true,
+      "validation_status": {
+        "entries": [
+          "?? docs/superpowers/evidence/phase-1/phase-1-execution-context-0001.json"
+        ],
+        "digest": "sha256:d9696eb77b60105857d647d7a37c721ab12f02145ce8fe89bad6d47c43375b25"
+      }
+    },
+    "sub2api": {
+      "baseline_main_head": "b0b77933716487da5fca00329443f88ce9a1c3db",
+      "authorized_parent_head": "20217731da9521f9676434b7bd5f9cb73020c32c",
+      "observed_remote_main_head": "b0b77933716487da5fca00329443f88ce9a1c3db",
+      "remote_name": "muqihang",
+      "remote_url_digest": "sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9",
+      "tracking_ref": "refs/remotes/muqihang/main",
+      "implementation_branch": "codex/oracle-phase-1-sub2api",
+      "pre_issue_clean": true,
+      "validation_status": {
+        "entries": [],
+        "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "shared_contract": {
+    "repository": "sub2api",
+    "path": "backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json",
+    "digest": "sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"
+  },
+  "authority_order": [
+    {
+      "path": "docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md",
+      "digest": "sha256:6883d66d74bd1e92f97625348c67559aa56c1f5e7542398635228a88814c57b2"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md",
+      "digest": "sha256:f1ccedc813e6edfbd50fb7779221e0fa4b9fd62863e0562fecf9c06c920f478e"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md",
+      "digest": "sha256:ba3e5798bea7c079445769d589c7cda93a6ba0f85ba204e0f5639f01cb9f0754"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md",
+      "digest": "sha256:f54f3aa730144e4d2b438c9af63f83aaaaab22e6e4c56d8b99983d5aadb54fc8"
+    }
+  ],
+  "selected_requirements": [
+    "AV-B1-001",
+    "AV-B2-001",
+    "AV-B3-001",
+    "RA-P0-008"
+  ],
+  "implementation_entry": {
+    "status": "authorized",
+    "conditions": [
+      "fresh_unexpired_execution_context",
+      "contiguous_immutable_context_chain",
+      "exact_stage_and_repository_state",
+      "exact_plan_digest_bound",
+      "independent_plan_approval_bound",
+      "critical_and_important_findings_zero",
+      "both_main_heads_frozen",
+      "shared_contract_unchanged",
+      "production_and_real_canary_disabled"
+    ]
+  },
+  "disabled_capabilities": [
+    "real_upstream_access",
+    "real_credentials",
+    "provider_internal_authority",
+    "profile_promotion",
+    "production_deployment",
+    "real_canary",
+    "direct_egress_trust",
+    "unverified_pinned_wire_claims",
+    "unsupported_negative_capabilities",
+    "expired_or_missing_negative_capabilities",
+    "unrestricted_capture",
+    "external_network_requests"
+  ]
+}
