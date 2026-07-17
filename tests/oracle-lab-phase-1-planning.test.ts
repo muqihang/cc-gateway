@@ -1525,6 +1525,7 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
   assert.match(plan, /does not compare fresh-root `\.codegraph` or `node_modules` digests.*does not claim evidence about a mutation that occurred before/s)
   assert.match(plan, /Mutation tests for final remote inject each ignored operation after the before snapshot/)
   assert.match(plan, /three consecutive `env -i` isolated `npm test` runs/)
+  assert.match(plan, /derive each temporary branch suffix from the already-created unique temporary parent/)
   assert.match(plan, /Run serially three times from one unchanged clean HEAD: `env -i/)
   assert.match(plan, /Then run `npm run build` in the same frozen worktree/)
 })

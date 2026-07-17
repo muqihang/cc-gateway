@@ -2075,9 +2075,9 @@ assert.equal(continuityCheckpointPeakBytes < 12 * MiB, true)
 console.log(canonical({ production_cli_continuity_negatives: { cases: '28/28', checkpoint_peak_bytes: continuityCheckpointPeakBytes } }))
 
 function cloneRepositoryRef(sourceRepository: string, label: string, commit: string): string {
-  const branch = `fixture-${label}`
-  git(sourceRepository, 'branch', branch, commit)
   const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-${label}-`))
+  const branch = `fixture-${label}-${path.basename(parent).slice(-6)}`
+  git(sourceRepository, 'branch', branch, commit)
   const repository = path.join(parent, 'repository')
   const isCcGateway = existsSync(path.join(sourceRepository, 'package.json'))
   const cloned = cloneSharedSparseRepository(
