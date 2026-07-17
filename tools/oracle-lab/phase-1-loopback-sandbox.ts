@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-import { sha256 } from './harness-core.js'
+import { canonicalJson, sha256 } from './harness-core.js'
 
 const REVIEWED_SANDBOX_EXEC = '/usr/bin/sandbox-exec'
 const PROFILE = [

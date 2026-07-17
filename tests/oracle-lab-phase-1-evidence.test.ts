@@ -52,6 +52,8 @@ import {
 } from '../tools/oracle-lab/phase-1-evidence.js'
 import {
   buildPhase1SandboxProfile,
+  resolvePhase1LoopbackSandbox,
+  runPhase1SandboxCanaries,
   wrapPhase1Command,
 } from '../tools/oracle-lab/phase-1-loopback-sandbox.js'
 import { canonicalJson, sha256 } from '../tools/oracle-lab/harness-core.js'
@@ -485,6 +487,16 @@ test('macOS sandbox profile is exact and all commands are wrapped without shell'
   assert.deepEqual(wrapPhase1Command({ executable: '/usr/bin/sandbox-exec', profilePath: '/tmp/profile', argv: ['npm', 'test'] }),
     ['/usr/bin/sandbox-exec', '-f', '/tmp/profile', 'npm', 'test'])
   assert.throws(() => wrapPhase1Command({ executable: '/usr/bin/sandbox-exec', profilePath: '/tmp/profile', argv: [] }))
+})
+
+test('real macOS sandbox canaries return the closed loopback-only verdict', () => {
+  const sandbox = resolvePhase1LoopbackSandbox({ temporaryRoot: os.tmpdir() })
+  assert.deepEqual(runPhase1SandboxCanaries(sandbox), {
+    loopback_socket: 'pass',
+    loopback_ipv6_socket: 'pass',
+    non_loopback_test_net_socket: 'denied_by_policy',
+    policy_bypass_detected: false,
+  })
 })
 
 const commit = (character: string) => character.repeat(40)
