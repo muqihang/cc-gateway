@@ -3,7 +3,7 @@ import { createHmac } from 'crypto'
 import { readFileSync } from 'fs'
 import { loadConfig } from '../src/config.js'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, writeConfigYaml } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, writeConfigYaml, waitForListening } from './helpers.js'
 
 console.log('\ntests/formal-pool-canonical-promotion.test.ts')
 
@@ -275,6 +275,7 @@ async function withGateway<T>(
   const proxy = await startFakeConnectProxy()
   const config = plan76Config(upstream.url, proxy.url, versions)
   const gateway = startProxy(options.mcpConnectorEnabled ? withMCPConnectorEnabled(config) : config)
+  await waitForListening(gateway)
   try {
     return await fn(gateway, upstream, proxy)
   } finally {

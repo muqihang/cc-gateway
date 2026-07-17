@@ -40,6 +40,8 @@ import { evaluateCanaryCostEnvelope } from './canary-cost-gate.js'
 import { isKnownEnabledTLSProfileRef, isSafeTLSProfileRef, tlsProfileMode } from './egress-tls-profile.js'
 import { resolvePersonaProfileId } from './persona-registry.js'
 import { claudeCodeEnvResidueTaxonomySummary, classifyClaudeCodeEnvResidue } from './claude-code-env-residue-taxonomy.js'
+import { resolveListenerBoundary } from './listener-boundary.js'
+import { resolveUpstreamTLSBoundary, type UpstreamTLSBoundary } from './upstream-tls-boundary.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
@@ -243,7 +245,27 @@ type ProxyRuntimeState = {
   formalPoolAttestationNonces: Map<string, number>
 }
 
-export function startProxy(config: Config) {
+type ProxyRequestListener = (request: IncomingMessage, response: ServerResponse) => void
+export type ProxyStartupServer = ReturnType<typeof createHttpServer> | ReturnType<typeof createHttpsServer>
+
+export type ProxyStartupPrimitives = Readonly<{
+  readTLSFile: (path: string) => Buffer
+  createHTTPServer: (handler: ProxyRequestListener) => ReturnType<typeof createHttpServer>
+  createHTTPSServer: (options: ServerOptions, handler: ProxyRequestListener) => ReturnType<typeof createHttpsServer>
+  listen: (server: ProxyStartupServer, port: number, host: string, ready: () => void) => void
+}>
+
+const DEFAULT_PROXY_STARTUP_PRIMITIVES: ProxyStartupPrimitives = Object.freeze({
+  readTLSFile: (file) => readFileSync(file),
+  createHTTPServer: createHttpServer,
+  createHTTPSServer: createHttpsServer,
+  listen: (server, port, host, ready) => { server.listen(port, host, ready) },
+})
+
+export function startProxy(config: Config, startup = DEFAULT_PROXY_STARTUP_PRIMITIVES): ProxyStartupServer {
+  const listenerBoundary = resolveListenerBoundary(config)
+  const upstreamTLSBoundary = resolveUpstreamTLSBoundary(config, process.env)
+
   initAuth(config)
   replayRuntimeMappings(config)
 
@@ -255,23 +277,22 @@ export function startProxy(config: Config) {
   }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleRequest(req, res, config, upstream, runtimeState)
+    handleRequest(req, res, config, upstream, runtimeState, upstreamTLSBoundary)
   }
 
   let server
   if (useTls) {
     const tlsOptions: ServerOptions = {
-      cert: readFileSync(config.server.tls.cert),
-      key: readFileSync(config.server.tls.key),
+      cert: startup.readTLSFile(config.server.tls.cert),
+      key: startup.readTLSFile(config.server.tls.key),
     }
-    server = createHttpsServer(tlsOptions, handler)
+    server = startup.createHTTPSServer(tlsOptions, handler)
   } else {
-    server = createHttpServer(handler)
+    server = startup.createHTTPServer(handler)
     log('warn', 'Running without TLS - only use for local development')
   }
 
-  const listenHost = config.server.host
-  server.listen(config.server.port, listenHost, () => {
+  startup.listen(server, config.server.port, listenerBoundary.host, () => {
     const address = server.address()
     const boundHost = typeof address === 'object' && address ? address.address : '0.0.0.0'
     const boundPort = typeof address === 'object' && address ? address.port : config.server.port
@@ -1481,6 +1502,7 @@ async function handleRequest(
   config: Config,
   upstream: URL,
   runtimeState: ProxyRuntimeState,
+  upstreamTLSBoundary: UpstreamTLSBoundary,
 ) {
   const method = req.method || 'GET'
   const target = normalizeRequestTarget(req.url || '/')
@@ -2189,6 +2211,7 @@ async function handleRequest(
     {
       method,
       headers: forwardHeaders,
+      ...upstreamTLSBoundary.requestOptions,
       ...(agent && { agent }),
     },
     (proxyRes) => {

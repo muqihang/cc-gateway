@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/claude-code-future-version-compat.test.ts')
 
@@ -143,6 +143,7 @@ test('observed Claude Code versions at or above 2.1.179 pass only through strip_
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     try {
       const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
         headers: signedHeaders(contextFor(version)),
@@ -168,6 +169,7 @@ test('observed Claude VSCode title-generation shape passes strip_attribution wit
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const context = contextFor('2.1.196', {
       nonce: `future-compat-vscode-${Date.now()}`,
@@ -232,6 +234,7 @@ test('observed Claude VSCode cannot self-promote to optional CCH profiles', asyn
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     try {
       const context = contextFor('2.1.196', {
         trusted_egress_profile_ref: tc.ref,
@@ -273,6 +276,7 @@ test('unknown or unparseable observed Claude Code versions fail closed under for
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     try {
       const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
         headers: signedHeaders(contextFor(version)),
@@ -293,6 +297,7 @@ test('observed Claude Code versions below 2.1.179 fail closed even under strip_a
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedHeaders(contextFor('2.1.170')),
@@ -318,6 +323,7 @@ test('observed Claude Code versions at or above 2.1.179 cannot self-promote to o
       const upstream = await startFakeUpstream()
       const proxy = await startFakeConnectProxy()
       const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
+      await waitForListening(gateway)
       try {
         const context = contextFor(version, {
           trusted_egress_profile_ref: tc.ref,

@@ -4,7 +4,7 @@ import { request as httpRequest } from 'http'
 import { startProxy, verifySharedPoolFinalOutput } from '../src/proxy.js'
 import { canonicalPersonaHeaders, isSafeIdentityRef, resolveAccountIdentity, resolveEgressBucket, runSigningPipeline, verifySignedCCH } from '../src/policy.js'
 import { rewriteHeaders } from '../src/rewriter.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/checkpoint3-remediation.test.ts')
 
@@ -304,6 +304,7 @@ test('sub2api shared-pool header policy synthesizes canonical allowlist and drop
 
 test('runtime registration requires internal control token in addition to gateway token', async () => {
   const gateway = startProxy(sharedConfig())
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -324,6 +325,7 @@ test('runtime registration rejects malformed credential binding HMAC before appl
   const config = sharedConfig()
   config.upstream.url = upstream.url
   const gateway = startProxy(config)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -362,6 +364,7 @@ test('runtime registration rejects credential binding HMAC that does not match t
   const config = sharedConfig()
   config.upstream.url = upstream.url
   const gateway = startProxy(config)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -406,6 +409,7 @@ test('runtime registration refuses to silently overwrite a committed account aut
   const config = sharedConfig()
   config.upstream.url = upstream.url
   const gateway = startProxy(config)
+  await waitForListening(gateway)
 
   try {
     const first = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -530,6 +534,7 @@ test('signed/no-CCH oracle profiles require exact 2.1.179 tuple before upstream 
   config.shared_pool = signedCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const signedLegacy = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -570,6 +575,7 @@ test('signed/no-CCH oracle profiles reject unknown observed client version inste
   config.shared_pool = signedCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -761,6 +767,7 @@ test('account identity and egress refs reject raw identifiers and plain hashes',
 test('sub2api route allowlist rejects auxiliary endpoints before upstream forwarding', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/api/organizations/abc/settings'), {
@@ -781,6 +788,7 @@ test('sub2api route allowlist rejects auxiliary endpoints before upstream forwar
 test('sub2api blocks messages with non-allowlisted query and defers count_tokens before forwarding', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     const badQuery = await httpJson(serverUrl(gateway, '/v1/messages?beta=false'), {
@@ -807,6 +815,7 @@ test('sub2api blocks messages with non-allowlisted query and defers count_tokens
 test('event_logging legacy and v2 are suppressed locally and never forwarded', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     for (const path of ['/api/event_logging/batch', '/api/event_logging/v2/batch']) {
@@ -827,6 +836,7 @@ test('event_logging legacy and v2 are suppressed locally and never forwarded', a
 test('suppressed control-plane routes fail closed on spoofed persona headers', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/api/event_logging/batch'), {
@@ -852,6 +862,7 @@ test('suppressed control-plane routes fail closed on spoofed persona headers', a
 test('suppressed control-plane routes reject downstream billing/CCH markers without invoking messages verifier', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/api/event_logging/v2/batch'), {
@@ -881,6 +892,7 @@ test('missing per-account identity fails closed', async () => {
   const upstream = await startFakeUpstream()
   const config = sharedConfig()
   const gateway = startProxy({ ...config, upstream: { url: upstream.url }, account_identities: {} } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -899,6 +911,7 @@ test('missing per-account identity fails closed', async () => {
 test('unknown or disabled egress bucket fails closed before any direct connection', async () => {
   const upstream = await startFakeUpstream()
   const gateway = startProxy({ ...sharedConfig(), upstream: { url: upstream.url } })
+  await waitForListening(gateway)
 
   try {
     const unknown = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -911,6 +924,7 @@ test('unknown or disabled egress bucket fails closed before any direct connectio
     const disabledConfig = sharedConfig()
     disabledConfig.egress_buckets!['bucket-a'].enabled = false
     const disabledGateway = startProxy({ ...disabledConfig, upstream: { url: upstream.url } } as any)
+    await waitForListening(disabledGateway)
     try {
       const disabled = await httpJson(serverUrl(disabledGateway, '/v1/messages?beta=true'), {
         headers: schedulerHeaders(),
@@ -935,6 +949,7 @@ test('egress proxy failure is a control-plane error and does not expose raw prox
   config.egress_buckets!['bucket-a'].proxy_url = 'http://user:pass@127.0.0.1:1'
   config.egress_buckets!['bucket-a'].proxy_identity_hash = 'opaque:proxy-ref:v1:bucket-fail'
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -964,6 +979,7 @@ test('body cap fails closed before forwarding shared-pool messages with safe siz
   const oldCaptureDir = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
   process.env.CC_GATEWAY_RAW_CAPTURE_DIR = captureDir
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -993,6 +1009,7 @@ test('retry contract fails closed when a body-mutating retry did not re-enter fi
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1024,6 +1041,7 @@ test('retry contract re-enters strip final-output pipeline for approved body-mut
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1062,6 +1080,7 @@ test('retry contract rejects changed policy/gates and sign-to-strip downgrades',
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const policyChanged = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1109,6 +1128,7 @@ test('strip verifier removes billing/CCH and rewrites per-account metadata befor
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1150,6 +1170,7 @@ test('strip verifier fails closed if billing markers remain after rewrite', asyn
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1177,6 +1198,7 @@ test('signing mode skeleton is disabled unless manually approved gates are prese
   configure2179Native(config)
   config.shared_pool = signedCch2179ProofConfig({ signing_enabled: false }) as any
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1198,6 +1220,7 @@ test('rollback to billing_cch_mode disabled fails closed without native fallback
   const config = sharedConfig()
   config.shared_pool = sharedPoolConfig({ billing_cch_mode: 'disabled' }) as any
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1220,6 +1243,7 @@ test('redacted log paths hide all query values including beta', async () => {
   const config = sharedConfig()
   config.logging = { level: 'info', audit: false }
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
   const originalLog = console.log
   const logs: string[] = []
   console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
@@ -1247,6 +1271,7 @@ test('signing skeleton fails closed even when local signing flag is enabled but 
   configure2179Native(config)
   config.shared_pool = signedCch2179ProofConfig({ signing_enabled: true, signing_evidence_gates_approved: false }) as any
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1267,6 +1292,7 @@ test('invalid gateway token emits stable control-plane wire contract', async () 
   const upstream = await startFakeUpstream()
   const config = sharedConfig()
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1291,6 +1317,7 @@ test('approved signing rejects downstream CCH material and never downgrades to s
   configure2179Native(config)
   config.shared_pool = signedCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1317,6 +1344,7 @@ test('approved signing allows literal billing header text without downstream CCH
   config.shared_pool = signedCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1368,6 +1396,7 @@ test('sign-primary full proxy path for 2.1.177 fails closed before upstream with
   }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1408,6 +1437,7 @@ test('approved sign-primary mode generates billing CCH and forwards only after v
   config.shared_pool = signedCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1442,6 +1472,7 @@ test('approved no-CCH profile inserts no-CCH billing block and rejects residual 
   config.shared_pool = noCch2179ProofConfig({ message_beta_profile: 'claude_code_2_1_179_native_degraded' }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1490,6 +1521,7 @@ test('sign-primary verified legacy drift fails closed before upstream under 2.1.
   config.shared_pool = signedCch2179ProofConfig() as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1537,6 +1569,7 @@ test('sign-primary 2.1.175 stale metadata lane fails closed under 2.1.179 profil
   }) as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1583,6 +1616,7 @@ test('verified legacy drift without internal trust header fails closed before up
   config.shared_pool = signedCch2179ProofConfig() as any
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1618,6 +1652,7 @@ test('sub2api control-plane errors do not reflect unsupported provider or token 
   const config = sharedConfig()
   config.upstream.url = upstream.url
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   const sensitiveProvider = 'gemini_native raw-control-value'
   const sensitiveTokenType = 'oauth raw-control-value'
 
@@ -1666,6 +1701,7 @@ test('raw capture omits raw bodies and plain digests while retaining safe respon
   const config = sharedConfig()
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
   const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-raw-capture-'))
   const previous = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
   process.env.CC_GATEWAY_RAW_CAPTURE_DIR = dir
@@ -1723,6 +1759,7 @@ test('audit/error logs redact path query secrets and do not print raw authorizat
   const config = sharedConfig()
   config.logging = { level: 'info', audit: true }
   const gateway = startProxy({ ...config, upstream: { url: upstream.url } } as any)
+  await waitForListening(gateway)
   const originalLog = console.log
   const logs: string[] = []
   console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }

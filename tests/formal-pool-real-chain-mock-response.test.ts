@@ -2,7 +2,7 @@ import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
-import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeUpstream, test, waitForListening } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
 
 console.log('\ntests/formal-pool-real-chain-mock-response.test.ts')
@@ -199,6 +199,7 @@ test('real-chain mock bridge returns Messages response after sidecar proof and s
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(gatewayConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: headers(),
@@ -266,6 +267,7 @@ test('real-chain mock bridge fail-closed cases stop before sidecar', async () =>
     const upstream = await startFakeUpstream()
     const sidecar = await startMockSidecar()
     const gateway = startProxy(gatewayConfig(upstream.url, sidecar.url))
+    await waitForListening(gateway)
     try {
       const response = await httpJson(serverUrl(gateway, tc.path), { headers: tc.headers, body: tc.body })
       assert.equal(response.status, 403, `${tc.name}: ${response.body}`)
@@ -284,6 +286,7 @@ test('real-chain mock bridge sanitizes structural env residue before sidecar', a
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(gatewayConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: headers(),

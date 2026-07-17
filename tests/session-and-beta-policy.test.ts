@@ -2,7 +2,7 @@ import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { startProxy } from '../src/proxy.js'
 import { canonicalPersonaHeaders } from '../src/policy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/session-and-beta-policy.test.ts')
 
@@ -143,6 +143,7 @@ test('shared-pool canonicalizes malformed downstream session IDs to UUID-like Cl
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sharedConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({ 'x-claude-code-session-id': 'short-non-uuid-session' }, { session_id: validUuid }),
@@ -174,6 +175,7 @@ test('shared-pool preserves valid UUID-like Claude Code session IDs', async () =
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sharedConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({ 'x-claude-code-session-id': validUuid }),
@@ -277,6 +279,7 @@ test('trusted internal healthcheck override uses non-1m beta while normal traffi
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const body = {
       model: 'claude-sonnet-4-6',
@@ -331,6 +334,7 @@ test('shared-pool uses non-1m persona for ordinary Haiku and Sonnet traffic by d
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     for (const model of ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6']) {
       const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -369,6 +373,7 @@ test('sub2api internal persona headers require internal control attestation', as
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const context1m = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
@@ -422,6 +427,7 @@ test('trusted Sub2API context-1m request opts into 1m persona for eligible Sonne
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
@@ -459,6 +465,7 @@ test('context-1m request for Haiku fails closed before upstream', async () => {
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
@@ -496,6 +503,7 @@ test('trusted internal healthcheck override accepts 2.1.179 native degraded pers
     policy_version: '2.1.179',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const healthcheckSessionId = '123e4567-e89b-42d3-a456-426614174005'
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -536,6 +544,7 @@ test('healthcheck persona override rejects 2.1.175 persona under 2.1.179 policy 
     policy_version: '2.1.179',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
@@ -574,6 +583,7 @@ test('healthcheck persona override rejects unsupported profiles before upstream'
     policy_version: '2.1.175',
   }
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
