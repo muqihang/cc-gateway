@@ -1,14 +1,16 @@
 import type { IncomingMessage } from 'http'
 import type { Config, TokenEntry } from './config.js'
+import { canonicalAuthMaterialBytes } from './auth-material.js'
 
 const tokenMap = new Map<string, TokenEntry>()
 let gatewayToken: string | null = null
 
 export function initAuth(config: Config) {
   tokenMap.clear()
-  gatewayToken = config.auth.gateway_token ?? null
+  gatewayToken = canonicalAuthMaterialBytes(config.auth.gateway_token)?.toString('utf8') ?? null
   for (const entry of config.auth.tokens ?? []) {
-    tokenMap.set(entry.token, entry)
+    const token = canonicalAuthMaterialBytes(entry.token)?.toString('utf8')
+    if (token) tokenMap.set(token, entry)
   }
 }
 
@@ -20,7 +22,8 @@ export function authenticate(req: IncomingMessage): string | null {
   // CC with ANTHROPIC_API_KEY sends x-api-key header
   const apiKey = req.headers['x-api-key']
   if (apiKey && typeof apiKey === 'string') {
-    const entry = tokenMap.get(apiKey)
+    const canonical = canonicalAuthMaterialBytes(apiKey)?.toString('utf8')
+    const entry = canonical ? tokenMap.get(canonical) : undefined
     if (entry) return entry.name
   }
 
@@ -31,7 +34,8 @@ export function authenticate(req: IncomingMessage): string | null {
   const match = authHeader.match(/^Bearer\s+(.+)$/i)
   if (!match) return null
 
-  const entry = tokenMap.get(match[1])
+  const canonical = canonicalAuthMaterialBytes(match[1])?.toString('utf8')
+  const entry = canonical ? tokenMap.get(canonical) : undefined
   return entry?.name ?? null
 }
 
@@ -44,9 +48,11 @@ export function authenticate(req: IncomingMessage): string | null {
 export function authenticateGateway(req: IncomingMessage): string | null {
   const token = req.headers['x-cc-gateway-token']
   if (!token || typeof token !== 'string') return null
+  const canonical = canonicalAuthMaterialBytes(token)?.toString('utf8')
+  if (!canonical) return null
 
-  if (gatewayToken && token === gatewayToken) return 'gateway'
+  if (gatewayToken && canonical === gatewayToken) return 'gateway'
 
-  const entry = tokenMap.get(token)
+  const entry = tokenMap.get(canonical)
   return entry?.name ?? null
 }

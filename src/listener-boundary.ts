@@ -1,5 +1,6 @@
 import { ConfigValidationError, type Config } from './config.js'
 import { isIP } from 'net'
+import { canonicalAuthMaterialBytes } from './auth-material.js'
 
 export type ApprovedNetworkExposurePolicyRef = 'network-exposure-policy:private-ingress-v1'
 
@@ -24,27 +25,31 @@ const WEAK_AUTH_MARKERS = [
   'test',
 ]
 
-function isStrongAuthMaterial(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length < 32) return false
+function canonicalStrongAuthMaterial(value: unknown): Buffer | null {
+  const canonical = canonicalAuthMaterialBytes(value)
+  if (!canonical || typeof value !== 'string' || value.length < 32) return null
   const lower = value.toLowerCase()
-  return !WEAK_AUTH_MARKERS.some((marker) => lower.includes(marker))
+  if (WEAK_AUTH_MARKERS.some((marker) => lower.includes(marker))) return null
+  return canonical
 }
 
 function hasStrongRemoteAuth(config: Config): boolean {
   if (config.mode === 'standalone') {
     return config.auth.tokens.length > 0
-      && config.auth.tokens.every((entry) => isStrongAuthMaterial(entry.token))
+      && config.auth.tokens.every((entry) => canonicalStrongAuthMaterial(entry.token) !== null)
   }
 
-  const gatewayMaterials = [
+  const rawGatewayMaterials = [
     ...(config.auth.gateway_token ? [config.auth.gateway_token] : []),
     ...config.auth.tokens.map((entry) => entry.token),
   ]
-  if (gatewayMaterials.length === 0 || !gatewayMaterials.every(isStrongAuthMaterial)) return false
+  if (rawGatewayMaterials.length === 0) return false
+  const gatewayMaterials = rawGatewayMaterials.map(canonicalStrongAuthMaterial)
+  if (gatewayMaterials.some((material) => material === null)) return false
 
-  const internalControl = config.auth.internal_control_token
-  return isStrongAuthMaterial(internalControl)
-    && !gatewayMaterials.includes(internalControl)
+  const internalControl = canonicalStrongAuthMaterial(config.auth.internal_control_token)
+  return internalControl !== null
+    && !gatewayMaterials.some((material) => material?.equals(internalControl))
 }
 
 function isLoopbackHost(host: string): boolean {

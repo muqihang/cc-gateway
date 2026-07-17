@@ -1,4 +1,3 @@
-import { isIP } from 'net'
 import { ConfigValidationError, type Config } from './config.js'
 
 export type UpstreamTLSBoundary = Readonly<{
@@ -12,11 +11,32 @@ const CUSTOM_TRUST_ENVIRONMENT = new Set([
   'SSL_CERT_DIR',
 ])
 
-function isLoopbackHostname(hostname: string): boolean {
-  if (hostname === 'localhost') return true
-  const kind = isIP(hostname)
-  if (kind === 4) return hostname.split('.')[0] === '127'
-  return kind === 6 && hostname.toLowerCase() === '::1'
+function canonicalPort(value: string): boolean {
+  if (!/^[1-9][0-9]{0,4}$/.test(value)) return false
+  return Number(value) <= 65535
+}
+
+function canonicalIPv4Loopback(value: string): boolean {
+  const octets = value.split('.')
+  return octets.length === 4
+    && octets[0] === '127'
+    && octets.every((octet) => /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255)
+}
+
+function canonicalNumericLoopbackHTTP(raw: string): boolean {
+  const match = /^http:\/\/([^/?#]+)(?:[/?#]|$)/.exec(raw)
+  if (!match || match[1].includes('@')) return false
+  const authority = match[1]
+  if (authority.startsWith('[')) {
+    const close = authority.indexOf(']')
+    if (close < 0 || authority.slice(0, close + 1) !== '[::1]') return false
+    const remainder = authority.slice(close + 1)
+    return remainder === '' || (remainder.startsWith(':') && canonicalPort(remainder.slice(1)))
+  }
+  const separator = authority.lastIndexOf(':')
+  const host = separator < 0 ? authority : authority.slice(0, separator)
+  const port = separator < 0 ? '' : authority.slice(separator + 1)
+  return canonicalIPv4Loopback(host) && (separator < 0 || canonicalPort(port))
 }
 
 function processTrustOverridePresent(env: NodeJS.ProcessEnv): boolean {
@@ -46,7 +66,7 @@ export function resolveUpstreamTLSBoundary(
     if (upstream.protocol !== 'http:' && upstream.protocol !== 'https:') {
       throw new ConfigValidationError('upstream_protocol_unsupported')
     }
-    if (upstream.protocol === 'http:' && !isLoopbackHostname(upstream.hostname)) {
+    if (upstream.protocol === 'http:' && !canonicalNumericLoopbackHTTP(config.upstream.url)) {
       throw new ConfigValidationError('upstream_http_loopback_required')
     }
     return { real: false, requestOptions: {} }

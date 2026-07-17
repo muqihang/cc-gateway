@@ -1,8 +1,7 @@
 import { createServer as createHttpsServer, type ServerOptions } from 'https'
-import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'http'
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http'
 import { isIP } from 'net'
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
-import { request as httpsRequest } from 'https'
 import { URL } from 'url'
 import { dirname } from 'path'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'zlib'
@@ -42,6 +41,9 @@ import { resolvePersonaProfileId } from './persona-registry.js'
 import { claudeCodeEnvResidueTaxonomySummary, classifyClaudeCodeEnvResidue } from './claude-code-env-residue-taxonomy.js'
 import { resolveListenerBoundary } from './listener-boundary.js'
 import { resolveUpstreamTLSBoundary, type UpstreamTLSBoundary } from './upstream-tls-boundary.js'
+import { requestDirectUpstream, type InertDirectRequestHarness } from './direct-upstream-request.js'
+import { canonicalAuthMaterialBytes } from './auth-material.js'
+export { createInertDirectRequestHarness } from './direct-upstream-request.js'
 
 const TRUSTED_PERSONA_HEADER = 'x-sub2api-persona-trusted'
 const HEALTHCHECK_PERSONA_HEADER = 'x-sub2api-healthcheck-persona'
@@ -262,7 +264,11 @@ const DEFAULT_PROXY_STARTUP_PRIMITIVES: ProxyStartupPrimitives = Object.freeze({
   listen: (server, port, host, ready) => { server.listen(port, host, ready) },
 })
 
-export function startProxy(config: Config, startup = DEFAULT_PROXY_STARTUP_PRIMITIVES): ProxyStartupServer {
+export function startProxy(
+  config: Config,
+  startup = DEFAULT_PROXY_STARTUP_PRIMITIVES,
+  inertDirectRequestHarness?: InertDirectRequestHarness,
+): ProxyStartupServer {
   const listenerBoundary = resolveListenerBoundary(config)
   const upstreamTLSBoundary = resolveUpstreamTLSBoundary(config, process.env)
 
@@ -277,7 +283,7 @@ export function startProxy(config: Config, startup = DEFAULT_PROXY_STARTUP_PRIMI
   }
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
-    handleRequest(req, res, config, upstream, runtimeState, upstreamTLSBoundary)
+    handleRequest(req, res, config, upstream, runtimeState, upstreamTLSBoundary, inertDirectRequestHarness)
   }
 
   let server
@@ -1503,6 +1509,7 @@ async function handleRequest(
   upstream: URL,
   runtimeState: ProxyRuntimeState,
   upstreamTLSBoundary: UpstreamTLSBoundary,
+  inertDirectRequestHarness?: InertDirectRequestHarness,
 ) {
   const method = req.method || 'GET'
   const target = normalizeRequestTarget(req.url || '/')
@@ -2205,8 +2212,7 @@ async function handleRequest(
     return
   }
 
-  const requestFn = upstreamUrl.protocol === 'http:' ? httpRequest : httpsRequest
-  const proxyReq = requestFn(
+  const proxyReq = requestDirectUpstream(
     upstreamUrl,
     {
       method,
@@ -2249,6 +2255,7 @@ async function handleRequest(
         if (config.logging.audit) audit(clientName, method, safePath, status)
       }
     },
+    inertDirectRequestHarness,
   )
 
   proxyReq.on('error', (err) => {
@@ -3194,12 +3201,11 @@ function hasProtectedInternalControlInput(req: IncomingMessage): boolean {
 }
 
 function isTrustedInternalControl(req: IncomingMessage, config: Config): boolean {
-  const expected = config.auth.internal_control_token
-  if (typeof expected !== 'string' || !expected.trim()) return false
+  const expectedBuffer = canonicalAuthMaterialBytes(config.auth.internal_control_token)
+  if (!expectedBuffer) return false
   const actual = readHeader(req, INTERNAL_CONTROL_HEADER)
-  if (typeof actual !== 'string') return false
-  const actualBuffer = Buffer.from(actual, 'utf-8')
-  const expectedBuffer = Buffer.from(expected.trim(), 'utf-8')
+  const actualBuffer = canonicalAuthMaterialBytes(actual)
+  if (!actualBuffer) return false
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer) && isLocalRequest(req)
 }
 
