@@ -1975,10 +1975,25 @@ function actualReceipt(input: ActualReceiptInput): Record<string, unknown> {
 export function buildPhase1IntegrationEntry(options: unknown): Record<string, unknown> {
   return isObject(options) && options.actual === true ? actualIntegrationEntry(options as unknown as ActualIntegrationEntryInput) : buildDownstream('integration_entry', options)
 }
-export function validatePhase1IntegrationEntryValue(value: unknown, options: { source?: unknown } = {}): HarnessResult {
+function validateActualDependencyReference(
+  errors: HarnessErrorRecord[],
+  reference: unknown,
+  sourceResults: unknown,
+  pathName: string,
+): void {
+  if (sourceResults === undefined) {
+    add(errors, 'external_dependency_drift', pathName, 'source results are required to validate the dependency reference')
+    return
+  }
+  const validation = validatePhase1ExternalDependencyReference(reference, sourceResults)
+  for (const error of validation.errors) add(errors, 'external_dependency_drift', pathName, error.message)
+}
+
+export function validatePhase1IntegrationEntryValue(value: unknown, options: { source?: unknown; featureResults?: unknown } = {}): HarnessResult {
   if (isObject(value) && value.entry_kind === 'phase_1_integration_entry') {
     const errors: HarnessErrorRecord[] = []
     if (value.entry_digest !== sha256(canonicalJson(withoutField(value, 'entry_digest')))) add(errors, 'integration_entry_mismatch', '$.entry_digest', 'entry digest drifted')
+    validateActualDependencyReference(errors, value.external_dependency_reference, options.featureResults, '$.external_dependency_reference')
     return result(errors)
   }
   return validateDownstream(value, 'integration_entry', options.source)
@@ -1986,10 +2001,11 @@ export function validatePhase1IntegrationEntryValue(value: unknown, options: { s
 export function buildPhase1Handoff(options: unknown): Record<string, unknown> {
   return isObject(options) && options.actual === true ? actualHandoff(options as unknown as ActualHandoffInput) : buildDownstream('handoff', options)
 }
-export function validatePhase1HandoffValue(value: unknown, options: { source?: unknown } = {}): HarnessResult {
+export function validatePhase1HandoffValue(value: unknown, options: { source?: unknown; results?: unknown } = {}): HarnessResult {
   if (isObject(value) && value.handoff_kind === 'phase_1_handoff') {
     const errors: HarnessErrorRecord[] = []
     if (value.handoff_digest !== sha256(canonicalJson(withoutField(value, 'handoff_digest'))) || !same(value.next_phase_gates, PHASE2_ENTRY_CONDITIONS)) add(errors, 'handoff_mismatch', '$', 'handoff digest or gates drifted')
+    validateActualDependencyReference(errors, value.external_dependency_reference, options.results, '$.external_dependency_reference')
     return result(errors)
   }
   return validateDownstream(value, 'handoff', options.source)
@@ -1997,11 +2013,12 @@ export function validatePhase1HandoffValue(value: unknown, options: { source?: u
 export function buildPhase1IntegrationReceipt(options: unknown): Record<string, unknown> {
   return isObject(options) && options.actual === true ? actualReceipt(options as unknown as ActualReceiptInput) : buildDownstream('integration_receipt', options)
 }
-export function validatePhase1IntegrationReceiptValue(value: unknown, options: { source?: unknown } = {}): HarnessResult {
+export function validatePhase1IntegrationReceiptValue(value: unknown, options: { source?: unknown; results?: unknown } = {}): HarnessResult {
   if (isObject(value) && value.receipt_kind === 'phase_1_integration_receipt') {
     const errors: HarnessErrorRecord[] = []
     if (value.receipt_digest !== sha256(canonicalJson(withoutField(value, 'receipt_digest'))) || !same(value.next_phase_gates, PHASE2_ENTRY_CONDITIONS)) add(errors, 'receipt_mismatch', '$', 'receipt digest or gates drifted')
     if (!isObject(value.historical_valid_at) || !(Date.parse(String(value.historical_valid_at.source_generated_at)) <= Date.parse(String(value.historical_valid_at.validated_at)) && Date.parse(String(value.historical_valid_at.validated_at)) < Date.parse(String(value.historical_valid_at.source_expires_at)))) add(errors, 'historical_validity_invalid', '$.historical_valid_at', 'historical validity relation is false')
+    validateActualDependencyReference(errors, value.external_dependency_reference, options.results, '$.external_dependency_reference')
     return result(errors)
   }
   return validateDownstream(value, 'integration_receipt', options.source)
@@ -2029,9 +2046,9 @@ export function validatePhase1CommittedArtifactChain(input: {
   for (const error of resultsValidation.errors) add(errors, error.code, '$.results', error.message)
   if (isObject(input.entry) && input.entry.schema_version === 1) {
     for (const [validation, prefix] of [
-      [validatePhase1IntegrationEntryValue(input.entry), '$.entry'],
-      [validatePhase1HandoffValue(input.handoff), '$.handoff'],
-      [validatePhase1IntegrationReceiptValue(input.receipt), '$.receipt'],
+      [validatePhase1IntegrationEntryValue(input.entry, { featureResults: input.featureResults }), '$.entry'],
+      [validatePhase1HandoffValue(input.handoff, { results: input.results }), '$.handoff'],
+      [validatePhase1IntegrationReceiptValue(input.receipt, { results: input.results }), '$.receipt'],
     ] as const) {
       for (const error of validation.errors) add(errors, error.code, prefix, error.message)
     }
@@ -2936,8 +2953,6 @@ export function derivePhase1StageAuthorityHeads(
 }
 
 function validatePostIntegrationEntryAuthority(root: string, entry: Record<string, unknown>, selectedPath: string, now: Date): void {
-  const validation = validatePhase1IntegrationEntryValue(entry)
-  if (!validation.ok) fail('integration_entry_mismatch', JSON.stringify(validation.errors))
   if (!isObject(entry.attempt) || selectedPath !== expectedAttemptPath(entry.attempt, 'phase-1-integration-entry.json')) fail('attempt_chain_invalid', 'integration-entry path does not match its attempt')
   const generated = Date.parse(String(entry.generated_at)); const expires = Date.parse(String(entry.expires_at))
   if (!Number.isFinite(generated) || !Number.isFinite(expires) || generated > now.getTime() || now.getTime() >= expires
@@ -2957,8 +2972,10 @@ function validatePostIntegrationEntryAuthority(root: string, entry: Record<strin
   const featureResults = JSON.parse(readFileSync(path.resolve(root, String((entry.feature_results as Record<string, unknown>).path)), 'utf8')) as Record<string, unknown>
   const resultsValidation = validatePhase1ResultsValue(featureResults, { catalog })
   if (!resultsValidation.ok || featureResults.stage !== 'feature-candidate') fail('red_evidence_mismatch', 'integration-entry feature results are invalid')
+  const entryValidation = validatePhase1IntegrationEntryValue(entry, { featureResults })
+  if (!entryValidation.ok) fail('integration_entry_mismatch', JSON.stringify(entryValidation.errors))
   const featureReview = JSON.parse(readFileSync(path.resolve(root, String((entry.feature_review as Record<string, unknown>).path)), 'utf8')) as Record<string, unknown>
-  const reviewValidation = validatePhase1FeatureReviewValue(featureReview)
+  const reviewValidation = validatePhase1FeatureReviewValue(featureReview, { featureResults })
   if (!reviewValidation.ok || !same(featureReview.feature_results, entry.feature_results)
     || !same(featureReview.context, entry.context) || !same(featureReview.plan_review, entry.plan_review)
     || !same(featureReview.candidate_heads, entry.candidate_heads)
@@ -3379,13 +3396,14 @@ function finalRemoteLive(values: Readonly<Record<string, string>>): Record<strin
   const receiptPath = effective.path
   const receiptBytes = effective.bytes
   const receipt = effective.value
-  const receiptValidation = validatePhase1IntegrationReceiptValue(receipt)
-  if (!receiptValidation.ok || !isObject(receipt.attempt) || receipt.attempt.attempt_id !== effective.attempt_id) fail('attempt_chain_invalid', 'effective receipt is invalid')
+  if (!isObject(receipt.attempt) || receipt.attempt.attempt_id !== effective.attempt_id) fail('attempt_chain_invalid', 'effective receipt is invalid')
   if (!isObject(receipt.artifacts)) fail('artifact_source_chain_mismatch', 'effective receipt artifacts are absent')
   const entry = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.integration_entry)
   const baseline = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.baseline)
   const resultsValue = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.results)
   const handoff = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.handoff)
+  const receiptValidation = validatePhase1IntegrationReceiptValue(receipt, { results: resultsValue })
+  if (!receiptValidation.ok) fail('attempt_chain_invalid', 'effective receipt is invalid')
   if (!isObject(entry.catalog)) fail('artifact_source_chain_mismatch', 'integration entry catalog binding is absent')
   const catalog = committedJsonBinding(ccRoot, receiptCommit, entry.catalog)
   const featureResults = committedJsonBinding(ccRoot, receiptCommit, entry.feature_results)
@@ -3593,7 +3611,7 @@ function runCli(tokens: readonly string[]): void {
       sub2apiContractRoot: v['sub2api-contract-root'], catalog, entry, baseline, results: resultsValue,
       registries, generatedAt: String(handoff.generated_at),
     })
-    const validation = validatePhase1HandoffValue(handoff)
+    const validation = validatePhase1HandoffValue(handoff, { results: resultsValue })
     if (!validation.ok || !same(regenerated, handoff)
       || readFileSync(path.resolve(root, v.report), 'utf8') !== renderPhase1HandoffMarkdown(handoff)) {
       fail('handoff_mismatch', validation.ok ? 'handoff sources or report bytes drifted' : JSON.stringify(validation.errors))
@@ -3617,7 +3635,7 @@ function runCli(tokens: readonly string[]): void {
       actual: true, catalog, artifactCommit: v['artifact-commit'], entry, baseline, results: resultsValue,
       handoff, report: pathBinding(root, v.report), registries, generatedAt: String(receipt.generated_at),
     })
-    const validation = validatePhase1IntegrationReceiptValue(receipt)
+    const validation = validatePhase1IntegrationReceiptValue(receipt, { results: resultsValue })
     if (!validation.ok || !same(regenerated, receipt)) fail(validation.ok ? 'receipt_mismatch' : validation.errors[0]?.code ?? 'receipt_mismatch', validation.ok ? 'receipt source bindings drifted' : JSON.stringify(validation.errors))
     assertActualReceiptTopology(root, v['artifact-commit'], v['receipt-commit'], v.receipt, receipt)
   } else if (invocation.command === 'verify-final-remote') {

@@ -26,6 +26,7 @@ import {
   parsePhase1GoModuleList,
   parsePhase1RedFailureLeaves,
   parsePhase1TrackedTree,
+  PHASE2_ENTRY_CONDITIONS,
   preparePhase1ExternalDependencies,
   selectPhase1GoModuleContentDirectory,
   selectLatestPhase1ExecutionContext,
@@ -817,6 +818,55 @@ test('external dependency transition chain and evidence reference reject rehashe
     forgedReference.chain_digest = changed.external_dependency_chain?.transitions_digest ?? forgedReference.chain_digest
     forgedReference.final = changed.external_dependency_chain?.final ?? forgedReference.final
     assert.equal(validatePhase1ExternalDependencyReference(forgedReference, changed).ok, false)
+  }
+})
+
+test('actual downstream value validators independently reject rehashed dependency references', async () => {
+  const { results: featureResults } = await validResultsFixture()
+  const featureResultsPath = 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json'
+  const postResults: any = structuredClone(featureResults)
+  postResults.stage = 'post-integration'
+  postResults.results_digest = sha256(canonicalJson(Object.fromEntries(
+    Object.entries(postResults).filter(([key]) => key !== 'results_digest'),
+  )))
+  const postResultsPath = 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-command-results.json'
+  const entry = signed({
+    entry_kind: 'phase_1_integration_entry',
+    external_dependency_reference: derivePhase1ExternalDependencyReference(featureResultsPath, featureResults),
+  }, 'entry_digest')
+  const handoff = signed({
+    handoff_kind: 'phase_1_handoff',
+    external_dependency_reference: derivePhase1ExternalDependencyReference(postResultsPath, postResults),
+    next_phase_gates: [...PHASE2_ENTRY_CONDITIONS],
+  }, 'handoff_digest')
+  const receipt = signed({
+    receipt_kind: 'phase_1_integration_receipt',
+    external_dependency_reference: derivePhase1ExternalDependencyReference(postResultsPath, postResults),
+    historical_valid_at: {
+      source_generated_at: '2026-07-17T00:00:00.000Z',
+      validated_at: '2026-07-17T00:00:01.000Z',
+      source_expires_at: '2026-07-18T00:00:00.000Z',
+    },
+    next_phase_gates: [...PHASE2_ENTRY_CONDITIONS],
+  }, 'receipt_digest')
+
+  assert.deepEqual(validatePhase1IntegrationEntryValue(entry, { featureResults }), { ok: true, errors: [] })
+  assert.deepEqual(validatePhase1HandoffValue(handoff, { results: postResults }), { ok: true, errors: [] })
+  assert.deepEqual(validatePhase1IntegrationReceiptValue(receipt, { results: postResults }), { ok: true, errors: [] })
+
+  for (const [name, value, digestField, validate] of [
+    ['entry', entry, 'entry_digest', (candidate: unknown) => validatePhase1IntegrationEntryValue(candidate, { featureResults })],
+    ['handoff', handoff, 'handoff_digest', (candidate: unknown) => validatePhase1HandoffValue(candidate, { results: postResults })],
+    ['receipt', receipt, 'receipt_digest', (candidate: unknown) => validatePhase1IntegrationReceiptValue(candidate, { results: postResults })],
+  ] as const) {
+    const changed: any = structuredClone(value)
+    changed.external_dependency_reference.chain_digest = digest('f')
+    changed[digestField] = sha256(canonicalJson(Object.fromEntries(
+      Object.entries(changed).filter(([key]) => key !== digestField),
+    )))
+    const validation = validate(changed)
+    assert.equal(validation.ok, false, name)
+    assert.equal(validation.errors.some((error) => error.code === 'external_dependency_drift'), true, name)
   }
 })
 
