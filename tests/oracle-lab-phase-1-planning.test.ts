@@ -1441,6 +1441,25 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
+test('Phase 1 Task 7 binds GREEN full-suite contract discovery without substituting the tested Sub2API root', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  const contractPath = '${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+
+  assert.match(plan, /cc-tests:.*env SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json/)
+  assert.match(plan, /cc-tests-repeat:.*env SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json/)
+  assert.equal(plan.includes(contractPath), true)
+  assert.match(plan, /only `cc-tests` and `cc-tests-repeat` may set `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
+  assert.match(plan, /the exact catalog value is `\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json`/)
+  assert.match(plan, /all other catalog rows forbid `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
+  assert.match(plan, /[Tt]he capture envelope still binds the tested Sub2API implementation root/)
+  assert.match(plan, /the `cc-tests` and `cc-tests-repeat` child environments omit `SUB2API_ROOT`/)
+  assert.match(plan, /missing, relative, alternate-root, wrong-suffix, symlink, inherited-startup, and every forbidden-row environment mutation/)
+  assert.match(plan, /every forbidden command ID independently receives the variable and must fail `contract_root_not_authorized` with zero spawned commands/)
+  assert.match(plan, /Run serially three times from one unchanged clean HEAD: `env -i/)
+  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json \/opt\/homebrew\/bin\/npm test/)
+  assert.match(plan, /Do not combine or parallelize the three runs/)
+})
+
 test('Phase 1 full regression uses a serial process-isolation boundary', async () => {
   const [runner, processRunner, packageManifest] = await Promise.all([
     readFile(path.join(root, 'tests/run-all.ts'), 'utf8'),
@@ -1453,7 +1472,11 @@ test('Phase 1 full regression uses a serial process-isolation boundary', async (
   assert.match(processRunner, /spawnSync/)
   assert.match(processRunner, /run-p0-1\.ts/)
   assert.match(processRunner, /run-all\.ts.*--exclude-oracle-p0-1/s)
-  assert.match(processRunner, /env: \{ \.\.\.\(options\.environment \?\? process\.env\) \}/)
+  assert.match(processRunner, /buildClosedFullSuiteEnvironment\(process\.env\)/)
+  assert.match(processRunner, /unsafe_full_suite_environment/)
+  assert.match(processRunner, /npm_config_userconfig: '\/dev\/null'/)
+  assert.match(processRunner, /SUB2API_FORMAL_POOL_CONTRACT_PATH/)
+  assert.doesNotMatch(processRunner, /\{ \.\.\.process\.env \}/)
   assert.equal(JSON.parse(packageManifest).scripts.test, 'node --import tsx tests/run-all.ts')
 })
 
@@ -1482,12 +1505,29 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
     'final_verify_ignored_profile_invalid',
     'Phase1IgnoredStateChainBinding',
     'Phase1IgnoredStateEvidenceReference',
+    'Phase1ExternalDependencyBinding',
+    'Phase1ExternalDependencySet',
+    'Phase1ExternalDependencyTransition',
+    'Phase1ExternalDependencyChainBinding',
+    'Phase1ExternalDependencyEvidenceReference',
+    'phase1_external_dependency_content_v1',
+    'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    'command_scoped_empty_mkdtemp_v1',
+    'external_dependency_drift',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /ignored_output_policies: \{\s*cc_gateway: Phase1IgnoredOutputPolicy\s*sub2api: Phase1IgnoredOutputPolicy/s)
   assert.match(plan, /ignored_state_transitions: \{\s*controller: Phase1ControllerIgnoredStateTransition\s*cc_gateway: Phase1IgnoredStateTransition\s*sub2api: Phase1IgnoredStateTransition/s)
   assert.match(plan, /controller_alias_cc_gateway_v1/)
   assert.match(plan, /transition_count: 17/)
+  assert.match(plan, /external_dependencies: Phase1ExternalDependencySet/)
+  assert.match(plan, /external_dependency_transition: Phase1ExternalDependencyTransition/)
+  assert.match(plan, /external_dependency_chain: Phase1ExternalDependencyChainBinding/)
+  assert.match(plan, /feature review, integration entry, handoff, receipt, and final-remote artifacts each embed `Phase1ExternalDependencyEvidenceReference`/i)
+  assert.match(plan, /npm ci --offline --ignore-scripts/)
+  assert.match(plan, /go mod verify/)
+  assert.match(plan, /mkdtemp\('\/tmp\/oracle-lab-phase1-go-build-'\)/)
+  assert.match(plan, /unsafe_full_suite_build_cache/)
   assert.match(plan, /does not follow symbolic links/)
   assert.match(plan, /absolute targets.*repository escape.*same ignored endpoint root.*dangling targets.*cross-endpoint targets.*cycles/s)
   assert.match(plan, /`node_modules` and `\.codegraph`.*before and after every command/s)
@@ -1498,8 +1538,11 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
   assert.match(plan, /fifteen `pass`, two `expected_fail`/)
   assert.match(plan, /does not compare fresh-root `\.codegraph` or `node_modules` digests.*does not claim evidence about a mutation that occurred before/s)
   assert.match(plan, /Mutation tests for final remote inject each ignored operation after the before snapshot/)
-  assert.match(plan, /three consecutive isolated `npm test` runs/)
-  assert.match(plan, /npm test && npm test && npm test && npm run build/)
+  assert.match(plan, /three consecutive `env -i` isolated `npm test` runs/)
+  assert.match(plan, /derive each temporary branch suffix from the already-created unique temporary parent/)
+  assert.match(plan, /actual fresh shared Git clone with no `dist`/)
+  assert.match(plan, /Run serially three times from one unchanged clean HEAD: `env -i/)
+  assert.match(plan, /Then run `npm run build` in the same frozen worktree/)
 })
 
 test('Phase 1 plan closes context refresh, review, merge-topology, and retry lifecycles', async () => {
@@ -1585,6 +1628,51 @@ test('Phase 1 plan closes context refresh, review, merge-topology, and retry lif
   assert.match(plan, /historical_receipt_deleted.*historical_receipt_deleted_readded.*attempt_chain_reset_to_0001/s)
   assert.match(plan, /Stop this plan, preserve prior evidence/)
   assert.match(plan, /no successor attempt is legal/)
+})
+
+test('Phase 1 mid-execution plan repair restarts canonical initial authority instead of mutating a successor chain', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+
+  for (const required of [
+    'Mid-Execution Plan Authority Repair Restart',
+    'quarantine checkpoint',
+    'fresh replacement implementation worktrees',
+    'rename the superseded implementation branches',
+    'recreate the exact implementation branch names',
+    'new canonical initial plan review and sequence-zero execution context',
+    'patch-id and implementation-tree equivalence',
+    'Do not replay superseded review/context artifacts',
+    'Task 7 broad gate remains blocked',
+    'oracle-lab-phase-1-authority-restart.schema.json',
+    'phase-1-authority-restart-0001.json',
+    'buildPhase1AuthorityRestart',
+    'validatePhase1AuthorityRestart',
+    'validatePhase1AuthorityRestartSource',
+    'oracle-phase1-authority-restart',
+    'initial-authority child of repaired remote main',
+    'Sub2API replay base equals frozen remote main',
+    '0403674d4c812e1a14704bfc890d66aac75f0325',
+    'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0',
+    'authority_restart_checkpoint_mismatch',
+  ]) assert(plan.includes(required), required)
+
+  assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
+  assert.match(plan, /old review and context bytes remain historical only and cannot authorize the replacement branches/)
+  assert.match(plan, /the replacement CC branch starts at the newly reviewed merged plan commit/)
+  assert.match(plan, /the replacement Sub2API branch starts at freshly fetched `muqihang\/main`/)
+  assert.match(plan, /replay only the enumerated Task 1-6 commits and pinned Task 7 checkpoint/)
+  assert.match(plan, /stable patch-id, exact parent order, and exact changed-path\/mode set for every source-to-replacement mapping/)
+  assert.match(plan, /projected tracked-tree comparison excludes exactly the reviewed authority-repair path set and canonical old\/new review-context paths/)
+  assert.match(plan, /all nonexcluded projected path, mode, object-type, and object-ID tuples remain byte-identical/)
+  assert.match(plan, /intentionally omits the restart artifact's own digest and commit to avoid Git self-reference/)
+  assert.match(plan, /rejects Node\/tsx, dynamic-library, and Git startup injection before Node starts/)
+  assert.match(plan, /npm ci --offline --ignore-scripts/)
+  assert.match(plan, /strict pre-commit gate requires the artifact to be the sole untracked delta and rejects a fully clean tree/)
+  assert.match(plan, /external controller decision package is informational only/)
+  assert.match(plan, /pinned checkpoint's exact changed-path set is disjoint from every authority-repair and historical exclusion/)
+  assert.match(plan, /Commit the nonempty Task 7 authority-repair continuation/)
+  assert.match(plan, /implement the repaired contract-environment, external-dependency, cache, schema\/reference, and mutation requirements/)
+  assert.match(plan, /then proceed to Task 8/)
 })
 
 test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {

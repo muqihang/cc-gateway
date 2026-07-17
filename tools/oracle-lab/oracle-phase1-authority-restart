@@ -1,0 +1,71 @@
+#!/bin/sh
+
+fail_startup() {
+  printf '%s\n' 'authority_restart_unsafe_startup_environment' >&2
+  exit 1
+}
+
+for name in \
+  NODE_OPTIONS NODE_PATH TSX_TSCONFIG_PATH TSX_DISABLE_CACHE \
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD \
+  GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
+  GIT_REPLACE_REF_BASE GIT_CONFIG_COUNT GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL
+do
+  eval "is_set=\${$name+x}"
+  [ "$is_set" = x ] && fail_startup
+done
+
+case $0 in
+  /*) launcher=$0 ;;
+  *) launcher=$PWD/$0 ;;
+esac
+script_dir=${launcher%/*}
+repository_root=${script_dir%/tools/oracle-lab}
+repository_root=$(cd -P "$repository_root" 2>/dev/null && pwd -P) || fail_startup
+
+select_tool() {
+  for candidate in "$@"; do
+    if [ -x "$candidate" ] && [ ! -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
+git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
+npm_executable=$(select_tool /opt/homebrew/bin/npm /usr/local/bin/npm /usr/bin/npm) || fail_startup
+tsx_cli=$repository_root/node_modules/tsx/dist/cli.mjs
+typescript_entry=$repository_root/tools/oracle-lab/phase-1-authority-restart.ts
+
+for file in \
+  docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json \
+  tools/oracle-lab/oracle-phase1-authority-restart \
+  tools/oracle-lab/phase-1-authority-restart.ts \
+  tools/oracle-lab/secure-runtime.ts \
+  package-lock.json
+do
+  current_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" hash-object -- "$file") || fail_startup
+  reviewed_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" rev-parse "refs/remotes/muqihang/main:$file") || fail_startup
+  [ "$current_oid" = "$reviewed_oid" ] || fail_startup
+done
+
+/usr/bin/env -i \
+  HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${npm_executable%/*}:/usr/bin:/bin" \
+  LANG=C LC_ALL=C TZ=UTC CI=1 \
+  npm_config_offline=true npm_config_audit=false npm_config_fund=false \
+  npm_config_userconfig=/dev/null npm_config_globalconfig=/nonexistent/oracle-lab-empty-global-npmrc \
+  "$npm_executable" ci --offline --ignore-scripts --prefix "$repository_root" || fail_startup
+
+[ -f "$tsx_cli" ] && [ ! -L "$tsx_cli" ] && [ -f "$typescript_entry" ] && [ ! -L "$typescript_entry" ] || fail_startup
+
+exec /usr/bin/env -i \
+  HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${git_executable%/*}:/usr/bin:/bin" \
+  LANG=C LC_ALL=C TZ=UTC \
+  npm_config_offline=true npm_config_audit=false npm_config_fund=false \
+  npm_config_userconfig=/dev/null npm_config_globalconfig=/nonexistent/oracle-lab-empty-global-npmrc \
+  ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1 \
+  ORACLE_P0_1_NODE="$node_executable" ORACLE_P0_1_GIT="$git_executable" \
+  "$node_executable" "$tsx_cli" "$typescript_entry" "$@"
