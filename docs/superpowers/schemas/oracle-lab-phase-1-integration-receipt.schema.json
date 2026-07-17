@@ -1,0 +1,691 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oracle.local/schemas/oracle-lab-phase-1-integration-receipt.json",
+  "title": "Oracle Lab Phase 1 Integration Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_kind",
+    "generated_at",
+    "historical_valid_at",
+    "attempt",
+    "artifact_commit",
+    "integrated_heads",
+    "artifacts",
+    "implementation_trees",
+    "ignored_state_reference",
+    "shared_contract",
+    "disabled_capabilities",
+    "next_phase_gates",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "receipt_kind": {
+      "const": "phase_1_integration_receipt"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "historical_valid_at": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validated_at",
+        "source_generated_at",
+        "source_expires_at"
+      ],
+      "properties": {
+        "validated_at": { "type": "string", "format": "date-time" },
+        "source_generated_at": { "type": "string", "format": "date-time" },
+        "source_expires_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "sequence",
+        "predecessor"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^attempt-[0-9]{4}$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "predecessor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attempt_id",
+                "receipt",
+                "receipt_commit"
+              ],
+              "properties": {
+                "attempt_id": {
+                  "type": "string",
+                  "pattern": "^attempt-[0-9]{4}$"
+                },
+                "receipt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "digest"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "receipt_commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40,64}$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "artifact_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "integrated_heads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cc_gateway",
+        "sub2api"
+      ],
+      "properties": {
+        "cc_gateway": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "sub2api": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 8,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "digest"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "implementation_trees": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cc_gateway", "sub2api"],
+      "properties": {
+        "cc_gateway": {"$ref": "#/$defs/implementation_tree"},
+        "sub2api": {"$ref": "#/$defs/implementation_tree"}
+      }
+    },
+    "ignored_state_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["results_digest", "chain_digest", "final"],
+      "properties": {
+        "results_digest": {"$ref": "#/$defs/digest"},
+        "chain_digest": {"$ref": "#/$defs/digest"},
+        "final": {"$ref": "#/$defs/ignored_state_set"}
+      }
+    },
+    "shared_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "path",
+        "digest"
+      ],
+      "properties": {
+        "repository": {
+          "const": "sub2api"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "disabled_capabilities": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "real_upstream_access",
+          "real_credentials",
+          "provider_internal_authority",
+          "profile_promotion",
+          "production_deployment",
+          "real_canary",
+          "direct_egress_trust",
+          "unverified_pinned_wire_claims",
+          "unsupported_negative_capabilities",
+          "expired_or_missing_negative_capabilities",
+          "unrestricted_capture",
+          "external_network_requests"
+        ]
+      }
+    },
+    "next_phase_gates": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "receipt_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40,64}$"
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+    },
+    "path_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "digest"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "implementation_tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "repository",
+        "source_commit",
+        "exclusion_policy",
+        "excluded_prefixes",
+        "excluded_paths",
+        "entry_count",
+        "entries_digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "git_ls_tree_v1_sha256_canonical_json"
+        },
+        "repository": {
+          "enum": [
+            "cc_gateway",
+            "sub2api"
+          ]
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "exclusion_policy": {
+          "const": "phase1_evidence_governance_only_v1"
+        },
+        "excluded_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+          }
+        },
+        "excluded_paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+          }
+        },
+        "entry_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entries_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ignored_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "repository",
+        "endpoint_count",
+        "entry_count",
+        "regular_file_count",
+        "directory_count",
+        "symlink_count",
+        "regular_file_bytes",
+        "digest"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "git_exclude_standard_recursive_v1"
+        },
+        "repository": {
+          "enum": [
+            "cc_gateway",
+            "sub2api"
+          ]
+        },
+        "endpoint_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entry_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "regular_file_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "directory_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "symlink_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "regular_file_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "contract_root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "clone_kind",
+        "branch",
+        "head",
+        "origin_url_digest",
+        "root_identity_digest",
+        "clean_status_digest",
+        "contract_relative_path",
+        "contract_digest"
+      ],
+      "properties": {
+        "repository": {
+          "const": "sub2api"
+        },
+        "clone_kind": {
+          "const": "independent_clone"
+        },
+        "branch": {
+          "const": "main"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "origin_url_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "root_identity_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "clean_status_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "contract_relative_path": {
+          "const": "backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json"
+        },
+        "contract_digest": {
+          "const": "sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"
+        }
+      }
+    },
+    "attempt_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "sequence",
+        "predecessor"
+      ],
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^attempt-[0-9]{4}$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "predecessor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "attempt_id",
+                "receipt",
+                "receipt_commit"
+              ],
+              "properties": {
+                "attempt_id": {
+                  "type": "string",
+                  "pattern": "^attempt-[0-9]{4}$"
+                },
+                "receipt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "digest"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "receipt_commit": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40,64}$"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "context_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "digest",
+        "sequence",
+        "stage",
+        "artifact_commit"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stage": {
+          "enum": [
+            "implementation_entry",
+            "implementation",
+            "feature_capture",
+            "post_integration"
+          ]
+        },
+        "artifact_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        }
+      }
+    },
+    "roots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controller",
+        "cc_gateway",
+        "sub2api"
+      ],
+      "properties": {
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stage",
+            "head",
+            "root_identity_digest",
+            "same_as_tested_cc_root",
+            "preexisting_delta_paths",
+            "declared_output_paths"
+          ],
+          "properties": {
+            "stage": {
+              "enum": [
+                "feature-candidate",
+                "post-integration"
+              ]
+            },
+            "head": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            "root_identity_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "same_as_tested_cc_root": {
+              "type": "boolean"
+            },
+            "preexisting_delta_paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+              }
+            },
+            "declared_output_paths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"
+              }
+            }
+          }
+        },
+        "cc_gateway": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "head",
+            "root_identity_digest",
+            "clean_status_digest"
+          ],
+          "properties": {
+            "head": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            "root_identity_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "clean_status_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        "sub2api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "head",
+            "root_identity_digest",
+            "clean_status_digest"
+          ],
+          "properties": {
+            "head": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40,64}$"
+            },
+            "root_identity_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "clean_status_digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "executable_digest",
+        "policy_digest",
+        "loopback_ipv4",
+        "loopback_ipv6",
+        "non_loopback",
+        "policy_bypass_detected"
+      ],
+      "properties": {
+        "adapter": {
+          "const": "macos_sandbox_exec_loopback_v1"
+        },
+        "executable_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "policy_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "loopback_ipv4": {
+          "const": "pass"
+        },
+        "loopback_ipv6": {
+          "const": "pass"
+        },
+        "non_loopback": {
+          "const": "denied_by_policy"
+        },
+        "policy_bypass_detected": {
+          "const": false
+        }
+      }
+    },
+    "ignored_state_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["controller", "cc_gateway", "sub2api"],
+      "properties": {
+        "controller": {"$ref": "#/$defs/ignored_state"},
+        "cc_gateway": {"$ref": "#/$defs/ignored_state"},
+        "sub2api": {"$ref": "#/$defs/ignored_state"}
+      }
+    },
+    "disabled": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "real_upstream_access",
+          "real_credentials",
+          "provider_internal_authority",
+          "profile_promotion",
+          "production_deployment",
+          "real_canary",
+          "direct_egress_trust",
+          "unverified_pinned_wire_claims",
+          "unsupported_negative_capabilities",
+          "expired_or_missing_negative_capabilities",
+          "unrestricted_capture",
+          "external_network_requests"
+        ]
+      }
+    }
+  }
+}
