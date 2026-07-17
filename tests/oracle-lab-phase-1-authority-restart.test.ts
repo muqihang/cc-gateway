@@ -66,14 +66,14 @@ function init(repository: string): string {
   return git(repository, 'rev-parse', 'HEAD')
 }
 
-function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase?: boolean; extraSubAuthorizedBase?: boolean } = {}) {
+function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase?: boolean; extraSubAuthorizedBase?: boolean; skippedAuthorityGap?: boolean } = {}) {
   const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-restart-'))
   const cc = path.join(parent, 'cc')
   const sub = path.join(parent, 'sub')
   const ccCommon = init(cc)
   const subCommon = init(sub)
   const repairPaths = ['authority/plan.md']
-  const historicalPaths = ['authority/review.json', 'authority/context.json']
+  const historicalPaths = ['authority/review.json', 'authority/context.json', 'authority/restart-old.json']
 
   git(cc, 'checkout', '-qb', 'cc-archive')
   const ccSourceAuthority = commit(cc, 'old authority', {
@@ -82,6 +82,9 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
     'authority/context.json': 'old context\n',
   })
   const ccSource1 = commit(cc, 'task six one', { 'app/task6-a.txt': 'alpha\n' })
+  const skippedAuthorityCommit = options.skippedAuthorityGap
+    ? commit(cc, 'historical restart authority', { 'authority/restart-old.json': 'historical\n' })
+    : null
   git(cc, 'mv', 'app/task6-a.txt', 'app/task6-renamed.txt')
   const ccSource2 = commit(cc, 'task six two', { 'app/task6-b.txt': 'beta\n' })
   const checkpoint = commit(cc, 'task seven quarantine', { 'app/task7.txt': 'quarantine\n' })
@@ -128,6 +131,13 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
       replacementBranch: 'codex/oracle-phase-1-cc-gateway',
       remoteUrlDigest: sha256('https://example.invalid/cc.git'),
       sourceCommits: [ccSource1, ccSource2, checkpoint],
+      allowedSkippedSourceCommits: skippedAuthorityCommit ? [skippedAuthorityCommit] : [],
+      pinnedSourceEvidence: [{
+        commit: checkpoint,
+        parent: ccSource2,
+        patchId: tool.inspectStablePatchId(cc, checkpoint),
+        changedPaths: checkpointTuple,
+      }],
       quarantineCheckpoint: checkpoint,
       quarantineParent: ccSource2,
       quarantinePatchId: tool.inspectStablePatchId(cc, checkpoint),
@@ -160,7 +170,7 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
   const subSourceRoot = path.join(parent, 'sub-source')
   git(cc, 'worktree', 'add', '--quiet', ccSourceRoot, 'cc-archive')
   git(sub, 'worktree', 'add', '--quiet', subSourceRoot, 'sub-archive')
-  return { parent, cc, sub, ccSourceRoot, subSourceRoot, bindings, input, artifact, ccPlanMain, ccContextCommit, ccReplacementBase, subReplacementBase, checkpoint, ccSource2 }
+  return { parent, cc, sub, ccSourceRoot, subSourceRoot, bindings, input, artifact, ccPlanMain, ccContextCommit, ccReplacementBase, subReplacementBase, checkpoint, ccSource2, skippedAuthorityCommit }
 }
 
 function expectCode(fn: () => unknown, code: string): void {
@@ -172,10 +182,22 @@ function expectCode(fn: () => unknown, code: string): void {
 
 function clone<T>(value: T): T { return structuredClone(value) }
 
-assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint, '0403674d4c812e1a14704bfc890d66aac75f0325')
-assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineParent, '49e4639c6f36dc51779c14813acd6e277315b969')
-assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantinePatchId, 'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0')
-assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineChangedPaths.length, 12)
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.repairId, 'authority-repair-0002')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.artifactPath, 'docs/superpowers/evidence/phase-1/phase-1-authority-restart-0002.json')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.replacementBranch, 'codex/oracle-phase-1-cc-gateway-v8')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.sub2api.replacementBranch, 'codex/oracle-phase-1-sub2api-v8')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint, 'd5a711614177906d18486b98ff4c5d45d97e04c7')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineParent, '8cbc5c633c7f791b395198aedd2db2e55f01915b')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantinePatchId, '655f57bc12191566b6f1efd415ce54721252ab08')
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineChangedPaths.length, 2)
+assert.deepEqual(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.sourceCommits.slice(-2), [
+  '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+  'd5a711614177906d18486b98ff4c5d45d97e04c7',
+])
+assert.deepEqual(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.pinnedSourceEvidence.map((entry: { commit: string }) => entry.commit), [
+  '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+  'd5a711614177906d18486b98ff4c5d45d97e04c7',
+])
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.sourceCommits.at(-1), tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint)
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.projectedTreePolicy.authorityRepairPaths.includes('tools/oracle-lab/phase-1-authority-bootstrap.mjs'), true)
 
@@ -193,6 +215,42 @@ tool.validatePhase1AuthorityRestartSource({
   sub2apiRoot: valid.subSourceRoot,
   bindings: valid.bindings,
 })
+const skippedAuthority = fixture({ skippedAuthorityGap: true })
+tool.validatePhase1AuthorityRestartSource({
+  ccGatewayRoot: skippedAuthority.ccSourceRoot,
+  sub2apiRoot: skippedAuthority.subSourceRoot,
+  bindings: skippedAuthority.bindings,
+})
+expectCode(() => tool.validatePhase1AuthorityRestartSource({
+  ccGatewayRoot: skippedAuthority.ccSourceRoot,
+  sub2apiRoot: skippedAuthority.subSourceRoot,
+  bindings: {
+    ...skippedAuthority.bindings,
+    ccGateway: { ...skippedAuthority.bindings.ccGateway, allowedSkippedSourceCommits: [] },
+  },
+}), 'authority_restart_parent_mismatch')
+expectCode(() => tool.validatePhase1AuthorityRestartSource({
+  ccGatewayRoot: skippedAuthority.ccSourceRoot,
+  sub2apiRoot: skippedAuthority.subSourceRoot,
+  bindings: {
+    ...skippedAuthority.bindings,
+    projectedTreePolicy: {
+      ...skippedAuthority.bindings.projectedTreePolicy,
+      historicalAuthorityPaths: skippedAuthority.bindings.projectedTreePolicy.historicalAuthorityPaths.filter((entry: string) => entry !== 'authority/restart-old.json'),
+    },
+  },
+}), 'authority_restart_skipped_source_path_mismatch')
+expectCode(() => tool.validatePhase1AuthorityRestartSource({
+  ccGatewayRoot: valid.ccSourceRoot,
+  sub2apiRoot: valid.subSourceRoot,
+  bindings: {
+    ...valid.bindings,
+    ccGateway: {
+      ...valid.bindings.ccGateway,
+      pinnedSourceEvidence: valid.bindings.ccGateway.pinnedSourceEvidence.map((entry: any) => ({ ...entry, patchId: '0'.repeat(40) })),
+    },
+  },
+}), 'authority_restart_source_evidence_mismatch')
 expectCode(() => tool.validatePhase1AuthorityRestartPreCommit(valid.artifact, {
   ccGatewayRoot: valid.cc,
   sub2apiRoot: valid.sub,

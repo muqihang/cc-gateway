@@ -6,7 +6,7 @@
   "required": ["schema_version", "repair_id", "repaired_authority", "repositories", "projected_tree_policy"],
   "properties": {
     "schema_version": {"const": 1},
-    "repair_id": {"const": "authority-repair-0001"},
+    "repair_id": {"const": "authority-repair-0002"},
     "repaired_authority": {
       "type": "object",
       "additionalProperties": false,

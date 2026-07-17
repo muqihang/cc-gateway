@@ -1643,14 +1643,14 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'Mid-Execution Plan Authority Repair Restart',
     'quarantine checkpoint',
     'fresh replacement implementation worktrees',
-    'rename the superseded implementation branches',
-    'recreate the exact implementation branch names',
+    'codex/oracle-phase-1-cc-gateway-v8',
+    'codex/oracle-phase-1-sub2api-v8',
     'new canonical initial plan review and sequence-zero execution context',
     'patch-id and implementation-tree equivalence',
-    'Do not replay superseded review/context artifacts',
+    'Do not replay superseded plan review, execution context, or restart artifacts',
     'Task 7 broad gate remains blocked',
     'oracle-lab-phase-1-authority-restart.schema.json',
-    'phase-1-authority-restart-0001.json',
+    'phase-1-authority-restart-0002.json',
     'buildPhase1AuthorityRestart',
     'validatePhase1AuthorityRestart',
     'validatePhase1AuthorityRestartSource',
@@ -1661,18 +1661,22 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'untrusted content seed only',
     'initial-authority child of repaired remote main',
     'Sub2API replay base equals frozen remote main',
-    '0403674d4c812e1a14704bfc890d66aac75f0325',
-    'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0',
+    '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+    'd5a711614177906d18486b98ff4c5d45d97e04c7',
+    '295de5938e2ed0001dc51b520ebf62a223b44a3c',
+    '655f57bc12191566b6f1efd415ce54721252ab08',
+    '1c8f25bb1ca31c5c16262fec71f93dd1e14f512d',
+    '6621c7a78432a895d261054e291aed74c04978c3',
     'authority_restart_checkpoint_mismatch',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
   assert.match(plan, /old review and context bytes remain historical only and cannot authorize the replacement branches/)
-  assert.match(plan, /the replacement CC branch starts at the newly reviewed merged plan commit/)
-  assert.match(plan, /the replacement Sub2API branch starts at freshly fetched `muqihang\/main`/)
-  assert.match(plan, /replay only the enumerated Task 1-6 commits and pinned Task 7 checkpoint/)
-  assert.match(plan, /stable patch-id, exact parent order, and exact changed-path\/mode set for every source-to-replacement mapping/)
-  assert.match(plan, /projected tracked-tree comparison excludes exactly the reviewed authority-repair path set and canonical old\/new review-context paths/)
+  assert.match(plan, /The replacement CC branch starts at the newly reviewed merged plan commit/)
+  assert.match(plan, /the replacement Sub2API branch starts at freshly fetched `muqihang\/main`/i)
+  assert.match(plan, /replay only the enumerated implementation commits/)
+  assert.match(plan, /stable patch-id, exact source parent, contiguous replacement parent order, and exact changed-path\/mode set for every source-to-replacement mapping/)
+  assert.match(plan, /projected tracked-tree comparison excludes exactly the reviewed authority-repair path set and canonical historical authority paths/)
   assert.match(plan, /all nonexcluded projected path, mode, object-type, and object-ID tuples remain byte-identical/)
   assert.match(plan, /intentionally omits the restart artifact's own digest and commit to avoid Git self-reference/)
   assert.match(plan, /rejects Node\/tsx, dynamic-library, and Git startup injection before Node starts/)
@@ -1686,9 +1690,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /strict pre-commit gate requires the artifact to be the sole untracked delta and rejects a fully clean tree/)
   assert.match(plan, /external controller decision package is informational only/)
   assert.match(plan, /pinned checkpoint's exact changed-path set is disjoint from every authority-repair and historical exclusion/)
-  assert.match(plan, /Commit the nonempty Task 7 authority-repair continuation/)
-  assert.match(plan, /implement the repaired contract-environment, external-dependency, cache, schema\/reference, and mutation requirements/)
-  assert.match(plan, /then proceed to Task 8/)
+  assert.match(plan, /Source gaps are forbidden except the two compiled authority-only commits/)
+  assert.match(plan, /must change only its one exact historical authority path, and must be consumed exactly once/)
+  assert.match(plan, /Do not create another Task 7 continuation unless those replay-verification gates find a demonstrable implementation regression/)
+  assert.match(plan, /then begin Task 8 with a fresh feature-capture context and fresh baseline\/results/)
 })
 
 test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {
