@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -66,7 +66,7 @@ function init(repository: string): string {
   return git(repository, 'rev-parse', 'HEAD')
 }
 
-function fixture(options: { projectedTupleDrift?: boolean } = {}) {
+function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase?: boolean; extraSubAuthorizedBase?: boolean } = {}) {
   const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-restart-'))
   const cc = path.join(parent, 'cc')
   const sub = path.join(parent, 'sub')
@@ -87,13 +87,16 @@ function fixture(options: { projectedTupleDrift?: boolean } = {}) {
   const checkpoint = commit(cc, 'task seven quarantine', { 'app/task7.txt': 'quarantine\n' })
 
   git(cc, 'checkout', '-qb', 'codex/oracle-phase-1-cc-gateway', ccCommon)
+  const ccPlanMain = commit(cc, 'new plan', { 'authority/plan.md': 'new plan\n' })
   const replacementAuthorityChanges: Record<string, string> = {
-    'authority/plan.md': 'new plan\n',
     'authority/review.json': 'new review\n',
     'authority/context.json': 'new context\n',
   }
   if (options.projectedTupleDrift) replacementAuthorityChanges['app/projected-drift.txt'] = 'drift\n'
-  const ccReplacementBase = commit(cc, 'new authority', replacementAuthorityChanges)
+  const ccContextCommit = commit(cc, 'new authority', replacementAuthorityChanges)
+  const ccReplacementBase = options.extraCcAuthorizedBase
+    ? commit(cc, 'unauthorized excluded base delta', { 'authority/tool.ts': 'unreviewed\n' })
+    : ccContextCommit
   const ccReplacement1 = commit(cc, 'replay task six one', { 'app/task6-a.txt': 'alpha\n' })
   git(cc, 'mv', 'app/task6-a.txt', 'app/task6-renamed.txt')
   const ccReplacement2 = commit(cc, 'replay task six two', { 'app/task6-b.txt': 'beta\n' })
@@ -103,19 +106,22 @@ function fixture(options: { projectedTupleDrift?: boolean } = {}) {
   const subSource1 = commit(sub, 'task one', { 'service/task1.txt': 'one\n' })
   const subSource2 = commit(sub, 'task two', { 'service/task2.txt': 'two\n' })
   git(sub, 'checkout', '-qb', 'codex/oracle-phase-1-sub2api', subCommon)
+  const subReplacementBase = options.extraSubAuthorizedBase
+    ? commit(sub, 'unauthorized sub base delta', { 'authority/tool.ts': 'unreviewed\n' })
+    : subCommon
   const subReplacement1 = commit(sub, 'replay task one', { 'service/task1.txt': 'one\n' })
   const subReplacement2 = commit(sub, 'replay task two', { 'service/task2.txt': 'two\n' })
 
   for (const repository of [cc, sub]) {
     git(repository, 'remote', 'add', 'muqihang', `https://example.invalid/${path.basename(repository)}.git`)
-    git(repository, 'update-ref', 'refs/remotes/muqihang/main', repository === cc ? ccReplacementBase : subCommon)
+    git(repository, 'update-ref', 'refs/remotes/muqihang/main', repository === cc ? ccPlanMain : subCommon)
   }
 
   const checkpointTuple = [{ status: 'A', old_mode: null, new_mode: '100644', old_path: null, new_path: 'app/task7.txt' }]
   const bindings = {
     ...tool.AUTHORITY_RESTART_BINDINGS,
     authorityPaths: { plan: 'authority/plan.md', planReview: 'authority/review.json', executionContext: 'authority/context.json' },
-    projectedTreePolicy: { authorityRepairPaths: repairPaths, historicalAuthorityPaths: historicalPaths },
+    projectedTreePolicy: { authorityRepairPaths: [...repairPaths, 'authority/tool.ts'], historicalAuthorityPaths: historicalPaths },
     ccGateway: {
       supersededHead: checkpoint,
       archivalBranch: 'cc-archive',
@@ -136,7 +142,7 @@ function fixture(options: { projectedTupleDrift?: boolean } = {}) {
     },
   }
   const repairedAuthority = {
-    plan: { path: 'authority/plan.md', digest: sha256('new plan\n'), commit: ccReplacementBase },
+    plan: { path: 'authority/plan.md', digest: sha256('new plan\n'), commit: ccPlanMain },
     plan_review: { path: 'authority/review.json', digest: sha256('new review\n'), commit: ccReplacementBase },
     execution_context: { path: 'authority/context.json', digest: sha256('new context\n'), commit: ccReplacementBase },
   }
@@ -154,7 +160,7 @@ function fixture(options: { projectedTupleDrift?: boolean } = {}) {
   const subSourceRoot = path.join(parent, 'sub-source')
   git(cc, 'worktree', 'add', '--quiet', ccSourceRoot, 'cc-archive')
   git(sub, 'worktree', 'add', '--quiet', subSourceRoot, 'sub-archive')
-  return { parent, cc, sub, ccSourceRoot, subSourceRoot, bindings, input, artifact, ccReplacementBase, checkpoint, ccSource2 }
+  return { parent, cc, sub, ccSourceRoot, subSourceRoot, bindings, input, artifact, ccPlanMain, ccContextCommit, ccReplacementBase, subReplacementBase, checkpoint, ccSource2 }
 }
 
 function expectCode(fn: () => unknown, code: string): void {
@@ -257,6 +263,10 @@ expectCode(() => tool.parseAuthorityRestartCli([
   '--output', valid.bindings.artifactPath,
   '--cc-replacement-commit', '1'.repeat(40),
 ]), 'authority_restart_cli_arguments_invalid')
+expectCode(() => tool.runAuthorityRestartCli([
+  'validate-source',
+  ...commonCliArguments,
+]), 'authority_restart_unsafe_startup_environment')
 
 process.env.GIT_DIR = '/tmp/forged-authority-restart-git-dir'
 expectCode(() => tool.validatePhase1AuthorityRestart(valid.artifact, { ccGatewayRoot: valid.cc, sub2apiRoot: valid.sub, bindings: valid.bindings }), 'authority_restart_unsafe_git_environment')
@@ -317,6 +327,8 @@ const projectedDrift = clone(valid.artifact)
 projectedDrift.repositories.cc_gateway.projected_tree_digest = sha256('forged')
 expectCode(() => tool.validatePhase1AuthorityRestart(projectedDrift, { ccGatewayRoot: valid.cc, sub2apiRoot: valid.sub, bindings: valid.bindings }), 'authority_restart_projected_tree_mismatch')
 expectCode(() => fixture({ projectedTupleDrift: true }), 'authority_restart_projected_tree_mismatch')
+expectCode(() => fixture({ extraCcAuthorizedBase: true }), 'authority_restart_initial_authority_topology_mismatch')
+expectCode(() => fixture({ extraSubAuthorizedBase: true }), 'authority_restart_initial_authority_topology_mismatch')
 
 for (const field of ['plan_review', 'execution_context'] as const) {
   const drift = clone(valid.artifact)
@@ -355,8 +367,26 @@ const wrongParent = fixture()
 const artifactBytes = tool.writePhase1AuthorityRestart(wrongParent.cc, wrongParent.artifact)
 git(wrongParent.cc, 'add', '--', tool.AUTHORITY_RESTART_BINDINGS.artifactPath)
 const tree = git(wrongParent.cc, 'write-tree')
-const wrongParentCommit = git(wrongParent.cc, 'commit-tree', tree, '-p', wrongParent.ccReplacementBase, '-m', 'wrong parent restart')
+const wrongParentCommit = git(wrongParent.cc, 'commit-tree', tree, '-p', wrongParent.ccContextCommit, '-m', 'wrong parent restart')
 git(wrongParent.cc, 'update-ref', 'refs/heads/codex/oracle-phase-1-cc-gateway', wrongParentCommit)
 expectCode(() => tool.validatePhase1AuthorityRestartPostCommit(wrongParent.artifact, artifactBytes, { ccGatewayRoot: wrongParent.cc, sub2apiRoot: wrongParent.sub, bindings: wrongParent.bindings }), 'authority_restart_artifact_parent_mismatch')
 
 console.log('oracle-lab Phase 1 authority restart tests passed')
+
+const launcherPath = path.join(root, 'tools/oracle-lab/oracle-phase1-authority-restart')
+const launcher = readFileSync(launcherPath, 'utf8')
+for (const required of [
+  '/usr/bin/env -i',
+  'ci --offline --ignore-scripts',
+  'ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1',
+  'NODE_OPTIONS NODE_PATH',
+  'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
+  'phase-1-authority-restart.ts',
+]) assert.ok(launcher.includes(required), required)
+const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { ...process.env, NODE_OPTIONS: '--require=/tmp/authority-restart-hook.cjs' },
+})
+assert.equal(injectedLauncher.status, 1)
+assert.equal(injectedLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')

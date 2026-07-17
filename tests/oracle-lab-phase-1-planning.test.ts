@@ -1648,6 +1648,9 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'buildPhase1AuthorityRestart',
     'validatePhase1AuthorityRestart',
     'validatePhase1AuthorityRestartSource',
+    'oracle-phase1-authority-restart',
+    'initial-authority child of repaired remote main',
+    'Sub2API replay base equals frozen remote main',
     '0403674d4c812e1a14704bfc890d66aac75f0325',
     'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0',
     'authority_restart_checkpoint_mismatch',
@@ -1662,6 +1665,9 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /projected tracked-tree comparison excludes exactly the reviewed authority-repair path set and canonical old\/new review-context paths/)
   assert.match(plan, /all nonexcluded projected path, mode, object-type, and object-ID tuples remain byte-identical/)
   assert.match(plan, /intentionally omits the restart artifact's own digest and commit to avoid Git self-reference/)
+  assert.match(plan, /rejects Node\/tsx, dynamic-library, and Git startup injection before Node starts/)
+  assert.match(plan, /npm ci --offline --ignore-scripts/)
+  assert.match(plan, /strict pre-commit gate requires the artifact to be the sole untracked delta and rejects a fully clean tree/)
   assert.match(plan, /external controller decision package is informational only/)
   assert.match(plan, /pinned checkpoint's exact changed-path set is disjoint from every authority-repair and historical exclusion/)
   assert.match(plan, /Commit the nonempty Task 7 authority-repair continuation/)

@@ -9,6 +9,7 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import {
   REVIEWED_GIT_ENVIRONMENT,
   REVIEWED_GIT_EXECUTABLE,
+  REVIEWED_NODE_EXECUTABLE,
   runReviewedGit,
   type ReviewedGitOptions,
 } from './secure-runtime.js'
@@ -90,6 +91,7 @@ export const AUTHORITY_RESTART_BINDINGS: AuthorityRestartBindings = Object.freez
       'tests/oracle-lab-phase-1-authority-restart.test.ts',
       'tests/suite-process-runner.ts',
       'tests/suite-process-runner.test.ts',
+      'tools/oracle-lab/oracle-phase1-authority-restart',
       'tools/oracle-lab/phase-1-authority-restart.ts',
     ]),
     historicalAuthorityPaths: Object.freeze([
@@ -456,6 +458,30 @@ function assertRepository(root: string, artifact: JsonObject, binding: Repositor
   if (!sourceTree.equals(replacementTree) || artifact.projected_tree_digest !== sha256(sourceTree)) fail('authority_restart_projected_tree_mismatch', 'projected path/mode/type/OID tuples drifted')
 }
 
+function expectedInitialAuthorityDelta(bindings: AuthorityRestartBindings): readonly ChangedPath[] {
+  return [bindings.authorityPaths.planReview, bindings.authorityPaths.executionContext]
+    .map((file) => Object.freeze({ status: 'A', old_mode: null, new_mode: '100644', old_path: null, new_path: file }))
+    .sort((left, right) => Buffer.compare(changedPathSortKey(left), changedPathSortKey(right)))
+}
+
+function assertInitialAuthorityTopology(artifact: JsonObject, ccRoot: string, subRoot: string, bindings: AuthorityRestartBindings): void {
+  const authority = artifact.repaired_authority
+  const ccReplacement = artifact.repositories.cc_gateway.replacement
+  const subReplacement = artifact.repositories.sub2api.replacement
+  const contextCommit = ccReplacement.authorized_base_head
+  if (authority.plan.commit !== ccReplacement.remote_main_head
+    || authority.plan_review.commit !== contextCommit
+    || authority.execution_context.commit !== contextCommit
+    || soleParent(ccRoot, contextCommit) !== authority.plan.commit
+    || !same(inspectChangedPaths(ccRoot, contextCommit), expectedInitialAuthorityDelta(bindings))) {
+    fail('authority_restart_initial_authority_topology_mismatch', 'CC initial authority must be the exact two-artifact child of repaired main')
+  }
+  if (subReplacement.authorized_base_head !== subReplacement.remote_main_head
+    || resolveCommit(subRoot, subReplacement.authorized_base_head) !== subReplacement.remote_main_head) {
+    fail('authority_restart_initial_authority_topology_mismatch', 'Sub2API replay must start at frozen remote main')
+  }
+}
+
 function assertCleanHead(root: string, branch: string, head: string): void {
   if (gitText(root, ['rev-parse', '--abbrev-ref', 'HEAD']) !== branch || resolveCommit(root, 'HEAD') !== head) fail('authority_restart_branch_mismatch', 'replacement branch or head drifted')
   if (reviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout.length !== 0) fail('authority_restart_dirty_tree', 'replacement repository must be clean')
@@ -547,6 +573,7 @@ function validateArtifactSemantics(artifact: JsonObject, ccRoot: string, subRoot
   if (bindings.ccGateway.quarantineChangedPaths.some((entry) => (entry.old_path !== null && excluded.has(entry.old_path)) || (entry.new_path !== null && excluded.has(entry.new_path)))) fail('authority_restart_checkpoint_exclusion_overlap', 'checkpoint implementation paths cannot be excluded from projected-tree proof')
   assertRepository(ccRoot, artifact.repositories.cc_gateway, bindings.ccGateway, exclusions)
   assertRepository(subRoot, artifact.repositories.sub2api, bindings.sub2api, exclusions)
+  assertInitialAuthorityTopology(artifact, ccRoot, subRoot, bindings)
   const ccReplacement = artifact.repositories.cc_gateway.replacement
   if (authorityPaths.plan.commit !== ccReplacement.remote_main_head || authorityPaths.plan_review.commit !== ccReplacement.authorized_base_head || authorityPaths.execution_context.commit !== ccReplacement.authorized_base_head) fail('authority_restart_authority_commit_mismatch', 'reviewed plan or initial authorization commit drifted')
   if (reviewedGit(ccRoot, ['merge-base', '--is-ancestor', authorityPaths.plan.commit, authorityPaths.plan_review.commit], { allowedExitCodes: [0, 1] }).status !== 0) fail('authority_restart_authority_commit_mismatch', 'initial authorization is not descended from the reviewed plan')
@@ -666,10 +693,43 @@ function assertCanonicalCliPaths(parsed: ParsedAuthorityRestartCli, bindings: Au
   }
 }
 
+const AUTHORITY_RESTART_RUNTIME_PATHS = Object.freeze([
+  'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+  'tools/oracle-lab/secure-runtime.ts',
+  'package-lock.json',
+])
+
+function assertAuthorityRestartCliStartup(ccRootInput: string): void {
+  if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
+    || process.env.HOME !== '/dev/null'
+    || process.env.TMPDIR !== '/tmp'
+    || realpathSync(process.execPath) !== REVIEWED_NODE_EXECUTABLE) {
+    fail('authority_restart_unsafe_startup_environment', 'the reviewed hermetic authority-restart launcher is required')
+  }
+  for (const name of ['NODE_OPTIONS', 'NODE_PATH', 'TSX_TSCONFIG_PATH', 'TSX_DISABLE_CACHE', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD']) {
+    if (Object.hasOwn(process.env, name)) fail('authority_restart_unsafe_startup_environment', 'unsafe authority-restart startup state is forbidden')
+  }
+  const ccRoot = realpathSync(ccRootInput)
+  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+  if (ccRoot !== moduleRoot) fail('authority_restart_runtime_binding_mismatch', 'CLI must execute from the tested CC replacement root')
+  const reviewedMain = resolveCommit(ccRoot, 'refs/remotes/muqihang/main')
+  for (const file of AUTHORITY_RESTART_RUNTIME_PATHS) {
+    const target = path.join(ccRoot, file)
+    let metadata
+    try { metadata = lstatSync(target) } catch { fail('authority_restart_runtime_binding_mismatch', 'reviewed runtime path is unavailable') }
+    if (!metadata.isFile() || metadata.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch', 'reviewed runtime path must be a regular file')
+    const committed = reviewedGit(ccRoot, ['show', `${reviewedMain}:${file}`]).stdout
+    if (!readFileSync(target).equals(committed)) fail('authority_restart_runtime_binding_mismatch', 'working runtime bytes differ from repaired main')
+  }
+}
+
 export function runAuthorityRestartCli(argv: readonly string[]): void {
   const parsed = parseAuthorityRestartCli(argv)
   const bindings = AUTHORITY_RESTART_BINDINGS
   assertCanonicalCliPaths(parsed, bindings)
+  assertAuthorityRestartCliStartup(parsed.values['cc-replacement-root'])
   validatePhase1AuthorityRestartSource({ ccGatewayRoot: parsed.values['cc-source-root'], sub2apiRoot: parsed.values['sub2api-source-root'], bindings })
   if (parsed.command === 'validate-source') return
   const ccRoot = realpathSync(parsed.values['cc-replacement-root'])
