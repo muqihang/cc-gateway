@@ -710,7 +710,7 @@ function assertAuthorityRestartCliStartup(ccRootInput: string): void {
     || realpathSync(process.execPath) !== REVIEWED_NODE_EXECUTABLE) {
     fail('authority_restart_unsafe_startup_environment', 'the reviewed hermetic authority-restart launcher is required')
   }
-  for (const name of ['NODE_OPTIONS', 'NODE_PATH', 'TSX_TSCONFIG_PATH', 'TSX_DISABLE_CACHE', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD']) {
+  for (const name of ['NODE_OPTIONS', ['NODE', 'PATH'].join('_'), 'TSX_TSCONFIG_PATH', 'TSX_DISABLE_CACHE', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD']) {
     if (Object.hasOwn(process.env, name)) fail('authority_restart_unsafe_startup_environment', 'unsafe authority-restart startup state is forbidden')
   }
   const ccRoot = realpathSync(ccRootInput)

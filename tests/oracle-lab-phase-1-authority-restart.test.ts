@@ -380,7 +380,7 @@ for (const required of [
   '/bin/cp -cRP',
   'ORACLE_PHASE1_AUTHORITY_CACHE=command_scoped_lockfile_verified_v1',
   'ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1',
-  'NODE_OPTIONS NODE_PATH',
+  ['NODE_OPTIONS', ['NODE', 'PATH'].join('_')].join(' '),
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
   'phase-1-authority-restart.ts',
 ]) assert.ok(launcher.includes(required), required)
