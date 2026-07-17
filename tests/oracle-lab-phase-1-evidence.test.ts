@@ -12,16 +12,21 @@ import {
   buildPhase1Handoff,
   buildPhase1IntegrationEntry,
   buildPhase1IntegrationReceipt,
+  buildPhase1CommandEnvironment,
   canonicalizePhase1FailureEvents,
   classifyPhase1Result,
   comparePhase1IgnoredState,
+  derivePhase1ExternalDependencyBinding,
+  derivePhase1ExternalDependencyReference,
   derivePhase1IgnoredStateBinding,
   derivePhase1ImplementationTreeBinding,
   derivePhase1StageAuthorityHeads,
   inspectPhase1ReceiptHistory,
   parsePhase1CLI,
+  parsePhase1GoModuleList,
   parsePhase1RedFailureLeaves,
   parsePhase1TrackedTree,
+  preparePhase1ExternalDependencies,
   selectLatestPhase1ExecutionContext,
   validatePhase1AttemptChain,
   validatePhase1IgnoredSymlinkClosure,
@@ -30,9 +35,17 @@ import {
   validatePhase1FeatureEvidenceCommit,
   validatePhase1FeatureReviewAttestation,
   validatePhase1FeatureReviewValue,
+  validatePhase1ExternalDependencyChain,
+  validatePhase1ExternalDependencyReference,
+  validatePhase1ExternalDependencySet,
   validatePhase1HandoffValue,
   validatePhase1IntegrationEntryValue,
   validatePhase1IntegrationReceiptValue,
+  validatePhase1LoadedResultsAuthority,
+  validatePhase1LoadedFeatureReview,
+  validatePhase1CommittedArtifactChain,
+  validatePhase1GoModuleCacheMetadata,
+  validatePhase1GoModuleCacheRoot,
   validatePhase1MergeTopology,
   validatePhase1ResultsValue,
   verifyPhase1FinalRemote,
@@ -241,6 +254,52 @@ test('catalog validation rejects duplicate names, count drift, lifecycle drift, 
   }
 })
 
+test('catalog binds the dedicated formal-pool contract path only to isolated CC full-suite rows', async () => {
+  const catalog = await readJson(catalogPath) as Array<Record<string, any>>
+  const contractPath = '${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+  for (const id of ['cc-tests', 'cc-tests-repeat']) {
+    assert.deepEqual(catalog.find((entry) => entry.id === id)?.env.SUB2API_FORMAL_POOL_CONTRACT_PATH, contractPath)
+    assert.equal(Object.hasOwn(catalog.find((entry) => entry.id === id)!.env, 'SUB2API_ROOT'), false)
+  }
+  for (const entry of catalog.filter((candidate) => !['cc-tests', 'cc-tests-repeat'].includes(candidate.id))) {
+    assert.equal(Object.hasOwn(entry.env, 'SUB2API_FORMAL_POOL_CONTRACT_PATH'), false, entry.id)
+  }
+  for (const mutate of [
+    (value: typeof catalog) => { delete value.find((entry) => entry.id === 'cc-tests')!.env.SUB2API_FORMAL_POOL_CONTRACT_PATH },
+    (value: typeof catalog) => { value.find((entry) => entry.id === 'cc-tests')!.env.SUB2API_FORMAL_POOL_CONTRACT_PATH = 'relative/vectors.json' },
+    (value: typeof catalog) => { value.find((entry) => entry.id === 'cc-tests-repeat')!.env.SUB2API_ROOT = '${SUB2API_ROOT}' },
+    (value: typeof catalog) => { value.find((entry) => entry.id === 'cc-build')!.env.SUB2API_FORMAL_POOL_CONTRACT_PATH = contractPath },
+  ]) {
+    const changed = structuredClone(catalog)
+    mutate(changed)
+    assert.equal(validatePhase1CatalogValue(changed).ok, false)
+  }
+})
+
+test('closed command environments omit capture authority from CC full-suite children and bind exclusive caches', async () => {
+  const catalog = await readJson(catalogPath) as Array<Record<string, any>>
+  const roots = { cc: '/reviewed/cc', sub: '/reviewed/sub', contract: '/reviewed/contract' }
+  const runtime = { goBuildCache: '/tmp/oracle-lab-phase1-go-build-unique', goModuleCache: '/reviewed/go/pkg/mod' }
+  for (const command of catalog) {
+    const env = buildPhase1CommandEnvironment(command as never, roots, runtime)
+    assert.equal(env.GOCACHE, runtime.goBuildCache)
+    assert.equal(env.GOMODCACHE, runtime.goModuleCache)
+    assert.equal(env.GOFLAGS, '-mod=readonly')
+    assert.equal(env.NODE_OPTIONS, undefined)
+    if (['cc-tests', 'cc-tests-repeat'].includes(command.id)) {
+      assert.equal(env.SUB2API_ROOT, undefined)
+      assert.equal(env.SUB2API_FORMAL_POOL_CONTRACT_PATH, '/reviewed/contract/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json')
+    } else {
+      assert.equal(env.SUB2API_FORMAL_POOL_CONTRACT_PATH, undefined, command.id)
+      assert.equal(env.SUB2API_ROOT, command.id === 'cc-b4-b6-red' ? roots.contract : roots.sub, command.id)
+    }
+  }
+  assert.throws(() => buildPhase1CommandEnvironment(catalog[11] as never, roots, runtime, { NODE_OPTIONS: '--import=/tmp/evil.mjs' }),
+    (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'unsafe_full_suite_environment')
+  assert.throws(() => buildPhase1CommandEnvironment(catalog[11] as never, roots, { ...runtime, goBuildCache: '/tmp/caller-selected' }),
+    (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'unsafe_full_suite_build_cache')
+})
+
 test('RED event canonicalization preserves the multiset and derives unique families', () => {
   const canonical = canonicalizePhase1FailureEvents([...CC_RED_FAILURE_NAMES].reverse())
   assert.deepEqual(canonical.failure_event_names, CC_RED_FAILURE_NAMES)
@@ -364,6 +423,8 @@ test('machine RED parsers require complete exact TAP and Go lifecycles', () => {
     { parser: 'node_test_tap_v1' as const, stdout: tapStream(CC_RED_FAILURE_NAMES), stderr: 'diagnostic' },
     { parser: 'go_test_json_leaf_v1' as const, stdout: goJsonStream(SIDECAR_RED_FAILURE_NAMES).split('\n').slice(0, -3).join('\n'), stderr: '' },
     { parser: 'go_test_json_leaf_v1' as const, stdout: `${goJsonStream(SIDECAR_RED_FAILURE_NAMES)}not-json\n`, stderr: '' },
+    { parser: 'go_test_json_leaf_v1' as const, stdout: `${goJsonStream(SIDECAR_RED_FAILURE_NAMES)}${JSON.stringify({ Action: 'output', Package: 'example/internal/server', Output: 'package diagnostic' })}\n`, stderr: '' },
+    { parser: 'go_test_json_leaf_v1' as const, stdout: `${goJsonStream(SIDECAR_RED_FAILURE_NAMES)}${JSON.stringify({ Action: 'pause', Package: 'example/internal/server', Test: 'TestPassing1' })}\n`, stderr: '' },
   ]) assert.throws(() => parsePhase1RedFailureLeaves(input), (error: unknown) =>
     error instanceof Error && (error as Error & { code?: string }).code === 'red_runner_output_incomplete')
 })
@@ -447,8 +508,132 @@ function transition(repository: 'cc_gateway' | 'sub2api', policy: string) {
   return { policy, policy_digest: sha256(canonicalJson({ policy })), before: state, after: state }
 }
 
+function dependencyBinding(repository: 'cc_gateway' | 'sub2api') {
+  return derivePhase1ExternalDependencyBinding({
+    algorithm: 'phase1_external_dependency_content_v1',
+    repository,
+    preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    node_binary_digest: digest(repository === 'cc_gateway' ? '1' : '2'),
+    npm_binary_digest: digest(repository === 'cc_gateway' ? '3' : '4'),
+    go_binary_digest: digest(repository === 'cc_gateway' ? '5' : '6'),
+    node_dependency_manifests: [{
+      repository_relative_root: repository === 'cc_gateway' ? '.' : 'frontend',
+      package_json_digest: digest('7'), package_lock_digest: digest('8'),
+      entry_count: 3, content_digest: digest('9'),
+    }],
+    go_module_manifests: [{
+      repository_relative_root: repository === 'cc_gateway' ? 'sidecar/egress-tls-sidecar' : 'backend',
+      go_mod_digest: digest('a'), go_sum_digest: digest('b'), module_count: 2,
+      module_manifest_digest: digest('c'), module_content_digest: digest('d'),
+      go_mod_verify_digest: digest('e'),
+    }],
+  })
+}
+
+function dependencySet() {
+  return { cc_gateway: dependencyBinding('cc_gateway'), sub2api: dependencyBinding('sub2api') }
+}
+
+test('external dependency bindings are closed, signed, and reject rehashed field drift', () => {
+  const dependencies = dependencySet()
+  assert.deepEqual(validatePhase1ExternalDependencySet(dependencies), { ok: true, errors: [] })
+  for (const mutate of [
+    (value: any) => { delete value.cc_gateway.node_binary_digest },
+    (value: any) => { value.cc_gateway.extra = true },
+    (value: any) => { value.cc_gateway.node_dependency_manifests[0].repository_relative_root = 'frontend' },
+    (value: any) => { value.sub2api.go_module_manifests[0].repository_relative_root = 'sidecar/egress-tls-sidecar' },
+    (value: any) => { value.sub2api.preparation = 'npm_install' },
+  ]) {
+    const changed: any = structuredClone(dependencies)
+    mutate(changed)
+    for (const binding of Object.values(changed) as any[]) {
+      if (binding && typeof binding === 'object') {
+        const unsigned = Object.fromEntries(Object.entries(binding).filter(([key]) => key !== 'binding_digest'))
+        binding.binding_digest = sha256(canonicalJson(unsigned))
+      }
+    }
+    assert.equal(validatePhase1ExternalDependencySet(changed).ok, false)
+  }
+})
+
+function dependencyPreparationFixture() {
+  const base = mkdtempSync(path.join(os.tmpdir(), 'phase1-dependencies-'))
+  const cc = path.join(base, 'cc'); const sub = path.join(base, 'sub'); const moduleCache = path.join(base, 'gomodcache')
+  for (const directory of [cc, path.join(sub, 'frontend'), path.join(cc, 'sidecar/egress-tls-sidecar'), path.join(sub, 'backend'), moduleCache]) mkdirSync(directory, { recursive: true })
+  for (const directory of [cc, path.join(sub, 'frontend')]) {
+    writeFileSync(path.join(directory, 'package.json'), '{"name":"fixture","version":"1.0.0"}\n')
+    writeFileSync(path.join(directory, 'package-lock.json'), '{"name":"fixture","version":"1.0.0","lockfileVersion":3,"packages":{}}\n')
+  }
+  for (const directory of [path.join(cc, 'sidecar/egress-tls-sidecar'), path.join(sub, 'backend')]) {
+    writeFileSync(path.join(directory, 'go.mod'), 'module example.invalid/fixture\n\ngo 1.24\n')
+    writeFileSync(path.join(directory, 'go.sum'), '')
+  }
+  const calls: Array<{ argv: string[]; cwd: string }> = []
+  const runner = (options: any) => {
+    calls.push({ argv: options.argv, cwd: options.cwd })
+    if (options.argv.includes('ci')) {
+      const modules = path.join(options.cwd, 'node_modules')
+      mkdirSync(path.join(modules, 'pkg'), { recursive: true })
+      writeFileSync(path.join(modules, 'pkg/index.js'), 'export default 1\n')
+    }
+    return { exitCode: 0, signal: null, durationMs: 1, stdoutDigest: digest('1'), stderrDigest: digest('2'), outputBytes: 0, outputExcerpt: '', outputOverflow: false, timedOut: false, failureNames: [], infrastructureFailure: false, unsafeOutputDetected: false }
+  }
+  return { cc, sub, moduleCache, calls, runner }
+}
+
+test('dependency preparation runs exact offline installs and Go verification before deriving live bindings', () => {
+  const fixture = dependencyPreparationFixture()
+  const prepared = preparePhase1ExternalDependencies({
+    ccGatewayRoot: fixture.cc, sub2apiRoot: fixture.sub,
+    sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable: '/usr/bin/sandbox-exec', executable_digest: digest('3'), profile_path: '/tmp/profile', profile_digest: digest('4') },
+    runner: fixture.runner as never,
+  })
+  assert.deepEqual(validatePhase1ExternalDependencySet(prepared.dependencies), { ok: true, errors: [] })
+  assert.equal(fixture.calls.length, 4)
+  assert.deepEqual(fixture.calls.slice(0, 2).map((call) => call.argv.slice(-3)), [
+    ['ci', '--offline', '--ignore-scripts'],
+    ['ci', '--offline', '--ignore-scripts'],
+  ])
+  assert.deepEqual(fixture.calls.slice(2).map((call) => call.argv.slice(-2)), [
+    ['mod', 'verify'],
+    ['mod', 'verify'],
+  ])
+  const preexisting = path.join(fixture.cc, 'node_modules/preexisting-marker')
+  writeFileSync(preexisting, 'must not authorize reuse\n')
+  const rebuilt = preparePhase1ExternalDependencies({
+    ccGatewayRoot: fixture.cc, sub2apiRoot: fixture.sub,
+    sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable: '/usr/bin/sandbox-exec', executable_digest: digest('3'), profile_path: '/tmp/profile', profile_digest: digest('4') },
+    runner: fixture.runner as never,
+  })
+  assert.deepEqual(validatePhase1ExternalDependencySet(rebuilt.dependencies), { ok: true, errors: [] })
+  assert.equal(fixture.calls.filter((call) => call.argv.slice(-3).join(' ') === 'ci --offline --ignore-scripts').length, 4)
+})
+
+test('Go module cache authority is the OS account cache with closed metadata', () => {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0
+  assert.doesNotThrow(() => validatePhase1GoModuleCacheMetadata({ is_directory: true, is_symlink: false, uid, mode: 0o755 }, uid))
+  for (const metadata of [
+    { is_directory: false, is_symlink: false, uid, mode: 0o644 },
+    { is_directory: true, is_symlink: true, uid, mode: 0o755 },
+    { is_directory: true, is_symlink: false, uid: uid + 1, mode: 0o755 },
+    { is_directory: true, is_symlink: false, uid, mode: 0o777 },
+  ]) assert.throws(() => validatePhase1GoModuleCacheMetadata(metadata, uid), (error: unknown) =>
+    error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
+  const forged = mkdtempSync(path.join(os.tmpdir(), 'phase1-forged-gomodcache-'))
+  assert.throws(() => validatePhase1GoModuleCacheRoot(forged), (error: unknown) =>
+    error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
+})
+
+test('Go module list parser closes concatenated JSON and rejects malformed streams', () => {
+  assert.deepEqual(parsePhase1GoModuleList('{"Path":"a","Dir":"/tmp/a"}\n{"Path":"b","Version":"v1.0.0","Dir":"/tmp/b"}\n').map((value) => value.Path), ['a', 'b'])
+  for (const raw of ['', '{"Path":"a"', '{not-json}', '[{"Path":"a"}]']) {
+    assert.throws(() => parsePhase1GoModuleList(raw), (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'external_dependency_drift')
+  }
+})
+
 async function validResultsFixture() {
   const catalog = await readJson(catalogPath) as Array<Record<string, unknown>>
+  const externalDependencies = dependencySet()
   const records = catalog.map((command, index) => {
     const redNames = index === 15 ? [...CC_RED_FAILURE_NAMES] : index === 16 ? [...SIDECAR_RED_FAILURE_NAMES] : []
     const canonical = canonicalizePhase1FailureEvents(redNames)
@@ -470,6 +655,11 @@ async function validResultsFixture() {
         cc_gateway: transition('cc_gateway', (command.ignored_output_policies as Record<string, string>).cc_gateway),
         sub2api: transition('sub2api', (command.ignored_output_policies as Record<string, string>).sub2api),
       },
+      external_dependency_transition: {
+        before: externalDependencies,
+        after: externalDependencies,
+        ephemeral_build_cache_token: 'command_scoped_empty_mkdtemp_v1',
+      },
     }, 'result_digest')
   })
   const base = {
@@ -478,7 +668,7 @@ async function validResultsFixture() {
     stage: 'feature-candidate',
     generated_at: '2026-07-17T00:00:00.000Z',
     captured_at: '2026-07-17T00:00:01.000Z',
-    catalog: { path: 'docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json', digest: 'sha256:abf3ceb62250eb60c12fc17c124826ba62f7e77b3578598ad00b0758a3d38481' },
+    catalog: { path: 'docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json', digest: 'sha256:0f4528cc2ca311a587a6dbe2eb5a17d5eb82679adf489e80a7b93285576a4777' },
     baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('4') },
     authority: { path: 'docs/superpowers/evidence/phase-1/phase-1-execution-context-0002.json', digest: digest('5'), sequence: 2, stage: 'feature_capture', artifact_commit: commit('a') },
     roots: {
@@ -492,13 +682,55 @@ async function validResultsFixture() {
       sub2api: { algorithm: 'git_ls_tree_v1_sha256_canonical_json', repository: 'sub2api', source_commit: commit('b'), exclusion_policy: 'phase1_evidence_governance_only_v1', excluded_prefixes: [], excluded_paths: [], entry_count: 1, entries_digest: digest('b') },
     },
     ignored_state: { controller: ignored('cc_gateway'), cc_gateway: ignored('cc_gateway'), sub2api: ignored('sub2api') },
+    external_dependencies: externalDependencies,
     sandbox: { adapter: 'macos_sandbox_exec_loopback_v1', executable_digest: digest('c'), policy_digest: digest('3'), loopback_ipv4: 'pass', loopback_ipv6: 'pass', non_loopback: 'denied_by_policy', policy_bypass_detected: false },
     disabled_capabilities: ['real_upstream_access', 'real_credentials', 'provider_internal_authority', 'profile_promotion', 'production_deployment', 'real_canary', 'direct_egress_trust', 'unverified_pinned_wire_claims', 'unsupported_negative_capabilities', 'expired_or_missing_negative_capabilities', 'unrestricted_capture', 'external_network_requests'],
     command_results: records,
     ignored_state_chain: { initial: { controller: ignored('cc_gateway'), cc_gateway: ignored('cc_gateway'), sub2api: ignored('sub2api') }, final: { controller: ignored('cc_gateway'), cc_gateway: ignored('cc_gateway'), sub2api: ignored('sub2api') }, transition_count: 17, transitions_digest: sha256(canonicalJson(records.map((record) => record.ignored_state_transitions))) },
+    external_dependency_chain: {
+      initial: externalDependencies,
+      final: externalDependencies,
+      transition_count: 17,
+      transitions_digest: sha256(canonicalJson(records.map((record) => record.external_dependency_transition))),
+    },
   }
   return { catalog, results: signed(base, 'results_digest') }
 }
+
+test('external dependency transition chain and evidence reference reject rehashed drift', async () => {
+  const { results } = await validResultsFixture()
+  assert.deepEqual(validatePhase1ExternalDependencyChain(results), { ok: true, errors: [] })
+  const reference = derivePhase1ExternalDependencyReference(
+    'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json',
+    results,
+  )
+  assert.deepEqual(validatePhase1ExternalDependencyReference(reference, results), { ok: true, errors: [] })
+  for (const mutate of [
+    (value: any) => { delete value.command_results[0].external_dependency_transition },
+    (value: any) => { value.command_results[0].external_dependency_transition.extra = true },
+    (value: any) => { value.command_results[0].external_dependency_transition.ephemeral_build_cache_token = '/tmp/caller-selected' },
+    (value: any) => { value.command_results[1].external_dependency_transition.before = structuredClone(dependencySet()); value.command_results[1].external_dependency_transition.before.cc_gateway.node_binary_digest = digest('f') },
+    (value: any) => { value.external_dependency_chain.transition_count = 16 },
+    (value: any) => { value.external_dependency_chain.transitions_digest = digest('f') },
+  ]) {
+    const changed: any = structuredClone(results)
+    mutate(changed)
+    for (const record of changed.command_results) {
+      const unsigned = Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'result_digest'))
+      record.result_digest = sha256(canonicalJson(unsigned))
+    }
+    changed.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(changed).filter(([key]) => key !== 'results_digest'))))
+    assert.equal(validatePhase1ExternalDependencyChain(changed).ok, false)
+    const forgedReference: any = derivePhase1ExternalDependencyReference(
+      'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json',
+      results,
+    )
+    forgedReference.results_digest = changed.results_digest
+    forgedReference.chain_digest = changed.external_dependency_chain?.transitions_digest ?? forgedReference.chain_digest
+    forgedReference.final = changed.external_dependency_chain?.final ?? forgedReference.final
+    assert.equal(validatePhase1ExternalDependencyReference(forgedReference, changed).ok, false)
+  }
+})
 
 test('results validation rejects rehashed RED semantic drift and accepts only raw-order canonical output', async () => {
   const { catalog, results } = await validResultsFixture()
@@ -516,6 +748,63 @@ test('results validation rejects rehashed RED semantic drift and accepts only ra
     changed.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(changed).filter(([key]) => key !== 'results_digest'))))
     assert.equal(validatePhase1ResultsValue(changed, { catalog }).ok, false)
   }
+})
+
+test('loaded results authority re-derives baseline, roots, contract, trees, ignored state, and dependencies', async () => {
+  const { catalog, results } = await validResultsFixture()
+  const baselineBase: any = Object.fromEntries(Object.entries(results).filter(([key]) =>
+    !['baseline', 'command_results', 'ignored_state_chain', 'external_dependency_chain', 'results_digest'].includes(key)))
+  baselineBase.artifact_kind = 'phase_1_exit_baseline'
+  const baseline = signed(baselineBase, 'baseline_digest')
+  results.baseline.digest = sha256(Buffer.from(`${canonicalJson(baseline)}\n`))
+  results.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(results).filter(([key]) => key !== 'results_digest'))))
+  const observed = {
+    stage: 'feature-candidate' as const, catalog, baseline, results,
+    authority: results.authority, roots: results.roots, contract: results.sub2api_contract_root,
+    implementationTrees: results.implementation_trees,
+    ignoredFinal: results.ignored_state_chain.final,
+    externalDependencies: results.external_dependency_chain.final,
+    controllerEqualsCC: true,
+    outputPaths: { baseline: String(results.baseline.path), results: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json' },
+    liveStatuses: {
+      controller: [`?? ${String(results.baseline.path)}`, '?? docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json'],
+      cc_gateway: [`?? ${String(results.baseline.path)}`, '?? docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json'],
+      sub2api: [],
+    },
+  }
+  assert.deepEqual(validatePhase1LoadedResultsAuthority(observed), { ok: true, errors: [] })
+  for (const field of ['authority', 'roots', 'contract', 'implementationTrees', 'ignoredFinal', 'externalDependencies'] as const) {
+    const changed: any = structuredClone(observed)
+    changed[field] = { forged: true }
+    assert.equal(validatePhase1LoadedResultsAuthority(changed).ok, false, field)
+  }
+  for (const liveStatuses of [
+    { ...observed.liveStatuses, controller: [...observed.liveStatuses.controller, '?? stray.txt'], cc_gateway: [...observed.liveStatuses.cc_gateway, '?? stray.txt'] },
+    { ...observed.liveStatuses, sub2api: ['?? backend/stray.txt'] },
+  ]) assert.equal(validatePhase1LoadedResultsAuthority({ ...observed, liveStatuses }).ok, false)
+
+  const integrationEntryPath = 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-integration-entry.json'
+  const postBaselinePath = 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-exit-baseline.json'
+  const postResultsPath = 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-command-results.json'
+  const postResults: any = structuredClone(results)
+  postResults.stage = 'post-integration'
+  postResults.authority = { path: integrationEntryPath, digest: digest('f'), sequence: 1, stage: 'post_integration', artifact_commit: commit('f') }
+  postResults.roots.controller = { stage: 'post-integration', head: commit('f'), root_identity_digest: digest('f'), same_as_tested_cc_root: false, preexisting_delta_paths: [integrationEntryPath], declared_output_paths: [postBaselinePath, postResultsPath] }
+  postResults.baseline.path = postBaselinePath
+  const postBaselineBase: any = Object.fromEntries(Object.entries(postResults).filter(([key]) =>
+    !['baseline', 'command_results', 'ignored_state_chain', 'external_dependency_chain', 'results_digest'].includes(key)))
+  postBaselineBase.artifact_kind = 'phase_1_exit_baseline'
+  const postBaseline = signed(postBaselineBase, 'baseline_digest')
+  postResults.baseline.digest = sha256(Buffer.from(`${canonicalJson(postBaseline)}\n`))
+  postResults.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(postResults).filter(([key]) => key !== 'results_digest'))))
+  const postObserved = {
+    ...observed, stage: 'post-integration' as const, baseline: postBaseline, results: postResults,
+    authority: postResults.authority, roots: postResults.roots, controllerEqualsCC: false,
+    outputPaths: { integrationEntry: integrationEntryPath, baseline: postBaselinePath, results: postResultsPath },
+    liveStatuses: { controller: [`?? ${integrationEntryPath}`, `?? ${postBaselinePath}`, `?? ${postResultsPath}`], cc_gateway: [], sub2api: [] },
+  }
+  assert.deepEqual(validatePhase1LoadedResultsAuthority(postObserved), { ok: true, errors: [] })
+  assert.equal(validatePhase1LoadedResultsAuthority({ ...postObserved, liveStatuses: { ...postObserved.liveStatuses, controller: [...postObserved.liveStatuses.controller, '?? stray.txt'] } }).ok, false)
 })
 
 test('capture root envelope rejects dirty, aliased, or wrong-delta roots before spawn', () => {
@@ -553,7 +842,7 @@ test('feature review, evidence commit, review attestation, and merge topology ar
   const evidenceCommit = { tested_head: commit('a'), candidate_head: commit('b'), parents: [commit('a')], added_paths: ['docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json'], bytes_match: true, sub2api_tested_head: commit('c'), sub2api_candidate_head: commit('c') }
   assert.doesNotThrow(() => validatePhase1FeatureEvidenceCommit(evidenceCommit))
   assert.throws(() => validatePhase1FeatureEvidenceCommit({ ...evidenceCommit, added_paths: [...evidenceCommit.added_paths, 'extra'] }))
-  const review = signed({ schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:00.000Z', reviewer_identity: 'independent-reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 }, tested_heads: { cc_gateway: commit('a'), sub2api: commit('c') }, candidate_heads: { cc_gateway: commit('b'), sub2api: commit('c') }, implementation_trees: { tested_cc_gateway: { entries_digest: digest('a') }, tested_sub2api: { entries_digest: digest('b') }, candidate_cc_gateway: { entries_digest: digest('a') }, candidate_sub2api: { entries_digest: digest('b') } }, feature_baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('1') }, feature_results: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', digest: digest('2') }, context: { path: 'docs/superpowers/evidence/phase-1/phase-1-execution-context-0002.json', digest: digest('3'), sequence: 2, stage: 'feature_capture', artifact_commit: commit('a') }, plan_review: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: digest('4') }, review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'] }, 'review_digest')
+  const review = signed({ schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:00.000Z', reviewer_identity: 'independent-reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 }, tested_heads: { cc_gateway: commit('a'), sub2api: commit('c') }, candidate_heads: { cc_gateway: commit('b'), sub2api: commit('c') }, implementation_trees: { tested_cc_gateway: { entries_digest: digest('a') }, tested_sub2api: { entries_digest: digest('b') }, candidate_cc_gateway: { entries_digest: digest('a') }, candidate_sub2api: { entries_digest: digest('b') } }, feature_baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('1') }, feature_results: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', digest: digest('2') }, context: { path: 'docs/superpowers/evidence/phase-1/phase-1-execution-context-0002.json', digest: digest('3'), sequence: 2, stage: 'feature_capture', artifact_commit: commit('a') }, plan_review: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: digest('4') }, external_dependency_reference: { results_path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', results_digest: digest('2'), chain_digest: digest('5'), final: dependencySet() }, review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'] }, 'review_digest')
   assert.equal(validatePhase1FeatureReviewValue(review).ok, true)
   assert.equal(validatePhase1FeatureReviewValue({ ...review, decision: 'changes_requested' }).ok, false)
   const attestation = { candidate_head: commit('b'), attestation_head: commit('d'), parents: [commit('b')], added_paths: ['docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-review.json'], bytes_match: true, path_unchanged_after: true }
@@ -562,6 +851,93 @@ test('feature review, evidence commit, review attestation, and merge topology ar
   const topology = { cc: { pre_merge_main: commit('1'), candidate: commit('d'), merge: commit('2'), parents: [commit('1'), commit('d')], ancestor_of_remote: true }, sub2api: { pre_merge_main: commit('3'), candidate: commit('c'), merge: commit('4'), parents: [commit('3'), commit('c')], ancestor_of_remote: true } }
   assert.doesNotThrow(() => validatePhase1MergeTopology(topology))
   assert.throws(() => validatePhase1MergeTopology({ ...topology, cc: { ...topology.cc, parents: [commit('1')] } }))
+})
+
+test('loaded feature review closes baseline, results, context, plan review, dependency reference, and evidence topology', async () => {
+  const { catalog, results } = await validResultsFixture()
+  const planReviewSchemaPath = path.join(root, 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json')
+  const planReviewSchema = await readJson(planReviewSchemaPath)
+  const planReviewSchemaBinding = { path: 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json', digest: sha256(await readFile(planReviewSchemaPath)) }
+  const executionContextSchemaPath = path.join(root, 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json')
+  const executionContextSchema = await readJson(executionContextSchemaPath)
+  const executionContextSchemaBinding = { path: 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json', digest: sha256(await readFile(executionContextSchemaPath)) }
+  const planReview = {
+    schema_version: 1, review_kind: 'phase_1_plan_review', generated_at: '2026-07-17T00:00:00.000Z',
+    plan: { path: 'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md', digest: digest('a'), reviewed_commit: commit('d') },
+    reviewer_id: 'independent-reviewer', review_round: 1, decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 },
+    review_scope: ['requirements_and_roadmap_coverage', 'current_code_anchor_realism', 'dependency_and_side_effect_ordering', 'fail_closed_security_boundaries', 'harness_and_evidence_bindings', 'commands_tests_and_rollback'],
+  }
+  const planReviewBinding = { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: sha256(Buffer.from(`${canonicalJson(planReview)}\n`)) }
+  const planningEntryBinding = { path: 'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json', digest: digest('b') }
+  const planningContextBinding = { path: 'docs/superpowers/evidence/phase-1/phase-1-context.json', digest: digest('c') }
+  const initialContext: any = await readJson(path.join(root, 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'))
+  const context: any = {
+    ...initialContext, context_mode: 'successor', sequence: 2, stage: 'feature_capture',
+    artifact_path: String(results.authority.path),
+    predecessor: { path: 'docs/superpowers/evidence/phase-1/phase-1-execution-context-0001.json', digest: digest('d'), sequence: 1, stage: 'implementation', artifact_commit: commit('e') },
+    plan: planReview.plan,
+    planning_provenance: { entry: { ...planningEntryBinding }, context: { ...planningContextBinding } },
+    approval_receipt: { artifact: planReviewBinding, decision: 'approved', reviewer_id: planReview.reviewer_id, review_round: planReview.review_round, reviewed_plan_commit: planReview.plan.reviewed_commit, reviewed_plan_digest: planReview.plan.digest, critical_findings: 0, important_findings: 0 },
+    gate_schemas: { execution_context: { ...executionContextSchemaBinding }, plan_review: { ...planReviewSchemaBinding } },
+  }
+  const contextBinding = { path: String(results.authority.path), digest: sha256(Buffer.from(`${canonicalJson(context)}\n`)) }
+  results.authority = { ...results.authority, digest: contextBinding.digest }
+  const baselineBase: any = Object.fromEntries(Object.entries(results).filter(([key]) =>
+    !['baseline', 'command_results', 'ignored_state_chain', 'external_dependency_chain', 'results_digest'].includes(key)))
+  baselineBase.artifact_kind = 'phase_1_exit_baseline'
+  const featureBaseline = signed(baselineBase, 'baseline_digest')
+  const featureBaselineBinding = { path: results.baseline.path, digest: sha256(Buffer.from(`${canonicalJson(featureBaseline)}\n`)) }
+  results.baseline = featureBaselineBinding
+  results.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(results).filter(([key]) => key !== 'results_digest'))))
+  const featureResultsBinding = { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', digest: sha256(Buffer.from(`${canonicalJson(results)}\n`)) }
+  const reviewBase: any = {
+    schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:02.000Z',
+    reviewer_identity: 'independent-reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 },
+    tested_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, candidate_heads: { cc_gateway: commit('c'), sub2api: commit('b') },
+    implementation_trees: { tested_cc_gateway: results.implementation_trees.cc_gateway, tested_sub2api: results.implementation_trees.sub2api, candidate_cc_gateway: results.implementation_trees.cc_gateway, candidate_sub2api: results.implementation_trees.sub2api },
+    feature_baseline: featureBaselineBinding, feature_results: featureResultsBinding,
+    context: results.authority, plan_review: planReviewBinding,
+    external_dependency_reference: derivePhase1ExternalDependencyReference(featureResultsBinding.path, results),
+    review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'],
+  }
+  const featureReview = signed(reviewBase, 'review_digest')
+  const evidenceCommit = { tested_head: commit('a'), candidate_head: commit('c'), parents: [commit('a')], added_paths: [featureBaselineBinding.path, featureResultsBinding.path], bytes_match: true, sub2api_tested_head: commit('b'), sub2api_candidate_head: commit('b') }
+  const valid = {
+    catalog, featureBaseline, featureResults: results, context, planReview, planReviewSchema, executionContextSchema,
+    featureReview, featureReviewPath: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-review.json',
+    reviewMode: 'uncommitted' as const,
+    liveStatuses: { cc_gateway: ['?? docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-review.json'], sub2api: [] },
+    bindings: { featureBaseline: featureBaselineBinding, featureResults: featureResultsBinding, context: contextBinding, planReview: planReviewBinding, planReviewSchema: planReviewSchemaBinding, executionContextSchema: executionContextSchemaBinding, planningEntry: planningEntryBinding, planningContext: planningContextBinding }, evidenceCommit,
+  }
+  assert.deepEqual(validatePhase1LoadedFeatureReview(valid), { ok: true, errors: [] })
+  assert.deepEqual(validatePhase1LoadedFeatureReview({ ...valid, reviewMode: 'committed', liveStatuses: { cc_gateway: [], sub2api: [] } }), { ok: true, errors: [] })
+  for (const [name, mutate] of [
+    ['baseline', (value: any) => { value.featureBaseline.baseline_digest = digest('f') }],
+    ['plan decision', (value: any) => { value.planReview.decision = 'changes_requested' }],
+    ['schema binding', (value: any) => { value.context.gate_schemas.plan_review.digest = digest('f') }],
+    ['execution schema required authority', (value: any) => {
+      delete value.context.repositories
+      value.bindings.context.digest = sha256(Buffer.from(`${canonicalJson(value.context)}\n`))
+      value.featureResults.authority.digest = value.bindings.context.digest
+      value.featureResults.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(value.featureResults).filter(([key]) => key !== 'results_digest'))))
+      value.bindings.featureResults.digest = sha256(Buffer.from(`${canonicalJson(value.featureResults)}\n`))
+      value.featureReview.context = value.featureResults.authority
+      value.featureReview.feature_results = value.bindings.featureResults
+      value.featureReview.external_dependency_reference = derivePhase1ExternalDependencyReference(value.bindings.featureResults.path, value.featureResults)
+      value.featureReview.review_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(value.featureReview).filter(([key]) => key !== 'review_digest'))))
+    }],
+    ['approval identity', (value: any) => { value.context.approval_receipt.reviewer_id = 'alternate-approved-reviewer' }],
+    ['CC dirt', (value: any) => { value.liveStatuses.cc_gateway.push(' M src/proxy.ts') }],
+    ['Sub2API dirt', (value: any) => { value.liveStatuses.sub2api.push('?? backend/stray.txt') }],
+    ['context path', (value: any) => { value.context.artifact_path = 'wrong.json' }],
+    ['evidence bytes', (value: any) => { value.evidenceCommit.bytes_match = false }],
+    ['dependency reference', (value: any) => { value.featureReview.external_dependency_reference.chain_digest = digest('f'); value.featureReview.review_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(value.featureReview).filter(([key]) => key !== 'review_digest')))) }],
+  ] as const) {
+    const changed = structuredClone(valid); mutate(changed)
+    const validation = validatePhase1LoadedFeatureReview(changed)
+    assert.equal(validation.ok, false, name)
+    if (name === 'execution schema required authority') assert.equal(validation.errors.some((error) => error.code === 'context_schema_invalid'), true)
+  }
 })
 
 test('attempt chain, retries, and final remote decisions are closed', () => {
@@ -597,6 +973,66 @@ test('downstream builders and validators reject a rehashed RED source mutation',
     () => buildPhase1Handoff({ source: { catalog, results: changed }, payload: {} }),
     () => buildPhase1IntegrationReceipt({ source: { catalog, results: changed }, payload: {} }),
   ]) assert.throws(invoke, (error: unknown) => error instanceof Error && (error as Error & { code?: string }).code === 'red_evidence_mismatch')
+})
+
+test('committed artifact chain reload rejects source, reference, and receipt binding drift after rehash', async () => {
+  const { catalog, results: featureResults } = await validResultsFixture()
+  const artifact = (pathName: string, value: unknown) => ({ path: pathName, digest: sha256(Buffer.from(`${canonicalJson(value)}\n`)) })
+  const featureResultsPath = 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json'
+  const featureReviewBase: any = {
+    schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:02.000Z', reviewer_identity: 'reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 },
+    tested_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, candidate_heads: { cc_gateway: commit('c'), sub2api: commit('b') },
+    implementation_trees: { tested_cc_gateway: featureResults.implementation_trees.cc_gateway, tested_sub2api: featureResults.implementation_trees.sub2api, candidate_cc_gateway: featureResults.implementation_trees.cc_gateway, candidate_sub2api: featureResults.implementation_trees.sub2api },
+    feature_baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('1') },
+    feature_results: artifact(featureResultsPath, featureResults), context: featureResults.authority,
+    plan_review: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: digest('2') },
+    external_dependency_reference: derivePhase1ExternalDependencyReference(featureResultsPath, featureResults), review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'],
+  }
+  const featureReview = signed(featureReviewBase, 'review_digest')
+  const featureReviewBinding = artifact('docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-review.json', featureReview)
+  const ignoredReference = { results_path: featureResultsPath, results_digest: featureResults.results_digest, chain_digest: featureResults.ignored_state_chain.transitions_digest, final: featureResults.ignored_state_chain.final }
+  const sharedContract = { repository: 'sub2api', path: featureResults.sub2api_contract_root.contract_relative_path, digest: featureResults.sub2api_contract_root.contract_digest }
+  const entryBase: any = {
+    entry_kind: 'phase_1_integration_entry', feature_results: featureReviewBase.feature_results,
+    feature_review: featureReviewBinding, external_dependency_reference: featureReviewBase.external_dependency_reference,
+    remote_mains: { cc_gateway: { integrated_head: commit('a') }, sub2api: { integrated_head: commit('b') } },
+    implementation_trees: featureResults.implementation_trees, ignored_state_reference: ignoredReference,
+    shared_contract: sharedContract, disabled_capabilities: featureResults.disabled_capabilities,
+  }
+  const entry = signed(entryBase, 'entry_digest')
+  const postResults: any = structuredClone(featureResults)
+  postResults.stage = 'post-integration'
+  postResults.baseline.path = 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-exit-baseline.json'
+  postResults.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(postResults).filter(([key]) => key !== 'results_digest'))))
+  const baselineBase: any = Object.fromEntries(Object.entries(postResults).filter(([key]) => !['baseline', 'command_results', 'ignored_state_chain', 'external_dependency_chain', 'results_digest'].includes(key)))
+  baselineBase.artifact_kind = 'phase_1_exit_baseline'
+  const baseline = signed(baselineBase, 'baseline_digest')
+  postResults.baseline.digest = artifact(postResults.baseline.path, baseline).digest
+  postResults.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(postResults).filter(([key]) => key !== 'results_digest'))))
+  const bindings: any = {
+    featureResults: artifact(featureResultsPath, featureResults), featureReview: featureReviewBinding,
+    entry: artifact('docs/superpowers/evidence/phase-1/attempt-0001/phase-1-integration-entry.json', entry),
+    baseline: artifact(postResults.baseline.path, baseline),
+    results: artifact('docs/superpowers/evidence/phase-1/attempt-0001/phase-1-command-results.json', postResults),
+  }
+  const postIgnoredReference = { results_digest: postResults.results_digest, chain_digest: postResults.ignored_state_chain.transitions_digest, final: postResults.ignored_state_chain.final }
+  const handoff = signed({ handoff_kind: 'phase_1_handoff', integration_entry: bindings.entry, baseline: bindings.baseline, results: bindings.results, external_dependency_reference: derivePhase1ExternalDependencyReference(bindings.results.path, postResults), implementation_trees: postResults.implementation_trees, ignored_state_reference: postIgnoredReference, shared_contract: sharedContract, disabled_capabilities: postResults.disabled_capabilities }, 'handoff_digest')
+  bindings.handoff = artifact('docs/superpowers/evidence/phase-1/attempt-0001/phase-1-handoff.json', handoff)
+  const receipt = signed({ receipt_kind: 'phase_1_integration_receipt', artifacts: { integration_entry: bindings.entry, baseline: bindings.baseline, results: bindings.results, handoff: bindings.handoff }, external_dependency_reference: derivePhase1ExternalDependencyReference(bindings.results.path, postResults), integrated_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, implementation_trees: postResults.implementation_trees, ignored_state_reference: postIgnoredReference, shared_contract: sharedContract, disabled_capabilities: postResults.disabled_capabilities }, 'receipt_digest')
+  const valid = { catalog, featureResults, featureReview, entry, baseline, results: postResults, handoff, receipt, bindings }
+  assert.deepEqual(validatePhase1CommittedArtifactChain(valid), { ok: true, errors: [] })
+  for (const mutate of [
+    (value: any) => { value.receipt.artifacts.results.digest = digest('f') },
+    (value: any) => { value.handoff.results.path = 'docs/superpowers/evidence/phase-1/attempt-0002/phase-1-command-results.json' },
+    (value: any) => { value.entry.external_dependency_reference.chain_digest = digest('f') },
+    (value: any) => { value.receipt.integrated_heads.cc_gateway = commit('f') },
+    (value: any) => { value.receipt.implementation_trees.cc_gateway.entries_digest = digest('f') },
+    (value: any) => { delete value.bindings.featureReview },
+  ]) {
+    const changed: any = structuredClone(valid); mutate(changed)
+    for (const [value, field] of [[changed.entry, 'entry_digest'], [changed.handoff, 'handoff_digest'], [changed.receipt, 'receipt_digest']] as const) value[field] = sha256(canonicalJson(Object.fromEntries(Object.entries(value).filter(([key]) => key !== field))))
+    assert.equal(validatePhase1CommittedArtifactChain(changed).ok, false)
+  }
 })
 
 test('all Phase 1 schemas compile and representative catalog/results validate', async () => {
@@ -672,6 +1108,7 @@ test('representative actual authority artifacts satisfy their closed schemas', a
     roots: results.roots, sub2api_contract_root: results.sub2api_contract_root,
     implementation_trees: results.implementation_trees,
     ignored_state_reference: { results_path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', results_digest: digest('2'), chain_digest: digest('4'), final: results.ignored_state_chain.final },
+    external_dependency_reference: derivePhase1ExternalDependencyReference('docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', featureResults),
     sandbox_policy_digest: digest('3'),
     shared_contract: { repository: 'sub2api', path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1' },
     disabled_capabilities: results.disabled_capabilities,
@@ -685,14 +1122,14 @@ test('representative actual authority artifacts satisfy their closed schemas', a
     artifact_commit: commit('a'),
   }
   results.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(results).filter(([key]) => key !== 'results_digest'))))
-  const rebuiltBaselineBase: any = Object.fromEntries(Object.entries(results).filter(([key]) => !['baseline', 'command_results', 'ignored_state_chain', 'results_digest'].includes(key)))
+  const rebuiltBaselineBase: any = Object.fromEntries(Object.entries(results).filter(([key]) => !['baseline', 'command_results', 'ignored_state_chain', 'external_dependency_chain', 'results_digest'].includes(key)))
   rebuiltBaselineBase.artifact_kind = 'phase_1_exit_baseline'
   baseline = { ...rebuiltBaselineBase, baseline_digest: sha256(canonicalJson(rebuiltBaselineBase)) }
   results.baseline.digest = sha256(Buffer.from(`${canonicalJson(baseline)}\n`))
   results.results_digest = sha256(canonicalJson(Object.fromEntries(Object.entries(results).filter(([key]) => key !== 'results_digest'))))
   const handoff = buildPhase1Handoff({ actual: true, controllerRoot: root, catalog, entry, baseline, results, registries: { requirements: { path: 'docs/superpowers/registry/oracle-lab-requirements.json', digest: digest('5') }, claims: { path: 'docs/superpowers/registry/oracle-lab-claims.json', digest: digest('6') }, observations: { path: 'docs/superpowers/registry/oracle-lab-current-observations.json', digest: digest('7') } }, generatedAt: '2026-07-17T00:00:02.000Z' })
   const receipt = buildPhase1IntegrationReceipt({ actual: true, catalog, artifactCommit: commit('e'), entry, baseline, results, handoff, report: { path: 'docs/superpowers/evidence/phase-1/attempt-0001/phase-1-exit-report.md', digest: digest('8') }, registries: { requirements: { path: 'docs/superpowers/registry/oracle-lab-requirements.json', digest: digest('5') }, claims: { path: 'docs/superpowers/registry/oracle-lab-claims.json', digest: digest('6') }, observations: { path: 'docs/superpowers/registry/oracle-lab-current-observations.json', digest: digest('7') } }, generatedAt: '2026-07-17T00:00:03.000Z' })
-  const reviewBase: any = { schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:00.000Z', reviewer_identity: 'independent-reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 }, tested_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, candidate_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, implementation_trees: { tested_cc_gateway: results.implementation_trees.cc_gateway, tested_sub2api: results.implementation_trees.sub2api, candidate_cc_gateway: results.implementation_trees.cc_gateway, candidate_sub2api: results.implementation_trees.sub2api }, feature_baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('9') }, feature_results: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', digest: digest('2') }, context: results.authority, plan_review: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: digest('1') }, review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'] }
+  const reviewBase: any = { schema_version: 1, review_kind: 'phase_1_feature_review', generated_at: '2026-07-17T00:00:00.000Z', reviewer_identity: 'independent-reviewer', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 }, tested_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, candidate_heads: { cc_gateway: commit('a'), sub2api: commit('b') }, implementation_trees: { tested_cc_gateway: results.implementation_trees.cc_gateway, tested_sub2api: results.implementation_trees.sub2api, candidate_cc_gateway: results.implementation_trees.cc_gateway, candidate_sub2api: results.implementation_trees.sub2api }, feature_baseline: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-baseline.json', digest: digest('9') }, feature_results: { path: 'docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', digest: digest('2') }, context: results.authority, plan_review: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: digest('1') }, external_dependency_reference: derivePhase1ExternalDependencyReference('docs/superpowers/evidence/phase-1/feature-0001/phase-1-feature-command-results.json', featureResults), review_scope: ['goal', 'authority', 'ordering', 'sandbox', 'leakage'] }
   const review = { ...reviewBase, review_digest: sha256(canonicalJson(reviewBase)) }
   const values: Array<[string, unknown]> = [
     ['oracle-lab-phase-1-exit.schema.json', baseline],

@@ -18,6 +18,7 @@
     "feature_results",
     "context",
     "plan_review",
+    "external_dependency_reference",
     "review_scope",
     "review_digest"
   ],
@@ -421,6 +422,7 @@
         }
       }
     },
+    "external_dependency_reference": {"$ref": "#/$defs/external_dependency_reference"},
     "review_scope": {
       "type": "array",
       "minItems": 1,
@@ -862,6 +864,20 @@
         }
       }
     },
+    "external_dependency_binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["algorithm", "repository", "preparation", "node_binary_digest", "npm_binary_digest", "go_binary_digest", "node_dependency_manifests", "go_module_manifests", "binding_digest"],
+      "properties": {
+        "algorithm": {"const": "phase1_external_dependency_content_v1"}, "repository": {"enum": ["cc_gateway", "sub2api"]},
+        "preparation": {"const": "npm_ci_offline_ignore_scripts_and_go_mod_verify_v1"},
+        "node_binary_digest": {"$ref": "#/$defs/digest"}, "npm_binary_digest": {"$ref": "#/$defs/digest"}, "go_binary_digest": {"$ref": "#/$defs/digest"},
+        "node_dependency_manifests": {"type": "array", "minItems": 1, "maxItems": 1, "prefixItems": [{"type": "object", "additionalProperties": false, "required": ["repository_relative_root", "package_json_digest", "package_lock_digest", "entry_count", "content_digest"], "properties": {"repository_relative_root": {"enum": [".", "frontend"]}, "package_json_digest": {"$ref": "#/$defs/digest"}, "package_lock_digest": {"$ref": "#/$defs/digest"}, "entry_count": {"type": "integer", "minimum": 0}, "content_digest": {"$ref": "#/$defs/digest"}}}], "items": false},
+        "go_module_manifests": {"type": "array", "minItems": 1, "maxItems": 1, "prefixItems": [{"type": "object", "additionalProperties": false, "required": ["repository_relative_root", "go_mod_digest", "go_sum_digest", "module_count", "module_manifest_digest", "module_content_digest", "go_mod_verify_digest"], "properties": {"repository_relative_root": {"enum": ["sidecar/egress-tls-sidecar", "backend"]}, "go_mod_digest": {"$ref": "#/$defs/digest"}, "go_sum_digest": {"$ref": "#/$defs/digest"}, "module_count": {"type": "integer", "minimum": 0}, "module_manifest_digest": {"$ref": "#/$defs/digest"}, "module_content_digest": {"$ref": "#/$defs/digest"}, "go_mod_verify_digest": {"$ref": "#/$defs/digest"}}}], "items": false},
+        "binding_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "external_dependency_set": {"type": "object", "additionalProperties": false, "required": ["cc_gateway", "sub2api"], "properties": {"cc_gateway": {"$ref": "#/$defs/external_dependency_binding"}, "sub2api": {"$ref": "#/$defs/external_dependency_binding"}}},
+    "external_dependency_reference": {"type": "object", "additionalProperties": false, "required": ["results_path", "results_digest", "chain_digest", "final"], "properties": {"results_path": {"$ref": "#/$defs/relative_path"}, "results_digest": {"$ref": "#/$defs/digest"}, "chain_digest": {"$ref": "#/$defs/digest"}, "final": {"$ref": "#/$defs/external_dependency_set"}}},
     "disabled": {
       "type": "array",
       "minItems": 12,

@@ -562,7 +562,8 @@
           "HTTP_PROXY": "http://127.0.0.1:9",
           "HTTPS_PROXY": "http://127.0.0.1:9",
           "ALL_PROXY": "http://127.0.0.1:9",
-          "NO_PROXY": "127.0.0.1,localhost"
+          "NO_PROXY": "127.0.0.1,localhost",
+          "SUB2API_FORMAL_POOL_CONTRACT_PATH": "${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json"
         },
         "inherit_env": [],
         "shell": false,
@@ -607,7 +608,8 @@
           "HTTP_PROXY": "http://127.0.0.1:9",
           "HTTPS_PROXY": "http://127.0.0.1:9",
           "ALL_PROXY": "http://127.0.0.1:9",
-          "NO_PROXY": "127.0.0.1,localhost"
+          "NO_PROXY": "127.0.0.1,localhost",
+          "SUB2API_FORMAL_POOL_CONTRACT_PATH": "${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json"
         },
         "inherit_env": [],
         "shell": false,

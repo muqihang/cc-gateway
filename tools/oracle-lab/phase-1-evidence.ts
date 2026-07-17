@@ -1,20 +1,26 @@
 import {
+  chmodSync,
   closeSync,
   constants as fsConstants,
   existsSync,
   linkSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { userInfo } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 import {
   canonicalJson,
@@ -176,7 +182,51 @@ export type Phase1IgnoredStateTransition = {
   after: Phase1IgnoredStateBinding
 }
 
-const CATALOG_DIGEST = 'sha256:abf3ceb62250eb60c12fc17c124826ba62f7e77b3578598ad00b0758a3d38481'
+export type Phase1ExternalDependencyBinding = {
+  algorithm: 'phase1_external_dependency_content_v1'
+  repository: 'cc_gateway' | 'sub2api'
+  preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1'
+  node_binary_digest: string
+  npm_binary_digest: string
+  go_binary_digest: string
+  node_dependency_manifests: Array<{
+    repository_relative_root: string
+    package_json_digest: string
+    package_lock_digest: string
+    entry_count: number
+    content_digest: string
+  }>
+  go_module_manifests: Array<{
+    repository_relative_root: string
+    go_mod_digest: string
+    go_sum_digest: string
+    module_count: number
+    module_manifest_digest: string
+    module_content_digest: string
+    go_mod_verify_digest: string
+  }>
+  binding_digest: string
+}
+
+export type Phase1ExternalDependencySet = {
+  cc_gateway: Phase1ExternalDependencyBinding
+  sub2api: Phase1ExternalDependencyBinding
+}
+
+export type Phase1ExternalDependencyTransition = {
+  before: Phase1ExternalDependencySet
+  after: Phase1ExternalDependencySet
+  ephemeral_build_cache_token: 'command_scoped_empty_mkdtemp_v1'
+}
+
+export type Phase1ExternalDependencyReference = {
+  results_path: string
+  results_digest: string
+  chain_digest: string
+  final: Phase1ExternalDependencySet
+}
+
+const CATALOG_DIGEST = 'sha256:0f4528cc2ca311a587a6dbe2eb5a17d5eb82679adf489e80a7b93285576a4777'
 const CATALOG_FIELDS = [
   'schema_version', 'id', 'group', 'owner', 'requirement_ids', 'repository', 'cwd', 'argv', 'env',
   'inherit_env', 'shell', 'expected_exit', 'failure_parser', 'expected_parser_lifecycle',
@@ -198,6 +248,7 @@ const HERMETIC_KEYS = {
   CI: '1',
   ...HERMETIC_NETWORK_ENV,
 } as const
+const CONTRACT_ENV_VALUE = '${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
 
 const CC_EXCLUDED_PREFIXES = ['docs/superpowers/evidence/phase-1/'] as const
 const CC_EXCLUDED_PATHS = [
@@ -236,6 +287,151 @@ function exact(value: unknown, fields: readonly string[], where: string, errors:
 
 function utf8Sort(values: readonly string[]): string[] {
   return [...values].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+}
+
+const EXTERNAL_BINDING_FIELDS = [
+  'algorithm', 'repository', 'preparation', 'node_binary_digest', 'npm_binary_digest', 'go_binary_digest',
+  'node_dependency_manifests', 'go_module_manifests', 'binding_digest',
+] as const
+const NODE_DEPENDENCY_FIELDS = [
+  'repository_relative_root', 'package_json_digest', 'package_lock_digest', 'entry_count', 'content_digest',
+] as const
+const GO_DEPENDENCY_FIELDS = [
+  'repository_relative_root', 'go_mod_digest', 'go_sum_digest', 'module_count', 'module_manifest_digest',
+  'module_content_digest', 'go_mod_verify_digest',
+] as const
+
+function externalDependencyBindingErrors(value: unknown, repository: 'cc_gateway' | 'sub2api', where: string, errors: HarnessErrorRecord[]): void {
+  if (!exact(value, EXTERNAL_BINDING_FIELDS, where, errors)) return
+  if (value.algorithm !== 'phase1_external_dependency_content_v1' || value.repository !== repository
+    || value.preparation !== 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1') {
+    add(errors, 'external_dependency_drift', where, 'external dependency authority header drifted')
+  }
+  for (const field of ['node_binary_digest', 'npm_binary_digest', 'go_binary_digest']) {
+    if (!validDigest(value[field])) add(errors, 'external_dependency_drift', `${where}.${field}`, `${field} is not a digest`)
+  }
+  const expectedNodeRoot = repository === 'cc_gateway' ? '.' : 'frontend'
+  const expectedGoRoot = repository === 'cc_gateway' ? 'sidecar/egress-tls-sidecar' : 'backend'
+  if (!Array.isArray(value.node_dependency_manifests) || value.node_dependency_manifests.length !== 1) {
+    add(errors, 'external_dependency_drift', `${where}.node_dependency_manifests`, 'exactly one reviewed Node dependency root is required')
+  } else {
+    const manifest = value.node_dependency_manifests[0]
+    if (exact(manifest, NODE_DEPENDENCY_FIELDS, `${where}.node_dependency_manifests[0]`, errors)) {
+      if (manifest.repository_relative_root !== expectedNodeRoot || !Number.isSafeInteger(manifest.entry_count) || manifest.entry_count < 0
+        || !['package_json_digest', 'package_lock_digest', 'content_digest'].every((field) => validDigest(manifest[field]))) {
+        add(errors, 'external_dependency_drift', `${where}.node_dependency_manifests[0]`, 'Node dependency manifest drifted')
+      }
+    }
+  }
+  if (!Array.isArray(value.go_module_manifests) || value.go_module_manifests.length !== 1) {
+    add(errors, 'external_dependency_drift', `${where}.go_module_manifests`, 'exactly one reviewed Go module root is required')
+  } else {
+    const manifest = value.go_module_manifests[0]
+    if (exact(manifest, GO_DEPENDENCY_FIELDS, `${where}.go_module_manifests[0]`, errors)) {
+      const digests = ['go_mod_digest', 'go_sum_digest', 'module_manifest_digest', 'module_content_digest', 'go_mod_verify_digest']
+      if (manifest.repository_relative_root !== expectedGoRoot || !Number.isSafeInteger(manifest.module_count) || manifest.module_count < 0
+        || !digests.every((field) => validDigest(manifest[field]))) {
+        add(errors, 'external_dependency_drift', `${where}.go_module_manifests[0]`, 'Go dependency manifest drifted')
+      }
+    }
+  }
+  if (!validDigest(value.binding_digest)
+    || value.binding_digest !== sha256(canonicalJson(withoutField(value, 'binding_digest')))) {
+    add(errors, 'external_dependency_drift', `${where}.binding_digest`, 'external dependency binding digest drifted')
+  }
+}
+
+export function derivePhase1ExternalDependencyBinding(
+  value: Omit<Phase1ExternalDependencyBinding, 'binding_digest'>,
+): Phase1ExternalDependencyBinding {
+  const unsigned = structuredClone(value) as Record<string, unknown>
+  const binding = { ...unsigned, binding_digest: sha256(canonicalJson(unsigned)) }
+  const errors: HarnessErrorRecord[] = []
+  externalDependencyBindingErrors(binding, value.repository, '$', errors)
+  if (errors.length !== 0) fail('external_dependency_drift', JSON.stringify(errors))
+  return Object.freeze(binding) as unknown as Phase1ExternalDependencyBinding
+}
+
+export function validatePhase1ExternalDependencySet(value: unknown): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  if (!exact(value, ['cc_gateway', 'sub2api'], '$', errors)) return result(errors)
+  externalDependencyBindingErrors(value.cc_gateway, 'cc_gateway', '$.cc_gateway', errors)
+  externalDependencyBindingErrors(value.sub2api, 'sub2api', '$.sub2api', errors)
+  return result(errors)
+}
+
+function externalDependencyTransitionErrors(value: unknown, where: string, errors: HarnessErrorRecord[]): void {
+  if (!exact(value, ['before', 'after', 'ephemeral_build_cache_token'], where, errors)) return
+  for (const field of ['before', 'after']) {
+    const validation = validatePhase1ExternalDependencySet(value[field])
+    for (const error of validation.errors) add(errors, 'external_dependency_drift', `${where}.${field}${error.path.slice(1)}`, error.message)
+  }
+  if (value.ephemeral_build_cache_token !== 'command_scoped_empty_mkdtemp_v1') {
+    add(errors, 'external_dependency_drift', `${where}.ephemeral_build_cache_token`, 'build cache authority token drifted')
+  }
+}
+
+export function validatePhase1ExternalDependencyChain(value: unknown): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  if (!isObject(value) || !Array.isArray(value.command_results) || !isObject(value.external_dependency_chain)) {
+    return result([{ code: 'external_dependency_drift', path: '$', message: 'external dependency transition chain is absent' }])
+  }
+  const chain = value.external_dependency_chain
+  if (!exact(chain, ['initial', 'final', 'transition_count', 'transitions_digest'], '$.external_dependency_chain', errors)) return result(errors)
+  const transitions = value.command_results.map((record, index) => {
+    const transition = isObject(record) ? record.external_dependency_transition : undefined
+    externalDependencyTransitionErrors(transition, `$.command_results[${index}].external_dependency_transition`, errors)
+    return transition
+  })
+  const initialValidation = validatePhase1ExternalDependencySet(chain.initial)
+  const finalValidation = validatePhase1ExternalDependencySet(chain.final)
+  for (const error of [...initialValidation.errors, ...finalValidation.errors]) add(errors, 'external_dependency_drift', '$.external_dependency_chain', error.message)
+  if (chain.transition_count !== 17 || transitions.length !== 17
+    || chain.transitions_digest !== sha256(canonicalJson(transitions))) {
+    add(errors, 'external_dependency_drift', '$.external_dependency_chain', 'external dependency transition count or digest drifted')
+  }
+  for (const [index, transition] of transitions.entries()) {
+    if (!isObject(transition)) continue
+    if (index === 0 && !same(transition.before, chain.initial)) add(errors, 'external_dependency_drift', `$.command_results[${index}]`, 'initial dependency set drifted')
+    if (index > 0) {
+      const prior = transitions[index - 1]
+      if (!isObject(prior) || !same(prior.after, transition.before)) add(errors, 'external_dependency_drift', `$.command_results[${index}]`, 'dependency transitions are not contiguous')
+    }
+    if (!same(transition.before, transition.after)) add(errors, 'external_dependency_drift', `$.command_results[${index}]`, 'catalog command changed external dependencies')
+    if (index === transitions.length - 1 && !same(transition.after, chain.final)) add(errors, 'external_dependency_drift', `$.command_results[${index}]`, 'final dependency set drifted')
+  }
+  return result(errors)
+}
+
+export function derivePhase1ExternalDependencyReference(resultsPath: string, results: unknown): Phase1ExternalDependencyReference {
+  const validation = validatePhase1ExternalDependencyChain(results)
+  if (!validation.ok || !isObject(results) || !isObject(results.external_dependency_chain) || !validDigest(results.results_digest)) {
+    fail('external_dependency_drift', JSON.stringify(validation.errors))
+  }
+  if (!/^docs\/superpowers\/evidence\/phase-1\/(?:feature|attempt)-[0-9]{4}\/phase-1-(?:feature-)?command-results\.json$/.test(resultsPath)) {
+    fail('external_dependency_drift', 'external dependency reference path is invalid')
+  }
+  return {
+    results_path: resultsPath,
+    results_digest: results.results_digest,
+    chain_digest: String(results.external_dependency_chain.transitions_digest),
+    final: structuredClone(results.external_dependency_chain.final) as Phase1ExternalDependencySet,
+  }
+}
+
+export function validatePhase1ExternalDependencyReference(reference: unknown, results: unknown): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  const chain = validatePhase1ExternalDependencyChain(results)
+  if (!chain.ok || !isObject(results)) add(errors, 'external_dependency_drift', '$.results', 'referenced dependency chain is invalid')
+  if (!exact(reference, ['results_path', 'results_digest', 'chain_digest', 'final'], '$.reference', errors)) return result(errors)
+  if (typeof reference.results_path !== 'string'
+    || !/^docs\/superpowers\/evidence\/phase-1\/(?:feature|attempt)-[0-9]{4}\/phase-1-(?:feature-)?command-results\.json$/.test(reference.results_path)
+    || reference.results_digest !== results.results_digest || !isObject(results.external_dependency_chain)
+    || reference.chain_digest !== results.external_dependency_chain.transitions_digest
+    || !same(reference.final, results.external_dependency_chain.final)) {
+    add(errors, 'external_dependency_drift', '$.reference', 'external dependency evidence reference drifted')
+  }
+  return result(errors)
 }
 
 function familyFor(name: string): Phase1RedFailureFamily | undefined {
@@ -301,6 +497,21 @@ export function validatePhase1CatalogValue(value: unknown): HarnessResult {
     if (!catalogHeaderValid(candidate, index, errors)) continue
     if (seen.has(candidate.id)) add(errors, 'duplicate_command_id', `$[${index}].id`, 'command ID is duplicated')
     seen.add(candidate.id)
+    if (isObject(candidate.env)) {
+      const contractRow = candidate.id === 'cc-tests' || candidate.id === 'cc-tests-repeat'
+      if (contractRow) {
+        if (candidate.env.SUB2API_FORMAL_POOL_CONTRACT_PATH !== CONTRACT_ENV_VALUE || hasOwn(candidate.env, 'SUB2API_ROOT')) {
+          add(errors, 'contract_root_not_authorized', `$[${index}].env`, 'CC full-suite row must bind only the dedicated contract file')
+        }
+      } else if (hasOwn(candidate.env, 'SUB2API_FORMAL_POOL_CONTRACT_PATH')) {
+        add(errors, 'contract_root_not_authorized', `$[${index}].env`, 'dedicated contract variable is forbidden for this row')
+      }
+      if (candidate.id === 'cc-b4-b6-red') {
+        if (candidate.env.SUB2API_ROOT !== '${SUB2API_CONTRACT_ROOT}') add(errors, 'contract_root_not_authorized', `$[${index}].env.SUB2API_ROOT`, 'RED contract root override drifted')
+      } else if (hasOwn(candidate.env, 'SUB2API_ROOT')) {
+        add(errors, 'contract_root_not_authorized', `$[${index}].env.SUB2API_ROOT`, 'catalog SUB2API_ROOT override is forbidden')
+      }
+    }
     const green = index < 15
     if (candidate.group !== (green ? 'phase1-green' : 'phase1-red')) add(errors, 'invalid_command_group', `$[${index}].group`, 'command group drifted')
     if (candidate.expected_exit !== (green ? 0 : 'nonzero')) add(errors, 'invalid_expected_exit', `$[${index}].expected_exit`, 'expected exit drifted')
@@ -438,7 +649,13 @@ function parseGoJson(stdoutInput: string | Buffer, stderr: string | Buffer): Pha
   for (const line of lines) {
     let event: unknown
     try { event = JSON.parse(line) } catch { return fail('red_runner_output_incomplete', 'Go runner emitted malformed JSON') }
-    if (!isObject(event) || typeof event.Action !== 'string' || typeof event.Package !== 'string') fail('red_runner_output_incomplete', 'Go runner event is malformed')
+    if (!isObject(event) || typeof event.Action !== 'string' || typeof event.Package !== 'string'
+      || !['start', 'run', 'pass', 'fail', 'skip', 'output'].includes(event.Action)) {
+      fail('red_runner_output_incomplete', 'Go runner event is malformed or has an unknown action')
+    }
+    if (event.Action === 'output' && (typeof event.Test !== 'string' || typeof event.Output !== 'string')) {
+      fail('red_runner_output_incomplete', 'Go runner package output or unbound diagnostic is forbidden')
+    }
     events.push(event as GoEvent)
   }
   const expectedPackages = [
@@ -459,7 +676,12 @@ function parseGoJson(stdoutInput: string | Buffer, stderr: string | Buffer): Pha
     if (packageTerminals.length !== 1 || packageTerminals[0].index !== packageEvents.length - 1) fail('red_runner_output_incomplete', 'Go package terminal lifecycle is invalid')
     const states = new Map<string, { run: number; terminal?: 'pass' | 'fail' | 'skip'; terminalIndex?: number; diagnostics: string[] }>()
     for (const [index, event] of packageEvents.entries()) {
-      if (!event.Test) continue
+      if (!event.Test) {
+        if (!((event.Action === 'start' && index === 0) || (event.Action === 'fail' && index === packageEvents.length - 1))) {
+          fail('red_runner_output_incomplete', 'Go package event is not part of the closed lifecycle')
+        }
+        continue
+      }
       const state = states.get(event.Test) ?? { run: 0, diagnostics: [] }
       if (event.Action === 'run') {
         if (state.run !== 0 || state.terminal) fail('red_runner_output_incomplete', 'Go test run lifecycle is duplicated or late')
@@ -710,13 +932,15 @@ const RESULT_FIELDS = [
   'command_id', 'repository', 'repository_commit', 'exit_code', 'status', 'stdout_digest', 'stderr_digest',
   'failure_parser', 'parser_lifecycle', 'failure_event_count', 'failure_event_names', 'failure_count',
   'failure_names', 'observed_failure_families', 'unclassified_failure_names', 'sandbox_policy_digest',
-  'network_policy_violations', 'unsafe_output_detected', 'ignored_state_transitions', 'result_digest',
+  'network_policy_violations', 'unsafe_output_detected', 'ignored_state_transitions',
+  'external_dependency_transition', 'result_digest',
 ] as const
 
 const RESULTS_FIELDS = [
   'schema_version', 'artifact_kind', 'stage', 'generated_at', 'captured_at', 'catalog', 'baseline',
   'authority', 'roots', 'sub2api_contract_root', 'implementation_trees', 'ignored_state', 'sandbox',
-  'disabled_capabilities', 'command_results', 'ignored_state_chain', 'results_digest',
+  'external_dependencies', 'disabled_capabilities', 'command_results', 'ignored_state_chain',
+  'external_dependency_chain', 'results_digest',
 ] as const
 
 function withoutField(value: Record<string, unknown>, field: string): Record<string, unknown> {
@@ -770,6 +994,7 @@ function recordValidation(candidate: unknown, command: Phase1Command, index: num
       if (!isObject(transition) || transition.policy !== command.ignored_output_policies[repository]) add(errors, 'ignored_state_drift', `${where}.ignored_state_transitions.${repository}`, 'ignored-state command policy drifted')
     }
   }
+  externalDependencyTransitionErrors(candidate.external_dependency_transition, `${where}.external_dependency_transition`, errors)
   if (!validDigest(candidate.result_digest) || candidate.result_digest !== sha256(canonicalJson(withoutField(candidate, 'result_digest')))) add(errors, 'result_digest_mismatch', `${where}.result_digest`, 'result digest does not bind canonical record fields')
 }
 
@@ -800,7 +1025,70 @@ export function validatePhase1ResultsValue(value: unknown, options: { catalog?: 
       }
     }
   } else add(errors, 'ignored_state_drift', '$.ignored_state_chain', 'ignored-state chain is absent')
+  const dependencySet = validatePhase1ExternalDependencySet(value.external_dependencies)
+  for (const error of dependencySet.errors) add(errors, 'external_dependency_drift', '$.external_dependencies', error.message)
+  const dependencyChain = validatePhase1ExternalDependencyChain(value)
+  for (const error of dependencyChain.errors) add(errors, 'external_dependency_drift', error.path, error.message)
+  if (isObject(value.external_dependency_chain) && !same(value.external_dependencies, value.external_dependency_chain.initial)) {
+    add(errors, 'external_dependency_drift', '$.external_dependencies', 'baseline dependency set differs from chain initial state')
+  }
   if (!validDigest(value.results_digest) || value.results_digest !== sha256(canonicalJson(withoutField(value, 'results_digest')))) add(errors, 'results_digest_mismatch', '$.results_digest', 'results digest does not bind canonical artifact fields')
+  return result(errors)
+}
+
+export function validatePhase1LoadedResultsAuthority(input: {
+  stage: 'feature-candidate' | 'post-integration'
+  catalog: unknown
+  baseline: unknown
+  results: unknown
+  authority: unknown
+  roots: unknown
+  contract: unknown
+  implementationTrees: unknown
+  ignoredFinal: unknown
+  externalDependencies: unknown
+  controllerEqualsCC: boolean
+  outputPaths: { baseline: string; results: string; integrationEntry?: string }
+  liveStatuses: { controller: string[]; cc_gateway: string[]; sub2api: string[] }
+}): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  const resultsValidation = validatePhase1ResultsValue(input.results, { catalog: input.catalog })
+  for (const error of resultsValidation.errors) add(errors, error.code, error.path, error.message)
+  if (!isObject(input.results) || !isObject(input.baseline)) return result(errors)
+  const featureOutputs = utf8Sort([`?? ${input.outputPaths.baseline}`, `?? ${input.outputPaths.results}`])
+  const postOutputs = input.outputPaths.integrationEntry
+    ? utf8Sort([`?? ${input.outputPaths.integrationEntry}`, `?? ${input.outputPaths.baseline}`, `?? ${input.outputPaths.results}`])
+    : []
+  const controllerStatus = utf8Sort(input.liveStatuses?.controller ?? [])
+  const ccStatus = utf8Sort(input.liveStatuses?.cc_gateway ?? [])
+  const subStatus = utf8Sort(input.liveStatuses?.sub2api ?? [])
+  const statusValid = input.stage === 'feature-candidate'
+    ? input.controllerEqualsCC === true && same(controllerStatus, featureOutputs) && same(ccStatus, featureOutputs) && same(subStatus, [])
+    : input.controllerEqualsCC === false && same(controllerStatus, postOutputs) && same(ccStatus, []) && same(subStatus, [])
+  if (!statusValid) {
+    add(errors, 'dirty_repository', '$.live_statuses', 'loaded results live statuses differ from the exact stage output envelope')
+  }
+  if (input.results.stage !== input.stage || input.baseline.stage !== input.stage
+    || input.baseline.artifact_kind !== 'phase_1_exit_baseline'
+    || input.baseline.baseline_digest !== sha256(canonicalJson(withoutField(input.baseline, 'baseline_digest')))
+    || !isObject(input.results.baseline)
+    || input.results.baseline.digest !== sha256(artifactBytes(input.baseline))) {
+    add(errors, 'baseline_binding_mismatch', '$.baseline', 'loaded baseline/results relation drifted')
+  }
+  for (const [field, observed] of [
+    ['authority', input.authority], ['roots', input.roots], ['sub2api_contract_root', input.contract],
+    ['implementation_trees', input.implementationTrees], ['external_dependencies', input.externalDependencies],
+  ] as const) {
+    if (!same(input.results[field], observed) || !same(input.baseline[field], observed)) {
+      add(errors, field === 'external_dependencies' ? 'external_dependency_drift' : field === 'implementation_trees' ? 'phase1_implementation_drift' : 'context_binding_drift', `$.${field}`, `${field} does not match live authority`)
+    }
+  }
+  if (!isObject(input.results.ignored_state_chain) || !same(input.results.ignored_state_chain.final, input.ignoredFinal)) {
+    add(errors, 'ignored_state_drift', '$.ignored_state_chain.final', 'final ignored state does not match live repositories')
+  }
+  if (!isObject(input.results.external_dependency_chain) || !same(input.results.external_dependency_chain.final, input.externalDependencies)) {
+    add(errors, 'external_dependency_drift', '$.external_dependency_chain.final', 'final dependency state does not match live repositories')
+  }
   return result(errors)
 }
 
@@ -901,10 +1189,10 @@ export function validatePhase1FeatureEvidenceCommit(value: unknown): void {
 const FEATURE_REVIEW_FIELDS = [
   'schema_version', 'review_kind', 'generated_at', 'reviewer_identity', 'decision', 'finding_counts',
   'tested_heads', 'candidate_heads', 'implementation_trees', 'feature_baseline', 'feature_results',
-  'context', 'plan_review', 'review_scope', 'review_digest',
+  'context', 'plan_review', 'external_dependency_reference', 'review_scope', 'review_digest',
 ] as const
 
-export function validatePhase1FeatureReviewValue(value: unknown): HarnessResult {
+export function validatePhase1FeatureReviewValue(value: unknown, options: { featureResults?: unknown } = {}): HarnessResult {
   const errors: HarnessErrorRecord[] = []
   if (!exact(value, FEATURE_REVIEW_FIELDS, '$', errors)) return result(errors)
   if (value.schema_version !== 1 || value.review_kind !== 'phase_1_feature_review' || value.decision !== 'approved') add(errors, 'feature_review_mismatch', '$', 'feature review is not an approved closed artifact')
@@ -920,6 +1208,16 @@ export function validatePhase1FeatureReviewValue(value: unknown): HarnessResult 
   }
   const requiredScope = ['goal', 'authority', 'ordering', 'sandbox', 'leakage']
   if (!Array.isArray(value.review_scope) || !requiredScope.every((entry) => value.review_scope.includes(entry)) || new Set(value.review_scope).size !== value.review_scope.length) add(errors, 'feature_review_mismatch', '$.review_scope', 'feature review scope is incomplete')
+  if (options.featureResults !== undefined) {
+    const dependencyReference = validatePhase1ExternalDependencyReference(value.external_dependency_reference, options.featureResults)
+    for (const error of dependencyReference.errors) add(errors, 'external_dependency_drift', '$.external_dependency_reference', error.message)
+  } else if (!isObject(value.external_dependency_reference)
+    || !exact(value.external_dependency_reference, ['results_path', 'results_digest', 'chain_digest', 'final'], '$.external_dependency_reference', errors)
+    || !validDigest(value.external_dependency_reference.results_digest)
+    || !validDigest(value.external_dependency_reference.chain_digest)
+    || !validatePhase1ExternalDependencySet(value.external_dependency_reference.final).ok) {
+    add(errors, 'external_dependency_drift', '$.external_dependency_reference', 'feature review dependency reference is invalid')
+  }
   if (!validDigest(value.review_digest) || value.review_digest !== sha256(canonicalJson(withoutField(value, 'review_digest')))) add(errors, 'feature_review_mismatch', '$.review_digest', 'feature review digest drifted')
   return result(errors)
 }
@@ -929,6 +1227,109 @@ export function validatePhase1FeatureReviewAttestation(value: unknown): void {
     || !same(value.parents, [value.candidate_head]) || !Array.isArray(value.added_paths) || value.added_paths.length !== 1
     || !/^docs\/superpowers\/evidence\/phase-1\/feature-[0-9]{4}\/phase-1-feature-review\.json$/.test(String(value.added_paths[0]))
     || value.bytes_match !== true || value.path_unchanged_after !== true) fail('feature_review_attestation_mismatch', 'feature review attestation topology or bytes drifted')
+}
+
+export function validatePhase1LoadedFeatureReview(input: {
+  catalog: unknown
+  featureBaseline: unknown
+  featureResults: unknown
+  context: unknown
+  planReview: unknown
+  planReviewSchema: unknown
+  executionContextSchema: unknown
+  featureReview: unknown
+  featureReviewPath: string
+  reviewMode: 'uncommitted' | 'committed'
+  liveStatuses: { cc_gateway: string[]; sub2api: string[] }
+  bindings: {
+    featureBaseline: { path: string; digest: string }
+    featureResults: { path: string; digest: string }
+    context: { path: string; digest: string }
+    planReview: { path: string; digest: string }
+    planReviewSchema: { path: string; digest: string }
+    executionContextSchema: { path: string; digest: string }
+    planningEntry: { path: string; digest: string }
+    planningContext: { path: string; digest: string }
+  }
+  evidenceCommit: unknown
+}): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  const resultsValidation = validatePhase1ResultsValue(input.featureResults, { catalog: input.catalog })
+  for (const error of resultsValidation.errors) add(errors, error.code, `$.feature_results${error.path.slice(1)}`, error.message)
+  const reviewValidation = validatePhase1FeatureReviewValue(input.featureReview, { featureResults: input.featureResults })
+  for (const error of reviewValidation.errors) add(errors, error.code, `$.feature_review${error.path.slice(1)}`, error.message)
+  if (!isObject(input.featureResults) || !isObject(input.featureReview) || !isObject(input.featureBaseline)) return result(errors)
+  if (!isObject(input.featureResults.baseline) || !same(input.featureResults.baseline, input.bindings.featureBaseline)
+    || input.featureBaseline.baseline_digest !== sha256(canonicalJson(withoutField(input.featureBaseline, 'baseline_digest')))) {
+    add(errors, 'baseline_binding_mismatch', '$.feature_baseline', 'loaded feature baseline binding drifted')
+  }
+  for (const [field, binding] of [
+    ['feature_baseline', input.bindings.featureBaseline], ['feature_results', input.bindings.featureResults],
+    ['context', input.bindings.context], ['plan_review', input.bindings.planReview],
+  ] as const) {
+    const persisted = input.featureReview[field]
+    if (field === 'context') {
+      if (!isObject(persisted) || persisted.path !== binding.path || persisted.digest !== binding.digest || !same(persisted, input.featureResults.authority)) {
+        add(errors, 'feature_review_mismatch', `$.feature_review.${field}`, `${field} binding drifted`)
+      }
+    } else if (!same(persisted, binding)) add(errors, 'feature_review_mismatch', `$.feature_review.${field}`, `${field} binding drifted`)
+  }
+  let planReviewSchemaValid = false
+  let executionContextSchemaValid = false
+  try {
+    planReviewSchemaValid = Boolean(new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(input.planReviewSchema)(input.planReview))
+  } catch { /* invalid or uncompilable schemas are not authority */ }
+  try {
+    executionContextSchemaValid = Boolean(new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(input.executionContextSchema)(input.context))
+  } catch { /* invalid or uncompilable schemas are not authority */ }
+  if (!planReviewSchemaValid || !isObject(input.planReview) || input.planReview.decision !== 'approved' || !isObject(input.planReview.finding_counts)
+    || input.planReview.finding_counts.critical !== 0 || input.planReview.finding_counts.important !== 0) {
+    add(errors, 'context_approval_invalid', '$.plan_review', 'loaded plan review is not approved')
+  }
+  if (!executionContextSchemaValid || !isObject(input.context) || input.context.artifact_path !== input.bindings.context.path) {
+    add(errors, 'context_schema_invalid', '$.context', 'loaded execution context does not satisfy its closed schema and binding')
+  } else if (!isObject(input.featureResults.authority)
+    || input.context.sequence !== input.featureResults.authority.sequence
+    || input.context.stage !== input.featureResults.authority.stage
+    || input.context.artifact_path !== input.featureResults.authority.path) {
+    add(errors, 'context_binding_drift', '$.context', 'loaded execution context path drifted')
+  } else {
+    const approval = input.context.approval_receipt
+    const provenance = input.context.planning_provenance
+    if (!isObject(input.planReview) || !same(input.context.plan, input.planReview.plan)
+      || !isObject(approval) || !same(approval.artifact, input.bindings.planReview)
+      || !isObject(input.context.gate_schemas) || !same(input.context.gate_schemas.plan_review, input.bindings.planReviewSchema)
+      || !same(input.context.gate_schemas.execution_context, input.bindings.executionContextSchema)
+      || approval.decision !== input.planReview.decision || approval.reviewer_id !== input.planReview.reviewer_id
+      || approval.review_round !== input.planReview.review_round
+      || approval.reviewed_plan_commit !== (isObject(input.planReview.plan) ? input.planReview.plan.reviewed_commit : undefined)
+      || approval.reviewed_plan_digest !== (isObject(input.planReview.plan) ? input.planReview.plan.digest : undefined)
+      || approval.critical_findings !== input.planReview.finding_counts?.critical
+      || approval.important_findings !== input.planReview.finding_counts?.important
+      || !isObject(provenance) || !same(provenance.entry, input.bindings.planningEntry)
+      || !same(provenance.context, input.bindings.planningContext)) {
+      add(errors, 'context_approval_invalid', '$.context.approval_receipt', 'context approval, plan, or planning provenance differs from the loaded review')
+    }
+  }
+  const expectedCCStatus = input.reviewMode === 'uncommitted' ? [`?? ${input.featureReviewPath}`] : []
+  if (!isObject(input.liveStatuses)
+    || !same(input.liveStatuses.cc_gateway, expectedCCStatus)
+    || !same(input.liveStatuses.sub2api, [])) {
+    add(errors, 'dirty_repository', '$.live_statuses', 'feature review requires only the exact uncommitted review artifact and a clean Sub2API root')
+  }
+  if (!isObject(input.featureReview.tested_heads) || !isObject(input.featureResults.roots)
+    || !isObject(input.featureResults.roots.cc_gateway) || !isObject(input.featureResults.roots.sub2api)
+    || input.featureReview.tested_heads.cc_gateway !== input.featureResults.roots.cc_gateway.head
+    || input.featureReview.tested_heads.sub2api !== input.featureResults.roots.sub2api.head) {
+    add(errors, 'feature_review_mismatch', '$.feature_review.tested_heads', 'reviewed tested heads differ from loaded results')
+  }
+  try { validatePhase1FeatureEvidenceCommit(input.evidenceCommit) }
+  catch (error) { add(errors, String((error as Error & { code?: string }).code ?? 'feature_evidence_commit_mismatch'), '$.evidence_commit', (error as Error).message) }
+  if (!isObject(input.evidenceCommit) || !Array.isArray(input.evidenceCommit.added_paths)
+    || !same(utf8Sort(input.evidenceCommit.added_paths as string[]), utf8Sort([input.bindings.featureBaseline.path, input.bindings.featureResults.path]))) {
+    add(errors, 'feature_evidence_commit_mismatch', '$.evidence_commit.added_paths', 'evidence commit paths differ from the loaded baseline/results')
+  }
+  return result(errors)
 }
 
 export function validatePhase1MergeTopology(value: unknown): void {
@@ -1071,11 +1472,17 @@ function buildDownstream(kind: 'integration_entry' | 'handoff' | 'integration_re
   validatedDownstreamSource(options.source)
   const source = options.source as DownstreamSource
   const payload = isObject(options.payload) ? options.payload : {}
+  const sourceResults = source.results as Record<string, unknown>
+  const baselinePath = isObject(sourceResults.baseline) ? String(sourceResults.baseline.path) : ''
+  const resultsPath = baselinePath.includes('feature-baseline')
+    ? baselinePath.replace('feature-baseline', 'feature-command-results')
+    : baselinePath.replace('exit-baseline', 'command-results')
   const base = {
     schema_version: 1,
     artifact_kind: `phase_1_${kind}`,
     source_results_digest: (source.results as Record<string, unknown>).results_digest,
     catalog_digest: CATALOG_DIGEST,
+    external_dependency_reference: derivePhase1ExternalDependencyReference(resultsPath, source.results),
     payload,
   }
   return { ...base, artifact_digest: sha256(canonicalJson(base)) }
@@ -1088,6 +1495,10 @@ function validateDownstream(value: unknown, kind: string, source: unknown): Harn
     if (!isObject(value) || value.source_results_digest !== ((source as DownstreamSource).results as Record<string, unknown>).results_digest) add(errors, 'red_evidence_mismatch', '$', 'downstream source binding drifted')
   }
   if (isObject(value) && value.artifact_digest !== sha256(canonicalJson(withoutField(value, 'artifact_digest')))) add(errors, 'artifact_digest_mismatch', '$.artifact_digest', 'downstream digest drifted')
+  if (isObject(value)) {
+    const dependencyReference = validatePhase1ExternalDependencyReference(value.external_dependency_reference, (source as DownstreamSource).results)
+    for (const error of dependencyReference.errors) add(errors, 'external_dependency_drift', '$.external_dependency_reference', error.message)
+  }
   return result(errors)
 }
 
@@ -1194,7 +1605,7 @@ function actualIntegrationEntry(input: ActualIntegrationEntryInput): Record<stri
   if (!featureResultsValidation.ok || featureResults.stage !== 'feature-candidate') fail('red_evidence_mismatch', 'feature results are invalid')
   const featureReviewBytes = readFileSync(path.resolve(controller, input.featureReviewPath))
   const featureReview = JSON.parse(featureReviewBytes.toString('utf8')) as Record<string, unknown>
-  const featureReviewValidation = validatePhase1FeatureReviewValue(featureReview)
+  const featureReviewValidation = validatePhase1FeatureReviewValue(featureReview, { featureResults })
   if (!featureReviewValidation.ok) fail('feature_review_mismatch', JSON.stringify(featureReviewValidation.errors))
   if (!isObject(featureReview.candidate_heads) || featureReview.candidate_heads.cc_gateway !== input.reviewedCCCandidateHead || featureReview.candidate_heads.sub2api !== input.reviewedSub2APICandidateHead) fail('feature_review_mismatch', 'reviewed candidate flags differ from feature review')
   const contextValue = JSON.parse(readFileSync(path.resolve(controller, input.executionContextPath), 'utf8')) as Record<string, unknown>
@@ -1335,6 +1746,7 @@ function actualIntegrationEntry(input: ActualIntegrationEntryInput): Record<stri
     },
     sub2api_contract_root: contract, implementation_trees: { cc_gateway: ccTree, sub2api: subTree },
     ignored_state_reference: { results_path: input.featureResultsPath, results_digest: featureResults.results_digest, chain_digest: (featureResults.ignored_state_chain as Record<string, unknown>)?.transitions_digest, final: (featureResults.ignored_state_chain as Record<string, unknown>)?.final },
+    external_dependency_reference: derivePhase1ExternalDependencyReference(input.featureResultsPath, featureResults),
     sandbox_policy_digest: (featureResults.sandbox as Record<string, unknown>)?.policy_digest,
     shared_contract: { repository: 'sub2api', path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1' },
     disabled_capabilities: [...DISABLED_CAPABILITIES],
@@ -1390,7 +1802,7 @@ function validateActualPostArtifactChain(input: {
     || input.results.authority.stage !== 'post_integration') fail('integration_entry_mismatch', 'results do not bind the exact integration entry')
   if (!isObject(input.entry.catalog) || !same(input.entry.catalog, input.results.catalog)
     || input.entry.catalog.digest !== CATALOG_DIGEST) fail('red_evidence_mismatch', 'post-integration catalog binding drifted')
-  for (const field of ['catalog', 'authority', 'roots', 'sub2api_contract_root', 'implementation_trees', 'ignored_state', 'sandbox', 'disabled_capabilities']) {
+  for (const field of ['catalog', 'authority', 'roots', 'sub2api_contract_root', 'implementation_trees', 'ignored_state', 'external_dependencies', 'sandbox', 'disabled_capabilities']) {
     if (!same(input.baseline[field], input.results[field])) fail('baseline_binding_mismatch', `${field} differs between baseline and results`)
   }
   if (!isObject(input.entry.remote_mains) || !isObject(input.entry.remote_mains.cc_gateway) || !isObject(input.entry.remote_mains.sub2api)
@@ -1435,6 +1847,10 @@ function actualHandoff(input: ActualHandoffInput): Record<string, unknown> {
     results: { path: String((input.results.baseline as Record<string, unknown>).path).replace('exit-baseline', 'command-results'), digest: sha256(artifactBytes(input.results)) },
     registries: input.registries, implementation_trees: input.results.implementation_trees,
     ignored_state_reference: { results_digest: input.results.results_digest, chain_digest: (input.results.ignored_state_chain as Record<string, unknown>).transitions_digest, final: (input.results.ignored_state_chain as Record<string, unknown>).final },
+    external_dependency_reference: derivePhase1ExternalDependencyReference(
+      String((input.results.baseline as Record<string, unknown>).path).replace('exit-baseline', 'command-results'),
+      input.results,
+    ),
     shared_contract: input.entry.shared_contract, disabled_capabilities: [...DISABLED_CAPABILITIES],
     next_phase_gates: [...PHASE2_ENTRY_CONDITIONS],
   }
@@ -1515,6 +1931,10 @@ function actualReceipt(input: ActualReceiptInput): Record<string, unknown> {
     integrated_heads: { cc_gateway: ((input.entry.remote_mains as Record<string, Record<string, unknown>>).cc_gateway).integrated_head, sub2api: ((input.entry.remote_mains as Record<string, Record<string, unknown>>).sub2api).integrated_head },
     artifacts, implementation_trees: input.results.implementation_trees,
     ignored_state_reference: { results_digest: input.results.results_digest, chain_digest: (input.results.ignored_state_chain as Record<string, unknown>).transitions_digest, final: (input.results.ignored_state_chain as Record<string, unknown>).final },
+    external_dependency_reference: derivePhase1ExternalDependencyReference(
+      `docs/superpowers/evidence/phase-1/${attemptID}/phase-1-command-results.json`,
+      input.results,
+    ),
     shared_contract: input.entry.shared_contract, disabled_capabilities: [...DISABLED_CAPABILITIES],
     next_phase_gates: [...PHASE2_ENTRY_CONDITIONS],
   }
@@ -1554,6 +1974,129 @@ export function validatePhase1IntegrationReceiptValue(value: unknown, options: {
     return result(errors)
   }
   return validateDownstream(value, 'integration_receipt', options.source)
+}
+
+export function validatePhase1CommittedArtifactChain(input: {
+  catalog: unknown
+  featureResults: unknown
+  featureReview: unknown
+  entry: unknown
+  baseline: unknown
+  results: unknown
+  handoff: unknown
+  receipt: unknown
+  bindings: Record<string, { path: string; digest: string }>
+}): HarnessResult {
+  const errors: HarnessErrorRecord[] = []
+  const catalogValidation = validatePhase1CatalogValue(input.catalog)
+  for (const error of catalogValidation.errors) add(errors, error.code, '$.catalog', error.message)
+  const featureResultsValidation = validatePhase1ResultsValue(input.featureResults, { catalog: input.catalog })
+  for (const error of featureResultsValidation.errors) add(errors, error.code, '$.feature_results', error.message)
+  const featureReviewValidation = validatePhase1FeatureReviewValue(input.featureReview, { featureResults: input.featureResults })
+  for (const error of featureReviewValidation.errors) add(errors, error.code, '$.feature_review', error.message)
+  const resultsValidation = validatePhase1ResultsValue(input.results, { catalog: input.catalog })
+  for (const error of resultsValidation.errors) add(errors, error.code, '$.results', error.message)
+  if (isObject(input.entry) && input.entry.schema_version === 1) {
+    for (const [validation, prefix] of [
+      [validatePhase1IntegrationEntryValue(input.entry), '$.entry'],
+      [validatePhase1HandoffValue(input.handoff), '$.handoff'],
+      [validatePhase1IntegrationReceiptValue(input.receipt), '$.receipt'],
+    ] as const) {
+      for (const error of validation.errors) add(errors, error.code, prefix, error.message)
+    }
+  }
+  for (const [kind, value, digestField] of [
+    ['entry', input.entry, 'entry_digest'], ['baseline', input.baseline, 'baseline_digest'],
+    ['handoff', input.handoff, 'handoff_digest'], ['receipt', input.receipt, 'receipt_digest'],
+  ] as const) {
+    if (!isObject(value) || value[digestField] !== sha256(canonicalJson(withoutField(value, digestField)))) {
+      add(errors, `${kind}_mismatch`, `$.${kind}`, `${kind} canonical digest drifted`)
+    }
+  }
+  if (!isObject(input.entry) || !isObject(input.results) || !isObject(input.handoff) || !isObject(input.receipt)) return result(errors)
+  if (input.entry.schema_version === 1) {
+    try {
+      validateActualPostArtifactChain({ catalog: input.catalog, entry: input.entry, baseline: input.baseline as Record<string, unknown>, results: input.results })
+    } catch (error) {
+      add(errors, String((error as Error & { code?: string }).code ?? 'artifact_source_chain_mismatch'), '$', (error as Error).message)
+    }
+  }
+  for (const [name, value] of [
+    ['featureResults', input.featureResults], ['featureReview', input.featureReview], ['entry', input.entry],
+    ['baseline', input.baseline], ['results', input.results], ['handoff', input.handoff],
+  ] as const) {
+    const binding = input.bindings[name]
+    if (!isObject(binding) || typeof binding.path !== 'string' || binding.digest !== sha256(artifactBytes(value))) {
+      add(errors, 'artifact_source_chain_mismatch', `$.bindings.${name}`, `${name} committed bytes do not match its binding`)
+    }
+  }
+  for (const [owner, reference, source] of [
+    ['feature_review', input.featureReview.external_dependency_reference, input.featureResults],
+    ['entry', input.entry.external_dependency_reference, input.featureResults],
+    ['handoff', input.handoff.external_dependency_reference, input.results],
+    ['receipt', input.receipt.external_dependency_reference, input.results],
+  ] as const) {
+    const validation = validatePhase1ExternalDependencyReference(reference, source)
+    for (const error of validation.errors) add(errors, 'external_dependency_drift', `$.${owner}.external_dependency_reference`, error.message)
+  }
+  if (!isObject(input.receipt.artifacts)) add(errors, 'receipt_mismatch', '$.receipt.artifacts', 'receipt artifact bindings are absent')
+  else {
+    for (const [name, key] of [['integration_entry', 'entry'], ['baseline', 'baseline'], ['results', 'results'], ['handoff', 'handoff']] as const) {
+      if (!same(input.receipt.artifacts[name], input.bindings[key])) add(errors, 'receipt_mismatch', `$.receipt.artifacts.${name}`, 'receipt artifact binding drifted')
+    }
+  }
+  if (!same(input.entry.feature_results, input.bindings.featureResults)
+    || !same(input.entry.feature_review, input.bindings.featureReview)
+    || !same(input.handoff.integration_entry, input.bindings.entry)
+    || !same(input.handoff.baseline, input.bindings.baseline)
+    || !same(input.handoff.results, input.bindings.results)) {
+    add(errors, 'artifact_source_chain_mismatch', '$', 'downstream source references drifted')
+  }
+  const resultsRoots = input.results.roots
+  const remoteMains = input.entry.remote_mains
+  const integratedHeads = input.receipt.integrated_heads
+  if (!isObject(resultsRoots) || !isObject(resultsRoots.cc_gateway) || !isObject(resultsRoots.sub2api)
+    || !isObject(remoteMains) || !isObject(remoteMains.cc_gateway) || !isObject(remoteMains.sub2api)
+    || !isObject(integratedHeads)
+    || integratedHeads.cc_gateway !== remoteMains.cc_gateway.integrated_head
+    || integratedHeads.sub2api !== remoteMains.sub2api.integrated_head
+    || integratedHeads.cc_gateway !== resultsRoots.cc_gateway.head
+    || integratedHeads.sub2api !== resultsRoots.sub2api.head) {
+    add(errors, 'cross_head_result', '$.receipt.integrated_heads', 'receipt, integration entry, and results heads are not the same authority')
+  }
+  if (!same(input.entry.implementation_trees, input.results.implementation_trees)
+    || !isObject(input.baseline) || !same(input.baseline.implementation_trees, input.results.implementation_trees)
+    || !same(input.handoff.implementation_trees, input.results.implementation_trees)
+    || !same(input.receipt.implementation_trees, input.results.implementation_trees)) {
+    add(errors, 'phase1_implementation_drift', '$.receipt.implementation_trees', 'downstream implementation-tree authority drifted')
+  }
+  const featureIgnored = isObject(input.featureResults.ignored_state_chain)
+    ? { results_path: input.bindings.featureResults?.path, results_digest: input.featureResults.results_digest, chain_digest: input.featureResults.ignored_state_chain.transitions_digest, final: input.featureResults.ignored_state_chain.final }
+    : null
+  const postIgnored = isObject(input.results.ignored_state_chain)
+    ? { results_digest: input.results.results_digest, chain_digest: input.results.ignored_state_chain.transitions_digest, final: input.results.ignored_state_chain.final }
+    : null
+  if (!same(input.entry.ignored_state_reference, featureIgnored)
+    || !same(input.handoff.ignored_state_reference, postIgnored)
+    || !same(input.receipt.ignored_state_reference, postIgnored)) {
+    add(errors, 'ignored_state_drift', '$.receipt.ignored_state_reference', 'downstream ignored-state authority drifted')
+  }
+  const contractRoot = input.results.sub2api_contract_root
+  const expectedContract = isObject(contractRoot)
+    ? { repository: 'sub2api', path: contractRoot.contract_relative_path, digest: contractRoot.contract_digest }
+    : null
+  if (!same(input.entry.shared_contract, expectedContract)
+    || !same(input.handoff.shared_contract, expectedContract)
+    || !same(input.receipt.shared_contract, expectedContract)) {
+    add(errors, 'contract_root_not_authorized', '$.receipt.shared_contract', 'downstream shared-contract authority drifted')
+  }
+  if (!same(input.entry.disabled_capabilities, input.results.disabled_capabilities)
+    || !isObject(input.baseline) || !same(input.baseline.disabled_capabilities, input.results.disabled_capabilities)
+    || !same(input.handoff.disabled_capabilities, input.results.disabled_capabilities)
+    || !same(input.receipt.disabled_capabilities, input.results.disabled_capabilities)) {
+    add(errors, 'context_binding_drift', '$.receipt.disabled_capabilities', 'downstream disabled capabilities drifted')
+  }
+  return result(errors)
 }
 
 type RepositorySnapshot = {
@@ -1696,14 +2239,325 @@ function reviewedTool(name: string): string {
   fail('missing_reviewed_tool', `${name} executable is unavailable at a reviewed absolute path`)
 }
 
-function executionEnvironment(command: Phase1Command, roots: { cc: string; sub: string; contract: string }): Record<string, string> {
-  const env = Object.fromEntries(Object.entries(command.env).map(([name, value]) => [name, expandToken(value, roots)]))
-  return {
-    ...env,
-    HOME: '/dev/null', TMPDIR: '/tmp', LANG: 'C', LC_ALL: 'C',
-    PATH: '/opt/homebrew/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin',
-    npm_config_userconfig: '/dev/null', npm_config_globalconfig: '/dev/null', GOENV: 'off',
+export function validatePhase1GoModuleCacheMetadata(
+  metadata: { is_directory: boolean; is_symlink: boolean; uid: number; mode: number },
+  expectedUID: number,
+): void {
+  if (!metadata.is_directory || metadata.is_symlink || metadata.uid !== expectedUID || (metadata.mode & 0o022) !== 0) {
+    fail('external_dependency_drift', 'GOMODCACHE is not an owned, non-symlink, non-writable directory')
   }
+}
+
+export function validatePhase1GoModuleCacheRoot(candidateInput: string): string {
+  const account = userInfo()
+  const accountHome = realpathSync(account.homedir)
+  const expected = path.join(accountHome, 'go', 'pkg', 'mod')
+  if (!path.isAbsolute(candidateInput) || path.normalize(candidateInput) !== candidateInput || candidateInput !== expected) {
+    fail('external_dependency_drift', 'GOMODCACHE is not the authoritative OS-account cache')
+  }
+  let metadata
+  try { metadata = lstatSync(candidateInput) } catch { return fail('external_dependency_drift', 'authoritative OS-account GOMODCACHE is unavailable') }
+  validatePhase1GoModuleCacheMetadata({
+    is_directory: metadata.isDirectory(), is_symlink: metadata.isSymbolicLink(), uid: metadata.uid, mode: metadata.mode & 0o777,
+  }, account.uid)
+  const canonical = realpathSync(candidateInput)
+  if (canonical !== expected) fail('external_dependency_drift', 'GOMODCACHE canonical path drifted')
+  return canonical
+}
+
+function reviewedGoModuleCache(): string {
+  const go = reviewedTool('go')
+  const accountHome = realpathSync(userInfo().homedir)
+  const expected = path.join(accountHome, 'go', 'pkg', 'mod')
+  let output: string
+  try {
+    output = execFileSync(go, ['env', 'GOMODCACHE'], {
+      encoding: 'utf8',
+      env: { PATH: '/opt/homebrew/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin', HOME: accountHome, GOENV: 'off', GOTOOLCHAIN: 'local' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).replace(/\r?\n$/, '')
+  } catch { return fail('external_dependency_drift', 'reviewed Go tool cannot resolve GOMODCACHE') }
+  if (output !== expected) fail('external_dependency_drift', 'reviewed Go tool did not resolve the authoritative OS-account GOMODCACHE')
+  return validatePhase1GoModuleCacheRoot(output)
+}
+
+function createPhase1ExclusiveBuildCache(): string {
+  const directory = mkdtempSync('/tmp/oracle-lab-phase1-go-build-')
+  chmodSync(directory, 0o700)
+  const metadata = lstatSync(directory)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== process.getuid?.()
+    || (metadata.mode & 0o077) !== 0 || readdirSync(directory).length !== 0) {
+    fail('unsafe_full_suite_build_cache', 'exclusive GOCACHE failed ownership/mode/emptiness checks')
+  }
+  return directory
+}
+
+type Phase1PreparationDigests = {
+  cc_gateway: string
+  sub2api: string
+}
+
+function dependencyTreeRecords(root: string, relativeRoot: string): Phase1IgnoredRecord[] {
+  const absoluteRoot = path.resolve(root, relativeRoot)
+  const rootReal = realpathSync(absoluteRoot)
+  if (rootReal !== absoluteRoot) fail('external_dependency_drift', 'dependency root is not canonical')
+  const records: Phase1IgnoredRecord[] = []
+  const visit = (absolute: string, relative: string): void => {
+    const metadata = lstatSync(absolute)
+    if (metadata.isDirectory()) {
+      records.push({ path: relative, type: 'directory', mode: metadata.mode & 0o777 })
+      for (const name of readdirSync(absolute).sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))) {
+        visit(path.join(absolute, name), `${relative}/${name}`)
+      }
+      return
+    }
+    if (metadata.isFile()) {
+      records.push({ path: relative, type: 'regular', mode: metadata.mode & 0o777, size: metadata.size, content_digest: sha256(readFileSync(absolute)) })
+      return
+    }
+    if (metadata.isSymbolicLink()) {
+      const target = readlinkSync(absolute)
+      const lexical = path.resolve(path.dirname(absolute), target)
+      if (path.relative(absoluteRoot, lexical).startsWith('..') || path.isAbsolute(target)) fail('external_dependency_drift', 'dependency symlink escapes its bound root')
+      records.push({ path: relative, type: 'symlink', mode: metadata.mode & 0o777, symlink_target: target, symlink_target_digest: sha256(target) })
+      return
+    }
+    fail('external_dependency_drift', 'dependency tree contains a special file')
+  }
+  visit(absoluteRoot, relativeRoot)
+  validatePhase1IgnoredSymlinkClosure(records)
+  return records
+}
+
+export function parsePhase1GoModuleList(raw: string): Array<Record<string, unknown>> {
+  const values: Array<Record<string, unknown>> = []
+  let start = -1; let depth = 0; let quoted = false; let escaped = false
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (character === '\\') escaped = true
+      else if (character === '"') quoted = false
+      continue
+    }
+    if (depth === 0 && character !== '{' && !/\s/.test(character)) fail('external_dependency_drift', 'Go module JSON stream contains a top-level non-object token')
+    if (character === '"') { quoted = true; continue }
+    if (character === '{') { if (depth === 0) start = index; depth += 1; continue }
+    if (character === '}') {
+      depth -= 1
+      if (depth < 0 || start < 0) fail('external_dependency_drift', 'Go module JSON stream is malformed')
+      if (depth === 0) {
+        let value: unknown
+        try { value = JSON.parse(raw.slice(start, index + 1)) } catch { return fail('external_dependency_drift', 'Go module JSON object is malformed') }
+        if (!isObject(value)) fail('external_dependency_drift', 'Go module JSON value is not an object')
+        values.push(value); start = -1
+      }
+    }
+  }
+  if (quoted || escaped || depth !== 0 || start !== -1 || values.length === 0) fail('external_dependency_drift', 'Go module JSON stream is incomplete')
+  return values
+}
+
+function goManifestSummary(root: string, moduleRoot: string, verificationDigest: string, goModuleCache: string): Phase1ExternalDependencyBinding['go_module_manifests'][number] {
+  const moduleDirectory = path.resolve(root, moduleRoot)
+  const goMod = readFileSync(path.join(moduleDirectory, 'go.mod'))
+  const goSumPath = path.join(moduleDirectory, 'go.sum')
+  const goSum = existsSync(goSumPath) ? readFileSync(goSumPath) : Buffer.alloc(0)
+  const goModText = goMod.toString('utf8')
+  for (const line of goModText.split(/\r?\n/)) {
+    const match = /^\s*replace\s+\S+(?:\s+\S+)?\s+=>\s+(\S+)/.exec(line)
+    if (match && (path.isAbsolute(match[1]) || match[1].startsWith('.') || match[1].includes('..'))) {
+      const target = path.resolve(moduleDirectory, match[1])
+      if (path.relative(root, target).startsWith('..')) fail('external_dependency_drift', 'Go replacement escapes the tested repository')
+    }
+  }
+  let moduleOutput: string
+  try {
+    moduleOutput = execFileSync(reviewedTool('go'), ['list', '-mod=readonly', '-m', '-json', 'all'], {
+      cwd: moduleDirectory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      env: { PATH: '/opt/homebrew/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin', HOME: '/tmp', GOENV: 'off', GOFLAGS: '-mod=readonly', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local', GOMODCACHE: goModuleCache, GOCACHE: createPhase1ExclusiveBuildCache() },
+    })
+  } catch { return fail('external_dependency_drift', 'go list -mod=readonly -m -json all failed') }
+  const listed = parsePhase1GoModuleList(moduleOutput)
+  const seen = new Set<string>(); const manifests: Array<Record<string, unknown>> = []; const contents: Array<Record<string, unknown>> = []
+  for (const module of listed) {
+    const modulePath = String(module.Path ?? ''); const version = String(module.Version ?? '')
+    const key = `${modulePath}@${version}`
+    if (!modulePath || seen.has(key)) fail('external_dependency_drift', 'listed Go module identity is missing or duplicated')
+    seen.add(key)
+    const replacement = isObject(module.Replace) ? module.Replace : undefined
+    const effectiveDirectory = String(replacement?.Dir ?? module.Dir ?? '')
+    const manifest = { path: modulePath, version, replacement_path: replacement ? String(replacement.Path ?? '') : '', replacement_version: replacement ? String(replacement.Version ?? '') : '' }
+    manifests.push(manifest)
+    if (!effectiveDirectory) fail('external_dependency_drift', 'listed Go module has no authenticated directory')
+    const canonicalDirectory = realpathSync(effectiveDirectory)
+    const repositoryRelative = path.relative(root, canonicalDirectory)
+    const cacheRelative = path.relative(goModuleCache, canonicalDirectory)
+    const insideRepository = repositoryRelative === '' || (!repositoryRelative.startsWith('..') && !path.isAbsolute(repositoryRelative))
+    const insideCache = cacheRelative === '' || (!cacheRelative.startsWith('..') && !path.isAbsolute(cacheRelative))
+    if (!insideRepository && !insideCache) fail('external_dependency_drift', 'listed Go module directory escapes tested repository and GOMODCACHE')
+    if (replacement && !insideRepository && !insideCache) fail('external_dependency_drift', 'Go replacement escapes dependency authority')
+    if (insideCache) contents.push({ module: manifest, records: dependencyTreeRecords(goModuleCache, cacheRelative) })
+  }
+  manifests.sort((left, right) => Buffer.compare(Buffer.from(String(left.path)), Buffer.from(String(right.path))))
+  contents.sort((left, right) => Buffer.compare(Buffer.from(String((left.module as Record<string, unknown>).path)), Buffer.from(String((right.module as Record<string, unknown>).path))))
+  return {
+    repository_relative_root: moduleRoot,
+    go_mod_digest: sha256(goMod), go_sum_digest: sha256(goSum), module_count: manifests.length,
+    module_manifest_digest: sha256(canonicalJson(manifests)),
+    module_content_digest: sha256(canonicalJson(contents)),
+    go_mod_verify_digest: verificationDigest,
+  }
+}
+
+function liveExternalDependencyBinding(
+  repository: 'cc_gateway' | 'sub2api',
+  root: string,
+  verificationDigest: string,
+  goModuleCache: string,
+): Phase1ExternalDependencyBinding {
+  const nodeRoot = repository === 'cc_gateway' ? '.' : 'frontend'
+  const goRoot = repository === 'cc_gateway' ? 'sidecar/egress-tls-sidecar' : 'backend'
+  const nodeModulesRoot = nodeRoot === '.' ? 'node_modules' : `${nodeRoot}/node_modules`
+  const nodeRecords = dependencyTreeRecords(root, nodeModulesRoot)
+  return derivePhase1ExternalDependencyBinding({
+    algorithm: 'phase1_external_dependency_content_v1', repository,
+    preparation: 'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    node_binary_digest: sha256(readFileSync(reviewedTool('node'))),
+    npm_binary_digest: sha256(readFileSync(reviewedTool('npm'))),
+    go_binary_digest: sha256(readFileSync(reviewedTool('go'))),
+    node_dependency_manifests: [{
+      repository_relative_root: nodeRoot,
+      package_json_digest: sha256(readFileSync(path.join(root, nodeRoot, 'package.json'))),
+      package_lock_digest: sha256(readFileSync(path.join(root, nodeRoot, 'package-lock.json'))),
+      entry_count: nodeRecords.length,
+      content_digest: sha256(canonicalJson(nodeRecords)),
+    }],
+    go_module_manifests: [goManifestSummary(root, goRoot, verificationDigest, goModuleCache)],
+  })
+}
+
+function liveExternalDependencySet(roots: { cc: string; sub: string }, verification: Phase1PreparationDigests, goModuleCache: string): Phase1ExternalDependencySet {
+  return {
+    cc_gateway: liveExternalDependencyBinding('cc_gateway', roots.cc, verification.cc_gateway, goModuleCache),
+    sub2api: liveExternalDependencyBinding('sub2api', roots.sub, verification.sub2api, goModuleCache),
+  }
+}
+
+export function preparePhase1ExternalDependencies(options: {
+  ccGatewayRoot: string
+  sub2apiRoot: string
+  sandbox: Phase1LoopbackSandbox
+  runner?: typeof runBoundedProcess
+  goModuleCache?: string
+}): { dependencies: Phase1ExternalDependencySet; verification: Phase1PreparationDigests } {
+  const roots = { cc: realpathSync(options.ccGatewayRoot), sub: realpathSync(options.sub2apiRoot) }
+  const runner = options.runner ?? runBoundedProcess
+  const reviewedCache = reviewedGoModuleCache()
+  const goModuleCache = options.goModuleCache === undefined
+    ? reviewedCache
+    : validatePhase1GoModuleCacheRoot(options.goModuleCache)
+  const cache = createPhase1ExclusiveBuildCache()
+  const env = buildPhase1CommandEnvironment({ id: 'dependency-preparation', env: {} } as Phase1Command,
+    { ...roots, contract: roots.sub }, { goBuildCache: cache, goModuleCache })
+  const npmRoots = [roots.cc, path.join(roots.sub, 'frontend')]
+  for (const cwd of npmRoots) {
+    const observed = runner({
+      argv: wrapPhase1Command({ executable: options.sandbox.executable, profilePath: options.sandbox.profile_path, argv: [reviewedTool('npm'), 'ci', '--offline', '--ignore-scripts'] }),
+      cwd, env, timeoutMs: 900_000, maxOutputBytes: 8 * 1024 * 1024,
+    })
+    if (observed.exitCode !== 0 || observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) {
+      fail('external_dependency_drift', 'offline npm preparation failed')
+    }
+  }
+  const verification = {} as Phase1PreparationDigests
+  for (const [repository, cwd] of [
+    ['cc_gateway', path.join(roots.cc, 'sidecar/egress-tls-sidecar')],
+    ['sub2api', path.join(roots.sub, 'backend')],
+  ] as const) {
+    const observed = runner({
+      argv: wrapPhase1Command({ executable: options.sandbox.executable, profilePath: options.sandbox.profile_path, argv: [reviewedTool('go'), 'mod', 'verify'] }),
+      cwd, env, timeoutMs: 900_000, maxOutputBytes: 8 * 1024 * 1024,
+    })
+    if (observed.exitCode !== 0 || observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) {
+      fail('external_dependency_drift', 'go mod verify failed')
+    }
+    verification[repository] = sha256(canonicalJson({ stdout_digest: observed.stdoutDigest, stderr_digest: observed.stderrDigest, exit_code: observed.exitCode }))
+  }
+  return { dependencies: liveExternalDependencySet(roots, verification, goModuleCache), verification }
+}
+
+function verifyCurrentPhase1ExternalDependencies(options: {
+  ccGatewayRoot: string
+  sub2apiRoot: string
+  sandbox: Phase1LoopbackSandbox
+  runner?: typeof runBoundedProcess
+  goModuleCache?: string
+}): Phase1ExternalDependencySet {
+  const roots = { cc: realpathSync(options.ccGatewayRoot), sub: realpathSync(options.sub2apiRoot) }
+  const runner = options.runner ?? runBoundedProcess
+  const reviewedCache = reviewedGoModuleCache()
+  const goModuleCache = options.goModuleCache === undefined
+    ? reviewedCache
+    : validatePhase1GoModuleCacheRoot(options.goModuleCache)
+  const cache = createPhase1ExclusiveBuildCache()
+  const env = buildPhase1CommandEnvironment({ id: 'dependency-validation', env: {} } as Phase1Command,
+    { ...roots, contract: roots.sub }, { goBuildCache: cache, goModuleCache })
+  const verification = {} as Phase1PreparationDigests
+  for (const [repository, cwd] of [
+    ['cc_gateway', path.join(roots.cc, 'sidecar/egress-tls-sidecar')],
+    ['sub2api', path.join(roots.sub, 'backend')],
+  ] as const) {
+    const observed = runner({
+      argv: wrapPhase1Command({ executable: options.sandbox.executable, profilePath: options.sandbox.profile_path, argv: [reviewedTool('go'), 'mod', 'verify'] }),
+      cwd, env, timeoutMs: 900_000, maxOutputBytes: 8 * 1024 * 1024,
+    })
+    if (observed.exitCode !== 0 || observed.timedOut || observed.outputOverflow || observed.infrastructureFailure || observed.unsafeOutputDetected) fail('external_dependency_drift', 'live go mod verify failed')
+    verification[repository] = sha256(canonicalJson({ stdout_digest: observed.stdoutDigest, stderr_digest: observed.stderrDigest, exit_code: observed.exitCode }))
+  }
+  return liveExternalDependencySet(roots, verification, goModuleCache)
+}
+
+const STARTUP_INJECTION_KEYS = [
+  'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'TSX_TSCONFIG_PATH',
+  'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+] as const
+
+export function buildPhase1CommandEnvironment(
+  command: Phase1Command,
+  roots: { cc: string; sub: string; contract: string },
+  runtime: { goBuildCache: string; goModuleCache: string },
+  inherited: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  for (const name of STARTUP_INJECTION_KEYS) {
+    if ((inherited[name] ?? '') !== '') fail('unsafe_full_suite_environment', `${name} is forbidden at the H1 launch boundary`)
+  }
+  if (!path.isAbsolute(runtime.goBuildCache)
+    || !runtime.goBuildCache.startsWith('/tmp/oracle-lab-phase1-go-build-')
+    || runtime.goBuildCache.includes('caller-selected')) {
+    fail('unsafe_full_suite_build_cache', 'GOCACHE is not one command-scoped exclusive directory')
+  }
+  if (!path.isAbsolute(runtime.goModuleCache)) fail('external_dependency_drift', 'GOMODCACHE is not an authenticated absolute root')
+  const declared = Object.fromEntries(Object.entries(command.env).map(([name, value]) => [name, expandToken(value, roots)]))
+  const contractRow = command.id === 'cc-tests' || command.id === 'cc-tests-repeat'
+  const env: Record<string, string> = {
+    ...declared,
+    PATH: `${roots.cc}/node_modules/.bin:${path.dirname(process.execPath)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`,
+    HOME: '/tmp', TMPDIR: '/tmp', LANG: 'C', LC_ALL: 'C', TZ: 'UTC',
+    npm_config_userconfig: '/dev/null',
+    npm_config_globalconfig: '/nonexistent/oracle-lab-empty-global-npmrc',
+    npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false',
+    GOENV: 'off', GOFLAGS: '-mod=readonly', GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local',
+    GOMODCACHE: runtime.goModuleCache, GOCACHE: runtime.goBuildCache,
+  }
+  if (contractRow) {
+    delete env.SUB2API_ROOT
+    env.SUB2API_FORMAL_POOL_CONTRACT_PATH = `${roots.contract}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json`
+  } else {
+    delete env.SUB2API_FORMAL_POOL_CONTRACT_PATH
+    env.SUB2API_ROOT = command.id === 'cc-b4-b6-red' ? roots.contract : roots.sub
+  }
+  return env
 }
 
 const RED_CHILD_SOURCE = String.raw`
@@ -1735,11 +2589,12 @@ function runCatalogProcess(
   roots: { cc: string; sub: string; contract: string },
   sandbox: Phase1LoopbackSandbox,
   runner: typeof runBoundedProcess,
+  runtime: { goBuildCache: string; goModuleCache: string },
 ): { observed: BoundedProcessResult; stdoutDigest: string; stderrDigest: string; outputBytes: number; parsed?: Phase1RedParseResult } {
   const cwd = expandToken(command.cwd, roots)
   const rawArgv = command.argv.map((part) => expandToken(part, roots))
   rawArgv[0] = reviewedTool(rawArgv[0])
-  const env = executionEnvironment(command, roots)
+  const env = buildPhase1CommandEnvironment(command, roots, runtime)
   let invocation = rawArgv
   if (command.group === 'phase1-red') {
     const helperOptions = Buffer.from(JSON.stringify({ argv: rawArgv, cwd, env, parser: command.failure_parser, module: pathToFileURL(fileURLToPath(import.meta.url)).href })).toString('base64url')
@@ -2013,9 +2868,9 @@ export function captureAndRunPhase1(options: {
   if (!Number.isFinite(now.getTime())) fail('invalid_timestamp', 'capture time is invalid')
   outputPaths(options.stage, relativeToRoot(controllerRoot, options.baselineOut), relativeToRoot(controllerRoot, options.resultsOut))
   if (existsSync(path.resolve(controllerRoot, options.baselineOut)) || existsSync(path.resolve(controllerRoot, options.resultsOut))) fail('artifact_exists', 'capture outputs must be absent before the first command')
-  const initialController = repositorySnapshot(controllerRoot, 'cc_gateway')
-  const initialCC = controllerRoot === ccRoot ? initialController : repositorySnapshot(ccRoot, 'cc_gateway')
-  const initialSub = repositorySnapshot(subRoot, 'sub2api')
+  let initialController = repositorySnapshot(controllerRoot, 'cc_gateway')
+  let initialCC = controllerRoot === ccRoot ? initialController : repositorySnapshot(ccRoot, 'cc_gateway')
+  let initialSub = repositorySnapshot(subRoot, 'sub2api')
   const expectedControllerStatus = options.stage === 'post-integration' && options.integrationEntryPath ? [`?? ${relativeToRoot(controllerRoot, options.integrationEntryPath)}`] : []
   validatePhase1CaptureInputs({
     stage: options.stage, controllerStatus: initialController.status, ccGatewayStatus: initialCC.status,
@@ -2032,11 +2887,26 @@ export function captureAndRunPhase1(options: {
   const sandboxPolicyDigest = String(sandboxEvidence.policy_digest)
   const roots = { cc: ccRoot, sub: subRoot, contract: contractRoot }
   const runner = options.runner ?? runBoundedProcess
+  const goModuleCache = reviewedGoModuleCache()
+  const authorizedController = initialController
+  const authorizedCC = initialCC
+  const authorizedSub = initialSub
+  const prepared = preparePhase1ExternalDependencies({
+    ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox, runner, goModuleCache,
+  })
+  initialController = repositorySnapshot(controllerRoot, 'cc_gateway')
+  initialCC = controllerRoot === ccRoot ? initialController : repositorySnapshot(ccRoot, 'cc_gateway')
+  initialSub = repositorySnapshot(subRoot, 'sub2api')
+  immutableSnapshot(authorizedController, initialController, expectedControllerStatus)
+  immutableSnapshot(authorizedCC, initialCC, [])
+  immutableSnapshot(authorizedSub, initialSub, [])
   let controllerIgnored = initialController.ignored
   let ccIgnored = initialCC.ignored
   let subIgnored = initialSub.ignored
+  let externalDependencies = prepared.dependencies
   const records: Record<string, unknown>[] = []
   const transitionTriples: Record<string, unknown>[] = []
+  const externalTransitions: Phase1ExternalDependencyTransition[] = []
   for (const command of catalog) {
     const beforeController = repositorySnapshot(controllerRoot, 'cc_gateway')
     const beforeCC = controllerRoot === ccRoot ? beforeController : repositorySnapshot(ccRoot, 'cc_gateway')
@@ -2045,7 +2915,12 @@ export function captureAndRunPhase1(options: {
     immutableSnapshot(initialCC, beforeCC, [])
     immutableSnapshot(initialSub, beforeSub, [])
     if (!same(beforeController.ignored, controllerIgnored) || !same(beforeCC.ignored, ccIgnored) || !same(beforeSub.ignored, subIgnored)) fail('ignored_state_drift', 'ignored state changed between catalog rows')
-    const processResult = runCatalogProcess(command, roots, sandbox, runner)
+    const beforeDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache)
+    if (!same(beforeDependencies, externalDependencies)) fail('external_dependency_drift', 'external dependency state changed between catalog rows')
+    const processResult = runCatalogProcess(command, roots, sandbox, runner, {
+      goBuildCache: createPhase1ExclusiveBuildCache(),
+      goModuleCache,
+    })
     const afterController = repositorySnapshot(controllerRoot, 'cc_gateway')
     const afterCC = controllerRoot === ccRoot ? afterController : repositorySnapshot(ccRoot, 'cc_gateway')
     const afterSub = repositorySnapshot(subRoot, 'sub2api')
@@ -2055,6 +2930,12 @@ export function captureAndRunPhase1(options: {
     const ccTransition = comparePhase1IgnoredState({ repository: 'cc_gateway', before: beforeCC.ignored, after: afterCC.ignored, policy: command.ignored_output_policies.cc_gateway })
     const subTransition = comparePhase1IgnoredState({ repository: 'sub2api', before: beforeSub.ignored, after: afterSub.ignored, policy: command.ignored_output_policies.sub2api })
     const controllerIgnoredTransition = controllerTransition(options.stage, beforeController.ignored, afterController.ignored, controllerRoot === ccRoot ? ccTransition : undefined)
+    const afterDependencies = liveExternalDependencySet(roots, prepared.verification, goModuleCache)
+    if (!same(beforeDependencies, afterDependencies)) fail('external_dependency_drift', `${command.id} changed external dependency authority`)
+    const externalDependencyTransition: Phase1ExternalDependencyTransition = {
+      before: beforeDependencies, after: afterDependencies,
+      ephemeral_build_cache_token: 'command_scoped_empty_mkdtemp_v1',
+    }
     const classification = classifyPhase1Result({
       command,
       exitCode: processResult.observed.exitCode,
@@ -2080,11 +2961,14 @@ export function captureAndRunPhase1(options: {
       sandbox_policy_digest: sandboxPolicyDigest, network_policy_violations: 0,
       unsafe_output_detected: processResult.observed.unsafeOutputDetected,
       ignored_state_transitions: { controller: controllerIgnoredTransition, cc_gateway: ccTransition, sub2api: subTransition },
+      external_dependency_transition: externalDependencyTransition,
     }
     const record = { ...base, result_digest: sha256(canonicalJson(base)) }
     records.push(record)
     transitionTriples.push(record.ignored_state_transitions)
+    externalTransitions.push(externalDependencyTransition)
     controllerIgnored = afterController.ignored; ccIgnored = afterCC.ignored; subIgnored = afterSub.ignored
+    externalDependencies = afterDependencies
   }
   const generatedAt = now.toISOString()
   const catalogBinding = { path: relativeToRoot(controllerRoot, path.resolve(controllerRoot, options.catalogPath)), digest: CATALOG_DIGEST }
@@ -2101,6 +2985,7 @@ export function captureAndRunPhase1(options: {
     sub2api_contract_root: contract,
     implementation_trees: { cc_gateway: initialCC.implementation_tree, sub2api: initialSub.implementation_tree },
     ignored_state: { controller: initialController.ignored, cc_gateway: initialCC.ignored, sub2api: initialSub.ignored },
+    external_dependencies: prepared.dependencies,
   }
   const baselineBase = {
     schema_version: 1, artifact_kind: 'phase_1_exit_baseline', stage: options.stage,
@@ -2118,6 +3003,10 @@ export function captureAndRunPhase1(options: {
       initial: rootEnvelope.ignored_state,
       final: { controller: controllerIgnored, cc_gateway: ccIgnored, sub2api: subIgnored },
       transition_count: 17, transitions_digest: sha256(canonicalJson(transitionTriples)),
+    },
+    external_dependency_chain: {
+      initial: prepared.dependencies, final: externalDependencies,
+      transition_count: 17, transitions_digest: sha256(canonicalJson(externalTransitions)),
     },
   }
   const results = { ...resultsBase, results_digest: sha256(canonicalJson(resultsBase)) }
@@ -2239,6 +3128,17 @@ function assertActualReceiptTopology(root: string, artifactCommit: string, recei
   if (!same(parents, [artifactCommit]) || !same(delta, ['A', receiptPath]) || !committedBytes.equals(artifactBytes(receipt))) fail('receipt_commit_mismatch', 'receipt commit is not the exact one-path child')
 }
 
+function committedJsonBinding(root: string, commitValue: string, binding: unknown): Record<string, unknown> {
+  if (!isObject(binding) || typeof binding.path !== 'string' || !validDigest(binding.digest)) fail('artifact_source_chain_mismatch', 'committed artifact binding is malformed')
+  relativeToRoot(root, binding.path)
+  const bytes = committedArtifactBytes(root, commitValue, binding.path)
+  if (sha256(bytes) !== binding.digest) fail('artifact_source_chain_mismatch', `${binding.path} committed digest drifted`)
+  let value: unknown
+  try { value = JSON.parse(bytes.toString('utf8')) } catch { return fail('artifact_source_chain_mismatch', `${binding.path} is malformed`) }
+  if (!isObject(value)) fail('artifact_source_chain_mismatch', `${binding.path} is not an object`)
+  return value
+}
+
 function finalRemoteLive(values: Readonly<Record<string, string>>): Record<string, unknown> {
   const ccRoot = realpathSync(values['cc-gateway-root'])
   const subRoot = realpathSync(values['sub2api-root'])
@@ -2262,7 +3162,67 @@ function finalRemoteLive(values: Readonly<Record<string, string>>): Record<strin
   const receipt = effective.value
   const receiptValidation = validatePhase1IntegrationReceiptValue(receipt)
   if (!receiptValidation.ok || !isObject(receipt.attempt) || receipt.attempt.attempt_id !== effective.attempt_id) fail('attempt_chain_invalid', 'effective receipt is invalid')
+  if (!isObject(receipt.artifacts)) fail('artifact_source_chain_mismatch', 'effective receipt artifacts are absent')
+  const entry = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.integration_entry)
+  const baseline = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.baseline)
+  const resultsValue = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.results)
+  const handoff = committedJsonBinding(ccRoot, receiptCommit, receipt.artifacts.handoff)
+  if (!isObject(entry.catalog)) fail('artifact_source_chain_mismatch', 'integration entry catalog binding is absent')
+  const catalog = committedJsonBinding(ccRoot, receiptCommit, entry.catalog)
+  const featureResults = committedJsonBinding(ccRoot, receiptCommit, entry.feature_results)
+  const featureReview = committedJsonBinding(ccRoot, receiptCommit, entry.feature_review)
+  const chainBindings = {
+    entry: receipt.artifacts.integration_entry as { path: string; digest: string },
+    baseline: receipt.artifacts.baseline as { path: string; digest: string },
+    results: receipt.artifacts.results as { path: string; digest: string },
+    handoff: receipt.artifacts.handoff as { path: string; digest: string },
+    featureResults: entry.feature_results as { path: string; digest: string },
+    featureReview: entry.feature_review as { path: string; digest: string },
+  }
+  const chainValidation = validatePhase1CommittedArtifactChain({ catalog, featureResults, featureReview, entry, baseline, results: resultsValue, handoff, receipt, bindings: chainBindings })
+  if (!chainValidation.ok) fail(chainValidation.errors[0]?.code ?? 'artifact_source_chain_mismatch', JSON.stringify(chainValidation.errors))
+  if (!isObject(featureReview.feature_baseline) || !isObject(featureReview.context) || !isObject(featureReview.plan_review)) fail('feature_review_mismatch', 'feature review loaded-source bindings are absent')
+  const featureBaseline = committedJsonBinding(ccRoot, receiptCommit, featureReview.feature_baseline)
+  const context = committedJsonBinding(ccRoot, receiptCommit, featureReview.context)
+  const planReview = committedJsonBinding(ccRoot, receiptCommit, featureReview.plan_review)
+  if (!isObject(context.gate_schemas) || !isObject(context.gate_schemas.plan_review) || !isObject(context.gate_schemas.execution_context)
+    || !isObject(context.planning_provenance) || !isObject(context.planning_provenance.entry) || !isObject(context.planning_provenance.context)) {
+    fail('context_schema_binding_drift', 'committed context schema or planning provenance bindings are absent')
+  }
+  const planReviewSchema = committedJsonBinding(ccRoot, receiptCommit, context.gate_schemas.plan_review)
+  const executionContextSchema = committedJsonBinding(ccRoot, receiptCommit, context.gate_schemas.execution_context)
+  const evidenceDelta = isObject(entry.candidate_heads) ? commitDelta(ccRoot, String(entry.candidate_heads.cc_gateway)) : []
+  const loadedReview = validatePhase1LoadedFeatureReview({
+    catalog, featureBaseline, featureResults, context, planReview, planReviewSchema, executionContextSchema, featureReview,
+    featureReviewPath: String((entry.feature_review as Record<string, unknown>).path), reviewMode: 'committed',
+    liveStatuses: { cc_gateway: repositoryStatus(ccRoot), sub2api: repositoryStatus(subRoot) },
+    bindings: {
+      featureBaseline: featureReview.feature_baseline as { path: string; digest: string },
+      featureResults: entry.feature_results as { path: string; digest: string },
+      context: featureReview.context as { path: string; digest: string },
+      planReview: featureReview.plan_review as { path: string; digest: string },
+      planReviewSchema: context.gate_schemas.plan_review as { path: string; digest: string },
+      executionContextSchema: context.gate_schemas.execution_context as { path: string; digest: string },
+      planningEntry: context.planning_provenance.entry as { path: string; digest: string },
+      planningContext: context.planning_provenance.context as { path: string; digest: string },
+    },
+    evidenceCommit: {
+      tested_head: isObject(featureReview.tested_heads) ? featureReview.tested_heads.cc_gateway : '',
+      candidate_head: isObject(entry.candidate_heads) ? entry.candidate_heads.cc_gateway : '',
+      parents: isObject(entry.candidate_heads) ? reviewedGitText(ccRoot, ['show', '-s', '--format=%P', String(entry.candidate_heads.cc_gateway)]).split(' ').filter(Boolean) : [],
+      added_paths: evidenceDelta.filter((item) => item.status === 'A').map((item) => item.path),
+      bytes_match: evidenceDelta.length === 2 && evidenceDelta.every((item) => item.status === 'A'),
+      sub2api_tested_head: isObject(featureReview.tested_heads) ? featureReview.tested_heads.sub2api : '',
+      sub2api_candidate_head: isObject(entry.candidate_heads) ? entry.candidate_heads.sub2api : '',
+    },
+  })
+  if (!loadedReview.ok) fail(loadedReview.errors[0]?.code ?? 'feature_review_mismatch', JSON.stringify(loadedReview.errors))
   if (!isObject(receipt.integrated_heads)) fail('attempt_chain_invalid', 'receipt integrated heads are absent')
+  if (!isObject(receipt.shared_contract) || receipt.shared_contract.repository !== 'sub2api'
+    || receipt.shared_contract.path !== 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+    || receipt.shared_contract.digest !== sha256(readFileSync(path.join(subRoot, String(receipt.shared_contract.path))))) {
+    fail('contract_root_not_authorized', 'effective receipt shared contract differs from current Sub2API bytes')
+  }
   const integratedCC = String(receipt.integrated_heads.cc_gateway); const integratedSub = String(receipt.integrated_heads.sub2api)
   if (!reviewedGitAncestor(ccRoot, integratedCC, ccRemote.integrated_head) || !reviewedGitAncestor(ccRoot, receiptCommit, ccRemote.integrated_head)
     || !reviewedGitAncestor(subRoot, integratedSub, subRemote.integrated_head)) fail('context_remote_rewind', 'remote main does not descend from receipt authority')
@@ -2274,6 +3234,10 @@ function finalRemoteLive(values: Readonly<Record<string, string>>): Record<strin
   if (subChanged.length !== 0 || ccChanged.some((entry) => !entry.startsWith('docs/superpowers/evidence/phase-1/') && !CC_EXCLUDED_PATHS.includes(entry as never))) fail('phase1_implementation_drift', 'remote descendant contains a nonexcluded tracked change')
   const afterCC = ignoredInventory(ccRoot, 'cc_gateway'); const afterSub = ignoredInventory(subRoot, 'sub2api')
   if (!same(beforeCC, afterCC) || !same(beforeSub, afterSub)) fail('ignored_state_drift', 'ignored state changed during final verification')
+  const sandbox = resolvePhase1LoopbackSandbox()
+  const currentDependencies = verifyCurrentPhase1ExternalDependencies({ ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox })
+  if (!isObject(receipt.external_dependency_reference)
+    || !same(receipt.external_dependency_reference.final, currentDependencies)) fail('external_dependency_drift', 'live dependencies differ from the effective receipt')
   return {
     schema_version: 1, verification_kind: 'phase_1_final_remote', verified_at: new Date().toISOString(), decision: effective === requested ? 'ready' : 'superseded',
     attempt_id: effective.attempt_id, receipt: { path: receiptPath, digest: sha256(receiptBytes), commit: receiptCommit },
@@ -2297,16 +3261,79 @@ function runCli(tokens: readonly string[]): void {
     })
   } else if (invocation.command === 'validate-results') {
     const root = realpathSync(v['controller-root']); const catalog = readPhase1Catalog(path.resolve(root, v.catalog)); const resultsValue = loadJson(root, v.results)
-    const validation = validatePhase1ResultsValue(resultsValue, { catalog })
-    if (!validation.ok || resultsValue.stage !== v.stage) fail(validation.ok ? 'invalid_results' : validation.errors[0]?.code ?? 'invalid_results', validation.ok ? 'result stage drifted' : JSON.stringify(validation.errors))
     const baseline = loadJson(root, v.baseline)
-    if (!isObject(resultsValue.baseline) || resultsValue.baseline.digest !== sha256(artifactBytes(baseline))) fail('baseline_binding_mismatch', 'results do not bind baseline bytes')
+    const ccRoot = realpathSync(v['cc-gateway-root']); const subRoot = realpathSync(v['sub2api-root']); const contractRoot = realpathSync(v['sub2api-contract-root'])
+    const stage = v.stage as 'feature-candidate' | 'post-integration'
+    const authority = captureAuthority({
+      stage, controllerRoot: root, ccGatewayRoot: ccRoot, sub2apiRoot: subRoot,
+      entryPath: v.entry, executionContextPath: v['execution-context'], integrationEntryPath: v['integration-entry'],
+      now: new Date(String(resultsValue.captured_at)),
+    })
+    const controllerSnapshot = repositorySnapshot(root, 'cc_gateway')
+    const ccSnapshot = root === ccRoot ? controllerSnapshot : repositorySnapshot(ccRoot, 'cc_gateway')
+    const subSnapshot = repositorySnapshot(subRoot, 'sub2api')
+    const contract = contractRootBinding(contractRoot, [root, ccRoot, subRoot], authority.contractHead, authority.contractOriginDigest)
+    const persistedController = isObject(resultsValue.roots) && isObject(resultsValue.roots.controller) ? resultsValue.roots.controller : {}
+    const roots = {
+      controller: { ...persistedController, head: controllerSnapshot.head, root_identity_digest: controllerSnapshot.root_identity_digest },
+      cc_gateway: { head: ccSnapshot.head, root_identity_digest: ccSnapshot.root_identity_digest, clean_status_digest: sha256('') },
+      sub2api: { head: subSnapshot.head, root_identity_digest: subSnapshot.root_identity_digest, clean_status_digest: sha256('') },
+    }
+    const sandbox = resolvePhase1LoopbackSandbox()
+    const dependencies = verifyCurrentPhase1ExternalDependencies({ ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, sandbox })
+    const validation = validatePhase1LoadedResultsAuthority({
+      stage, catalog, baseline, results: resultsValue, authority: authority.binding, roots, contract,
+      implementationTrees: { cc_gateway: ccSnapshot.implementation_tree, sub2api: subSnapshot.implementation_tree },
+      ignoredFinal: { controller: controllerSnapshot.ignored, cc_gateway: ccSnapshot.ignored, sub2api: subSnapshot.ignored },
+      externalDependencies: dependencies,
+      controllerEqualsCC: root === ccRoot,
+      outputPaths: {
+        baseline: relativeToRoot(root, v.baseline), results: relativeToRoot(root, v.results),
+        integrationEntry: stage === 'post-integration' ? relativeToRoot(root, v['integration-entry']) : undefined,
+      },
+      liveStatuses: { controller: controllerSnapshot.status, cc_gateway: ccSnapshot.status, sub2api: subSnapshot.status },
+    })
+    if (!validation.ok) fail(validation.errors[0]?.code ?? 'invalid_results', JSON.stringify(validation.errors))
   } else if (invocation.command === 'validate-feature-review') {
-    const root = realpathSync(v['controller-root']); readPhase1Catalog(path.resolve(root, v.catalog))
-    const review = loadJson(root, v['feature-review']); const validation = validatePhase1FeatureReviewValue(review)
-    if (!validation.ok || !isObject(review.candidate_heads) || review.candidate_heads.cc_gateway !== v['reviewed-cc-candidate-head'] || review.candidate_heads.sub2api !== v['reviewed-sub2api-candidate-head']) fail('feature_review_mismatch', validation.ok ? 'candidate head flags drifted' : JSON.stringify(validation.errors))
-    for (const artifact of ['execution-context', 'plan-review', 'feature-baseline', 'feature-results'] as const) pathBinding(root, v[artifact])
-    if (repositoryStatus(v['sub2api-root']).length !== 0) fail('dirty_repository', 'Sub2API must remain clean during review validation')
+    const root = realpathSync(v['controller-root']); const catalog = readPhase1Catalog(path.resolve(root, v.catalog))
+    const subRoot = realpathSync(v['sub2api-root'])
+    const review = loadJson(root, v['feature-review'])
+    const featureBaseline = loadJson(root, v['feature-baseline'])
+    const featureResults = loadJson(root, v['feature-results'])
+    const context = loadJson(root, v['execution-context'])
+    const planReview = loadJson(root, v['plan-review'])
+    const planReviewSchema = loadJson(root, 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json')
+    const executionContextSchema = loadJson(root, 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json')
+    if (!isObject(review.candidate_heads) || review.candidate_heads.cc_gateway !== v['reviewed-cc-candidate-head']
+      || review.candidate_heads.sub2api !== v['reviewed-sub2api-candidate-head']) fail('feature_review_mismatch', 'candidate head flags drifted')
+    const ccStatus = repositoryStatus(root); const subStatus = repositoryStatus(subRoot)
+    if (subStatus.length !== 0 || reviewedGitText(subRoot, ['rev-parse', 'HEAD']) !== v['reviewed-sub2api-candidate-head']) fail('dirty_repository', 'Sub2API review root must be the clean reviewed candidate')
+    const delta = commitDelta(root, v['reviewed-cc-candidate-head'])
+    const evidenceCommit = {
+      tested_head: isObject(review.tested_heads) ? review.tested_heads.cc_gateway : '',
+      candidate_head: v['reviewed-cc-candidate-head'],
+      parents: reviewedGitText(root, ['show', '-s', '--format=%P', v['reviewed-cc-candidate-head']]).split(' ').filter(Boolean),
+      added_paths: delta.filter((entry) => entry.status === 'A').map((entry) => entry.path),
+      bytes_match: delta.length === 2 && delta.every((entry) => entry.status === 'A')
+        && committedArtifactBytes(root, v['reviewed-cc-candidate-head'], v['feature-baseline']).equals(readFileSync(path.resolve(root, v['feature-baseline'])))
+        && committedArtifactBytes(root, v['reviewed-cc-candidate-head'], v['feature-results']).equals(readFileSync(path.resolve(root, v['feature-results']))),
+      sub2api_tested_head: isObject(review.tested_heads) ? review.tested_heads.sub2api : '',
+      sub2api_candidate_head: v['reviewed-sub2api-candidate-head'],
+    }
+    const validation = validatePhase1LoadedFeatureReview({
+      catalog, featureBaseline, featureResults, context, planReview, planReviewSchema, executionContextSchema, featureReview: review,
+      featureReviewPath: v['feature-review'], reviewMode: 'uncommitted', liveStatuses: { cc_gateway: ccStatus, sub2api: subStatus },
+      bindings: {
+        featureBaseline: pathBinding(root, v['feature-baseline']), featureResults: pathBinding(root, v['feature-results']),
+        context: pathBinding(root, v['execution-context']), planReview: pathBinding(root, v['plan-review']),
+        planReviewSchema: pathBinding(root, 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'),
+        executionContextSchema: pathBinding(root, 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'),
+        planningEntry: pathBinding(root, 'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json'),
+        planningContext: pathBinding(root, 'docs/superpowers/evidence/phase-1/phase-1-context.json'),
+      },
+      evidenceCommit,
+    })
+    if (!validation.ok) fail(validation.errors[0]?.code ?? 'feature_review_mismatch', JSON.stringify(validation.errors))
   } else if (invocation.command === 'build-integration-entry') {
     const root = realpathSync(v['controller-root'])
     const entry = buildPhase1IntegrationEntry({
