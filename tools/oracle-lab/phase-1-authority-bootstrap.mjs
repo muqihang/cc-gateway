@@ -169,6 +169,22 @@ function runGit(root, git, args) {
   return result.stdout
 }
 
+function gitText(root, git, args) {
+  return runGit(root, git, args).toString('utf8').trim()
+}
+
+function resolveCommit(root, git, revision) {
+  const commit = gitText(root, git, ['rev-parse', '--verify', '--end-of-options', `${revision}^{commit}`])
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) fail('authority_restart_git_object_invalid')
+  return commit
+}
+
+function soleParent(root, git, commit) {
+  const fields = gitText(root, git, ['rev-list', '--parents', '-n', '1', commit]).split(' ')
+  if (fields.length !== 2) fail('authority_restart_parent_mismatch')
+  return fields[1]
+}
+
 function exactFlag(argv, name) {
   const values = []
   for (let index = 0; index < argv.length; index += 1) {
@@ -245,18 +261,76 @@ function prepareDependencies(repositoryRoot, npm) {
   if (installed.error || installed.signal !== null || installed.status !== 0) fail('authority_restart_dependency_install_failed')
 }
 
-async function runAuthorityCli(repositoryRoot, argv) {
+function assertCanonicalCliPaths(parsed, bindings) {
+  if (parsed.command === 'build') {
+    if (parsed.values['plan-path'] !== bindings.authorityPaths.plan
+      || parsed.values['plan-review-path'] !== bindings.authorityPaths.planReview
+      || parsed.values['execution-context-path'] !== bindings.authorityPaths.executionContext
+      || path.resolve(parsed.values['cc-replacement-root'], parsed.values.output) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
+      fail('authority_restart_cli_arguments_invalid')
+    }
+  } else if (parsed.command !== 'validate-source' && parsed.command !== 'validate-runtime'
+    && path.resolve(parsed.values['cc-replacement-root'], parsed.values.artifact) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
+    fail('authority_restart_cli_arguments_invalid')
+  }
+}
+
+function authorityFromCommit(root, git, file, commit) {
+  const bytes = runGit(root, git, ['show', `${commit}:${file}`])
+  return Object.freeze({ path: file, digest: sha256(bytes), commit })
+}
+
+async function runAuthorityCommand(repositoryRoot, git, argv) {
   const apiPath = path.join(repositoryRoot, 'node_modules/tsx/dist/esm/api/index.mjs')
   const toolPath = path.join(repositoryRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')
   for (const target of [apiPath, toolPath]) {
     const metadata = lstatSync(target)
     if (!metadata.isFile() || metadata.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
   }
-  process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP = 'verified-v1'
-  process.env.ORACLE_PHASE1_AUTHORITY_CACHE = 'command_scoped_lockfile_verified_v1'
   const { tsImport } = await import(pathToFileURL(apiPath).href)
   const tool = await tsImport(pathToFileURL(toolPath).href, import.meta.url)
-  tool.runAuthorityRestartCli(argv)
+  const parsed = tool.parseAuthorityRestartCli(argv)
+  const bindings = tool.AUTHORITY_RESTART_BINDINGS
+  assertCanonicalCliPaths(parsed, bindings)
+  if (parsed.command === 'validate-runtime') return
+
+  tool.validatePhase1AuthorityRestartSource({
+    ccGatewayRoot: parsed.values['cc-source-root'],
+    sub2apiRoot: parsed.values['sub2api-source-root'],
+    bindings,
+  })
+  if (parsed.command === 'validate-source') return
+
+  const ccRoot = realpathSync(parsed.values['cc-replacement-root'])
+  const subRoot = realpathSync(parsed.values['sub2api-replacement-root'])
+  if (parsed.command === 'build') {
+    const ccCommits = parsed.repeated['cc-replacement-commit']
+    const subCommits = parsed.repeated['sub2api-replacement-commit']
+    const authorizedBase = soleParent(ccRoot, git, ccCommits[0])
+    const remoteMain = resolveCommit(ccRoot, git, 'refs/remotes/muqihang/main')
+    const artifact = tool.buildPhase1AuthorityRestart({
+      ccGatewayRoot: ccRoot,
+      sub2apiRoot: subRoot,
+      repairedAuthority: {
+        plan: authorityFromCommit(ccRoot, git, bindings.authorityPaths.plan, remoteMain),
+        plan_review: authorityFromCommit(ccRoot, git, bindings.authorityPaths.planReview, authorizedBase),
+        execution_context: authorityFromCommit(ccRoot, git, bindings.authorityPaths.executionContext, authorizedBase),
+      },
+      replacementCommits: { cc_gateway: ccCommits, sub2api: subCommits },
+    }, bindings)
+    tool.writePhase1AuthorityRestart(ccRoot, artifact, bindings)
+    tool.validatePhase1AuthorityRestartPreCommit(artifact, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
+    return
+  }
+
+  const artifactPath = path.join(ccRoot, bindings.artifactPath)
+  const bytes = readFileSync(artifactPath)
+  const artifact = JSON.parse(bytes.toString('utf8'))
+  if (parsed.command === 'validate-pre-commit') {
+    tool.validatePhase1AuthorityRestartPreCommit(artifact, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
+  } else {
+    tool.validatePhase1AuthorityRestartPostCommit(artifact, bytes, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
+  }
 }
 
 async function main(argv) {
@@ -271,7 +345,7 @@ async function main(argv) {
   const git = selectTool('git')
   verifyRuntime(repositoryRoot, git)
   prepareDependencies(repositoryRoot, selectTool('npm'))
-  await runAuthorityCli(repositoryRoot, argv)
+  await runAuthorityCommand(repositoryRoot, git, argv)
 }
 
 try {

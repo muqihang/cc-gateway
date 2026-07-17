@@ -1651,7 +1651,6 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     'oracle-phase1-authority-restart',
     'phase-1-authority-bootstrap.mjs',
     'validate-runtime',
-    'command_scoped_lockfile_verified_v1',
     'canonical OS account',
     'untrusted content seed only',
     'initial-authority child of repaired remote main',
@@ -1674,6 +1673,7 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /dependency-free bootstrap uses only Node built-ins and reviewed absolute OS tools to inventory and copy-on-write clone only `_cacache`/)
   assert.match(plan, /source inventory is byte-identical before and after the clone/)
   assert.match(plan, /TypeScript entry point always rejects direct execution/)
+  assert.match(plan, /No importable TypeScript export dispatches authority commands/)
   assert.match(plan, /npm ci --offline --ignore-scripts/)
   assert.match(plan, /exclusive command cache is mode 0700/)
   assert.match(plan, /Inherited `HOME`, `npm_config_cache`.*cannot select dependency bytes/)

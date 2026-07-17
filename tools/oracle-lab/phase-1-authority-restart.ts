@@ -9,7 +9,6 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import {
   REVIEWED_GIT_ENVIRONMENT,
   REVIEWED_GIT_EXECUTABLE,
-  REVIEWED_NODE_EXECUTABLE,
   runReviewedGit,
   type ReviewedGitOptions,
 } from './secure-runtime.js'
@@ -674,96 +673,6 @@ export function parseAuthorityRestartCli(argv: readonly string[]): ParsedAuthori
     if (!same(repeatedNames.sort(), ['cc-replacement-commit', 'sub2api-replacement-commit']) || repeated['cc-replacement-commit'].length === 0 || repeated['sub2api-replacement-commit'].length === 0) fail('authority_restart_cli_arguments_invalid', 'build requires ordered replacement commits for both repositories')
   } else if (repeatedNames.length !== 0) fail('authority_restart_cli_arguments_invalid', 'replacement commits are accepted only by build')
   return Object.freeze({ command, values: Object.freeze(values), repeated: Object.freeze(repeated) })
-}
-
-function authorityFromCommit(root: string, file: string, commit: string): AuthorityArtifact {
-  const bytes = reviewedGit(root, ['show', `${commit}:${file}`]).stdout
-  return { path: file, digest: sha256(bytes), commit }
-}
-
-function assertCanonicalCliPaths(parsed: ParsedAuthorityRestartCli, bindings: AuthorityRestartBindings): void {
-  if (parsed.command === 'build') {
-    if (parsed.values['plan-path'] !== bindings.authorityPaths.plan
-      || parsed.values['plan-review-path'] !== bindings.authorityPaths.planReview
-      || parsed.values['execution-context-path'] !== bindings.authorityPaths.executionContext
-      || path.resolve(parsed.values['cc-replacement-root'], parsed.values.output) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
-      fail('authority_restart_cli_arguments_invalid', 'authority or output path differs from the compiled contract')
-    }
-  } else if (parsed.command !== 'validate-source' && parsed.command !== 'validate-runtime'
-    && path.resolve(parsed.values['cc-replacement-root'], parsed.values.artifact) !== path.resolve(parsed.values['cc-replacement-root'], bindings.artifactPath)) {
-    fail('authority_restart_cli_arguments_invalid', 'artifact path differs from the compiled contract')
-  }
-}
-
-const AUTHORITY_RESTART_RUNTIME_PATHS = Object.freeze([
-  'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
-  'tools/oracle-lab/oracle-phase1-authority-restart',
-  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
-  'tools/oracle-lab/phase-1-authority-restart.ts',
-  'tools/oracle-lab/secure-runtime.ts',
-  'package-lock.json',
-])
-
-function assertAuthorityRestartCliStartup(ccRootInput: string): void {
-  if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
-    || process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'verified-v1'
-    || process.env.ORACLE_PHASE1_AUTHORITY_CACHE !== 'command_scoped_lockfile_verified_v1'
-    || process.env.HOME !== '/dev/null'
-    || process.env.TMPDIR !== '/tmp'
-    || realpathSync(process.execPath) !== REVIEWED_NODE_EXECUTABLE) {
-    fail('authority_restart_unsafe_startup_environment', 'the reviewed hermetic authority-restart launcher is required')
-  }
-  for (const name of ['NODE_OPTIONS', ['NODE', 'PATH'].join('_'), 'TSX_TSCONFIG_PATH', 'TSX_DISABLE_CACHE', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD']) {
-    if (Object.hasOwn(process.env, name)) fail('authority_restart_unsafe_startup_environment', 'unsafe authority-restart startup state is forbidden')
-  }
-  const ccRoot = realpathSync(ccRootInput)
-  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-  if (ccRoot !== moduleRoot) fail('authority_restart_runtime_binding_mismatch', 'CLI must execute from the tested CC replacement root')
-  const reviewedMain = resolveCommit(ccRoot, 'refs/remotes/muqihang/main')
-  for (const file of AUTHORITY_RESTART_RUNTIME_PATHS) {
-    const target = path.join(ccRoot, file)
-    let metadata
-    try { metadata = lstatSync(target) } catch { fail('authority_restart_runtime_binding_mismatch', 'reviewed runtime path is unavailable') }
-    if (!metadata.isFile() || metadata.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch', 'reviewed runtime path must be a regular file')
-    const committed = reviewedGit(ccRoot, ['show', `${reviewedMain}:${file}`]).stdout
-    if (!readFileSync(target).equals(committed)) fail('authority_restart_runtime_binding_mismatch', 'working runtime bytes differ from repaired main')
-  }
-}
-
-export function runAuthorityRestartCli(argv: readonly string[]): void {
-  const parsed = parseAuthorityRestartCli(argv)
-  const bindings = AUTHORITY_RESTART_BINDINGS
-  assertCanonicalCliPaths(parsed, bindings)
-  assertAuthorityRestartCliStartup(parsed.values['cc-replacement-root'])
-  if (parsed.command === 'validate-runtime') return
-  validatePhase1AuthorityRestartSource({ ccGatewayRoot: parsed.values['cc-source-root'], sub2apiRoot: parsed.values['sub2api-source-root'], bindings })
-  if (parsed.command === 'validate-source') return
-  const ccRoot = realpathSync(parsed.values['cc-replacement-root'])
-  const subRoot = realpathSync(parsed.values['sub2api-replacement-root'])
-  if (parsed.command === 'build') {
-    const ccCommits = parsed.repeated['cc-replacement-commit']
-    const subCommits = parsed.repeated['sub2api-replacement-commit']
-    const authorizedBase = soleParent(ccRoot, ccCommits[0])
-    const remoteMain = resolveCommit(ccRoot, 'refs/remotes/muqihang/main')
-    const artifact = buildPhase1AuthorityRestart({
-      ccGatewayRoot: ccRoot,
-      sub2apiRoot: subRoot,
-      repairedAuthority: {
-        plan: authorityFromCommit(ccRoot, bindings.authorityPaths.plan, remoteMain),
-        plan_review: authorityFromCommit(ccRoot, bindings.authorityPaths.planReview, authorizedBase),
-        execution_context: authorityFromCommit(ccRoot, bindings.authorityPaths.executionContext, authorizedBase),
-      },
-      replacementCommits: { cc_gateway: ccCommits, sub2api: subCommits },
-    }, bindings)
-    writePhase1AuthorityRestart(ccRoot, artifact, bindings)
-    validatePhase1AuthorityRestartPreCommit(artifact, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
-    return
-  }
-  const artifactPath = path.join(ccRoot, bindings.artifactPath)
-  const bytes = readFileSync(artifactPath)
-  const artifact = JSON.parse(bytes.toString('utf8'))
-  if (parsed.command === 'validate-pre-commit') validatePhase1AuthorityRestartPreCommit(artifact, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
-  else validatePhase1AuthorityRestartPostCommit(artifact, bytes, { ccGatewayRoot: ccRoot, sub2apiRoot: subRoot, bindings })
 }
 
 let invokedDirectly = false
