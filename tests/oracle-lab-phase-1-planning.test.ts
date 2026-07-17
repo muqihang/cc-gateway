@@ -1441,6 +1441,21 @@ test('Phase 1 H1 rejects unrelated RED leaves and proxy-only network controls', 
   assert.doesNotMatch(plan, /cc-b4-b6-red:.*ORACLE_LAB_MANIFEST_PATH/)
 })
 
+test('Phase 1 Task 7 binds GREEN full-suite contract discovery without substituting the tested Sub2API root', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+  const contractPath = '${SUB2API_CONTRACT_ROOT}/backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
+
+  assert.match(plan, /cc-tests:.*env SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json/)
+  assert.match(plan, /cc-tests-repeat:.*env SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json/)
+  assert.equal(plan.includes(contractPath), true)
+  assert.match(plan, /only `cc-tests` and `cc-tests-repeat` may set `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
+  assert.match(plan, /the exact catalog value is `\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json`/)
+  assert.match(plan, /all other catalog rows forbid `SUB2API_FORMAL_POOL_CONTRACT_PATH`/)
+  assert.match(plan, /`SUB2API_ROOT` remains bound to the tested Sub2API implementation root for both GREEN full-suite rows/)
+  assert.match(plan, /missing, relative, alternate-root, wrong-suffix, symlink, and cross-row environment mutations/)
+  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=/)
+})
+
 test('Phase 1 full regression uses a serial process-isolation boundary', async () => {
   const [runner, processRunner, packageManifest] = await Promise.all([
     readFile(path.join(root, 'tests/run-all.ts'), 'utf8'),
@@ -1499,7 +1514,7 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
   assert.match(plan, /does not compare fresh-root `\.codegraph` or `node_modules` digests.*does not claim evidence about a mutation that occurred before/s)
   assert.match(plan, /Mutation tests for final remote inject each ignored operation after the before snapshot/)
   assert.match(plan, /three consecutive isolated `npm test` runs/)
-  assert.match(plan, /npm test && npm test && npm test && npm run build/)
+  assert.match(plan, /SUB2API_FORMAL_POOL_CONTRACT_PATH=\$\{SUB2API_CONTRACT_ROOT\}\/backend\/internal\/service\/testdata\/cc_gateway_formal_pool_contract\/vectors\.json npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=.*npm test && SUB2API_FORMAL_POOL_CONTRACT_PATH=.*npm test && npm run build/)
 })
 
 test('Phase 1 plan closes context refresh, review, merge-topology, and retry lifecycles', async () => {
@@ -1585,6 +1600,29 @@ test('Phase 1 plan closes context refresh, review, merge-topology, and retry lif
   assert.match(plan, /historical_receipt_deleted.*historical_receipt_deleted_readded.*attempt_chain_reset_to_0001/s)
   assert.match(plan, /Stop this plan, preserve prior evidence/)
   assert.match(plan, /no successor attempt is legal/)
+})
+
+test('Phase 1 mid-execution plan repair restarts canonical initial authority instead of mutating a successor chain', async () => {
+  const plan = await readFile(path.join(root, planPath), 'utf8')
+
+  for (const required of [
+    'Mid-Execution Plan Authority Repair Restart',
+    'quarantine checkpoint',
+    'fresh replacement implementation worktrees',
+    'rename the superseded implementation branches',
+    'recreate the exact implementation branch names',
+    'new canonical initial plan review and sequence-zero execution context',
+    'patch-id and implementation-tree equivalence',
+    'must not cherry-pick the superseded plan review or execution-context artifacts',
+    'Task 7 broad gate remains blocked',
+  ]) assert(plan.includes(required), required)
+
+  assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
+  assert.match(plan, /old review and context bytes remain historical only and cannot authorize the replacement branches/)
+  assert.match(plan, /the replacement CC branch starts at the newly reviewed merged plan commit/)
+  assert.match(plan, /the replacement Sub2API branch starts at freshly fetched `muqihang\/main`/)
+  assert.match(plan, /replay only the enumerated reviewed Task 1-6 implementation commits and the Task 7 quarantine checkpoint/)
+  assert.match(plan, /rerun the task-scoped tests plus planning, P0\.1, three isolated full-suite passes, and build/)
 })
 
 test('Phase 1 final handoff is minted only after merged-main recapture and a receipt chain', async () => {

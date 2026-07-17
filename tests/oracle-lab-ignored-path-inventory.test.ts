@@ -274,8 +274,10 @@ writePair(policyMidnightRoot, { date: '2026-07-14' })
 assert.ok(compareIgnoredPathInventories(policyMidnightBefore, inventory(policyMidnightRoot), 'sub2api_joint_safe_deliverable_v1', new Date('2026-07-13T23:59:00'), new Date('2026-07-14T00:01:00')).observation)
 
 const projectRoot = path.resolve(new URL('..', import.meta.url).pathname)
+const projectBuildEnvironment = { ...process.env, npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false' }
+execFileSync('npm', ['run', 'build'], { cwd: projectRoot, env: projectBuildEnvironment, stdio: 'pipe' })
 const buildBefore = inventory(projectRoot)
-execFileSync('npm', ['run', 'build'], { cwd: projectRoot, env: { ...process.env, npm_config_offline: 'true', npm_config_audit: 'false', npm_config_fund: 'false' }, stdio: 'pipe' })
+execFileSync('npm', ['run', 'build'], { cwd: projectRoot, env: projectBuildEnvironment, stdio: 'pipe' })
 const buildAfter = inventory(projectRoot)
 assert.deepEqual(
   compareIgnoredPathInventories(buildBefore, buildAfter, 'none', new Date('2026-07-13T00:00:00'), new Date('2026-07-13T00:01:00')),
