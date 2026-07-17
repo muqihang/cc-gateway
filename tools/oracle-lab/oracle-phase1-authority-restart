@@ -36,13 +36,12 @@ select_tool() {
 
 node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
 git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
-npm_executable=$(select_tool /opt/homebrew/bin/npm /usr/local/bin/npm /usr/bin/npm) || fail_startup
-tsx_cli=$repository_root/node_modules/tsx/dist/cli.mjs
-typescript_entry=$repository_root/tools/oracle-lab/phase-1-authority-restart.ts
+bootstrap_entry=$repository_root/tools/oracle-lab/phase-1-authority-bootstrap.mjs
 
 for file in \
   docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json \
   tools/oracle-lab/oracle-phase1-authority-restart \
+  tools/oracle-lab/phase-1-authority-bootstrap.mjs \
   tools/oracle-lab/phase-1-authority-restart.ts \
   tools/oracle-lab/secure-runtime.ts \
   package-lock.json
@@ -52,20 +51,11 @@ do
   [ "$current_oid" = "$reviewed_oid" ] || fail_startup
 done
 
-/usr/bin/env -i \
-  HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${npm_executable%/*}:/usr/bin:/bin" \
-  LANG=C LC_ALL=C TZ=UTC CI=1 \
-  npm_config_offline=true npm_config_audit=false npm_config_fund=false \
-  npm_config_userconfig=/dev/null npm_config_globalconfig=/nonexistent/oracle-lab-empty-global-npmrc \
-  "$npm_executable" ci --offline --ignore-scripts --prefix "$repository_root" || fail_startup
-
-[ -f "$tsx_cli" ] && [ ! -L "$tsx_cli" ] && [ -f "$typescript_entry" ] && [ ! -L "$typescript_entry" ] || fail_startup
+[ -f "$bootstrap_entry" ] && [ ! -L "$bootstrap_entry" ] || fail_startup
 
 exec /usr/bin/env -i \
   HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${git_executable%/*}:/usr/bin:/bin" \
   LANG=C LC_ALL=C TZ=UTC \
-  npm_config_offline=true npm_config_audit=false npm_config_fund=false \
-  npm_config_userconfig=/dev/null npm_config_globalconfig=/nonexistent/oracle-lab-empty-global-npmrc \
   ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1 \
   ORACLE_P0_1_NODE="$node_executable" ORACLE_P0_1_GIT="$git_executable" \
-  "$node_executable" "$tsx_cli" "$typescript_entry" "$@"
+  "$node_executable" "$bootstrap_entry" "$@"

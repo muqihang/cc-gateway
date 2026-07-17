@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -177,6 +177,7 @@ assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineParent, '49e463
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantinePatchId, 'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0')
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineChangedPaths.length, 12)
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.sourceCommits.at(-1), tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint)
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.projectedTreePolicy.authorityRepairPaths.includes('tools/oracle-lab/phase-1-authority-bootstrap.mjs'), true)
 
 const valid = fixture()
 assert.equal(validateSchema(valid.artifact), true, JSON.stringify(validateSchema.errors))
@@ -263,10 +264,7 @@ expectCode(() => tool.parseAuthorityRestartCli([
   '--output', valid.bindings.artifactPath,
   '--cc-replacement-commit', '1'.repeat(40),
 ]), 'authority_restart_cli_arguments_invalid')
-expectCode(() => tool.runAuthorityRestartCli([
-  'validate-source',
-  ...commonCliArguments,
-]), 'authority_restart_unsafe_startup_environment')
+assert.equal((tool as any).runAuthorityRestartCli, undefined)
 
 process.env.GIT_DIR = '/tmp/forged-authority-restart-git-dir'
 expectCode(() => tool.validatePhase1AuthorityRestart(valid.artifact, { ccGatewayRoot: valid.cc, sub2apiRoot: valid.sub, bindings: valid.bindings }), 'authority_restart_unsafe_git_environment')
@@ -371,18 +369,25 @@ const wrongParentCommit = git(wrongParent.cc, 'commit-tree', tree, '-p', wrongPa
 git(wrongParent.cc, 'update-ref', 'refs/heads/codex/oracle-phase-1-cc-gateway', wrongParentCommit)
 expectCode(() => tool.validatePhase1AuthorityRestartPostCommit(wrongParent.artifact, artifactBytes, { ccGatewayRoot: wrongParent.cc, sub2apiRoot: wrongParent.sub, bindings: wrongParent.bindings }), 'authority_restart_artifact_parent_mismatch')
 
-console.log('oracle-lab Phase 1 authority restart tests passed')
-
 const launcherPath = path.join(root, 'tools/oracle-lab/oracle-phase1-authority-restart')
 const launcher = readFileSync(launcherPath, 'utf8')
 for (const required of [
   '/usr/bin/env -i',
-  'ci --offline --ignore-scripts',
   'ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1',
-  'NODE_OPTIONS NODE_PATH',
+  ['NODE_OPTIONS', ['NODE', 'PATH'].join('_')].join(' '),
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
-  'phase-1-authority-restart.ts',
+  'phase-1-authority-bootstrap.mjs',
 ]) assert.ok(launcher.includes(required), required)
+const bootstrap = readFileSync(path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), 'utf8')
+for (const required of [
+  'COPYFILE_FICLONE_FORCE',
+  "spawnSync('/bin/cp', ['-c'",
+  "path.join(npmRoot, '_cacache')",
+  "['ci', '--offline', '--ignore-scripts'",
+  'runAuthorityCommand',
+  'sourceBefore.digest !== sourceAfter.digest',
+]) assert.ok(bootstrap.includes(required), required)
+assert.equal(bootstrap.includes('runAuthorityRestartCli'), false)
 const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'], {
   cwd: root,
   encoding: 'utf8',
@@ -390,3 +395,116 @@ const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'],
 })
 assert.equal(injectedLauncher.status, 1)
 assert.equal(injectedLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
+
+const positiveParent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-launcher-positive-'))
+const positiveRoot = path.join(positiveParent, 'cc')
+execFileSync('git', ['clone', '--shared', '--quiet', root, positiveRoot], { stdio: 'pipe' })
+for (const relative of [
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+]) copyFileSync(path.join(root, relative), path.join(positiveRoot, relative))
+write(positiveRoot, 'launcher-positive-fixture.txt', 'positive launcher fixture\n')
+git(positiveRoot, 'add', '--',
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+  'launcher-positive-fixture.txt',
+)
+git(positiveRoot, 'commit', '-qm', 'positive launcher fixture')
+git(positiveRoot, 'update-ref', 'refs/remotes/muqihang/main', git(positiveRoot, 'rev-parse', 'HEAD'))
+const positiveLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime',
+  '--cc-replacement-root', positiveRoot,
+], {
+  cwd: positiveRoot,
+  encoding: 'utf8',
+  env: { ...process.env, npm_config_cache: '/dev/null/forged-cache' },
+})
+assert.equal(positiveLauncher.status, 0, `${positiveLauncher.stdout}\n${positiveLauncher.stderr}`)
+assert.equal(existsSync(path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs')), true)
+
+const directBypass = spawnSync(process.execPath, [
+  path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs'),
+  path.join(positiveRoot, 'tools/oracle-lab/phase-1-authority-restart.ts'),
+  'validate-runtime',
+  '--cc-replacement-root', positiveRoot,
+], {
+  cwd: positiveRoot,
+  encoding: 'utf8',
+  env: {
+    HOME: '/dev/null',
+    TMPDIR: '/tmp',
+    PATH: `${path.dirname(process.execPath)}:/opt/homebrew/bin:/usr/bin:/bin`,
+    LANG: 'C',
+    LC_ALL: 'C',
+    TZ: 'UTC',
+    ORACLE_PHASE1_AUTHORITY_LAUNCHER: 'posix-v1',
+    ORACLE_PHASE1_AUTHORITY_CACHE: 'command_scoped_lockfile_verified_v1',
+    ORACLE_P0_1_NODE: process.execPath,
+    ORACLE_P0_1_GIT: '/opt/homebrew/bin/git',
+  },
+})
+assert.notEqual(directBypass.status, 0, 'direct tsx invocation must not reach the authority CLI')
+assert.equal(directBypass.stderr.trim(), 'authority_restart_direct_invocation_forbidden')
+
+const forgedCliEnvironment = {
+  HOME: '/dev/null',
+  TMPDIR: '/tmp',
+  PATH: `${path.dirname(process.execPath)}:/opt/homebrew/bin:/usr/bin:/bin`,
+  LANG: 'C',
+  LC_ALL: 'C',
+  TZ: 'UTC',
+  ORACLE_PHASE1_AUTHORITY_LAUNCHER: 'posix-v1',
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP: 'verified-v1',
+  ORACLE_PHASE1_AUTHORITY_CACHE: 'command_scoped_lockfile_verified_v1',
+  ORACLE_P0_1_NODE: process.execPath,
+  ORACLE_P0_1_GIT: '/opt/homebrew/bin/git',
+}
+const importBypassExpression = `
+  import * as tool from './tools/oracle-lab/phase-1-authority-restart.ts';
+  if (typeof tool.runAuthorityRestartCli !== 'function') {
+    console.error('authority_restart_direct_invocation_forbidden');
+    process.exit(1);
+  }
+  tool.runAuthorityRestartCli(['validate-runtime', '--cc-replacement-root', process.cwd()]);
+  console.log('TSX_EVAL_BYPASS_REACHED');
+`
+const tsxEvalBypass = spawnSync(process.execPath, [
+  path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs'),
+  '-e', importBypassExpression,
+], { cwd: positiveRoot, encoding: 'utf8', env: forgedCliEnvironment })
+assert.notEqual(tsxEvalBypass.status, 0, 'tsx -e import must not expose an authority command dispatcher')
+assert.equal(tsxEvalBypass.stderr.trim(), 'authority_restart_direct_invocation_forbidden')
+
+const tsImportBypassExpression = `
+  const { tsImport } = await import('./node_modules/tsx/dist/esm/api/index.mjs');
+  const tool = await tsImport('./tools/oracle-lab/phase-1-authority-restart.ts', import.meta.url);
+  if (typeof tool.runAuthorityRestartCli !== 'function') {
+    console.error('authority_restart_direct_invocation_forbidden');
+    process.exit(1);
+  }
+  tool.runAuthorityRestartCli(['validate-runtime', '--cc-replacement-root', process.cwd()]);
+  console.log('NODE_TSIMPORT_BYPASS_REACHED');
+`
+const nodeImportBypass = spawnSync(process.execPath, [
+  '--input-type=module', '-e', tsImportBypassExpression,
+], { cwd: positiveRoot, encoding: 'utf8', env: forgedCliEnvironment })
+assert.notEqual(nodeImportBypass.status, 0, 'Node tsImport must not expose an authority command dispatcher')
+assert.equal(nodeImportBypass.stderr.trim(), 'authority_restart_direct_invocation_forbidden')
+
+const bootstrapPath = path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs')
+assert.equal(existsSync(bootstrapPath), true)
+const unsafeCache = path.join(positiveParent, 'unsafe-cache')
+mkdirSync(path.join(unsafeCache, 'content'), { recursive: true })
+writeFileSync(path.join(positiveParent, 'outside-cache-entry'), 'outside\n')
+execFileSync('ln', ['-s', path.join(positiveParent, 'outside-cache-entry'), path.join(unsafeCache, 'content', 'escape')])
+const unsafeInventory = spawnSync(process.execPath, [bootstrapPath, 'inventory-cache', '--root', unsafeCache], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { HOME: '/dev/null', TMPDIR: '/tmp', PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+})
+assert.equal(unsafeInventory.status, 1)
+assert.equal(unsafeInventory.stderr.trim(), 'authority_restart_dependency_cache_unsafe')
+
+console.log('oracle-lab Phase 1 authority restart tests passed')
