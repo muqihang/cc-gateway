@@ -78,25 +78,60 @@ for (const mode of ['real-canary', 'production'] as const) {
   }
 }
 
-test('loopback HTTP remains limited to non-real mock modes', () => {
-  const config = baseConfig({
-    upstream: { url: 'http://127.0.0.1:43123' },
-    shared_pool: { upstream_mode: 'local-capture' },
+for (const url of [
+  'http://127.0.0.1:43123',
+  'http://127.42.7.9:43123',
+  'http://[::1]:43123',
+]) {
+  test(`canonical numeric loopback HTTP is allowed for local mock mode: ${url}`, () => {
+    const config = baseConfig({
+      upstream: { url },
+      shared_pool: { upstream_mode: 'local-capture' },
+    })
+    assert.deepEqual(resolveUpstreamTLSBoundary(config, {}), { real: false, requestOptions: {} })
   })
-  assert.deepEqual(resolveUpstreamTLSBoundary(config, {}), { real: false, requestOptions: {} })
-})
+}
 
-test('non-loopback HTTP is rejected outside real modes', () => {
-  const config = baseConfig({
-    upstream: { url: 'http://example.invalid' },
-    shared_pool: { upstream_mode: 'local-capture' },
+for (const [name, url] of [
+  ['non-loopback hostname', 'http://example.invalid:43123'],
+  ['localhost hostname', 'http://localhost:43123'],
+  ['localhost subdomain', 'http://mock.localhost:43123'],
+  ['localhost trailing dot', 'http://localhost.:43123'],
+  ['numeric loopback trailing dot', 'http://127.0.0.1.:43123'],
+  ['userinfo', 'http://user@127.0.0.1:43123'],
+  ['short IPv4 notation', 'http://127.1:43123'],
+  ['integer IPv4 notation', 'http://2130706433:43123'],
+  ['octal IPv4 notation', 'http://0177.0.0.1:43123'],
+  ['hex IPv4 notation', 'http://0x7f000001:43123'],
+  ['IPv4-mapped IPv6', 'http://[::ffff:127.0.0.1]:43123'],
+  ['expanded IPv6 loopback', 'http://[0:0:0:0:0:0:0:1]:43123'],
+] as const) {
+  test(`${name} cleartext upstream is rejected by resolver`, () => {
+    const config = baseConfig({
+      upstream: { url },
+      shared_pool: { upstream_mode: 'local-capture' },
+    })
+    assert.throws(
+      () => resolveUpstreamTLSBoundary(config, {}),
+      (error: unknown) => error instanceof ConfigValidationError
+        && error.code === 'upstream_http_loopback_required',
+    )
   })
-  assert.throws(
-    () => resolveUpstreamTLSBoundary(config, {}),
-    (error: unknown) => error instanceof ConfigValidationError
-      && error.code === 'upstream_http_loopback_required',
-  )
-})
+
+  test(`${name} cleartext upstream is rejected by startProxy before startup effects`, () => {
+    const config = baseConfig({
+      upstream: { url },
+      shared_pool: { upstream_mode: 'local-capture' },
+    })
+    const observed = observedStartupPrimitives()
+    assert.throws(
+      () => startProxy(config, observed.primitives),
+      (error: unknown) => error instanceof ConfigValidationError
+        && error.code === 'upstream_http_loopback_required',
+    )
+    assert.deepEqual(observed.calls, [])
+  })
+}
 
 test('unsupported upstream protocols are rejected before startup effects', () => {
   const config = baseConfig({

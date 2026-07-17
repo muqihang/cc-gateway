@@ -3,7 +3,7 @@ import { createHmac } from 'crypto'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { startProxy } from '../src/proxy.js'
+import { createInertDirectRequestHarness, startProxy } from '../src/proxy.js'
 import { getSharedPoolMaxBodyBytes } from '../src/policy.js'
 import { evaluateCanaryCostEnvelope } from '../src/canary-cost-gate.js'
 import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
@@ -158,6 +158,74 @@ function liteBody(overrides: Record<string, unknown> = {}) {
     output_config: { effort: 'low' },
     context_management: { edits: [] },
     ...overrides,
+  }
+}
+
+function realModeConfig(
+  mode: 'real-canary' | 'production',
+  sharedPoolOverrides: Record<string, unknown> = {},
+) {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
+  base.upstream = {
+    url: 'https://api.anthropic.com',
+    tls: { verification: 'required', trust_store: 'system' },
+  }
+  base.shared_pool = {
+    upstream_mode: mode,
+    real_canary_user_approved: mode === 'real-canary',
+    production_upstream_enabled: mode === 'production',
+    billing_cch_mode: 'sign',
+    context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
+    context_attestation_secret: attestationSecret,
+    signing_enabled: true,
+    signing_evidence_gates_approved: true,
+    ...(mode === 'production'
+      ? { production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true } }
+      : {}),
+    ...sharedPoolOverrides,
+  } as any
+  return base
+}
+
+async function withRealModeRequest(input: {
+  mode: 'real-canary' | 'production'
+  body: unknown
+  requestHeaders?: Record<string, string>
+  sharedPoolOverrides?: Record<string, unknown>
+}) {
+  const previousCanary = process.env.ALLOW_REAL_ANTHROPIC_CANARY
+  const previousProduction = process.env.ALLOW_REAL_ANTHROPIC_PRODUCTION
+  const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+  const harness = createInertDirectRequestHarness()
+  let gateway: ReturnType<typeof startProxy> | undefined
+  try {
+    if (input.mode === 'real-canary') process.env.ALLOW_REAL_ANTHROPIC_CANARY = '1'
+    if (input.mode === 'production') {
+      process.env.ALLOW_REAL_ANTHROPIC_PRODUCTION = '1'
+      process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = join(
+        mkdtempSync(join(tmpdir(), 'cc-gateway-real-mode-ledger-')),
+        'formal-pool-session-ledger.json',
+      )
+    }
+    gateway = startProxy(
+      realModeConfig(input.mode, input.sharedPoolOverrides),
+      undefined,
+      harness,
+    )
+    await waitForListening(gateway)
+    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
+      headers: input.requestHeaders ?? signedHeaders(),
+      body: input.body,
+    })
+    return { response, attempts: harness.observations() }
+  } finally {
+    if (gateway) await close(gateway)
+    if (previousCanary === undefined) delete process.env.ALLOW_REAL_ANTHROPIC_CANARY
+    else process.env.ALLOW_REAL_ANTHROPIC_CANARY = previousCanary
+    if (previousProduction === undefined) delete process.env.ALLOW_REAL_ANTHROPIC_PRODUCTION
+    else process.env.ALLOW_REAL_ANTHROPIC_PRODUCTION = previousProduction
+    if (previousLedgerFile === undefined) delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
+    else process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = previousLedgerFile
   }
 }
 
@@ -472,6 +540,111 @@ test('trusted routing does not relax real-canary candidate model rollout control
   const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }))))
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.code, 'canary_cost_envelope_model_blocked')
+})
+
+test('production request path forwards rich body once with verified direct TLS options', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'production',
+    body: liteBody({
+      max_tokens: 32000,
+      tools: Array.from({ length: 30 }, (_, index) => ({ name: `tool_${index}`, description: 'local', input_schema: { type: 'object' } })),
+      thinking: { type: 'adaptive' },
+      context_management: { edits: [{ type: 'clear_thinking_20251015', keep: 'all' }] },
+      system: [{ type: 'text', text: 'x'.repeat(2 * 1024 * 1024 + 1024) }],
+      stream: true,
+    }),
+  })
+  assert.equal(response.status, 200, response.body)
+  assert.equal(attempts.length, 1)
+  assert.equal(attempts[0].protocol, 'https:')
+  assert.equal(attempts[0].hostname, 'api.anthropic.com')
+  assert.equal(attempts[0].rejectUnauthorized, true)
+})
+
+test('real-canary request path allows Opus 4.7 and observes one verified TLS attempt', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'real-canary',
+    body: liteBody({ model: 'claude-opus-4-7', max_tokens: 1024 }),
+  })
+  assert.equal(response.status, 200, response.body)
+  assert.equal(attempts.length, 1)
+  assert.equal(attempts[0].rejectUnauthorized, true)
+})
+
+test('real-canary request path rejects default max-token overflow before transport', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'real-canary',
+    body: liteBody({ max_tokens: 32000 }),
+  })
+  assert.equal(response.status, 403, response.body)
+  assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_max_tokens_exceeded')
+  assert.equal(attempts.length, 0)
+})
+
+test('real-canary request path rejects invalid gateway authentication before transport', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'real-canary',
+    requestHeaders: signedHeaders({ ...headers, 'x-cc-gateway-token': 'wrong-gateway-token' }),
+    body: liteBody(),
+  })
+  assert.equal(response.status, 401, response.body)
+  assert.equal(response.headers['x-cc-gateway-error-code'], 'missing_gateway_token')
+  assert.equal(attempts.length, 0)
+})
+
+test('real-canary request path rejects missing scheduler attestation before transport', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'real-canary',
+    requestHeaders: { ...headers },
+    body: liteBody(),
+  })
+  assert.equal(response.status, 403, response.body)
+  assert.equal(response.headers['x-cc-gateway-error-code'], 'missing_formal_pool_context_attestation')
+  assert.equal(attempts.length, 0)
+})
+
+test('real-canary trusted routing controls candidate model transport eligibility', async () => {
+  const candidateModel = 'claude-opus-9-9'
+  const controls = {
+    candidate_model_allowlist: [candidateModel],
+    candidate_model_replay_proofs: { [candidateModel]: 'fixture-opus-99' },
+    candidate_model_kill_switches: { [candidateModel]: false },
+    candidate_model_audit_budgets: { [candidateModel]: 1 },
+  }
+  const untrusted = await withRealModeRequest({
+    mode: 'real-canary',
+    body: liteBody({ model: candidateModel, max_tokens: 1024 }),
+    sharedPoolOverrides: controls,
+  })
+  assert.equal(untrusted.response.status, 403, untrusted.response.body)
+  assert.equal(untrusted.response.headers['x-cc-gateway-error-code'], 'persona_reject_untrusted_model')
+  assert.equal(untrusted.attempts.length, 0)
+
+  const trusted = await withRealModeRequest({
+    mode: 'real-canary',
+    requestHeaders: trustedSignedHeaders(),
+    body: liteBody({ model: candidateModel, max_tokens: 1024 }),
+    sharedPoolOverrides: controls,
+  })
+  assert.equal(trusted.response.status, 200, trusted.response.body)
+  assert.equal(trusted.attempts.length, 1)
+  assert.equal(trusted.attempts[0].rejectUnauthorized, true)
+})
+
+test('real-canary trusted request still rejects missing rollout proof before transport', async () => {
+  const { response, attempts } = await withRealModeRequest({
+    mode: 'real-canary',
+    requestHeaders: trustedSignedHeaders(),
+    body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
+    sharedPoolOverrides: {
+      candidate_model_allowlist: ['claude-opus-4-8'],
+      candidate_model_kill_switches: { 'claude-opus-4-8': false },
+      candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
+    },
+  })
+  assert.equal(response.status, 403, response.body)
+  assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_model_blocked')
+  assert.equal(attempts.length, 0)
 })
 
 await finish()
