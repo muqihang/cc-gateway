@@ -1510,8 +1510,10 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
     'Phase1ExternalDependencyTransition',
     'Phase1ExternalDependencyChainBinding',
     'Phase1ExternalDependencyEvidenceReference',
+    'Phase1NpmCachePreparation',
     'phase1_external_dependency_content_v1',
-    'npm_ci_offline_ignore_scripts_and_go_mod_verify_v1',
+    'npm_ci_offline_authenticated_cache_and_go_mod_verify_v2',
+    'os_account_cow_cache_v1',
     'command_scoped_empty_mkdtemp_v1',
     'external_dependency_drift',
   ]) assert(plan.includes(required), required)
@@ -1524,7 +1526,11 @@ test('Phase 1 H1 binds ignored state and repeats the isolated full suite', async
   assert.match(plan, /external_dependency_transition: Phase1ExternalDependencyTransition/)
   assert.match(plan, /external_dependency_chain: Phase1ExternalDependencyChainBinding/)
   assert.match(plan, /feature review, integration entry, handoff, receipt, and final-remote artifacts each embed `Phase1ExternalDependencyEvidenceReference`/i)
-  assert.match(plan, /npm ci --offline --ignore-scripts/)
+  assert.match(plan, /npm ci --offline --ignore-scripts --cache <command-scoped-cache>/)
+  assert.match(plan, /source_before_digest.*source_after_digest.*command_before_digest.*command_after_digest.*install_result_digest/s)
+  assert.match(plan, /source race.*symlink.*special file.*group[/]world writable.*missing tarball.*command-cache drift/s)
+  assert.match(plan, /never persists.*absolute npm-cache path/i)
+  assert.match(plan, /listed transitive module without `Dir` remains identity-bound.*replacement without a real selected directory still fails/s)
   assert.match(plan, /go mod verify/)
   assert.match(plan, /mkdtemp\('\/tmp\/oracle-lab-phase1-go-build-'\)/)
   assert.match(plan, /unsafe_full_suite_build_cache/)
