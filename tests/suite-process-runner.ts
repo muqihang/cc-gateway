@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { realpathSync, statSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,6 +52,15 @@ export function buildClosedFullSuiteEnvironment(source: NodeJS.ProcessEnv): Node
   } catch {
     fail('full_suite_dependency_cache_unavailable', 'the reviewed offline Go module cache is unavailable')
   }
+  const goBuildCache = mkdtempSync('/tmp/oracle-lab-phase1-go-build-')
+  const goBuildCacheStat = lstatSync(goBuildCache)
+  if (!goBuildCacheStat.isDirectory()
+    || goBuildCacheStat.isSymbolicLink()
+    || (typeof process.getuid === 'function' && goBuildCacheStat.uid !== process.getuid())
+    || (goBuildCacheStat.mode & 0o077) !== 0
+    || readdirSync(goBuildCache).length !== 0) {
+    fail('unsafe_full_suite_build_cache', 'the command-scoped Go build cache is not exclusive, owned, and empty')
+  }
 
   const environment: NodeJS.ProcessEnv = {
     PATH: [localExecutableDirectory, path.dirname(process.execPath), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
@@ -72,7 +81,7 @@ export function buildClosedFullSuiteEnvironment(source: NodeJS.ProcessEnv): Node
     GOSUMDB: 'off',
     GOTOOLCHAIN: 'local',
     GOMODCACHE: goModuleCache,
-    GOCACHE: `/tmp/oracle-lab-phase1-go-build-${process.pid}`,
+    GOCACHE: goBuildCache,
     HTTP_PROXY: 'http://127.0.0.1:9',
     HTTPS_PROXY: 'http://127.0.0.1:9',
     ALL_PROXY: 'http://127.0.0.1:9',
@@ -87,6 +96,26 @@ export function buildClosedFullSuiteEnvironment(source: NodeJS.ProcessEnv): Node
     environment.SUB2API_FORMAL_POOL_CONTRACT_PATH = contractPath
   }
   return environment
+}
+
+function verifyClosedFullSuiteGoDependencies(environment: NodeJS.ProcessEnv): void {
+  let goExecutable: string
+  try {
+    goExecutable = realpathSync('/opt/homebrew/bin/go')
+  } catch {
+    fail('full_suite_dependency_cache_unavailable', 'the reviewed Go executable is unavailable')
+  }
+  const moduleRoot = fileURLToPath(new URL('../sidecar/egress-tls-sidecar/', import.meta.url))
+  const observed = spawnSync(goExecutable, ['mod', 'verify'], {
+    cwd: moduleRoot,
+    encoding: 'utf8',
+    env: { ...environment },
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (observed.error || observed.signal !== null || observed.status !== 0) {
+    fail('full_suite_dependency_verification_failed', 'offline Go module verification failed')
+  }
 }
 
 export function defaultSuiteProcessSpecifications(): readonly SuiteProcessSpecification[] {
@@ -113,12 +142,14 @@ export function runSerialSuiteProcesses(
     if (specification.label.length === 0 || specification.argv.length === 0) {
       fail('invalid_suite_process', 'suite process label and argv are required')
     }
+    const environment = options.environment === undefined
+      ? buildClosedFullSuiteEnvironment(process.env)
+      : { ...options.environment }
+    if (options.environment === undefined) verifyClosedFullSuiteGoDependencies(environment)
     const observed = spawnSync(specification.argv[0], specification.argv.slice(1), {
       cwd: options.cwd,
       encoding: 'utf8',
-      env: options.environment === undefined
-        ? buildClosedFullSuiteEnvironment(process.env)
-        : { ...options.environment },
+      env: environment,
       shell: false,
       stdio: options.stdio ?? 'inherit',
     })

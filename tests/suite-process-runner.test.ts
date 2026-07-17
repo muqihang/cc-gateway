@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { lstatSync, readdirSync } from 'node:fs'
 import test from 'node:test'
 
 import {
@@ -17,6 +18,7 @@ test('default full-suite child environment is closed and preserves only the dedi
     ORACLE_LAB_MANIFEST_PATH: '/tmp/forged.json',
     PHASE1_REQUIRE_EXECUTION_CONTEXT: '1',
     GIT_DIR: '/tmp/forged-git',
+    GOCACHE: '/tmp/preseeded-go-cache',
     npm_config_userconfig: '/tmp/forged-npmrc',
   })
 
@@ -34,7 +36,17 @@ test('default full-suite child environment is closed and preserves only the dedi
   assert.equal(observed.GOPROXY, 'off')
   assert.equal(observed.GOFLAGS, '-mod=readonly')
   assert.match(observed.GOMODCACHE ?? '', /^\//)
-  assert.match(observed.GOCACHE ?? '', /^\/tmp\/oracle-lab-phase1-go-build-[0-9]+$/)
+  assert.match(observed.GOCACHE ?? '', /^\/tmp\/oracle-lab-phase1-go-build-[A-Za-z0-9_-]+$/)
+  assert.notEqual(observed.GOCACHE, '/tmp/preseeded-go-cache')
+  const second = buildClosedFullSuiteEnvironment({ SUB2API_FORMAL_POOL_CONTRACT_PATH: contractPath })
+  assert.notEqual(second.GOCACHE, observed.GOCACHE)
+  for (const cache of [observed.GOCACHE, second.GOCACHE]) {
+    const stat = lstatSync(cache ?? '')
+    assert.equal(stat.isDirectory(), true)
+    assert.equal(stat.isSymbolicLink(), false)
+    assert.equal(stat.mode & 0o077, 0)
+    assert.deepEqual(readdirSync(cache ?? ''), [])
+  }
 })
 
 test('full-suite launcher rejects inherited Node loader and dynamic-library startup injection', () => {
