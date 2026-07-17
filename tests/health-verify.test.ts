@@ -1,6 +1,6 @@
 import { strict as assert } from 'assert'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/health-verify.test.ts')
 
@@ -17,6 +17,7 @@ function assertNoSecretLeak(body: string) {
 
 test('standalone health reflects missing OAuth state without leaking tokens', async () => {
   const gateway = startProxy(baseConfig({ oauth: { refresh_token: 'refresh-token' } } as any))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/_health'))
     assert.equal(response.status, 503)
@@ -33,6 +34,7 @@ test('sub2api health does not require gateway OAuth and does not leak tokens', a
     auth: { gateway_token: 'gateway-token', tokens: [] },
     oauth: undefined,
   } as any))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/_health'), {
       headers: {
@@ -51,6 +53,7 @@ test('sub2api health does not require gateway OAuth and does not leak tokens', a
 
 test('standalone verify uses legacy x-api-key auth without leaking token values', async () => {
   const gateway = startProxy(baseConfig())
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/_verify'), {
       headers: { 'x-api-key': 'client-token' },
@@ -68,6 +71,7 @@ test('sub2api verify uses x-cc-gateway-token without leaking credential headers'
     auth: { gateway_token: 'gateway-token', tokens: [] },
     oauth: undefined,
   } as any))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/_verify'), {
       headers: {

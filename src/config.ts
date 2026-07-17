@@ -4,6 +4,9 @@ import { parse } from 'yaml'
 import { resolve } from 'path'
 import { assertNoRawTLSProfileMaterial, isSafeTLSProfileRef, validateTLSProfilesConfig, type TLSProfileConfig } from './egress-tls-profile.js'
 import { validateEgressSidecarConfig, type EgressSidecarConfig } from './egress-sidecar-client.js'
+import type { RemoteListenConfig } from './listener-boundary.js'
+import { resolveListenerBoundary } from './listener-boundary.js'
+import { resolveUpstreamTLSBoundary } from './upstream-tls-boundary.js'
 
 export type TokenEntry = {
   name: string
@@ -75,6 +78,7 @@ export type Config = {
   server: {
     port: number
     host?: string
+    remote_listen?: RemoteListenConfig
     tls: {
       cert: string
       key: string
@@ -82,6 +86,10 @@ export type Config = {
   }
   upstream: {
     url: string
+    tls?: {
+      verification?: 'required'
+      trust_store?: 'system'
+    }
   }
   providers: {
     anthropic: boolean
@@ -614,6 +622,8 @@ export function loadConfig(configPath?: string): Config {
   }
 
   validateFormalPoolMode(config)
+  resolveListenerBoundary(config)
+  resolveUpstreamTLSBoundary(config, process.env)
 
   return config
 }

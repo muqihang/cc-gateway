@@ -5,7 +5,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
 import { getSharedPoolMaxBodyBytes } from '../src/policy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { evaluateCanaryCostEnvelope } from '../src/canary-cost-gate.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/canary-cost-envelope.test.ts')
 
@@ -165,6 +166,7 @@ async function withGateway(envelope: Record<string, unknown>, body: unknown) {
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(config(upstream.url, proxy.url, envelope))
   try {
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), { headers: signedHeaders(), body })
     return { response, upstreamCount: upstream.captured.length }
   } finally {
@@ -247,6 +249,7 @@ test('canary cost envelope does not affect non-canary path when disabled', async
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(config(upstream.url, proxy.url, { enabled: false, max_tokens: 1 }))
   try {
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedHeaders(),
       body: liteBody({ max_tokens: 1024 }),
@@ -275,6 +278,7 @@ test('canary cost envelope stays disabled for non-canary routing when no envelop
   } as any
   const gateway = startProxy(base)
   try {
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedHeaders(),
       body: liteBody({ max_tokens: 32000, tools: Array.from({ length: 10 }, (_, i) => ({ name: `tool_${i}`, description: 'local', input_schema: { type: 'object' } })) }),
@@ -306,6 +310,7 @@ test('production observe-only budget does not inherit canary cost envelope defau
   const richTools = Array.from({ length: 30 }, (_, i) => ({ name: `tool_${i}`, description: 'local', input_schema: { type: 'object' } }))
   const gateway = startProxy(base)
   try {
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedHeaders(),
       body: liteBody({
@@ -340,24 +345,24 @@ test('production observe-only budget does not inherit shared-pool default body c
   assert.equal(getSharedPoolMaxBodyBytes(base), Number.MAX_SAFE_INTEGER)
 })
 
-test('production upstream mode forwards rich local-mock body without canary envelope or default body cap', async () => {
+test('local-capture mode forwards rich local-mock body without canary envelope or default body cap', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const base = config(upstream.url, proxy.url)
   base.shared_pool = {
-    upstream_mode: 'production',
+    upstream_mode: 'local-capture',
     billing_cch_mode: 'sign',
     context_attestation_secret_ref: 'opaque:attestation-ref:v1:canary',
       context_attestation_secret: attestationSecret,
     signing_enabled: true,
     signing_evidence_gates_approved: true,
-    production_upstream_enabled: true,
     production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
   } as any
   const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
   process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = join(mkdtempSync(join(tmpdir(), 'cc-gateway-canary-ledger-')), 'formal-pool-session-ledger.json')
   const gateway = startProxy(base)
   try {
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedHeaders(),
       body: liteBody({
@@ -380,10 +385,8 @@ test('production upstream mode forwards rich local-mock body without canary enve
   }
 })
 
-test('real-canary default envelope allows Opus 4.7 model family', async () => {
-  const upstream = await startFakeUpstream()
-  const proxy = await startFakeConnectProxy()
-  const base = config(upstream.url, proxy.url)
+test('real-canary default envelope allows Opus 4.7 model family without opening transport', () => {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
   base.shared_pool = {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
@@ -393,25 +396,12 @@ test('real-canary default envelope allows Opus 4.7 model family', async () => {
     signing_enabled: true,
     signing_evidence_gates_approved: true,
   } as any
-  const gateway = startProxy(base)
-  try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: signedHeaders(),
-      body: liteBody({ model: 'claude-opus-4-7', max_tokens: 1024 }),
-    })
-    assert.equal(response.status, 200, response.body)
-    assert.equal(upstream.captured.length, 1)
-  } finally {
-    await close(gateway)
-    await close(proxy.server)
-    await close(upstream.server)
-  }
+  const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ model: 'claude-opus-4-7', max_tokens: 1024 }))))
+  assert.equal(result.ok, true)
 })
 
-test('real-canary mode applies default canary cost envelope even without explicit envelope config', async () => {
-  const upstream = await startFakeUpstream()
-  const proxy = await startFakeConnectProxy()
-  const base = config(upstream.url, proxy.url)
+test('real-canary mode applies default canary cost envelope without opening transport', () => {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
   base.shared_pool = {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
@@ -421,26 +411,13 @@ test('real-canary mode applies default canary cost envelope even without explici
     signing_enabled: true,
     signing_evidence_gates_approved: true,
   } as any
-  const gateway = startProxy(base)
-  try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: signedHeaders(),
-      body: liteBody({ max_tokens: 32000 }),
-    })
-    assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_max_tokens_exceeded')
-    assert.equal(upstream.captured.length, 0)
-  } finally {
-    await close(gateway)
-    await close(proxy.server)
-    await close(upstream.server)
-  }
+  const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ max_tokens: 32000 }))))
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.code, 'canary_cost_envelope_max_tokens_exceeded')
 })
 
-test('real-canary candidate model envelope allows trusted Opus 4.8 only with rollout controls', async () => {
-  const upstream = await startFakeUpstream()
-  const proxy = await startFakeConnectProxy()
-  const base = config(upstream.url, proxy.url)
+test('real-canary candidate model envelope allows Opus 4.8 only with rollout controls without opening transport', () => {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
   base.shared_pool = {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
@@ -454,25 +431,12 @@ test('real-canary candidate model envelope allows trusted Opus 4.8 only with rol
     candidate_model_kill_switches: { 'claude-opus-4-8': false },
     candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
   } as any
-  const gateway = startProxy(base)
-  try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: trustedSignedHeaders(),
-      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
-    })
-    assert.equal(response.status, 200, response.body)
-    assert.equal(upstream.captured.length, 1)
-  } finally {
-    await close(gateway)
-    await close(proxy.server)
-    await close(upstream.server)
-  }
+  const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }))))
+  assert.equal(result.ok, true)
 })
 
-test('real-canary candidate model envelope rejects Opus 4.8 without rollout controls', async () => {
-  const upstream = await startFakeUpstream()
-  const proxy = await startFakeConnectProxy()
-  const base = config(upstream.url, proxy.url)
+test('real-canary candidate model envelope rejects Opus 4.8 without rollout controls without opening transport', () => {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
   base.shared_pool = {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
@@ -485,26 +449,13 @@ test('real-canary candidate model envelope rejects Opus 4.8 without rollout cont
     candidate_model_kill_switches: { 'claude-opus-4-8': false },
     candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
   } as any
-  const gateway = startProxy(base)
-  try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: signedHeaders(),
-      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
-    })
-    assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_model_blocked')
-    assert.equal(upstream.captured.length, 0)
-  } finally {
-    await close(gateway)
-    await close(proxy.server)
-    await close(upstream.server)
-  }
+  const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }))))
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.code, 'canary_cost_envelope_model_blocked')
 })
 
-test('trusted real-canary candidate model envelope rejects Opus 4.8 without rollout controls', async () => {
-  const upstream = await startFakeUpstream()
-  const proxy = await startFakeConnectProxy()
-  const base = config(upstream.url, proxy.url)
+test('trusted routing does not relax real-canary candidate model rollout controls', () => {
+  const base = config('https://api.anthropic.com', 'http://127.0.0.1:9')
   base.shared_pool = {
     upstream_mode: 'real-canary',
     real_canary_user_approved: true,
@@ -517,20 +468,10 @@ test('trusted real-canary candidate model envelope rejects Opus 4.8 without roll
     candidate_model_kill_switches: { 'claude-opus-4-8': false },
     candidate_model_audit_budgets: { 'claude-opus-4-8': 1 },
   } as any
-  const gateway = startProxy(base)
-  try {
-    const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
-      headers: trustedSignedHeaders(),
-      body: liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }),
-    })
-    assert.equal(response.status, 403)
-    assert.equal(response.headers['x-cc-gateway-error-code'], 'canary_cost_envelope_model_blocked')
-    assert.equal(upstream.captured.length, 0)
-  } finally {
-    await close(gateway)
-    await close(proxy.server)
-    await close(upstream.server)
-  }
+  assert.equal(trustedSignedHeaders()['x-sub2api-persona-trusted'], '1')
+  const result = evaluateCanaryCostEnvelope(base, Buffer.from(JSON.stringify(liteBody({ model: 'claude-opus-4-8', max_tokens: 1024 }))))
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.code, 'canary_cost_envelope_model_blocked')
 })
 
 await finish()

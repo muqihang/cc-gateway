@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/formal-pool-env-residue.test.ts')
 
@@ -222,6 +222,7 @@ async function withGateway<T>(fn: (gateway: ReturnType<typeof startProxy>, upstr
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sharedConfig(upstream.url, proxy.url, extraSharedPool))
+  await waitForListening(gateway)
   try {
     return await fn(gateway, upstream)
   } finally {
@@ -369,6 +370,7 @@ test('claude platform aws scoped path requires and verifies env residue refs', a
     anthropic_workspace_id: rawWorkspaceId,
   }
   const gateway = startProxy(awsConfig)
+  await waitForListening(gateway)
   try {
     const awsCtx = context({
       provider_kind: 'claude_platform_aws',

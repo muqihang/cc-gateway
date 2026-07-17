@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/claude-platform-aws-cp7-sigv4.test.ts')
 
@@ -227,6 +227,7 @@ test('claude platform aws sigv4 signs the final rewritten request with service a
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sigv4Config(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -273,6 +274,7 @@ test('claude platform aws sigv4 refuses to sign without explicit profile gate', 
       upstream_mode: 'local-capture',
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -298,6 +300,7 @@ test('claude platform aws sigv4 capture omits canonical request secrets workspac
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sigv4Config(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {

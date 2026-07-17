@@ -6,7 +6,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { request as httpRequest } from 'http'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 import { resolveFormalPoolContract, type SharedContractFixture as BaseSharedContractFixture } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
 
 console.log('\ntests/proxy-sub2api.test.ts')
@@ -334,6 +334,7 @@ test('formal-pool healthcheck accepts server-selected 2.1.197 persona with strea
     },
     env: { ...baseConfig().env, version: '2.1.197', version_base: '2.1.197' },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -385,6 +386,7 @@ test('sub2api Anthropic OAuth preserves selected authorization and strips all x-
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -415,6 +417,7 @@ test('runtime registration requires internal control token', async () => {
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -449,6 +452,7 @@ test('runtime registration requires account-owned device_id for formal-pool mapp
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const missing = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -485,6 +489,7 @@ test('runtime registration uses account-owned device_id in upstream metadata', a
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -544,6 +549,7 @@ test('runtime registration propagates strict TLS profile ref into dynamic egress
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -654,6 +660,7 @@ test('runtime registration backfills missing TLS profile ref on existing runtime
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -738,6 +745,7 @@ test('runtime registration makes a newly onboarded account routable without rest
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const before = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -800,6 +808,7 @@ test('runtime registration permits same-account credential rotation with fresh i
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const first = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -897,6 +906,7 @@ test('runtime registration permits safe 2.1.179 to 2.1.197 canonical promotion w
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const oldRuntime = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -983,6 +993,7 @@ test('runtime registration persists and replays after gateway restart', async ()
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const registered = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -1007,6 +1018,7 @@ test('runtime registration persists and replays after gateway restart', async ()
       account_identities: {},
       egress_buckets: {},
     }))
+    await waitForListening(gateway)
     const afterRestart = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
         ...runtimeHeaders,
@@ -1034,6 +1046,7 @@ test('runtime registration rejects mappings without credential binding refs', as
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const rejected = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -1075,6 +1088,7 @@ test('runtime registration rejects raw numeric account ids before mutating runti
     account_identities: {},
     egress_buckets: {},
   }))
+  await waitForListening(gateway)
 
   try {
     const rejected = await httpJson(serverUrl(gateway, '/_runtime/register-account'), {
@@ -1123,6 +1137,7 @@ test('raw capture evidence headers include safe opaque ref only when capture art
   })
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1171,6 +1186,7 @@ test('full raw capture writes only safe summaries and no raw body material', asy
   })
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1234,6 +1250,7 @@ test('disabled raw capture omits raw capture evidence ref header', async () => {
   })
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1272,6 +1289,7 @@ test('raw capture does not buffer streaming responses before first downstream ch
   })
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await streamPost(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1304,6 +1322,7 @@ test('sub2api Anthropic OAuth strips incidental x-api-key', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1343,6 +1362,7 @@ test('formal-pool attestation must bind credential ref to selected account ident
       },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1371,6 +1391,7 @@ test('formal-pool selected raw credential must match account credential binding 
   const config = attestedSub2apiConfig(upstream.url, proxy.url)
   config.account_identities!['account-1'].credential_binding_hmac = credentialBindingHmac('Bearer selected-token-good')
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   const sessionId = '123e4567-e89b-42d3-a456-426614174776'
 
   try {
@@ -1410,6 +1431,7 @@ test('formal-pool attestation must bind policy version to selected account ident
       },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1435,6 +1457,7 @@ test('formal-pool session rejects valid re-attestation that switches account aut
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const first = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1471,16 +1494,23 @@ test('formal-pool production fails closed when persistent session authority ledg
   const proxy = await startFakeConnectProxy()
   const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
   delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
-  const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url, {
-    shared_pool: {
-      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
-      context_attestation_secret: attestationSecret,
-      upstream_mode: 'production',
-      production_upstream_enabled: true,
-    },
-  }))
+  let gateway: ReturnType<typeof startProxy> | undefined
 
   try {
+    const productionLoopbackUrl = upstream.url.replace(/^http:/, 'https:')
+    gateway = startProxy(attestedSub2apiConfig(productionLoopbackUrl, proxy.url, {
+      upstream: {
+        url: productionLoopbackUrl,
+        tls: { verification: 'required', trust_store: 'system' },
+      },
+      shared_pool: {
+        context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+        context_attestation_secret: attestationSecret,
+        upstream_mode: 'production',
+        production_upstream_enabled: true,
+      },
+    }))
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
@@ -1496,7 +1526,7 @@ test('formal-pool production fails closed when persistent session authority ledg
   } finally {
     if (previousLedgerFile === undefined) delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
     else process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = previousLedgerFile
-    await close(gateway)
+    if (gateway) await close(gateway)
     await close(upstream.server)
     await close(proxy.server)
   }
@@ -1511,16 +1541,23 @@ test('formal-pool production fails closed when persistent session authority ledg
   writeFileSync(process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE, '{"version":1,"sessions":[]}')
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
-  const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url, {
-    shared_pool: {
-      context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
-      context_attestation_secret: attestationSecret,
-      upstream_mode: 'production',
-      production_upstream_enabled: true,
-    },
-  }))
+  let gateway: ReturnType<typeof startProxy> | undefined
 
   try {
+    const productionLoopbackUrl = upstream.url.replace(/^http:/, 'https:')
+    gateway = startProxy(attestedSub2apiConfig(productionLoopbackUrl, proxy.url, {
+      upstream: {
+        url: productionLoopbackUrl,
+        tls: { verification: 'required', trust_store: 'system' },
+      },
+      shared_pool: {
+        context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
+        context_attestation_secret: attestationSecret,
+        upstream_mode: 'production',
+        production_upstream_enabled: true,
+      },
+    }))
+    await waitForListening(gateway)
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: schedulerHeaders({
         authorization: 'Bearer selected-token',
@@ -1534,7 +1571,7 @@ test('formal-pool production fails closed when persistent session authority ledg
   } finally {
     if (previousLedgerFile === undefined) delete process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
     else process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = previousLedgerFile
-    await close(gateway)
+    if (gateway) await close(gateway)
     await close(upstream.server)
     await close(proxy.server)
   }
@@ -1547,6 +1584,7 @@ test('formal-pool session authority ledger persists safe refs without raw sessio
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const sessionId = '123e4567-e89b-42d3-a456-426614174013'
 
   try {
@@ -1590,6 +1628,7 @@ test('failed persistent session ledger write does not poison in-memory authority
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const session = '123e4567-e89b-42d3-a456-426614174015'
 
   try {
@@ -1635,6 +1674,7 @@ test('sub2api Anthropic API key preserves selected x-api-key and does not inject
   const config = sub2apiConfig(upstream.url, proxy.url)
   config.account_identities!['account-1'].credential_binding_hmac = credentialBindingHmac('selected-api-key', 'apikey')
   const gateway = startProxy(config)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1663,6 +1703,7 @@ test('sub2api Anthropic API key strips incidental authorization', async () => {
   const config = sub2apiConfig(upstream.url, proxy.url)
   config.account_identities!['account-1'].credential_binding_hmac = credentialBindingHmac('selected-api-key', 'apikey')
   const gateway = startProxy(config)
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1688,6 +1729,7 @@ test('sub2api mode fails closed when provider is missing', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1712,6 +1754,7 @@ test('sub2api mode fails closed when provider is unsupported', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1737,6 +1780,7 @@ test('sub2api mode fails closed when Anthropic provider is disabled', async () =
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url, { providers: { anthropic: false } }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1764,6 +1808,7 @@ test('sub2api mode blocks unknown event logging routes with a control-plane erro
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/api/event_logging/v3/batch'), {
@@ -1791,6 +1836,7 @@ test('raw capture records Sub2API inbound and CC Gateway normalized routes', asy
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-route-capture-'))
   const previous = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
   process.env.CC_GATEWAY_RAW_CAPTURE_DIR = dir
@@ -1843,6 +1889,7 @@ test('raw capture ignores unsafe Sub2API route audit headers', async () => {
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-route-capture-'))
   const previous = process.env.CC_GATEWAY_RAW_CAPTURE_DIR
   process.env.CC_GATEWAY_RAW_CAPTURE_DIR = dir
@@ -1875,6 +1922,7 @@ test('sub2api rejects unattested scheduler x-cc context before rewrite', async (
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1903,6 +1951,7 @@ test('sub2api rejects scheduler context when attested account mismatches x-cc he
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const sessionId = '123e4567-e89b-42d3-a456-426614174999'
   const attested = formalPoolContext({ session_id: sessionId })
 
@@ -1948,6 +1997,7 @@ test('sub2api rejects every attested scheduler authority-field mismatch', async 
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     const sessionId = '123e4567-e89b-42d3-a456-426614174999'
     const context = formalPoolContext({ session_id: sessionId, nonce: `mismatch-${caseName}`, ...contextOverrides })
 
@@ -1981,6 +2031,7 @@ test('sub2api rejects expired or replayed formal-pool scheduler context', async 
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attestedSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const sessionId = '123e4567-e89b-42d3-a456-426614174999'
   const baseHeaders = {
     ...ccGatewayHeaders,
@@ -2028,6 +2079,7 @@ test('sub2api accepts Sub2API shared formal-pool contract fixture', async () => 
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, proxy.url))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
 
   try {
@@ -2069,6 +2121,7 @@ test('sub2api rejects Sub2API shared formal-pool contract negative vectors', asy
   const mismatchUpstream = await startFakeUpstream()
   const mismatchProxy = await startFakeConnectProxy()
   const mismatchGateway = startProxy(sharedFixtureConfig(fixture, mismatchUpstream.url, mismatchProxy.url))
+  await waitForListening(mismatchGateway)
   try {
     const mismatchContext = sharedFixtureContext(fixture, fixture.cases.one_field_mismatch.mutate_context)
     const response = await httpJson(serverUrl(mismatchGateway, '/v1/messages?beta=true'), {
@@ -2087,6 +2140,7 @@ test('sub2api rejects Sub2API shared formal-pool contract negative vectors', asy
   const expiredUpstream = await startFakeUpstream()
   const expiredProxy = await startFakeConnectProxy()
   const expiredGateway = startProxy(sharedFixtureConfig(fixture, expiredUpstream.url, expiredProxy.url))
+  await waitForListening(expiredGateway)
   try {
     const expiredContext = sharedFixtureContext(fixture, {
       timestamp_ms: Date.now() + fixture.cases.expired.timestamp_offset_ms,
@@ -2108,6 +2162,7 @@ test('sub2api rejects Sub2API shared formal-pool contract negative vectors', asy
   const replayUpstream = await startFakeUpstream()
   const replayProxy = await startFakeConnectProxy()
   const replayGateway = startProxy(sharedFixtureConfig(fixture, replayUpstream.url, replayProxy.url))
+  await waitForListening(replayGateway)
   try {
     const replayContext = sharedFixtureContext(fixture, { nonce: fixture.cases.replay_nonce.nonce })
     const first = await httpJson(serverUrl(replayGateway, '/v1/messages?beta=true'), {
@@ -2138,7 +2193,9 @@ test('in-memory formal-pool session authority ledger is scoped per startProxy in
   const configA = attestedSub2apiConfig(upstreamA.url, proxyA.url)
   const configB = attestedSub2apiConfig(upstreamB.url, proxyB.url)
   const gatewayA = startProxy(configA)
+  await waitForListening(gatewayA)
   const gatewayB = startProxy(configB)
+  await waitForListening(gatewayB)
   const sessionId = '123e4567-e89b-42d3-a456-426614174777'
 
   try {
@@ -2301,6 +2358,7 @@ test('formal-pool attestation requires CP2 profile authority fields and safe obs
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(attested2179Sub2apiConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     try {
       const context = native2179FormalPoolContext({ nonce: `missing-${field}` }) as Record<string, unknown>
       delete context[field]
@@ -2332,6 +2390,7 @@ test('formal-pool strip_attribution profile strips native 2.1.179 CCH billing bl
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(attested2179Sub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: native2179Headers(),
@@ -2362,6 +2421,7 @@ test('formal-pool session ledger binds CP2 profile authority tuple fields', asyn
       no_cch_2179_oracle_profile_ref: 'claude_code_2_1_179_custom_base_no_cch_oracle_cp1_degraded_v1',
     },
   }))
+  await waitForListening(gateway)
   try {
     const first = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: native2179Headers({ nonce: 'profile-ledger-first' }),
@@ -2404,6 +2464,7 @@ test('formal-pool signed/no-CCH egress profiles require explicit 2.1.179 oracle 
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(attested2179Sub2apiConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     try {
       const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
         headers: native2179Headers({
@@ -2428,6 +2489,7 @@ test('formal-pool request-shape/cache profile gates fail closed on unknown futur
   const unknownRefUpstream = await startFakeUpstream()
   const unknownRefProxy = await startFakeConnectProxy()
   const unknownRefGateway = startProxy(attested2179Sub2apiConfig(unknownRefUpstream.url, unknownRefProxy.url))
+  await waitForListening(unknownRefGateway)
   try {
     const response = await httpJson(serverUrl(unknownRefGateway, '/v1/messages?beta=true'), {
       headers: native2179Headers({
@@ -2448,6 +2510,7 @@ test('formal-pool request-shape/cache profile gates fail closed on unknown futur
   const unknownBodyUpstream = await startFakeUpstream()
   const unknownBodyProxy = await startFakeConnectProxy()
   const unknownBodyGateway = startProxy(attested2179Sub2apiConfig(unknownBodyUpstream.url, unknownBodyProxy.url))
+  await waitForListening(unknownBodyGateway)
   try {
     const response = await httpJson(serverUrl(unknownBodyGateway, '/v1/messages?beta=true'), {
       headers: native2179Headers({

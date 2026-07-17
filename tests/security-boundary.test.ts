@@ -114,13 +114,14 @@ function sub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<
 }
 
 
-test('serverUrl targets IPv6 loopback when gateway binds wildcard IPv6', async () => {
+test('omitted server host binds gateway to explicit IPv4 loopback', async () => {
   const gateway = startProxy(baseConfig({ server: { port: 0, tls: { cert: '', key: '' } } }))
 
   try {
+    if (!gateway.listening) await new Promise((resolve) => gateway.once('listening', resolve))
     const address = gateway.address() as any
-    assert.equal(address.address, '::')
-    assert.match(serverUrl(gateway, '/_health'), /^http:\/\/\[::1\]:\d+\/_health$/)
+    assert.equal(address.address, '127.0.0.1')
+    assert.match(serverUrl(gateway, '/_health'), /^http:\/\/127\.0\.0\.1:\d+\/_health$/)
   } finally {
     await close(gateway)
   }
@@ -148,6 +149,7 @@ test('fixed upstream ignores inbound Host and Forwarded routing headers', async 
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
 
   try {
+    if (!gateway.listening) await new Promise((resolve) => gateway.once('listening', resolve))
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: signedSchedulerHeaders({
         host: 'attacker.example',
@@ -176,6 +178,7 @@ test('absolute-form URL still uses fixed upstream and route-sensitive body rewri
   const gateway = startProxy(sub2apiConfig(upstream.url, proxy.url))
 
   try {
+    if (!gateway.listening) await new Promise((resolve) => gateway.once('listening', resolve))
     const body = JSON.stringify({
 	      metadata: {
 	        user_id: JSON.stringify({

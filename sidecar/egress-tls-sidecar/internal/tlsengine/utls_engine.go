@@ -120,15 +120,15 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 	if req.Profile.Ref == "" || req.TargetHost == "" {
 		return nil, nil, fmt.Errorf("missing TLS engine request authority")
 	}
+	cfg, err := utlsConfigForRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
 	dialAddr := req.TargetHost + ":443"
 	if req.DialAddress != "" {
-		if !req.AllowTestDialOverride {
-			return nil, nil, fmt.Errorf("test dial override disabled")
-		}
 		dialAddr = req.DialAddress
 	}
 	var conn net.Conn
-	var err error
 	if req.DialAddress != "" {
 		d := &net.Dialer{Timeout: 2 * time.Second}
 		conn, err = d.DialContext(ctx, "tcp", dialAddr)
@@ -144,10 +144,6 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 		return nil, nil, err
 	}
 	rec := &recordingConn{Conn: conn}
-	cfg := &utls.Config{ServerName: req.TargetHost, NextProtos: nextProtosForProfile(req.Profile)}
-	if req.DialAddress != "" && req.AllowTestDialOverride {
-		cfg.InsecureSkipVerify = true
-	}
 	u := utls.UClient(rec, cfg, utls.HelloCustom)
 	if err := u.ApplyPreset(clientHelloSpecForProfile(req.Profile)); err != nil {
 		_ = u.Close()
@@ -163,6 +159,28 @@ func dialUTLS(ctx context.Context, req Request) (*utls.UConn, *recordingConn, er
 		}
 	}
 	return u, rec, nil
+}
+
+func utlsConfigForRequest(req Request) (*utls.Config, error) {
+	hasDialOverride := strings.TrimSpace(req.DialAddress) != ""
+	if hasDialOverride != req.AllowTestDialOverride {
+		return nil, fmt.Errorf("test dial override authority mismatch")
+	}
+	if hasDialOverride {
+		host, _, err := net.SplitHostPort(req.DialAddress)
+		if err != nil {
+			return nil, fmt.Errorf("test dial override must be explicit loopback")
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || !ip.IsLoopback() {
+			return nil, fmt.Errorf("test dial override must be explicit loopback")
+		}
+	}
+	return &utls.Config{
+		ServerName:         req.TargetHost,
+		NextProtos:         nextProtosForProfile(req.Profile),
+		InsecureSkipVerify: hasDialOverride && req.AllowTestDialOverride,
+	}, nil
 }
 
 func dialProxyTunnel(ctx context.Context, proxyURL string, targetHost string, targetPort int) (net.Conn, error) {
