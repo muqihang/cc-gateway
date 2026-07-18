@@ -1698,6 +1698,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     '1c8f25bb1ca31c5c16262fec71f93dd1e14f512d',
     '6621c7a78432a895d261054e291aed74c04978c3',
     'authority_restart_checkpoint_mismatch',
+    'refs/remotes/muqihang/codex/oracle-p0-1-governance',
+    '38cf6ab4d02cd2cda9b0728ced236972235587e1',
+    '0a97b3f3b84b5c679788b3694d5840e235031f07',
+    'refs/oracle-lab/authenticated-production-head',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
@@ -1723,6 +1727,9 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /Source gaps are forbidden except the two compiled authority-only commits/)
   assert.match(plan, /must change only its one exact historical authority path, and must be consumed exactly once/)
   assert.match(plan, /Do not create another Task 7 continuation unless those replay-verification gates find a demonstrable implementation regression/)
+  assert.match(plan, /must not materialize `refs\/heads\/codex\/oracle-p0-1-governance` as hidden preflight state/)
+  assert.match(plan, /creates the production branch only inside its temporary destination/)
+  assert.match(plan, /Any present local or remote-tracking ref with a different head, an absent pair, or an ambiguous repository role fails closed/)
   assert.match(plan, /then begin Task 8 with a fresh feature-capture context and fresh baseline\/results/)
 })
 
