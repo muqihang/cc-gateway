@@ -21,8 +21,8 @@ case $0 in
   *) launcher=$PWD/$0 ;;
 esac
 script_dir=${launcher%/*}
-repository_root=${script_dir%/tools/oracle-lab}
-repository_root=$(cd -P "$repository_root" 2>/dev/null && pwd -P) || fail_startup
+tool_root=${script_dir%/tools/oracle-lab}
+tool_root=$(cd -P "$tool_root" 2>/dev/null && pwd -P) || fail_startup
 
 select_tool() {
   for candidate in "$@"; do
@@ -36,7 +36,24 @@ select_tool() {
 
 node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
 git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
-bootstrap_entry=$repository_root/tools/oracle-lab/phase-1-authority-bootstrap.mjs
+reviewed_git() {
+  /usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
+    "$git_executable" -C "$tool_root" "$@"
+}
+
+tool_branch=$(reviewed_git symbolic-ref --quiet --short HEAD 2>/dev/null) || fail_startup
+case $tool_branch in
+  main|codex/*) ;;
+  *) fail_startup ;;
+esac
+tool_upstream=refs/remotes/muqihang/$tool_branch
+tool_head=$(reviewed_git rev-parse --verify --end-of-options 'HEAD^{commit}' 2>/dev/null) || fail_startup
+reviewed_head=$(reviewed_git rev-parse --verify --end-of-options "$tool_upstream^{commit}" 2>/dev/null) || fail_startup
+[ "$tool_head" = "$reviewed_head" ] || fail_startup
+[ "$(reviewed_git remote get-url muqihang 2>/dev/null)" = 'https://github.com/muqihang/cc-gateway.git' ] || fail_startup
+[ -z "$(reviewed_git status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>/dev/null)" ] || fail_startup
 
 for file in \
   docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json \
@@ -44,18 +61,38 @@ for file in \
   tools/oracle-lab/phase-1-authority-bootstrap.mjs \
   tools/oracle-lab/phase-1-authority-restart.ts \
   tools/oracle-lab/secure-runtime.ts \
+  package.json \
   package-lock.json
 do
-  current_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" hash-object -- "$file") || fail_startup
-  reviewed_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" rev-parse "refs/remotes/muqihang/main:$file") || fail_startup
+  [ -f "$tool_root/$file" ] && [ ! -L "$tool_root/$file" ] || fail_startup
+  current_oid=$(reviewed_git hash-object -- "$file") || fail_startup
+  reviewed_oid=$(reviewed_git rev-parse "$tool_head:$file") || fail_startup
   [ "$current_oid" = "$reviewed_oid" ] || fail_startup
 done
 
-[ -f "$bootstrap_entry" ] && [ ! -L "$bootstrap_entry" ] || fail_startup
+bootstrap_oid=$(reviewed_git rev-parse "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" 2>/dev/null) || fail_startup
+case $bootstrap_oid in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fail_startup ;;
+esac
+bootstrap_loader='import { createHash } from "node:crypto";
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const bytes = Buffer.concat(chunks);
+const oid = process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID ?? "";
+const algorithm = /^[0-9a-f]{40}$/.test(oid) ? "sha1" : /^[0-9a-f]{64}$/.test(oid) ? "sha256" : "";
+const actual = algorithm === "" ? "" : createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+if (actual !== oid) { process.stderr.write("authority_restart_runtime_binding_mismatch\n"); process.exit(1); }
+process.argv.splice(1, 0, "-");
+await import(`data:text/javascript;base64,${bytes.toString("base64")}`);'
 
+reviewed_git show "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" |
 exec /usr/bin/env -i \
   HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${git_executable%/*}:/usr/bin:/bin" \
   LANG=C LC_ALL=C TZ=UTC \
   ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1 \
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP=reviewed-git-object-v3 \
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID="$bootstrap_oid" \
+  ORACLE_PHASE1_AUTHORITY_TOOL_ROOT="$tool_root" \
   ORACLE_P0_1_NODE="$node_executable" ORACLE_P0_1_GIT="$git_executable" \
-  "$node_executable" "$bootstrap_entry" "$@"
+  "$node_executable" --input-type=module -e "$bootstrap_loader" "$@"

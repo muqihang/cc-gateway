@@ -6,12 +6,18 @@ import path from 'node:path'
 import test from 'node:test'
 
 import Ajv2020 from 'ajv/dist/2020.js'
+import {
+  assertPhase1BaselineEnvelopeUnchanged,
+  derivePhase1BaselineEnvelope,
+  parseDeliveryTransitionContract,
+} from '../tools/oracle-lab/delivery-authority.js'
 import { runReviewedGit } from '../tools/oracle-lab/secure-runtime.js'
 
 type Value = Record<string, any>
 
 const root = process.cwd()
 const planPath = 'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md'
+const deliveryTransitionPlanPath = 'docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md'
 const entryPath = 'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json'
 const contextPath = 'docs/superpowers/evidence/phase-1/phase-1-context.json'
 const entrySchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-entry.schema.json'
@@ -443,15 +449,8 @@ function validateExecutionContextChainValues(
     requireContextGate(value.predecessor.digest === digest(contextArtifactBytes(previous)), 'predecessor_context_mutated', 'predecessor digest drifted')
     requireContextGate(Date.parse(value.generated_at) >= Date.parse(previous.generated_at), 'context_timestamp_regression', 'context timestamp regressed')
     requireContextGate(executionContextStages.indexOf(value.stage) >= executionContextStages.indexOf(previous.stage), 'context_stage_regression', 'context stage regressed')
-    for (const field of ['plan', 'planning_provenance', 'approval_receipt', 'gate_schemas', 'shared_contract', 'authority_order', 'selected_requirements', 'implementation_entry', 'disabled_capabilities']) {
-      requireContextGate(sameValue(value[field], initial[field]), 'context_binding_drift', `${field} drifted`)
-    }
-    for (const name of ['cc_gateway', 'sub2api']) {
-      requireContextGate(value.repositories[name].baseline_main_head === initial.repositories[name].baseline_main_head, 'context_binding_drift', `${name} baseline drifted`)
-      for (const field of ['remote_name', 'remote_url_digest', 'tracking_ref', 'implementation_branch']) {
-        requireContextGate(value.repositories[name][field] === initial.repositories[name][field], 'context_binding_drift', `${name} ${field} drifted`)
-      }
-    }
+    try { assertPhase1BaselineEnvelopeUnchanged(initial, value) }
+    catch { requireContextGate(false, 'context_binding_drift', 'immutable baseline envelope drifted') }
   }
 
   const latest = ordered.at(-1)!
@@ -460,6 +459,13 @@ function validateExecutionContextChainValues(
   requireContextGate(Date.parse(latest.generated_at) <= now, 'context_not_yet_valid', 'latest context validity has not started')
   requireContextGate(Date.parse(latest.expires_at) > now, 'stale_execution_context', 'latest context is expired')
 }
+
+test('Phase 1 planning gate uses the shared immutable baseline projection', () => {
+  const initial = executionContextFixture()
+  const successor = successorExecutionContextFixture(initial, 1)
+  assert.deepEqual(derivePhase1BaselineEnvelope(successor), derivePhase1BaselineEnvelope(initial))
+  assert.doesNotThrow(() => assertPhase1BaselineEnvelopeUnchanged(initial, successor))
+})
 
 test('Phase 1 planning entry and context satisfy their closed schemas', async () => {
   await validate(entrySchemaPath, entryPath)
@@ -1227,9 +1233,14 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
 test('Phase 1 planning context binds the exact entry bytes and governing source bytes', async () => {
   const context = await json(contextPath)
   assert.equal(context.entry.digest, digest(await readFile(path.join(root, entryPath))))
-  for (const binding of [...context.authority_order, ...Object.values(context.registries)] as Value[]) {
+  for (const binding of [...context.authority_order, ...Object.entries(context.registries)
+    .filter(([name]) => name !== 'roadmap').map(([, value]) => value)] as Value[]) {
     assert.equal(binding.digest, digest(await readFile(path.join(root, binding.path))), binding.path)
   }
+  const roadmap = context.registries.roadmap
+  assert.notEqual(roadmap.digest, digest(await readFile(path.join(root, roadmap.path))), 'legacy Phase 1 context must not masquerade as the amended program roadmap authority')
+  assert.equal(digest(await readFile(path.join(root, roadmap.path))), 'sha256:00519348d9dd8972dbea92a647d67c2fc42e9015ece6dcb0eb427df02480b107')
+  assert.equal(parseDeliveryTransitionContract(await readFile(path.join(root, deliveryTransitionPlanPath))).source_digest, 'sha256:08952a6f2ba48b671b6f8792651040a7292e2a2a4bc8036d8d9e851dc6e46463')
 })
 
 test('Phase 1 plan classifies exact consumed-proof replay after owner but before version and state', async () => {

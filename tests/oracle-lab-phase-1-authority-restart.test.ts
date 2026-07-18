@@ -81,6 +81,18 @@ function git(repository: string, ...args: string[]): string {
   }).trim()
 }
 
+function cloneRepository(source: string, destination: string): void {
+  execFileSync('git', ['clone', '--shared', '--quiet', source, destination], { stdio: 'pipe' })
+}
+
+function bindReviewedToolUpstream(repository: string): void {
+  const branch = git(repository, 'branch', '--show-current')
+  assert.notEqual(branch, '')
+  try { git(repository, 'remote', 'add', 'muqihang', 'https://github.com/muqihang/cc-gateway.git') }
+  catch { git(repository, 'remote', 'set-url', 'muqihang', 'https://github.com/muqihang/cc-gateway.git') }
+  git(repository, 'update-ref', `refs/remotes/muqihang/${branch}`, git(repository, 'rev-parse', 'HEAD'))
+}
+
 function sha256(value: string | Buffer): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`
 }
@@ -495,7 +507,14 @@ for (const required of [
   ['NODE_OPTIONS', ['NODE', 'PATH'].join('_')].join(' '),
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
   'phase-1-authority-bootstrap.mjs',
+  'bootstrap_loader',
+  'ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID="$bootstrap_oid"',
+  '"$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs"',
+  '"$node_executable" --input-type=module -e "$bootstrap_loader" "$@"',
 ]) assert.ok(launcher.includes(required), required)
+assert.equal(launcher.includes('"$node_executable" "$bootstrap_entry"'), false, 'launcher must never execute the live bootstrap pathname')
+assert.equal(launcher.includes('bootstrap_snapshot'), false, 'reviewed bootstrap must never be materialized at a same-UID-replaceable pathname')
+assert.equal(launcher.includes('/tmp/oracle-phase1-authority-bootstrap.'), false, 'reviewed bootstrap must execute from an anonymous verified stream')
 const bootstrap = readFileSync(path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), 'utf8')
 for (const required of [
   'COPYFILE_FICLONE_FORCE',
@@ -507,9 +526,11 @@ for (const required of [
   "path.join(dependencies.dependencyRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')",
   'runAuthorityCommand',
   'sourceBefore.digest !== sourceAfter.digest',
+  'assertDistinctRuntimeRoots',
+  'assertReviewedRuntimeUnchanged',
 ]) assert.ok(bootstrap.includes(required), required)
 assert.ok(
-  bootstrap.indexOf('const runtime = verifyRuntime(repositoryRoot, git)') < bootstrap.indexOf('const dependencies = prepareDependencies(runtime, npm)'),
+  bootstrap.indexOf('const runtime = verifyRuntime(toolRoot, git)') < bootstrap.indexOf('const dependencies = prepareDependencies(runtime, npm)'),
   'reviewed runtime bytes must be frozen before isolated dependency preparation',
 )
 assert.equal(bootstrap.includes('installDependencies(repositoryRoot'), false, 'replacement dependency installation is forbidden')
@@ -523,8 +544,8 @@ assert.equal(injectedLauncher.status, 1)
 assert.equal(injectedLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
 
 const positiveParent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-launcher-positive-'))
-const positiveRoot = path.join(positiveParent, 'cc')
-execFileSync('git', ['clone', '--shared', '--quiet', root, positiveRoot], { stdio: 'pipe' })
+const positiveRoot = path.join(positiveParent, 'tool')
+cloneRepository(root, positiveRoot)
 for (const relative of [
   'tools/oracle-lab/oracle-phase1-authority-restart',
   'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
@@ -538,34 +559,84 @@ git(positiveRoot, 'add', '--',
   'launcher-positive-fixture.txt',
 )
 git(positiveRoot, 'commit', '-qm', 'positive launcher fixture')
-git(positiveRoot, 'update-ref', 'refs/remotes/muqihang/main', git(positiveRoot, 'rev-parse', 'HEAD'))
+bindReviewedToolUpstream(positiveRoot)
+const positiveReplacementRoot = path.join(positiveParent, 'cc-replacement')
+const positiveSubReplacementRoot = path.join(positiveParent, 'sub-replacement')
+cloneRepository(positiveRoot, positiveReplacementRoot)
+cloneRepository(positiveRoot, positiveSubReplacementRoot)
 const positiveLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
   'validate-runtime',
-  '--cc-replacement-root', positiveRoot,
+  '--cc-replacement-root', positiveReplacementRoot,
 ], {
   cwd: positiveRoot,
   encoding: 'utf8',
   env: { ...process.env, npm_config_cache: '/dev/null/forged-cache' },
 })
 assert.equal(positiveLauncher.status, 0, `${positiveLauncher.stdout}\n${positiveLauncher.stderr}`)
-assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'validate-runtime must keep dependencies outside the replacement root')
+assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'validate-runtime must keep dependencies outside the tool root')
+assert.equal(existsSync(path.join(positiveReplacementRoot, 'node_modules')), false, 'validate-runtime must keep dependencies outside the replacement root')
+
+const aliasLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime', '--cc-replacement-root', positiveRoot,
+], { cwd: positiveRoot, encoding: 'utf8', env: process.env })
+assert.equal(aliasLauncher.status, 1)
+assert.equal(aliasLauncher.stderr.trim(), 'authority_restart_tool_replacement_alias')
+
+write(positiveReplacementRoot, 'package.json', '{ replacement product manifest\n')
+write(positiveReplacementRoot, 'package-lock.json', '{ replacement product lock\n')
+const replacementManifestMutation = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime', '--cc-replacement-root', positiveReplacementRoot,
+], { cwd: positiveRoot, encoding: 'utf8', env: process.env })
+assert.equal(replacementManifestMutation.status, 0, `${replacementManifestMutation.stdout}\n${replacementManifestMutation.stderr}`)
 
 const invalidSourceLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
   'validate-source',
   '--cc-source-root', path.join(positiveParent, 'missing-cc-source'),
-  '--cc-replacement-root', positiveRoot,
+  '--cc-replacement-root', positiveReplacementRoot,
   '--sub2api-source-root', path.join(positiveParent, 'missing-sub-source'),
-  '--sub2api-replacement-root', path.join(positiveParent, 'unused-sub-replacement'),
+  '--sub2api-replacement-root', positiveSubReplacementRoot,
 ], { cwd: positiveRoot, encoding: 'utf8', env: process.env })
 assert.notEqual(invalidSourceLauncher.status, 0, 'invalid source authority must fail')
-assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'source validation failure must not mutate replacement dependencies')
+assert.equal(existsSync(path.join(positiveReplacementRoot, 'node_modules')), false, 'source validation failure must not mutate replacement dependencies')
 
-const manifestRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-manifest-race-')), 'cc')
-execFileSync('git', ['clone', '--shared', '--quiet', positiveRoot, manifestRaceRoot], { stdio: 'pipe' })
-git(manifestRaceRoot, 'update-ref', 'refs/remotes/muqihang/main', git(manifestRaceRoot, 'rev-parse', 'HEAD'))
+const driftRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-tool-drift-')), 'tool')
+cloneRepository(positiveRoot, driftRoot)
+bindReviewedToolUpstream(driftRoot)
+writeFileSync(path.join(driftRoot, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), `${readFileSync(path.join(driftRoot, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), 'utf8')}\n`)
+const driftLauncher = spawnSync(path.join(driftRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime', '--cc-replacement-root', positiveReplacementRoot,
+], { cwd: driftRoot, encoding: 'utf8', env: process.env })
+assert.equal(driftLauncher.status, 1)
+assert.equal(driftLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
+
+const upstreamDriftRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-upstream-drift-')), 'tool')
+cloneRepository(positiveRoot, upstreamDriftRoot)
+bindReviewedToolUpstream(upstreamDriftRoot)
+const upstreamBranch = git(upstreamDriftRoot, 'branch', '--show-current')
+git(upstreamDriftRoot, 'update-ref', `refs/remotes/muqihang/${upstreamBranch}`, git(upstreamDriftRoot, 'rev-parse', 'HEAD^'))
+const upstreamDriftLauncher = spawnSync(path.join(upstreamDriftRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime', '--cc-replacement-root', positiveReplacementRoot,
+], { cwd: upstreamDriftRoot, encoding: 'utf8', env: process.env })
+assert.equal(upstreamDriftLauncher.status, 1)
+assert.equal(upstreamDriftLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
+
+const symlinkRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-symlink-')), 'tool')
+cloneRepository(positiveRoot, symlinkRoot)
+bindReviewedToolUpstream(symlinkRoot)
+renameSync(path.join(symlinkRoot, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), path.join(symlinkRoot, 'bootstrap.saved'))
+execFileSync('ln', ['-s', path.join(symlinkRoot, 'bootstrap.saved'), path.join(symlinkRoot, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs')])
+const symlinkLauncher = spawnSync(path.join(symlinkRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-runtime', '--cc-replacement-root', positiveReplacementRoot,
+], { cwd: symlinkRoot, encoding: 'utf8', env: process.env })
+assert.equal(symlinkLauncher.status, 1)
+assert.equal(symlinkLauncher.stderr.trim(), 'authority_restart_unsafe_startup_environment')
+
+const manifestRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-manifest-race-')), 'tool')
+cloneRepository(positiveRoot, manifestRaceRoot)
+bindReviewedToolUpstream(manifestRaceRoot)
 const manifestRace = await runLauncherWithPostVerificationRace(manifestRaceRoot, [
   'validate-runtime',
-  '--cc-replacement-root', manifestRaceRoot,
+  '--cc-replacement-root', positiveReplacementRoot,
 ], () => {
   for (const relative of ['package.json', 'package-lock.json']) {
     const replacement = path.join(manifestRaceRoot, `${relative}.race`)
@@ -573,19 +644,20 @@ const manifestRace = await runLauncherWithPostVerificationRace(manifestRaceRoot,
     renameSync(replacement, path.join(manifestRaceRoot, relative))
   }
 })
-assert.equal(manifestRace.status, 0, `${manifestRace.stdout}\n${manifestRace.stderr}`)
-assert.equal(existsSync(path.join(manifestRaceRoot, 'node_modules')), false, 'manifest race must not install into the replacement root')
+assert.equal(manifestRace.status, 1, `${manifestRace.stdout}\n${manifestRace.stderr}`)
+assert.equal(manifestRace.stderr.trim(), 'authority_restart_runtime_binding_mismatch')
+assert.equal(existsSync(path.join(manifestRaceRoot, 'node_modules')), false, 'manifest race must not install into the tool root')
 
-const toolRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-tool-race-')), 'cc')
-execFileSync('git', ['clone', '--shared', '--quiet', positiveRoot, toolRaceRoot], { stdio: 'pipe' })
-git(toolRaceRoot, 'update-ref', 'refs/remotes/muqihang/main', git(toolRaceRoot, 'rev-parse', 'HEAD'))
+const toolRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-tool-race-')), 'tool')
+cloneRepository(positiveRoot, toolRaceRoot)
+bindReviewedToolUpstream(toolRaceRoot)
 const toolRaceMarker = path.join(toolRaceRoot, 'live-tool-race-executed')
 const toolRace = await runLauncherWithPostVerificationRace(toolRaceRoot, [
   'validate-source',
   '--cc-source-root', path.join(positiveParent, 'missing-race-cc-source'),
-  '--cc-replacement-root', toolRaceRoot,
+  '--cc-replacement-root', positiveReplacementRoot,
   '--sub2api-source-root', path.join(positiveParent, 'missing-race-sub-source'),
-  '--sub2api-replacement-root', path.join(positiveParent, 'unused-race-sub-replacement'),
+  '--sub2api-replacement-root', positiveSubReplacementRoot,
 ], () => {
   const replacement = path.join(toolRaceRoot, 'tools/oracle-lab/phase-1-authority-restart.ts.race')
   writeFileSync(replacement, [
@@ -598,7 +670,7 @@ const toolRace = await runLauncherWithPostVerificationRace(toolRaceRoot, [
 })
 assert.notEqual(toolRace.status, 0, 'invalid source authority must still fail during a live-tool race')
 assert.equal(existsSync(toolRaceMarker), false, 'post-verification live authority tool bytes must never execute')
-assert.equal(existsSync(path.join(toolRaceRoot, 'node_modules')), false, 'tool race must not install into the replacement root')
+assert.equal(existsSync(path.join(toolRaceRoot, 'node_modules')), false, 'tool race must not install into the tool root')
 
 const reviewedTsxCli = path.join(root, 'node_modules/tsx/dist/cli.mjs')
 const directBypass = spawnSync(process.execPath, [
@@ -684,5 +756,16 @@ const unsafeInventory = spawnSync(process.execPath, [bootstrapPath, 'inventory-c
 })
 assert.equal(unsafeInventory.status, 1)
 assert.equal(unsafeInventory.stderr.trim(), 'authority_restart_dependency_cache_unsafe')
+
+const specialCache = path.join(positiveParent, 'special-cache')
+mkdirSync(specialCache, { recursive: true })
+execFileSync('mkfifo', [path.join(specialCache, 'named-pipe')])
+const specialInventory = spawnSync(process.execPath, [bootstrapPath, 'inventory-cache', '--root', specialCache], {
+  cwd: root,
+  encoding: 'utf8',
+  env: { HOME: '/dev/null', TMPDIR: '/tmp', PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+})
+assert.equal(specialInventory.status, 1)
+assert.equal(specialInventory.stderr.trim(), 'authority_restart_dependency_cache_unsafe')
 
 console.log('oracle-lab Phase 1 authority restart tests passed')
