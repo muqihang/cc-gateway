@@ -70,20 +70,29 @@ do
   [ "$current_oid" = "$reviewed_oid" ] || fail_startup
 done
 
-umask 077
-bootstrap_root=$(/usr/bin/mktemp -d /tmp/oracle-phase1-authority-bootstrap.XXXXXX) || fail_startup
-/bin/chmod 700 "$bootstrap_root" || fail_startup
-[ -d "$bootstrap_root" ] && [ ! -L "$bootstrap_root" ] || fail_startup
-bootstrap_snapshot=$bootstrap_root/phase-1-authority-bootstrap.mjs
-reviewed_git show "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" > "$bootstrap_snapshot" || fail_startup
-/bin/chmod 600 "$bootstrap_snapshot" || fail_startup
-[ -f "$bootstrap_snapshot" ] && [ ! -L "$bootstrap_snapshot" ] || fail_startup
+bootstrap_oid=$(reviewed_git rev-parse "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" 2>/dev/null) || fail_startup
+case $bootstrap_oid in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fail_startup ;;
+esac
+bootstrap_loader='import { createHash } from "node:crypto";
+const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const bytes = Buffer.concat(chunks);
+const oid = process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID ?? "";
+const algorithm = /^[0-9a-f]{40}$/.test(oid) ? "sha1" : /^[0-9a-f]{64}$/.test(oid) ? "sha256" : "";
+const actual = algorithm === "" ? "" : createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+if (actual !== oid) { process.stderr.write("authority_restart_runtime_binding_mismatch\n"); process.exit(1); }
+process.argv.splice(1, 0, "-");
+await import(`data:text/javascript;base64,${bytes.toString("base64")}`);'
 
+reviewed_git show "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" |
 exec /usr/bin/env -i \
   HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${git_executable%/*}:/usr/bin:/bin" \
   LANG=C LC_ALL=C TZ=UTC \
   ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1 \
-  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP=reviewed-git-object-v2 \
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP=reviewed-git-object-v3 \
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID="$bootstrap_oid" \
   ORACLE_PHASE1_AUTHORITY_TOOL_ROOT="$tool_root" \
   ORACLE_P0_1_NODE="$node_executable" ORACLE_P0_1_GIT="$git_executable" \
-  "$node_executable" "$bootstrap_snapshot" "$@"
+  "$node_executable" --input-type=module -e "$bootstrap_loader" "$@"
