@@ -13,6 +13,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  writeFileSync,
 } from 'node:fs'
 import { userInfo } from 'node:os'
 import path from 'node:path'
@@ -202,14 +203,20 @@ function verifyRuntime(repositoryRoot, git) {
     || process.env.TMPDIR !== '/tmp') fail('authority_restart_unsafe_startup_environment')
   const replacementRefs = runGit(repositoryRoot, git, ['for-each-ref', '--format=%(refname)', 'refs/replace'])
   if (replacementRefs.length !== 0) fail('authority_restart_runtime_binding_mismatch')
+  const reviewedMain = resolveCommit(repositoryRoot, git, 'refs/remotes/muqihang/main')
+  const files = []
   for (const file of RUNTIME_PATHS) {
     const target = path.join(repositoryRoot, file)
-    let metadata
-    try { metadata = lstatSync(target) } catch { fail('authority_restart_runtime_binding_mismatch') }
-    if (!metadata.isFile() || metadata.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
-    const reviewed = runGit(repositoryRoot, git, ['show', `refs/remotes/muqihang/main:${file}`])
-    if (!readFileSync(target).equals(reviewed)) fail('authority_restart_runtime_binding_mismatch')
+    let before
+    try { before = lstatSync(target, { bigint: true }) } catch { fail('authority_restart_runtime_binding_mismatch') }
+    if (!before.isFile() || before.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
+    const working = readFileSync(target)
+    const after = lstatSync(target, { bigint: true })
+    const reviewed = runGit(repositoryRoot, git, ['show', `${reviewedMain}:${file}`])
+    if (!sameMetadata(before, after) || !working.equals(reviewed)) fail('authority_restart_runtime_binding_mismatch')
+    files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed) }))
   }
+  return Object.freeze({ reviewedMain, files: Object.freeze(files) })
 }
 
 function installDependencies(targetRoot, npm, commandCache) {
@@ -238,7 +245,40 @@ function installDependencies(targetRoot, npm, commandCache) {
   if (installed.error || installed.signal !== null || installed.status !== 0) fail('authority_restart_dependency_install_failed')
 }
 
-function prepareDependencies(repositoryRoot, npm) {
+function materializeReviewedRuntime(runtime, dependencyRoot, account) {
+  for (const file of runtime.files) {
+    const destination = path.join(dependencyRoot, file.path)
+    const parent = path.dirname(destination)
+    mkdirSync(parent, { recursive: true, mode: 0o700 })
+    for (let current = parent; current !== dependencyRoot; current = path.dirname(current)) {
+      chmodSync(current, 0o700)
+      const metadata = lstatSync(current, { bigint: true })
+      if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== BigInt(account.uid)
+        || (Number(metadata.mode) & 0o777) !== 0o700) {
+        fail('authority_restart_runtime_binding_mismatch')
+      }
+    }
+    writeFileSync(destination, file.bytes, { flag: 'wx', mode: 0o600 })
+    const metadata = lstatSync(destination, { bigint: true })
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== BigInt(account.uid)
+      || (Number(metadata.mode) & 0o777) !== 0o600 || !readFileSync(destination).equals(file.bytes)) {
+      fail('authority_restart_runtime_binding_mismatch')
+    }
+  }
+}
+
+function assertMaterializedRuntime(runtime, dependencyRoot, account) {
+  for (const file of runtime.files) {
+    const target = path.join(dependencyRoot, file.path)
+    const metadata = lstatSync(target, { bigint: true })
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== BigInt(account.uid)
+      || (Number(metadata.mode) & 0o777) !== 0o600 || !readFileSync(target).equals(file.bytes)) {
+      fail('authority_restart_runtime_binding_mismatch')
+    }
+  }
+}
+
+function prepareDependencies(runtime, npm) {
   const account = userInfo()
   const npmRoot = path.join(account.homedir, '.npm')
   const sourceCache = path.join(npmRoot, '_cacache')
@@ -266,20 +306,9 @@ function prepareDependencies(repositoryRoot, npm) {
   const dependencyRoot = mkdtempSync('/tmp/oracle-phase1-authority-dependencies.')
   chmodSync(dependencyRoot, 0o700)
   assertRealDirectory(dependencyRoot, account.uid, true)
-  for (const file of ['package.json', 'package-lock.json']) {
-    const source = path.join(repositoryRoot, file)
-    const destination = path.join(dependencyRoot, file)
-    const before = lstatSync(source, { bigint: true })
-    if (!before.isFile() || before.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
-    const bytes = readFileSync(source)
-    copyFileCow(source, destination)
-    chmodSync(destination, 0o600)
-    const after = lstatSync(source, { bigint: true })
-    if (!sameMetadata(before, after) || !readFileSync(destination).equals(bytes) || !readFileSync(source).equals(bytes)) {
-      fail('authority_restart_runtime_binding_mismatch')
-    }
-  }
+  materializeReviewedRuntime(runtime, dependencyRoot, account)
   installDependencies(dependencyRoot, npm, commandCache)
+  assertMaterializedRuntime(runtime, dependencyRoot, account)
   return Object.freeze({ dependencyRoot, commandCache })
 }
 
@@ -302,9 +331,9 @@ function authorityFromCommit(root, git, file, commit) {
   return Object.freeze({ path: file, digest: sha256(bytes), commit })
 }
 
-async function runAuthorityCommand(repositoryRoot, git, npm, dependencies, argv) {
+async function runAuthorityCommand(repositoryRoot, git, dependencies, argv) {
   const apiPath = path.join(dependencies.dependencyRoot, 'node_modules/tsx/dist/esm/api/index.mjs')
-  const toolPath = path.join(repositoryRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')
+  const toolPath = path.join(dependencies.dependencyRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')
   for (const target of [apiPath, toolPath]) {
     const metadata = lstatSync(target)
     if (!metadata.isFile() || metadata.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
@@ -322,8 +351,6 @@ async function runAuthorityCommand(repositoryRoot, git, npm, dependencies, argv)
     bindings,
   })
   if (parsed.command === 'validate-source') return
-
-  installDependencies(repositoryRoot, npm, dependencies.commandCache)
 
   const ccRoot = realpathSync(parsed.values['cc-replacement-root'])
   const subRoot = realpathSync(parsed.values['sub2api-replacement-root'])
@@ -367,10 +394,10 @@ async function main(argv) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   if (repositoryRoot !== moduleRoot) fail('authority_restart_runtime_binding_mismatch')
   const git = selectTool('git')
-  verifyRuntime(repositoryRoot, git)
+  const runtime = verifyRuntime(repositoryRoot, git)
   const npm = selectTool('npm')
-  const dependencies = prepareDependencies(repositoryRoot, npm)
-  await runAuthorityCommand(repositoryRoot, git, npm, dependencies, argv)
+  const dependencies = prepareDependencies(runtime, npm)
+  await runAuthorityCommand(repositoryRoot, git, dependencies, argv)
 }
 
 try {

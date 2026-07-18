@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +18,50 @@ assert.equal(existsSync(toolPath), true)
 const tool = await import(pathToFileURL(toolPath).href)
 const schema = JSON.parse(readFileSync(schemaPath, 'utf8'))
 const validateSchema = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+
+type ChildResult = Readonly<{ status: number | null; stdout: string; stderr: string }>
+
+function authorityCacheRoots(): Set<string> {
+  return new Set(readdirSync('/tmp').filter((entry) => entry.startsWith('oracle-phase1-authority-npm-cache.')))
+}
+
+async function runLauncherWithPostVerificationRace(
+  repositoryRoot: string,
+  argv: readonly string[],
+  mutateLiveRuntime: () => void,
+): Promise<ChildResult> {
+  const before = authorityCacheRoots()
+  const child = spawn(path.join(repositoryRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), argv, {
+    cwd: repositoryRoot,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  const completion = new Promise<number | null>((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  })
+
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    if ([...authorityCacheRoots()].some((entry) => !before.has(entry))) break
+    if (child.exitCode !== null) throw new Error(`authority launcher exited before the post-verification race window: ${stderr}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  if (![...authorityCacheRoots()].some((entry) => !before.has(entry))) {
+    child.kill('SIGTERM')
+    throw new Error('authority launcher did not reach the post-verification race window')
+  }
+
+  mutateLiveRuntime()
+  const status = await completion
+  return Object.freeze({ status, stdout, stderr })
+}
 
 function git(repository: string, ...args: string[]): string {
   return execFileSync('git', args, {
@@ -459,14 +503,16 @@ for (const required of [
   "path.join(npmRoot, '_cacache')",
   "['ci', '--offline', '--ignore-scripts'",
   "mkdtempSync('/tmp/oracle-phase1-authority-dependencies.')",
-  'installDependencies(repositoryRoot, npm, dependencies.commandCache)',
+  'materializeReviewedRuntime(runtime, dependencyRoot, account)',
+  "path.join(dependencies.dependencyRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')",
   'runAuthorityCommand',
   'sourceBefore.digest !== sourceAfter.digest',
 ]) assert.ok(bootstrap.includes(required), required)
 assert.ok(
-  bootstrap.indexOf('tool.validatePhase1AuthorityRestartSource') < bootstrap.indexOf('installDependencies(repositoryRoot, npm, dependencies.commandCache)'),
-  'source authority must validate before replacement dependency installation',
+  bootstrap.indexOf('const runtime = verifyRuntime(repositoryRoot, git)') < bootstrap.indexOf('const dependencies = prepareDependencies(runtime, npm)'),
+  'reviewed runtime bytes must be frozen before isolated dependency preparation',
 )
+assert.equal(bootstrap.includes('installDependencies(repositoryRoot'), false, 'replacement dependency installation is forbidden')
 assert.equal(bootstrap.includes('runAuthorityRestartCli'), false)
 const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'], {
   cwd: root,
@@ -513,6 +559,46 @@ const invalidSourceLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-la
 ], { cwd: positiveRoot, encoding: 'utf8', env: process.env })
 assert.notEqual(invalidSourceLauncher.status, 0, 'invalid source authority must fail')
 assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'source validation failure must not mutate replacement dependencies')
+
+const manifestRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-manifest-race-')), 'cc')
+execFileSync('git', ['clone', '--shared', '--quiet', positiveRoot, manifestRaceRoot], { stdio: 'pipe' })
+git(manifestRaceRoot, 'update-ref', 'refs/remotes/muqihang/main', git(manifestRaceRoot, 'rev-parse', 'HEAD'))
+const manifestRace = await runLauncherWithPostVerificationRace(manifestRaceRoot, [
+  'validate-runtime',
+  '--cc-replacement-root', manifestRaceRoot,
+], () => {
+  for (const relative of ['package.json', 'package-lock.json']) {
+    const replacement = path.join(manifestRaceRoot, `${relative}.race`)
+    writeFileSync(replacement, '{ malformed runtime manifest\n')
+    renameSync(replacement, path.join(manifestRaceRoot, relative))
+  }
+})
+assert.equal(manifestRace.status, 0, `${manifestRace.stdout}\n${manifestRace.stderr}`)
+assert.equal(existsSync(path.join(manifestRaceRoot, 'node_modules')), false, 'manifest race must not install into the replacement root')
+
+const toolRaceRoot = path.join(mkdtempSync(path.join(tmpdir(), 'oracle-phase1-authority-tool-race-')), 'cc')
+execFileSync('git', ['clone', '--shared', '--quiet', positiveRoot, toolRaceRoot], { stdio: 'pipe' })
+git(toolRaceRoot, 'update-ref', 'refs/remotes/muqihang/main', git(toolRaceRoot, 'rev-parse', 'HEAD'))
+const toolRaceMarker = path.join(toolRaceRoot, 'live-tool-race-executed')
+const toolRace = await runLauncherWithPostVerificationRace(toolRaceRoot, [
+  'validate-source',
+  '--cc-source-root', path.join(positiveParent, 'missing-race-cc-source'),
+  '--cc-replacement-root', toolRaceRoot,
+  '--sub2api-source-root', path.join(positiveParent, 'missing-race-sub-source'),
+  '--sub2api-replacement-root', path.join(positiveParent, 'unused-race-sub-replacement'),
+], () => {
+  const replacement = path.join(toolRaceRoot, 'tools/oracle-lab/phase-1-authority-restart.ts.race')
+  writeFileSync(replacement, [
+    "import { writeFileSync } from 'node:fs'",
+    `writeFileSync(${JSON.stringify(toolRaceMarker)}, 'executed\\n')`,
+    "throw new Error('live authority tool was imported')",
+    '',
+  ].join('\n'))
+  renameSync(replacement, path.join(toolRaceRoot, 'tools/oracle-lab/phase-1-authority-restart.ts'))
+})
+assert.notEqual(toolRace.status, 0, 'invalid source authority must still fail during a live-tool race')
+assert.equal(existsSync(toolRaceMarker), false, 'post-verification live authority tool bytes must never execute')
+assert.equal(existsSync(path.join(toolRaceRoot, 'node_modules')), false, 'tool race must not install into the replacement root')
 
 const reviewedTsxCli = path.join(root, 'node_modules/tsx/dist/cli.mjs')
 const directBypass = spawnSync(process.execPath, [
