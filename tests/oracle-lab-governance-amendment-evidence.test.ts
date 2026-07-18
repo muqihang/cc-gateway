@@ -484,6 +484,9 @@ function cloneSharedSparseRepository(
     const expectedCommit = ccMarker ? productionHeads.cc_gateway : productionHeads.sub2api
     const remoteCommit = resolveOptionalCommit(productionRemoteTrackingRef)
     const authenticationCommit = resolveOptionalCommit(productionAuthenticationRef)
+    if (remoteCommit !== null && remoteCommit !== expectedCommit) {
+      throw new Error('authenticated historical production ref head mismatch')
+    }
     if (authenticationCommit !== null) {
       if (authenticationCommit !== expectedCommit) {
         throw new Error('authenticated historical production ref head mismatch')
@@ -493,9 +496,6 @@ function cloneSharedSparseRepository(
       return localCommit
     }
     if (localCommit !== null && localCommit !== expectedCommit) {
-      throw new Error('authenticated historical production ref head mismatch')
-    }
-    if (remoteCommit !== null && remoteCommit !== expectedCommit) {
       throw new Error('authenticated historical production ref head mismatch')
     }
     if (localCommit === null && remoteCommit === null) {
@@ -588,6 +588,14 @@ const wrongAuthenticationSource = freshHistoricalRefSource('wrong-anchor', produ
 git(wrongAuthenticationSource, 'update-ref', productionAuthenticationRef, git(root, 'rev-parse', 'HEAD'))
 assert.throws(
   () => cloneSharedSparseRepository(wrongAuthenticationSource, path.join(path.dirname(wrongAuthenticationSource), 'destination'), ['package.json']),
+  /authenticated historical production ref head mismatch/,
+)
+
+const conflictingRemoteWithAuthenticationSource = freshHistoricalRefSource('anchor-remote-conflict', git(root, 'rev-parse', 'HEAD'))
+git(conflictingRemoteWithAuthenticationSource, 'update-ref', `refs/heads/${productionBranch}`, productionHeads.cc_gateway)
+git(conflictingRemoteWithAuthenticationSource, 'update-ref', productionAuthenticationRef, productionHeads.cc_gateway)
+assert.throws(
+  () => cloneSharedSparseRepository(conflictingRemoteWithAuthenticationSource, path.join(path.dirname(conflictingRemoteWithAuthenticationSource), 'destination'), ['package.json']),
   /authenticated historical production ref head mismatch/,
 )
 
