@@ -1736,7 +1736,7 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /exclusive command-scoped `\/tmp` tool root.*runs `validatePhase1AuthorityRestartSource`.*before any replacement-root mutation/)
   assert.match(plan, /copies the reviewed `package\.json` and `package-lock\.json` bytes into an exclusive mode-0700 command-scoped `\/tmp\/oracle-phase1-authority-dependencies\.\*` root/)
   assert.match(plan, /`validate-source` returns without installing any replacement dependency/)
-  assert.match(plan, /Only `build`, `validate-pre-commit`, and `validate-post-commit` may run a second exact offline `npm ci --prefix <cc-replacement-root>`/)
+  assert.match(plan, /Only `build`, `validate-pre-commit`, and `validate-post-commit` may run a second exact offline `npm ci` with the CC replacement root as its explicit install prefix/)
   assert.match(plan, /A source-invalid `validate-source` has the same replacement-state guarantee/)
   assert.match(plan, /must not contain `refs\/heads\/codex\/oracle-phase-1-h1-cache-checkpoint` or `refs\/heads\/codex\/oracle-phase-1-sub2api`/)
   assert.match(plan, /then begin Task 8 with a fresh feature-capture context and fresh baseline\/results/)
