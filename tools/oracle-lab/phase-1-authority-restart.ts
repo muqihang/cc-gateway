@@ -28,11 +28,18 @@ type RepositoryBinding = Readonly<{
   remoteUrlDigest: string
   sourceCommits: readonly string[]
   forbiddenSourceCommits?: readonly string[]
+  allowedSkippedSourceCommits?: readonly string[]
+  pinnedSourceEvidence?: readonly Readonly<{
+    commit: string
+    parent: string
+    patchId: string
+    changedPaths: readonly ChangedPath[]
+  }>[]
 }>
 
 export type AuthorityRestartBindings = Readonly<{
   schemaVersion: 1
-  repairId: 'authority-repair-0001'
+  repairId: 'authority-repair-0002'
   artifactPath: string
   schemaPath: string
   authorityPaths: Readonly<{ plan: string; planReview: string; executionContext: string }>
@@ -49,31 +56,32 @@ export type AuthorityRestartBindings = Readonly<{
   sub2api: RepositoryBinding
 }>
 
-const QUARANTINE_CHANGED_PATHS: readonly ChangedPath[] = Object.freeze([
-  ['docs/superpowers/registry/oracle-lab-phase-1-command-catalog.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-command-catalog.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-feature-review.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json', null, '100644', 'A'],
-  ['docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json', null, '100644', 'A'],
-  ['package.json', '100644', '100644', 'M'],
-  ['tests/oracle-lab-phase-1-evidence.test.ts', null, '100644', 'A'],
-  ['tools/oracle-lab/phase-1-evidence.ts', null, '100644', 'A'],
-  ['tools/oracle-lab/phase-1-loopback-sandbox.ts', null, '100644', 'A'],
-].map(([file, oldMode, newMode, status]) => Object.freeze({
-  status: status as string,
-  old_mode: oldMode as string | null,
-  new_mode: newMode as string | null,
-  old_path: oldMode === null ? null : file as string,
-  new_path: file as string,
-})))
+function modifiedChangedPaths(files: readonly string[]): readonly ChangedPath[] {
+  return Object.freeze(files.map((file) => Object.freeze({
+    status: 'M', old_mode: '100644', new_mode: '100644', old_path: file, new_path: file,
+  })))
+}
+
+const H1_CACHE_CHECKPOINT_CHANGED_PATHS = modifiedChangedPaths([
+  'docs/superpowers/schemas/oracle-lab-phase-1-exit.schema.json',
+  'docs/superpowers/schemas/oracle-lab-phase-1-feature-review.schema.json',
+  'docs/superpowers/schemas/oracle-lab-phase-1-handoff.schema.json',
+  'docs/superpowers/schemas/oracle-lab-phase-1-integration-entry.schema.json',
+  'docs/superpowers/schemas/oracle-lab-phase-1-integration-receipt.schema.json',
+  'docs/superpowers/schemas/oracle-lab-phase-1-results.schema.json',
+  'tests/oracle-lab-phase-1-evidence.test.ts',
+  'tools/oracle-lab/phase-1-evidence.ts',
+])
+
+const QUARANTINE_CHANGED_PATHS = modifiedChangedPaths([
+  'tests/oracle-lab-phase-1-evidence.test.ts',
+  'tools/oracle-lab/phase-1-evidence.ts',
+])
 
 export const AUTHORITY_RESTART_BINDINGS: AuthorityRestartBindings = Object.freeze({
   schemaVersion: 1,
-  repairId: 'authority-repair-0001',
-  artifactPath: 'docs/superpowers/evidence/phase-1/phase-1-authority-restart-0001.json',
+  repairId: 'authority-repair-0002',
+  artifactPath: 'docs/superpowers/evidence/phase-1/phase-1-authority-restart-0002.json',
   schemaPath: 'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
   authorityPaths: Object.freeze({
     plan: 'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md',
@@ -99,40 +107,70 @@ export const AUTHORITY_RESTART_BINDINGS: AuthorityRestartBindings = Object.freez
       'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json',
       'docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
       'docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
+      'docs/superpowers/evidence/phase-1/phase-1-authority-restart-0001.json',
+      'docs/superpowers/evidence/phase-1/phase-1-execution-context-0001.json',
     ]),
   }),
   ccGateway: Object.freeze({
-    supersededHead: '0403674d4c812e1a14704bfc890d66aac75f0325',
-    archivalBranch: 'codex/oracle-phase-1-cc-gateway-pre-authority-repair-0001',
-    replacementBranch: 'codex/oracle-phase-1-cc-gateway',
+    supersededHead: 'd5a711614177906d18486b98ff4c5d45d97e04c7',
+    archivalBranch: 'codex/oracle-phase-1-h1-cache-checkpoint',
+    replacementBranch: 'codex/oracle-phase-1-cc-gateway-v8',
     remoteUrlDigest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
     sourceCommits: Object.freeze([
-      '2a1553a4d16ccfdcd186ae78d99deeecbd7dfb4c',
-      '49e4639c6f36dc51779c14813acd6e277315b969',
-      '0403674d4c812e1a14704bfc890d66aac75f0325',
+      '410fbe0c784c9eea04685cc251909d8df75b6871',
+      'e2972e6f6b27c658d9a6e91379ba9cea834cd4cb',
+      'beabd36547daa6236c1caa142a0a1b5a926bbde3',
+      'bedc81ca5c0aa9e0991a2f0bc42b62c4dd62f8db',
+      '540962ea9c068c82d5dbe07b5aeae172fa6258e6',
+      'e43f50816c8b693f875fc485a99dcdf9d985080e',
+      '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+      'd5a711614177906d18486b98ff4c5d45d97e04c7',
     ]),
-    forbiddenSourceCommits: Object.freeze(['dd5ea716bc84e391daec333ecf03f41643612dde']),
-    quarantineCheckpoint: '0403674d4c812e1a14704bfc890d66aac75f0325',
-    quarantineParent: '49e4639c6f36dc51779c14813acd6e277315b969',
-    quarantinePatchId: 'c48f2a7960e8cdf09ab4be8a3656b789080a0fe0',
+    forbiddenSourceCommits: Object.freeze([
+      '4f67b26091e3279c0b82bb7e6b31b309be7b6304',
+      '1c8f25bb1ca31c5c16262fec71f93dd1e14f512d',
+      '6621c7a78432a895d261054e291aed74c04978c3',
+      '91a0bc81fedc80d931e29aaefcc6a0a848b354ee',
+    ]),
+    allowedSkippedSourceCommits: Object.freeze([
+      '1c8f25bb1ca31c5c16262fec71f93dd1e14f512d',
+      '6621c7a78432a895d261054e291aed74c04978c3',
+    ]),
+    pinnedSourceEvidence: Object.freeze([
+      Object.freeze({
+        commit: '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+        parent: 'e43f50816c8b693f875fc485a99dcdf9d985080e',
+        patchId: '295de5938e2ed0001dc51b520ebf62a223b44a3c',
+        changedPaths: H1_CACHE_CHECKPOINT_CHANGED_PATHS,
+      }),
+      Object.freeze({
+        commit: 'd5a711614177906d18486b98ff4c5d45d97e04c7',
+        parent: '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+        patchId: '655f57bc12191566b6f1efd415ce54721252ab08',
+        changedPaths: QUARANTINE_CHANGED_PATHS,
+      }),
+    ]),
+    quarantineCheckpoint: 'd5a711614177906d18486b98ff4c5d45d97e04c7',
+    quarantineParent: '8cbc5c633c7f791b395198aedd2db2e55f01915b',
+    quarantinePatchId: '655f57bc12191566b6f1efd415ce54721252ab08',
     quarantineChangedPaths: QUARANTINE_CHANGED_PATHS,
   }),
   sub2api: Object.freeze({
-    supersededHead: 'e2af1be5176854958a3d7b63a029174ffc5792a8',
-    archivalBranch: 'codex/oracle-phase-1-sub2api-pre-authority-repair-0001',
-    replacementBranch: 'codex/oracle-phase-1-sub2api',
+    supersededHead: '20217731da9521f9676434b7bd5f9cb73020c32c',
+    archivalBranch: 'codex/oracle-phase-1-sub2api',
+    replacementBranch: 'codex/oracle-phase-1-sub2api-v8',
     remoteUrlDigest: 'sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9',
     sourceCommits: Object.freeze([
-      'b095307407b7b0bf08a7fc629a5d83dea86c26ab',
-      'fadcbd18c0d49bf3562e568fd6b8282c4417a12c',
-      '6f1754396b572abf929cb80ea4602306b89fcf9c',
-      '7aba29c7387b82e37187d11c80ced09cef86b47f',
-      '4e55cb8b0442c3a0f1734615efaf38967f2fe1aa',
-      '3b09da2574e07a72e0cac34a28aeb5d4604f4759',
-      'fe7753fa5b0b046eea42427e29aab3af467d5312',
-      '540d58cb820811e7beaca26e678f499c8cc66351',
-      'd25ecc1ddf1cf1e058c903c26915cf11c9c97025',
-      'e2af1be5176854958a3d7b63a029174ffc5792a8',
+      '267b3d074248a7e1f7cf16bf302f91b41fa754ec',
+      'cff380892f64720c046d581723d0faf13cb566fc',
+      'b90254865b11be445a73faeeb0bbf1c0ff5384dd',
+      'e49100746f8e00d83168864dab2a4235053d16d7',
+      '33cac77640cccf5bbd87ab79ea9e44ef2c125da7',
+      '7ffaebdaa32aa3b9896cf6a3c554a671255b98d3',
+      'da7a01ac692553c9886c4ef14d0f9d5cb29c0a45',
+      '75dc3c0fd38acea12f373207521d9927c01c25ad',
+      '0f2271946686458458e959d3952e56f75c9e50fe',
+      '20217731da9521f9676434b7bd5f9cb73020c32c',
     ]),
   }),
 })
@@ -369,6 +407,48 @@ function buildMappings(root: string, sourceCommits: readonly string[], replaceme
   })
 }
 
+function assertPinnedSourceEvidence(root: string, binding: RepositoryBinding): void {
+  const pinned = binding.pinnedSourceEvidence ?? []
+  const commits = new Set(binding.sourceCommits)
+  for (const evidence of pinned) {
+    if (!commits.has(evidence.commit)
+      || soleParent(root, evidence.commit) !== evidence.parent
+      || inspectStablePatchId(root, evidence.commit) !== evidence.patchId
+      || !same(inspectChangedPaths(root, evidence.commit), evidence.changedPaths)) {
+      fail('authority_restart_source_evidence_mismatch', 'pinned source commit evidence drifted')
+    }
+  }
+}
+
+function assertSourceSequence(root: string, binding: RepositoryBinding, historicalAuthorityPaths: readonly string[]): void {
+  const allowed = binding.allowedSkippedSourceCommits ?? []
+  const allowedSet = new Set(allowed)
+  if (allowedSet.size !== allowed.length || allowed.some((commit) => binding.sourceCommits.includes(commit))) {
+    fail('authority_restart_skipped_source_commit_mismatch', 'allowed skipped source commits are not a unique disjoint set')
+  }
+  const historical = new Set(historicalAuthorityPaths)
+  const consumed = new Set<string>()
+  for (let index = 1; index < binding.sourceCommits.length; index += 1) {
+    const previous = binding.sourceCommits[index - 1]
+    let cursor = soleParent(root, binding.sourceCommits[index])
+    while (cursor !== previous) {
+      if (!allowedSet.has(cursor) || consumed.has(cursor)) {
+        fail('authority_restart_parent_mismatch', 'source mapping gap is not an exact reviewed authority-only commit')
+      }
+      const changed = inspectChangedPaths(root, cursor)
+      if (changed.some((entry) => (entry.old_path !== null && !historical.has(entry.old_path))
+        || (entry.new_path !== null && !historical.has(entry.new_path)))) {
+        fail('authority_restart_skipped_source_path_mismatch', 'skipped source commit changes a nonhistorical path')
+      }
+      consumed.add(cursor)
+      cursor = soleParent(root, cursor)
+    }
+  }
+  if (consumed.size !== allowedSet.size || [...allowedSet].some((commit) => !consumed.has(commit))) {
+    fail('authority_restart_skipped_source_commit_mismatch', 'compiled skipped source commits are not the exact observed gaps')
+  }
+}
+
 function buildRepository(root: string, binding: RepositoryBinding, replacementCommits: readonly string[], exclusions: readonly string[]): JsonObject {
   const mappings = buildMappings(root, binding.sourceCommits, replacementCommits)
   const authorizedBase = mappings[0].replacement_parent
@@ -423,7 +503,7 @@ function assertEndpoint(root: string, artifact: JsonObject, binding: RepositoryB
   if (resolveCommit(root, 'refs/remotes/muqihang/main') !== artifact.replacement.remote_main_head) fail('authority_restart_remote_mismatch', 'frozen remote main drifted')
 }
 
-function assertMappings(root: string, artifact: JsonObject, binding: RepositoryBinding): void {
+function assertMappings(root: string, artifact: JsonObject, binding: RepositoryBinding, historicalAuthorityPaths: readonly string[]): void {
   if (artifact.replay_mappings.length !== binding.sourceCommits.length) fail('authority_restart_mapping_count_mismatch', 'mapping count drifted')
   const observedSources = artifact.replay_mappings.map((mapping: JsonObject) => mapping.source_commit)
   if (!same(observedSources, binding.sourceCommits)) {
@@ -432,6 +512,8 @@ function assertMappings(root: string, artifact: JsonObject, binding: RepositoryB
     if (same(observedSet, expectedSet)) fail('authority_restart_mapping_order_mismatch', 'source mapping order drifted')
     fail('authority_restart_source_commit_mismatch', 'source mapping commit drifted')
   }
+  assertSourceSequence(root, binding, historicalAuthorityPaths)
+  assertPinnedSourceEvidence(root, binding)
   for (let index = 0; index < artifact.replay_mappings.length; index += 1) {
     const mapping = artifact.replay_mappings[index]
     if (binding.forbiddenSourceCommits?.includes(mapping.source_commit)) fail('authority_restart_source_commit_forbidden', 'superseded authority commits cannot be replayed')
@@ -439,7 +521,6 @@ function assertMappings(root: string, artifact: JsonObject, binding: RepositoryB
     const sourceParent = soleParent(root, mapping.source_commit)
     const replacementParent = soleParent(root, mapping.replacement_commit)
     if (mapping.source_parent !== sourceParent || mapping.replacement_parent !== replacementParent) fail('authority_restart_parent_mismatch', 'recorded mapping parent drifted')
-    if (index > 0 && mapping.source_parent !== artifact.replay_mappings[index - 1].source_commit) fail('authority_restart_parent_mismatch', 'source mapping parents are not contiguous')
     const sourcePatch = inspectStablePatchId(root, mapping.source_commit)
     const replacementPatch = inspectStablePatchId(root, mapping.replacement_commit)
     if (mapping.stable_patch_id !== sourcePatch || sourcePatch !== replacementPatch) fail('authority_restart_patch_id_mismatch', 'stable patch-id drifted')
@@ -450,9 +531,9 @@ function assertMappings(root: string, artifact: JsonObject, binding: RepositoryB
   if (artifact.replacement.authorized_base_head !== artifact.replay_mappings[0].replacement_parent || artifact.replacement.replay_head !== artifact.replay_mappings.at(-1).replacement_commit) fail('authority_restart_replay_head_mismatch', 'replacement replay endpoints drifted')
 }
 
-function assertRepository(root: string, artifact: JsonObject, binding: RepositoryBinding, exclusions: readonly string[]): void {
+function assertRepository(root: string, artifact: JsonObject, binding: RepositoryBinding, exclusions: readonly string[], historicalAuthorityPaths: readonly string[]): void {
   assertEndpoint(root, artifact, binding)
-  assertMappings(root, artifact, binding)
+  assertMappings(root, artifact, binding, historicalAuthorityPaths)
   const sourceTree = projectedTree(root, binding.supersededHead, exclusions)
   const replacementTree = projectedTree(root, artifact.replacement.replay_head, exclusions)
   if (!sourceTree.equals(replacementTree) || artifact.projected_tree_digest !== sha256(sourceTree)) fail('authority_restart_projected_tree_mismatch', 'projected path/mode/type/OID tuples drifted')
@@ -487,15 +568,16 @@ function assertCleanHead(root: string, branch: string, head: string): void {
   if (reviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout.length !== 0) fail('authority_restart_dirty_tree', 'replacement repository must be clean')
 }
 
-function assertSourceRepository(root: string, binding: RepositoryBinding): void {
+function assertSourceRepository(root: string, binding: RepositoryBinding, historicalAuthorityPaths: readonly string[]): void {
   assertCleanHead(root, binding.archivalBranch, binding.supersededHead)
   if (remoteUrlDigest(root) !== binding.remoteUrlDigest) fail('authority_restart_remote_mismatch', 'source remote origin differs from the pinned authority')
   if (binding.sourceCommits.length === 0 || binding.sourceCommits.at(-1) !== binding.supersededHead) fail('authority_restart_source_head_mismatch', 'source history does not terminate at the superseded head')
+  assertSourceSequence(root, binding, historicalAuthorityPaths)
+  assertPinnedSourceEvidence(root, binding)
   for (let index = 0; index < binding.sourceCommits.length; index += 1) {
     const commit = binding.sourceCommits[index]
     if (binding.forbiddenSourceCommits?.includes(commit)) fail('authority_restart_source_commit_forbidden', 'superseded authority commits cannot be replayed')
     if (resolveCommit(root, commit) !== commit) fail('authority_restart_source_commit_mismatch', 'source commit identity drifted')
-    if (index > 0 && soleParent(root, commit) !== binding.sourceCommits[index - 1]) fail('authority_restart_parent_mismatch', 'source commits are not contiguous')
     inspectStablePatchId(root, commit)
     inspectChangedPaths(root, commit)
   }
@@ -505,8 +587,8 @@ export function validatePhase1AuthorityRestartSource(options: SourceValidateOpti
   const bindings = options.bindings ?? AUTHORITY_RESTART_BINDINGS
   const ccRoot = realpathSync(options.ccGatewayRoot)
   const subRoot = realpathSync(options.sub2apiRoot)
-  assertSourceRepository(ccRoot, bindings.ccGateway)
-  assertSourceRepository(subRoot, bindings.sub2api)
+  assertSourceRepository(ccRoot, bindings.ccGateway, bindings.projectedTreePolicy.historicalAuthorityPaths)
+  assertSourceRepository(subRoot, bindings.sub2api, bindings.projectedTreePolicy.historicalAuthorityPaths)
   if (soleParent(ccRoot, bindings.ccGateway.quarantineCheckpoint) !== bindings.ccGateway.quarantineParent) fail('authority_restart_checkpoint_mismatch', 'quarantine checkpoint topology drifted')
   if (inspectStablePatchId(ccRoot, bindings.ccGateway.quarantineCheckpoint) !== bindings.ccGateway.quarantinePatchId
     || !same(inspectChangedPaths(ccRoot, bindings.ccGateway.quarantineCheckpoint), bindings.ccGateway.quarantineChangedPaths)) {
@@ -571,8 +653,8 @@ function validateArtifactSemantics(artifact: JsonObject, ccRoot: string, subRoot
   const exclusions = [...bindings.projectedTreePolicy.authorityRepairPaths, ...bindings.projectedTreePolicy.historicalAuthorityPaths]
   const excluded = new Set(exclusions)
   if (bindings.ccGateway.quarantineChangedPaths.some((entry) => (entry.old_path !== null && excluded.has(entry.old_path)) || (entry.new_path !== null && excluded.has(entry.new_path)))) fail('authority_restart_checkpoint_exclusion_overlap', 'checkpoint implementation paths cannot be excluded from projected-tree proof')
-  assertRepository(ccRoot, artifact.repositories.cc_gateway, bindings.ccGateway, exclusions)
-  assertRepository(subRoot, artifact.repositories.sub2api, bindings.sub2api, exclusions)
+  assertRepository(ccRoot, artifact.repositories.cc_gateway, bindings.ccGateway, exclusions, bindings.projectedTreePolicy.historicalAuthorityPaths)
+  assertRepository(subRoot, artifact.repositories.sub2api, bindings.sub2api, exclusions, bindings.projectedTreePolicy.historicalAuthorityPaths)
   assertInitialAuthorityTopology(artifact, ccRoot, subRoot, bindings)
   const ccReplacement = artifact.repositories.cc_gateway.replacement
   if (authorityPaths.plan.commit !== ccReplacement.remote_main_head || authorityPaths.plan_review.commit !== ccReplacement.authorized_base_head || authorityPaths.execution_context.commit !== ccReplacement.authorized_base_head) fail('authority_restart_authority_commit_mismatch', 'reviewed plan or initial authorization commit drifted')
