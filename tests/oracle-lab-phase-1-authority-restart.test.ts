@@ -72,12 +72,13 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
   const sub = path.join(parent, 'sub')
   const ccCommon = init(cc)
   const subCommon = init(sub)
-  const repairPaths = ['authority/plan.md']
+  const repairPaths = ['authority/execution-context.schema.json', 'authority/plan.md']
   const historicalPaths = ['authority/review.json', 'authority/context.json', 'authority/restart-old.json']
 
   git(cc, 'checkout', '-qb', 'cc-archive')
   const ccSourceAuthority = commit(cc, 'old authority', {
     'authority/plan.md': 'old plan\n',
+    'authority/execution-context.schema.json': 'old execution schema\n',
     'authority/review.json': 'old review\n',
     'authority/context.json': 'old context\n',
   })
@@ -90,7 +91,10 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
   const checkpoint = commit(cc, 'task seven quarantine', { 'app/task7.txt': 'quarantine\n' })
 
   git(cc, 'checkout', '-qb', 'codex/oracle-phase-1-cc-gateway', ccCommon)
-  const ccPlanMain = commit(cc, 'new plan', { 'authority/plan.md': 'new plan\n' })
+  const ccPlanMain = commit(cc, 'new plan', {
+    'authority/execution-context.schema.json': 'new execution schema\n',
+    'authority/plan.md': 'new plan\n',
+  })
   const replacementAuthorityChanges: Record<string, string> = {
     'authority/review.json': 'new review\n',
     'authority/context.json': 'new context\n',
@@ -200,6 +204,7 @@ assert.deepEqual(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.pinnedSourceEvidence.
 ])
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.ccGateway.sourceCommits.at(-1), tool.AUTHORITY_RESTART_BINDINGS.ccGateway.quarantineCheckpoint)
 assert.equal(tool.AUTHORITY_RESTART_BINDINGS.projectedTreePolicy.authorityRepairPaths.includes('tools/oracle-lab/phase-1-authority-bootstrap.mjs'), true)
+assert.equal(tool.AUTHORITY_RESTART_BINDINGS.projectedTreePolicy.authorityRepairPaths.includes('docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'), true)
 
 const valid = fixture()
 assert.equal(validateSchema(valid.artifact), true, JSON.stringify(validateSchema.errors))

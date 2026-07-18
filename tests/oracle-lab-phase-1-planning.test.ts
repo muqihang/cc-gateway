@@ -1664,6 +1664,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     plan,
     /Push `codex\/oracle-phase-1-sub2api-v8` and `codex\/oracle-phase-1-cc-gateway-v8`/,
   )
+  assert.match(
+    plan,
+    /Instance `0002` permits[\s\S]*?projected-tree policy retains the existing exact repair paths, adds exactly `docs\/superpowers\/schemas\/oracle-lab-phase-1-execution-context\.schema\.json` as the current v8 gate-schema authority path/,
+  )
 
   for (const required of [
     'Mid-Execution Plan Authority Repair Restart',
