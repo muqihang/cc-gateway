@@ -26,8 +26,12 @@ const expectedRemoteUrlDigests = {
   cc_gateway: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
   sub2api: 'sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9',
 } as const
+const expectedImplementationBranches = {
+  cc_gateway: 'codex/oracle-phase-1-cc-gateway-v8',
+  sub2api: 'codex/oracle-phase-1-sub2api-v8',
+} as const
 const expectedGateSchemaDigests = {
-  execution_context: 'sha256:5c0f18f3614b30fe82907a74746b1ce2ed7887868bfed1854715297c8e445086',
+  execution_context: 'sha256:0c9d478bbc5aa810da044c07c6fc0ffaf016aa014ff416b2ea75c6069dec4e56',
   plan_review: 'sha256:9c4262da2cc8620f6297ecdaacb39c6741fdaba3564a4c795da3d5149abab65a',
 } as const
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
@@ -221,7 +225,7 @@ function repositoryContextState(commit: string, statusEntries: string[], remoteU
     remote_name: 'muqihang',
     remote_url_digest: remoteUrlDigest,
     tracking_ref: 'refs/remotes/muqihang/main',
-    implementation_branch: 'codex/oracle-phase-1-cc-gateway',
+    implementation_branch: expectedImplementationBranches.cc_gateway,
     pre_issue_clean: true,
     validation_status: validationStatus(statusEntries),
   }
@@ -271,7 +275,7 @@ function executionContextFixture(): Value {
       ]),
       sub2api: {
         ...repositoryContextState(commit, [], expectedRemoteUrlDigests.sub2api),
-        implementation_branch: 'codex/oracle-phase-1-sub2api',
+        implementation_branch: expectedImplementationBranches.sub2api,
       },
     },
     shared_contract: {
@@ -1638,6 +1642,32 @@ test('Phase 1 plan closes context refresh, review, merge-topology, and retry lif
 
 test('Phase 1 mid-execution plan repair restarts canonical initial authority instead of mutating a successor chain', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
+  const executionContextSchema = await json(executionContextSchemaPath)
+
+  assert.equal(
+    executionContextSchema.properties.repositories.properties.cc_gateway.allOf[1].properties.implementation_branch.const,
+    expectedImplementationBranches.cc_gateway,
+  )
+  assert.equal(
+    executionContextSchema.properties.repositories.properties.sub2api.allOf[1].properties.implementation_branch.const,
+    expectedImplementationBranches.sub2api,
+  )
+  assert.match(
+    plan,
+    /current replacement branch and worktree: `codex\/oracle-phase-1-sub2api-v8` and `codex\/oracle-phase-1-cc-gateway-v8`/,
+  )
+  assert.match(
+    plan,
+    /current branches are exactly `codex\/oracle-phase-1-cc-gateway-v8` and `codex\/oracle-phase-1-sub2api-v8`/,
+  )
+  assert.match(
+    plan,
+    /Push `codex\/oracle-phase-1-sub2api-v8` and `codex\/oracle-phase-1-cc-gateway-v8`/,
+  )
+  assert.match(
+    plan,
+    /Instance `0002` permits[\s\S]*?projected-tree policy retains the existing exact repair paths, adds exactly `docs\/superpowers\/schemas\/oracle-lab-phase-1-execution-context\.schema\.json` as the current v8 gate-schema authority path/,
+  )
 
   for (const required of [
     'Mid-Execution Plan Authority Repair Restart',

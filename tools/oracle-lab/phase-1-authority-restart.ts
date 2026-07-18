@@ -92,6 +92,7 @@ export const AUTHORITY_RESTART_BINDINGS: AuthorityRestartBindings = Object.freez
     authorityRepairPaths: Object.freeze([
       'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md',
       'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
+      'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json',
       'tests/oracle-lab-governance-amendment-evidence.test.ts',
       'tests/oracle-lab-ignored-path-inventory.test.ts',
       'tests/oracle-lab-phase-1-planning.test.ts',

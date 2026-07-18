@@ -120,13 +120,13 @@
         "cc_gateway": {
           "allOf": [
             {"$ref": "#/$defs/repository"},
-            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-cc-gateway"}, "remote_url_digest": {"const": "sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a"}}}
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-cc-gateway-v8"}, "remote_url_digest": {"const": "sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a"}}}
           ]
         },
         "sub2api": {
           "allOf": [
             {"$ref": "#/$defs/repository"},
-            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-sub2api"}, "remote_url_digest": {"const": "sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9"}}}
+            {"properties": {"implementation_branch": {"const": "codex/oracle-phase-1-sub2api-v8"}, "remote_url_digest": {"const": "sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9"}}}
           ]
         }
       }
