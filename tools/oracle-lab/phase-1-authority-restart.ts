@@ -1,10 +1,9 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-
-import Ajv2020 from 'ajv/dist/2020.js'
 
 import {
   REVIEWED_GIT_ENVIRONMENT,
@@ -477,6 +476,7 @@ function buildRepository(root: string, binding: RepositoryBinding, replacementCo
 function schemaValidator(): ((value: unknown) => boolean) & { errors?: unknown } {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
   const schema = JSON.parse(readFileSync(path.join(repositoryRoot, AUTHORITY_RESTART_BINDINGS.schemaPath), 'utf8'))
+  const Ajv2020 = createRequire(import.meta.url)('ajv/dist/2020.js').default
   const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false })
   return ajv.compile(schema) as ((value: unknown) => boolean) & { errors?: unknown }
 }

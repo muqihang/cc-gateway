@@ -24,6 +24,7 @@ const RUNTIME_PATHS = Object.freeze([
   'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
   'tools/oracle-lab/phase-1-authority-restart.ts',
   'tools/oracle-lab/secure-runtime.ts',
+  'package.json',
   'package-lock.json',
 ])
 
@@ -211,6 +212,32 @@ function verifyRuntime(repositoryRoot, git) {
   }
 }
 
+function installDependencies(targetRoot, npm, commandCache) {
+  const installed = spawnSync(npm, ['ci', '--offline', '--ignore-scripts', '--cache', commandCache, '--prefix', targetRoot], {
+    cwd: targetRoot,
+    encoding: 'buffer',
+    env: {
+      HOME: '/dev/null',
+      TMPDIR: '/tmp',
+      PATH: `${path.dirname(process.execPath)}:${path.dirname(npm)}:/usr/bin:/bin`,
+      LANG: 'C',
+      LC_ALL: 'C',
+      TZ: 'UTC',
+      CI: '1',
+      npm_config_offline: 'true',
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+      npm_config_cache: commandCache,
+      npm_config_userconfig: '/dev/null',
+      npm_config_globalconfig: '/nonexistent/oracle-lab-empty-global-npmrc',
+    },
+    maxBuffer: 32 * 1024 * 1024,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (installed.error || installed.signal !== null || installed.status !== 0) fail('authority_restart_dependency_install_failed')
+}
+
 function prepareDependencies(repositoryRoot, npm) {
   const account = userInfo()
   const npmRoot = path.join(account.homedir, '.npm')
@@ -236,29 +263,24 @@ function prepareDependencies(repositoryRoot, npm) {
     fail('authority_restart_dependency_cache_unstable')
   }
 
-  const installed = spawnSync(npm, ['ci', '--offline', '--ignore-scripts', '--cache', commandCache, '--prefix', repositoryRoot], {
-    cwd: repositoryRoot,
-    encoding: 'buffer',
-    env: {
-      HOME: '/dev/null',
-      TMPDIR: '/tmp',
-      PATH: `${path.dirname(process.execPath)}:${path.dirname(npm)}:/usr/bin:/bin`,
-      LANG: 'C',
-      LC_ALL: 'C',
-      TZ: 'UTC',
-      CI: '1',
-      npm_config_offline: 'true',
-      npm_config_audit: 'false',
-      npm_config_fund: 'false',
-      npm_config_cache: commandCache,
-      npm_config_userconfig: '/dev/null',
-      npm_config_globalconfig: '/nonexistent/oracle-lab-empty-global-npmrc',
-    },
-    maxBuffer: 32 * 1024 * 1024,
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  if (installed.error || installed.signal !== null || installed.status !== 0) fail('authority_restart_dependency_install_failed')
+  const dependencyRoot = mkdtempSync('/tmp/oracle-phase1-authority-dependencies.')
+  chmodSync(dependencyRoot, 0o700)
+  assertRealDirectory(dependencyRoot, account.uid, true)
+  for (const file of ['package.json', 'package-lock.json']) {
+    const source = path.join(repositoryRoot, file)
+    const destination = path.join(dependencyRoot, file)
+    const before = lstatSync(source, { bigint: true })
+    if (!before.isFile() || before.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
+    const bytes = readFileSync(source)
+    copyFileCow(source, destination)
+    chmodSync(destination, 0o600)
+    const after = lstatSync(source, { bigint: true })
+    if (!sameMetadata(before, after) || !readFileSync(destination).equals(bytes) || !readFileSync(source).equals(bytes)) {
+      fail('authority_restart_runtime_binding_mismatch')
+    }
+  }
+  installDependencies(dependencyRoot, npm, commandCache)
+  return Object.freeze({ dependencyRoot, commandCache })
 }
 
 function assertCanonicalCliPaths(parsed, bindings) {
@@ -280,8 +302,8 @@ function authorityFromCommit(root, git, file, commit) {
   return Object.freeze({ path: file, digest: sha256(bytes), commit })
 }
 
-async function runAuthorityCommand(repositoryRoot, git, argv) {
-  const apiPath = path.join(repositoryRoot, 'node_modules/tsx/dist/esm/api/index.mjs')
+async function runAuthorityCommand(repositoryRoot, git, npm, dependencies, argv) {
+  const apiPath = path.join(dependencies.dependencyRoot, 'node_modules/tsx/dist/esm/api/index.mjs')
   const toolPath = path.join(repositoryRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')
   for (const target of [apiPath, toolPath]) {
     const metadata = lstatSync(target)
@@ -300,6 +322,8 @@ async function runAuthorityCommand(repositoryRoot, git, argv) {
     bindings,
   })
   if (parsed.command === 'validate-source') return
+
+  installDependencies(repositoryRoot, npm, dependencies.commandCache)
 
   const ccRoot = realpathSync(parsed.values['cc-replacement-root'])
   const subRoot = realpathSync(parsed.values['sub2api-replacement-root'])
@@ -344,8 +368,9 @@ async function main(argv) {
   if (repositoryRoot !== moduleRoot) fail('authority_restart_runtime_binding_mismatch')
   const git = selectTool('git')
   verifyRuntime(repositoryRoot, git)
-  prepareDependencies(repositoryRoot, selectTool('npm'))
-  await runAuthorityCommand(repositoryRoot, git, argv)
+  const npm = selectTool('npm')
+  const dependencies = prepareDependencies(repositoryRoot, npm)
+  await runAuthorityCommand(repositoryRoot, git, npm, dependencies, argv)
 }
 
 try {

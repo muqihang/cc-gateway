@@ -458,9 +458,15 @@ for (const required of [
   "spawnSync('/bin/cp', ['-c'",
   "path.join(npmRoot, '_cacache')",
   "['ci', '--offline', '--ignore-scripts'",
+  "mkdtempSync('/tmp/oracle-phase1-authority-dependencies.')",
+  'installDependencies(repositoryRoot, npm, dependencies.commandCache)',
   'runAuthorityCommand',
   'sourceBefore.digest !== sourceAfter.digest',
 ]) assert.ok(bootstrap.includes(required), required)
+assert.ok(
+  bootstrap.indexOf('tool.validatePhase1AuthorityRestartSource') < bootstrap.indexOf('installDependencies(repositoryRoot, npm, dependencies.commandCache)'),
+  'source authority must validate before replacement dependency installation',
+)
 assert.equal(bootstrap.includes('runAuthorityRestartCli'), false)
 const injectedLauncher = spawnSync('/bin/sh', [launcherPath, 'validate-source'], {
   cwd: root,
@@ -496,10 +502,21 @@ const positiveLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/ora
   env: { ...process.env, npm_config_cache: '/dev/null/forged-cache' },
 })
 assert.equal(positiveLauncher.status, 0, `${positiveLauncher.stdout}\n${positiveLauncher.stderr}`)
-assert.equal(existsSync(path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs')), true)
+assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'validate-runtime must keep dependencies outside the replacement root')
 
+const invalidSourceLauncher = spawnSync(path.join(positiveRoot, 'tools/oracle-lab/oracle-phase1-authority-restart'), [
+  'validate-source',
+  '--cc-source-root', path.join(positiveParent, 'missing-cc-source'),
+  '--cc-replacement-root', positiveRoot,
+  '--sub2api-source-root', path.join(positiveParent, 'missing-sub-source'),
+  '--sub2api-replacement-root', path.join(positiveParent, 'unused-sub-replacement'),
+], { cwd: positiveRoot, encoding: 'utf8', env: process.env })
+assert.notEqual(invalidSourceLauncher.status, 0, 'invalid source authority must fail')
+assert.equal(existsSync(path.join(positiveRoot, 'node_modules')), false, 'source validation failure must not mutate replacement dependencies')
+
+const reviewedTsxCli = path.join(root, 'node_modules/tsx/dist/cli.mjs')
 const directBypass = spawnSync(process.execPath, [
-  path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs'),
+  reviewedTsxCli,
   path.join(positiveRoot, 'tools/oracle-lab/phase-1-authority-restart.ts'),
   'validate-runtime',
   '--cc-replacement-root', positiveRoot,
@@ -545,14 +562,15 @@ const importBypassExpression = `
   console.log('TSX_EVAL_BYPASS_REACHED');
 `
 const tsxEvalBypass = spawnSync(process.execPath, [
-  path.join(positiveRoot, 'node_modules/tsx/dist/cli.mjs'),
+  reviewedTsxCli,
   '-e', importBypassExpression,
 ], { cwd: positiveRoot, encoding: 'utf8', env: forgedCliEnvironment })
 assert.notEqual(tsxEvalBypass.status, 0, 'tsx -e import must not expose an authority command dispatcher')
 assert.equal(tsxEvalBypass.stderr.trim(), 'authority_restart_direct_invocation_forbidden')
 
+const reviewedTsImportApi = pathToFileURL(path.join(root, 'node_modules/tsx/dist/esm/api/index.mjs')).href
 const tsImportBypassExpression = `
-  const { tsImport } = await import('./node_modules/tsx/dist/esm/api/index.mjs');
+  const { tsImport } = await import(${JSON.stringify(reviewedTsImportApi)});
   const tool = await tsImport('./tools/oracle-lab/phase-1-authority-restart.ts', import.meta.url);
   if (typeof tool.runAuthorityRestartCli !== 'function') {
     console.error('authority_restart_direct_invocation_forbidden');
