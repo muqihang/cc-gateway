@@ -1702,6 +1702,7 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
     '38cf6ab4d02cd2cda9b0728ced236972235587e1',
     '0a97b3f3b84b5c679788b3694d5840e235031f07',
     'refs/oracle-lab/authenticated-production-head',
+    'authority_restart_source_ref_leak',
   ]) assert(plan.includes(required), required)
 
   assert.match(plan, /plan, review, or gate-schema drift is never represented as an ordinary successor context/)
@@ -1730,6 +1731,10 @@ test('Phase 1 mid-execution plan repair restarts canonical initial authority ins
   assert.match(plan, /must not materialize `refs\/heads\/codex\/oracle-p0-1-governance` as hidden preflight state/)
   assert.match(plan, /creates the production branch only inside its temporary destination/)
   assert.match(plan, /Any present local or remote-tracking ref with a different head, an absent pair, or an ambiguous repository role fails closed/)
+  assert.match(plan, /archival branches exist only in the explicit source roots/)
+  assert.match(plan, /Replacement roots import only the compiled source commit objects needed for replay/)
+  assert.match(plan, /Every other command revalidates both explicit source roots before inspecting or writing either replacement root/)
+  assert.match(plan, /must not contain `refs\/heads\/codex\/oracle-phase-1-h1-cache-checkpoint` or `refs\/heads\/codex\/oracle-phase-1-sub2api`/)
   assert.match(plan, /then begin Task 8 with a fresh feature-capture context and fresh baseline\/results/)
 })
 
