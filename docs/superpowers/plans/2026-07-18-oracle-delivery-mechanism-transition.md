@@ -3,7 +3,8 @@
 ## Status
 
 - Date: 2026-07-18
-- State: candidate transition plan; no implementation or Phase 1 execution authority
+- State: operator-approved transition plan; implementation authority begins only with the exact
+  Task 0 expected-RED gate, while Phase 1 execution remains paused
 - CC Gateway planning base: `ed4ef46dc41b547ecee9ec25dda974274c5cd110`
 - Sub2API remote-main discovery base: `b0b77933716487da5fca00329443f88ce9a1c3db`
 - Governing delivery mechanics:
@@ -23,8 +24,8 @@
   publication, production, real canary, or upstream traffic.
 
 This document is the compact Phase Acceptance Contract and implementation plan for the delivery
-mechanism transition. Implementation begins only after operator approval and the real expected-RED
-rehearsal in Task 0.
+mechanism transition. Operator approval is recorded; implementation begins only after the real
+expected-RED rehearsal in Task 0.
 
 ## 1. Goal
 
