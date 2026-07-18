@@ -117,7 +117,10 @@ The Program Baseline Envelope binds immutable authority:
 
 The envelope changes only when one of those authority inputs changes. Expiry alone does not change
 it. A main-branch advance that is not the bound commit requires a new envelope; ancestry alone is
-insufficient.
+insufficient. The initial envelope is frozen only after a draft Phase Acceptance Contract exists,
+so it binds that contract's exact digest. If the bounded acceptance-contract review changes an
+authority input, one consolidated update replaces the envelope and re-proves the expected RED;
+remaining material findings after closure stop the phase instead of starting another envelope loop.
 
 ### 4.2 Run Lease
 
@@ -127,12 +130,19 @@ The Run Lease is short-lived execution authority. It binds:
 - exact worktree realpaths, branches, and current heads;
 - clean-state digests;
 - stage and state-machine position;
+- the one authorized transition identifier and its permitted-delta digest;
 - issue time, expiry, and controller identity;
 - disabled network and sensitivity policy.
 
-A lease refresh rechecks those facts but does not reopen the baseline review. It cannot change a
-plan, schema, contract, repository head, phase state, or allowed delta. If any immutable binding
-changes, refresh fails and a new Program Baseline Envelope is required.
+A same-state lease refresh rechecks those facts but does not reopen the baseline review. It cannot
+change a plan, schema, contract, repository head, phase state, transition, or allowed delta.
+
+A successful declared transition issues a chained successor lease. The successor binds the prior
+lease digest, completed transition identifier, validated observed delta, resulting clean heads, and
+the contract-declared next state. This ordinary head and state advance does not reopen baseline
+review because the unchanged envelope already authorized that exact transition. No successor may be
+issued for an undeclared delta, invalid predecessor, expired execution, or non-unique next state. A
+change to immutable envelope authority still requires a replacement Program Baseline Envelope.
 
 ### 4.3 Phase Acceptance Contract
 
@@ -272,8 +282,11 @@ T2 is mandatory before integrated review and after any authority repair.
 - sample count and stop rule follow the Hardening Amendments convergence procedure;
 - repeated runs are driven by a declared confidence or flakiness hypothesis.
 
-T3 runs once on a stable vertical-GREEN tip, with only the repetitions required by its declared
-budget. There is no universal three-run rule.
+T3 runs once per stable vertical-GREEN candidate tip, with only the repetitions required by its
+declared budget. There is no universal three-run rule. Its record binds that immutable tip and the
+T2 transaction digest. A closure fix invalidates every T3 campaign whose declared inputs, changed
+paths, or covered invariants intersect the fix; those campaigns rerun on the closure tip. Reuse of
+an unaffected campaign requires digest-bound proof that all three sets are disjoint and unchanged.
 
 ### T4: Complete Local Staging or Canary
 
@@ -309,6 +322,8 @@ After T2 is GREEN, one integrated review examines the immutable tip and transact
 - All genuine Critical and Important findings are batched into one fix wave.
 - Minor findings enter the durable ledger and do not reopen implementation.
 - One closure review is allowed after the batch.
+- Before closure review, the batch reruns its T0/T1 tests, T2, and every affected T3 campaign on the
+  new immutable tip. Exit evidence cannot mix a repaired T2 tip with stale campaign evidence.
 - A further loop requires a demonstrable Critical regression introduced by that batch, with exact
   reproduction and affected requirement.
 - If Critical or Important findings remain after closure, the phase stops and the architecture or
@@ -341,15 +356,19 @@ Each future phase follows this order:
 
 1. Read predecessor handoff and governing requirement slices.
 2. Perform repository, artifact, and environment discovery.
-3. Freeze the Program Baseline Envelope.
-4. Write the Phase Acceptance Contract and vertical transaction skeleton.
-5. Run the real transaction to the exact expected RED.
-6. Review the acceptance contract once.
+3. Draft the Phase Acceptance Contract and vertical transaction skeleton.
+4. Freeze the Program Baseline Envelope with the draft contract digest.
+5. Issue the sequence-zero Run Lease and run the real transaction to the exact expected RED.
+6. Review the acceptance contract once. Batch material corrections once; when they change authority,
+   freeze one replacement envelope, issue a new sequence-zero lease, and re-prove the RED before
+   closure. Remaining Critical or Important findings stop the phase.
 7. Write the detailed implementation plan using discovered files and symbols.
-8. Implement in small task commits with T0 and T1.
+8. Implement in small task commits with T0 and T1, issuing a validated chained successor lease for
+   each contract-declared head and state transition.
 9. Integrate tasks and run T2 with real pinned inputs.
 10. Run T3 only on the stable T2-GREEN tip.
-11. Perform the bounded integrated review and one closure wave if needed.
+11. Perform the bounded integrated review. If one closure wave is needed, rerun T0/T1, T2, and all
+    affected T3 campaigns on its immutable tip before the single closure review.
 12. Merge, rerun the required integrated transaction on merged heads, and issue the exit handoff.
 
 The detailed plan is just in time. The program does not write all future phase file-level plans
@@ -646,14 +665,20 @@ The following failure modes were considered and bounded:
   expected RED, not a fabricated full pass. Full GREEN is required only after implementation.
 - **Research forced into a claim:** P3A may end GREEN with `unknown` or `disabled` when the method,
   convergence, and claim boundary are correct.
-- **Lease churn reopens review:** an unchanged Run Lease refresh never changes baseline authority
-  and does not trigger holistic review.
+- **Baseline cannot bind a later contract:** the contract is drafted before the initial envelope;
+  one reviewed contract correction may replace the envelope and re-prove RED, after which remaining
+  material findings stop the phase.
+- **Lease churn reopens review:** an unchanged same-state refresh does not trigger holistic review,
+  while each declared transition produces a digest-chained successor lease bound to its validated
+  resulting head and state.
 - **One large review batch hides task defects:** task commits still run T0/T1; only independent
   integrated review is batched after T2.
 - **One repair wave becomes unlimited:** a single closure wave is allowed; remaining material
   findings force simplification and operator decision.
 - **Full-suite repetition becomes ritual:** repetition requires a named hypothesis and budget;
   otherwise one stable T3 run is the default.
+- **Closure changes leave stale campaign evidence:** the closure tip reruns T2 and every intersecting
+  T3 campaign; reuse requires digest-bound proof that inputs, paths, and invariants are unchanged.
 - **Minor findings are used to block delivery:** Minor and optional hardening enter the durable
   ledger and cannot reopen the phase.
 - **Workspace limits destroy evidence:** active roots and minimal reproductions are protected;

@@ -75,7 +75,8 @@ No conflict, requirement, or authority statement may be silently replaced or sup
 9. Final integrated review requires the post-implementation real vertical transaction record.
    Synthetic fixtures and repeated broad suites are supplementary and cannot replace that record.
 10. Immutable design and repository authority belongs to a Program Baseline Envelope. Short-lived
-    execution freshness belongs to a Run Lease. Refreshing an unchanged lease does not reopen
+    execution freshness belongs to a Run Lease. Refreshing an unchanged same-state lease, or
+    issuing a chained successor after an exact contract-authorized transition, does not reopen
     baseline review.
 11. Every phase declares test, review, repair, workspace, cache, and evidence budgets using the
     Delivery Operating Model v2 rules. Exhausting a budget triggers simplification or operator
