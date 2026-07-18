@@ -169,11 +169,15 @@ function fixture(options: { projectedTupleDrift?: boolean; extraCcAuthorizedBase
       sub2api: [subReplacement1, subReplacement2],
     },
   }
-  const artifact = tool.buildPhase1AuthorityRestart(input, bindings)
   const ccSourceRoot = path.join(parent, 'cc-source')
   const subSourceRoot = path.join(parent, 'sub-source')
-  git(cc, 'worktree', 'add', '--quiet', ccSourceRoot, 'cc-archive')
-  git(sub, 'worktree', 'add', '--quiet', subSourceRoot, 'sub-archive')
+  execFileSync('git', ['clone', '--shared', '--quiet', '--branch', 'cc-archive', cc, ccSourceRoot], { stdio: 'pipe' })
+  execFileSync('git', ['clone', '--shared', '--quiet', '--branch', 'sub-archive', sub, subSourceRoot], { stdio: 'pipe' })
+  git(ccSourceRoot, 'remote', 'add', 'muqihang', 'https://example.invalid/cc.git')
+  git(subSourceRoot, 'remote', 'add', 'muqihang', 'https://example.invalid/sub.git')
+  git(cc, 'update-ref', '-d', 'refs/heads/cc-archive')
+  git(sub, 'update-ref', '-d', 'refs/heads/sub-archive')
+  const artifact = tool.buildPhase1AuthorityRestart(input, bindings)
   return { parent, cc, sub, ccSourceRoot, subSourceRoot, bindings, input, artifact, ccPlanMain, ccContextCommit, ccReplacementBase, subReplacementBase, checkpoint, ccSource2, skippedAuthorityCommit }
 }
 
@@ -215,6 +219,13 @@ tool.validatePhase1AuthorityRestart(valid.artifact, {
   sub2apiRoot: valid.sub,
   bindings: valid.bindings,
 })
+const leakedArchivalRef = fixture()
+git(leakedArchivalRef.cc, 'update-ref', 'refs/heads/cc-archive', leakedArchivalRef.checkpoint)
+expectCode(() => tool.validatePhase1AuthorityRestart(leakedArchivalRef.artifact, {
+  ccGatewayRoot: leakedArchivalRef.cc,
+  sub2apiRoot: leakedArchivalRef.sub,
+  bindings: leakedArchivalRef.bindings,
+}), 'authority_restart_source_ref_leak')
 tool.validatePhase1AuthorityRestartSource({
   ccGatewayRoot: valid.ccSourceRoot,
   sub2apiRoot: valid.subSourceRoot,

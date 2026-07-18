@@ -498,7 +498,10 @@ function assertAuthority(root: string, value: AuthorityArtifact): void {
 
 function assertEndpoint(root: string, artifact: JsonObject, binding: RepositoryBinding): void {
   if (artifact.superseded.head !== binding.supersededHead || artifact.superseded.branch !== binding.archivalBranch) fail('authority_restart_source_head_mismatch', 'superseded repository binding drifted')
-  if (resolveCommit(root, `refs/heads/${binding.archivalBranch}`) !== binding.supersededHead) fail('authority_restart_source_head_mismatch', 'archival branch does not pin the superseded head')
+  const archivalRef = `refs/heads/${binding.archivalBranch}`
+  if (reviewedGit(root, ['show-ref', '--verify', '--quiet', archivalRef], { allowedExitCodes: [0, 1] }).status === 0) {
+    fail('authority_restart_source_ref_leak', 'archival branch must remain isolated from the replacement repository')
+  }
   if (artifact.replacement.branch !== binding.replacementBranch) fail('authority_restart_branch_mismatch', 'replacement branch binding drifted')
   if (artifact.superseded.remote_url_digest !== binding.remoteUrlDigest || artifact.replacement.remote_url_digest !== binding.remoteUrlDigest || remoteUrlDigest(root) !== binding.remoteUrlDigest) fail('authority_restart_remote_mismatch', 'remote origin binding drifted')
   if (resolveCommit(root, 'refs/remotes/muqihang/main') !== artifact.replacement.remote_main_head) fail('authority_restart_remote_mismatch', 'frozen remote main drifted')
