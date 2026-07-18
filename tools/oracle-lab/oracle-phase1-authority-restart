@@ -36,8 +36,6 @@ select_tool() {
 
 node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
 git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
-bootstrap_entry=$tool_root/tools/oracle-lab/phase-1-authority-bootstrap.mjs
-
 reviewed_git() {
   /usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
@@ -68,15 +66,24 @@ for file in \
 do
   [ -f "$tool_root/$file" ] && [ ! -L "$tool_root/$file" ] || fail_startup
   current_oid=$(reviewed_git hash-object -- "$file") || fail_startup
-  reviewed_oid=$(reviewed_git rev-parse "$tool_upstream:$file") || fail_startup
+  reviewed_oid=$(reviewed_git rev-parse "$tool_head:$file") || fail_startup
   [ "$current_oid" = "$reviewed_oid" ] || fail_startup
 done
 
-[ -f "$bootstrap_entry" ] && [ ! -L "$bootstrap_entry" ] || fail_startup
+umask 077
+bootstrap_root=$(/usr/bin/mktemp -d /tmp/oracle-phase1-authority-bootstrap.XXXXXX) || fail_startup
+/bin/chmod 700 "$bootstrap_root" || fail_startup
+[ -d "$bootstrap_root" ] && [ ! -L "$bootstrap_root" ] || fail_startup
+bootstrap_snapshot=$bootstrap_root/phase-1-authority-bootstrap.mjs
+reviewed_git show "$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs" > "$bootstrap_snapshot" || fail_startup
+/bin/chmod 600 "$bootstrap_snapshot" || fail_startup
+[ -f "$bootstrap_snapshot" ] && [ ! -L "$bootstrap_snapshot" ] || fail_startup
 
 exec /usr/bin/env -i \
   HOME=/dev/null TMPDIR=/tmp PATH="${node_executable%/*}:${git_executable%/*}:/usr/bin:/bin" \
   LANG=C LC_ALL=C TZ=UTC \
   ORACLE_PHASE1_AUTHORITY_LAUNCHER=posix-v1 \
+  ORACLE_PHASE1_AUTHORITY_BOOTSTRAP=reviewed-git-object-v2 \
+  ORACLE_PHASE1_AUTHORITY_TOOL_ROOT="$tool_root" \
   ORACLE_P0_1_NODE="$node_executable" ORACLE_P0_1_GIT="$git_executable" \
-  "$node_executable" "$bootstrap_entry" "$@"
+  "$node_executable" "$bootstrap_snapshot" "$@"

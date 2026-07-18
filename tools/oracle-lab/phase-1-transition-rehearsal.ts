@@ -163,18 +163,44 @@ function assertAuthorizationRoot(root: string, binding: RepositoryRehearsalBindi
   }
 }
 
-function createExclusiveDirectory(target: string, code: string): string {
+function exclusiveDirectoryCandidate(target: string, code: string): string {
   const parent = assertRealDirectory(path.dirname(target), code)
   const basename = path.basename(target)
   if (basename === '.' || basename === '..' || basename.includes(path.sep)) fail(code, 'transaction root basename is invalid')
-  const destination = path.join(parent, basename)
+  return path.join(parent, basename)
+}
+
+function createExclusiveDirectory(target: string, code: string, retained: string[]): string {
+  const destination = exclusiveDirectoryCandidate(target, code)
   if (existsSync(target) || existsSync(destination)) fail(code, 'exclusive transaction root already exists')
-  mkdirSync(destination, { mode: 0o700 })
-  chmodSync(destination, 0o700)
-  const canonical = realpathSync(destination)
-  const metadata = lstatSync(canonical)
-  if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o777) !== 0o700) fail(code, 'transaction root is not an exclusive 0700 directory')
-  return canonical
+  try { mkdirSync(destination, { mode: 0o700 }) } catch { fail(code, 'exclusive transaction root could not be created', retained) }
+  retained.push(destination)
+  try {
+    chmodSync(destination, 0o700)
+    const canonical = realpathSync(destination)
+    const metadata = lstatSync(canonical)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink() || (metadata.mode & 0o777) !== 0o700) fail(code, 'transaction root is not an exclusive 0700 directory', retained)
+    retained[retained.length - 1] = canonical
+    return canonical
+  } catch (error) {
+    if (Array.isArray((error as { retained_cleanup_roots?: unknown }).retained_cleanup_roots)) throw error
+    fail(code, 'exclusive transaction root validation failed', retained)
+  }
+}
+
+function rootsOverlap(left: string, right: string): boolean {
+  const relative = path.relative(left, right)
+  const reverse = path.relative(right, left)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+    || (!reverse.startsWith(`..${path.sep}`) && reverse !== '..' && !path.isAbsolute(reverse))
+}
+
+function assertRootContainment(protectedRoots: readonly string[], replacementParent: string, outputRoot: string): void {
+  const transactionRoots = [replacementParent, outputRoot]
+  if (rootsOverlap(replacementParent, outputRoot)
+    || protectedRoots.some((protectedRoot) => transactionRoots.some((transactionRoot) => rootsOverlap(protectedRoot, transactionRoot)))) {
+    fail('transition_rehearsal_root_alias', 'transaction roots must not overlap preserved or tool roots')
+  }
 }
 
 function spawnReviewedGit(root: string, args: readonly string[]): void {
@@ -339,14 +365,15 @@ export async function runPhase1TransitionRehearsal(
 
   if (existsSync(input.replacement_parent_root)) fail('transition_rehearsal_replacement_exists', 'replacement parent must be absent')
   if (existsSync(input.output_root)) fail('transition_rehearsal_output_exists', 'output root must be absent')
-  const replacementParent = createExclusiveDirectory(input.replacement_parent_root, 'transition_rehearsal_replacement_exists')
-  const outputRoot = createExclusiveDirectory(input.output_root, 'transition_rehearsal_output_exists')
-  const ccRoot = createExclusiveDirectory(path.join(replacementParent, 'cc'), 'transition_rehearsal_replacement_exists')
-  const subRoot = createExclusiveDirectory(path.join(replacementParent, 'sub2api'), 'transition_rehearsal_replacement_exists')
-  const retained = Object.freeze([replacementParent, outputRoot, ccRoot, subRoot])
-  if (new Set([input.tool_root, ccRoot, subRoot, outputRoot]).size !== 4) fail('transition_rehearsal_root_alias', 'tool, replacement, and output roots must be distinct', retained)
-
+  const replacementCandidate = exclusiveDirectoryCandidate(input.replacement_parent_root, 'transition_rehearsal_replacement_exists')
+  const outputCandidate = exclusiveDirectoryCandidate(input.output_root, 'transition_rehearsal_output_exists')
+  assertRootContainment(snapshots.map((snapshot) => snapshot.root), replacementCandidate, outputCandidate)
+  const retained: string[] = []
   try {
+    const replacementParent = createExclusiveDirectory(replacementCandidate, 'transition_rehearsal_replacement_exists', retained)
+    const outputRoot = createExclusiveDirectory(outputCandidate, 'transition_rehearsal_output_exists', retained)
+    const ccRoot = createExclusiveDirectory(path.join(replacementParent, 'cc'), 'transition_rehearsal_replacement_exists', retained)
+    const subRoot = createExclusiveDirectory(path.join(replacementParent, 'sub2api'), 'transition_rehearsal_replacement_exists', retained)
     prepareReplacementRoot(ccRoot, input.cc_authorization_root, input.cc_source_root, bindings.cc_gateway)
     prepareReplacementRoot(subRoot, input.sub2api_authorization_root, input.sub2api_source_root, bindings.sub2api)
     const ccCommits = replayCompiledCommits(ccRoot, bindings.cc_gateway.source_commits)
@@ -440,10 +467,13 @@ export async function runPhase1TransitionRehearsal(
     const recordBytes = Buffer.from(`${canonicalDeliveryJson(record)}\n`, 'utf8')
     const recordPath = path.join(outputRoot, TRANSACTION_RECORD)
     writeFileSync(recordPath, recordBytes, { flag: 'wx', mode: 0o600 })
+    assertPreservedSnapshots(snapshots)
     return Object.freeze(structuredClone(record))
   } catch (error) {
-    if (Array.isArray((error as { retained_cleanup_roots?: unknown }).retained_cleanup_roots)) throw error
-    throw Object.assign(error as Error, { retained_cleanup_roots: retained })
+    const recorded = Array.isArray((error as { retained_cleanup_roots?: unknown }).retained_cleanup_roots)
+      ? (error as { retained_cleanup_roots: string[] }).retained_cleanup_roots
+      : []
+    throw Object.assign(error as Error, { retained_cleanup_roots: Object.freeze([...new Set([...retained, ...recorded])]) })
   }
 }
 

@@ -170,3 +170,27 @@ test('pre-existing outputs and failed launcher runs fail closed without cleanup'
   assert.equal(existsSync(failed.input.output_root), true)
   assert.equal(existsSync(path.join(failed.input.output_root, 'phase-1-transition-transaction.json')), false)
 })
+
+test('replacement and output roots cannot overlap any preserved input root', async () => {
+  const nestedOutput = fixture()
+  const outputInsideSource = { ...nestedOutput.input, output_root: path.join(nestedOutput.input.cc_source_root, 'transaction-output') }
+  await expectCode(() => runPhase1TransitionRehearsal(outputInsideSource, nestedOutput.bindings, nestedOutput.dependencies), 'transition_rehearsal_root_alias')
+  assert.equal(existsSync(outputInsideSource.output_root), false)
+  assert.equal(git(nestedOutput.input.cc_source_root, 'status', '--porcelain=v1'), '')
+
+  const nestedReplacement = fixture()
+  const replacementInsideAuthorization = { ...nestedReplacement.input, replacement_parent_root: path.join(nestedReplacement.input.sub2api_authorization_root, 'replacement-parent') }
+  await expectCode(() => runPhase1TransitionRehearsal(replacementInsideAuthorization, nestedReplacement.bindings, nestedReplacement.dependencies), 'transition_rehearsal_root_alias')
+  assert.equal(existsSync(replacementInsideAuthorization.replacement_parent_root), false)
+})
+
+test('unavailable output parent fails before retaining any replacement root', async () => {
+  const current = fixture()
+  const input = { ...current.input, output_root: path.join(current.parent, 'missing-parent', 'output') }
+  await assert.rejects(runPhase1TransitionRehearsal(input, current.bindings, current.dependencies), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'transition_rehearsal_output_exists')
+    assert.deepEqual((error as { retained_cleanup_roots?: string[] }).retained_cleanup_roots, [])
+    return true
+  })
+  assert.equal(existsSync(input.replacement_parent_root), false)
+})

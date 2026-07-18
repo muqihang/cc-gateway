@@ -124,7 +124,8 @@ test('run leases form one digest chain and enforce refresh versus successor sema
   const envelopeDigest = digestDeliveryValue(derivePhase1BaselineEnvelope(initialContext))
   const initial = derivePhase1RunLease(initialContext, {
     envelope_digest: envelopeDigest,
-    transition: dm01,
+    plan_bytes: planBytes,
+    transition_id: dm01.id,
     predecessor_lease_digest: null,
     observed_delta_digest: null,
   })
@@ -134,17 +135,18 @@ test('run leases form one digest chain and enforce refresh versus successor sema
   refreshContext.repositories.sub2api.authorized_parent_head = initialContext.repositories.sub2api.authorized_parent_head
   const refresh = derivePhase1RunLease(refreshContext, {
     envelope_digest: envelopeDigest,
-    transition: dm01,
+    plan_bytes: planBytes,
+    transition_id: dm01.id,
     predecessor_lease_digest: digestDeliveryValue(initial),
     observed_delta_digest: null,
   })
-  assert.doesNotThrow(() => validatePhase1LeaseRefresh({ previous_lease: initial, next_lease: refresh, previous_context: initialContext, next_context: refreshContext, now: Date.parse('2026-07-18T10:02:00Z') }))
+  assert.doesNotThrow(() => validatePhase1LeaseRefresh({ previous_lease: initial, next_lease: refresh, previous_context: initialContext, next_context: refreshContext, plan_bytes: planBytes, now: Date.parse('2026-07-18T10:02:00Z') }))
 
   const refreshHeadDrift = clone(refresh)
   refreshHeadDrift.repository_heads_and_clean_state_digests.cc_gateway.head = 'e'.repeat(40)
   const refreshHeadDriftContext = clone(refreshContext)
   refreshHeadDriftContext.repositories.cc_gateway.authorized_parent_head = 'e'.repeat(40)
-  expectCode(() => validatePhase1LeaseRefresh({ previous_lease: initial, next_lease: refreshHeadDrift, previous_context: initialContext, next_context: refreshHeadDriftContext, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_undeclared_head_advance')
+  expectCode(() => validatePhase1LeaseRefresh({ previous_lease: initial, next_lease: refreshHeadDrift, previous_context: initialContext, next_context: refreshHeadDriftContext, plan_bytes: planBytes, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_undeclared_head_advance')
 
   const observed = [
     { category: 'external:add:cc-source.bundle', digest: `sha256:${'e'.repeat(64)}` },
@@ -154,7 +156,8 @@ test('run leases form one digest chain and enforce refresh versus successor sema
   const successorContext = contextFixture(1)
   const successor = derivePhase1RunLease(successorContext, {
     envelope_digest: envelopeDigest,
-    transition: dm02,
+    plan_bytes: planBytes,
+    transition_id: dm02.id,
     predecessor_lease_digest: digestDeliveryValue(initial),
     observed_delta_digest: digestDeliveryValue(observed),
   })
@@ -163,21 +166,45 @@ test('run leases form one digest chain and enforce refresh versus successor sema
     next_lease: successor,
     previous_context: initialContext,
     next_context: successorContext,
-    transitions: rows,
+    plan_bytes: planBytes,
     observed_delta: observed,
     now: Date.parse('2026-07-18T10:02:00Z'),
   }))
 
   const duplicateSequence = clone(successor)
   duplicateSequence.sequence = 0
-  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: duplicateSequence, previous_context: initialContext, next_context: successorContext, transitions: rows, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_sequence_invalid')
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: duplicateSequence, previous_context: initialContext, next_context: successorContext, plan_bytes: planBytes, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_sequence_invalid')
   const wrongPredecessor = clone(successor)
   wrongPredecessor.predecessor_lease_digest = `sha256:${'0'.repeat(64)}`
-  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: wrongPredecessor, previous_context: initialContext, next_context: successorContext, transitions: rows, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_predecessor_invalid')
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: wrongPredecessor, previous_context: initialContext, next_context: successorContext, plan_bytes: planBytes, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_predecessor_invalid')
   const dirtyContext = clone(successorContext)
   dirtyContext.repositories.sub2api.pre_issue_clean = false
-  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: successor, previous_context: initialContext, next_context: dirtyContext, transitions: rows, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_dirty_result')
-  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: successor, previous_context: initialContext, next_context: successorContext, transitions: rows, observed_delta: observed, now: Date.parse('2026-07-18T15:00:00Z') }), 'delivery_lease_expired')
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: successor, previous_context: initialContext, next_context: dirtyContext, plan_bytes: planBytes, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_lease_dirty_result')
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: successor, previous_context: initialContext, next_context: successorContext, plan_bytes: planBytes, observed_delta: observed, now: Date.parse('2026-07-18T15:00:00Z') }), 'delivery_lease_expired')
+
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: envelopeDigest,
+    plan_bytes: planBytes,
+    transition_id: dm02.id,
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_transition_initial_invalid')
+  const driftedPlan = replaceTransitionBlock((contractRows) => contractRows.map((row) => row.id === 'DM-01' ? { ...row, condition: 'caller-condition' } : row))
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: envelopeDigest,
+    plan_bytes: driftedPlan,
+    transition_id: dm01.id,
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_transition_source_drift')
+  const emptySuccessor = derivePhase1RunLease(successorContext, {
+    envelope_digest: envelopeDigest,
+    plan_bytes: planBytes,
+    transition_id: dm02.id,
+    predecessor_lease_digest: digestDeliveryValue(initial),
+    observed_delta_digest: digestDeliveryValue([]),
+  })
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: initial, next_lease: emptySuccessor, previous_context: initialContext, next_context: successorContext, plan_bytes: planBytes, observed_delta: [], now: Date.parse('2026-07-18T10:02:00Z') }), 'delivery_observed_delta_missing')
 })
 
 test('conditional successor requires one exact reviewed condition', () => {
@@ -187,16 +214,35 @@ test('conditional successor requires one exact reviewed condition', () => {
   const initialContext = contextFixture(0)
   const successorContext = contextFixture(1)
   const envelopeDigest = digestDeliveryValue(derivePhase1BaselineEnvelope(initialContext))
-  const previous = derivePhase1RunLease(initialContext, { envelope_digest: envelopeDigest, transition: dm05, predecessor_lease_digest: null, observed_delta_digest: null })
-  const observed = [{ category: 'external:add:review-verdict' }]
-  const next = derivePhase1RunLease(successorContext, {
+  const previousContext = contextFixture(1)
+  const previous = derivePhase1RunLease(previousContext, { envelope_digest: envelopeDigest, plan_bytes: planBytes, transition_id: dm05.id, predecessor_lease_digest: `sha256:${'d'.repeat(64)}`, observed_delta_digest: null })
+  const observed = [
+    { category: 'external:add:review-verdict' },
+    { category: 'git:implementation-root:none', head: previousContext.repositories.cc_gateway.authorized_parent_head, clean: true },
+  ]
+  const nextContext = contextFixture(2)
+  const next = derivePhase1RunLease(nextContext, {
     envelope_digest: envelopeDigest,
-    transition: dm06a,
+    plan_bytes: planBytes,
+    transition_id: dm06a.id,
     predecessor_lease_digest: digestDeliveryValue(previous),
     observed_delta_digest: digestDeliveryValue(observed),
   })
-  const input = { previous_lease: previous, next_lease: next, previous_context: initialContext, next_context: successorContext, transitions: rows, observed_delta: observed, now: Date.parse('2026-07-18T10:02:00Z') }
+  const input = { previous_lease: previous, next_lease: next, previous_context: previousContext, next_context: nextContext, plan_bytes: planBytes, observed_delta: observed, now: Date.parse('2026-07-18T10:03:00Z') }
   expectCode(() => validatePhase1LeaseSuccessor(input), 'delivery_transition_ambiguous_successor')
   assert.doesNotThrow(() => validatePhase1LeaseSuccessor({ ...input, satisfied_condition: 'critical-important-zero' }))
   expectCode(() => validatePhase1LeaseSuccessor({ ...input, satisfied_condition: 'critical-important-nonzero' }), 'delivery_transition_condition_mismatch')
+})
+
+test('forbid tokens require exact absence proofs and cannot replace mandatory deltas', () => {
+  const { rows } = parseDeliveryTransitionContract(planBytes)
+  const dm02 = rows.find((row) => row.id === 'DM-02')!
+  const dm03 = rows.find((row) => row.id === 'DM-03')!
+  const previousContext = contextFixture(1)
+  const nextContext = contextFixture(2)
+  const envelopeDigest = digestDeliveryValue(derivePhase1BaselineEnvelope(previousContext))
+  const previous = derivePhase1RunLease(previousContext, { envelope_digest: envelopeDigest, plan_bytes: planBytes, transition_id: dm02.id, predecessor_lease_digest: `sha256:${'e'.repeat(64)}`, observed_delta_digest: null })
+  const bogus = [{ category: 'forbid:restart-artifact', bogus: true }]
+  const next = derivePhase1RunLease(nextContext, { envelope_digest: envelopeDigest, plan_bytes: planBytes, transition_id: dm03.id, predecessor_lease_digest: digestDeliveryValue(previous), observed_delta_digest: digestDeliveryValue(bogus) })
+  expectCode(() => validatePhase1LeaseSuccessor({ previous_lease: previous, next_lease: next, previous_context: previousContext, next_context: nextContext, plan_bytes: planBytes, observed_delta: bogus, now: Date.parse('2026-07-18T10:03:00Z') }), 'delivery_observed_delta_missing')
 })

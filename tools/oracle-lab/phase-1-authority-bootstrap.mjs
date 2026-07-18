@@ -235,6 +235,7 @@ function assertDistinctRuntimeRoots(toolRoot, parsedRoots) {
 function verifyRuntime(toolRoot, git) {
   if (realpathSync(process.execPath) !== realpathSync(selectTool('node'))) fail('authority_restart_unsafe_startup_environment')
   if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
+    || process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'reviewed-git-object-v2'
     || process.env.HOME !== '/dev/null'
     || process.env.TMPDIR !== '/tmp') fail('authority_restart_unsafe_startup_environment')
   const replacementRefs = runGit(toolRoot, git, ['for-each-ref', '--format=%(refname)', 'refs/replace'])
@@ -262,6 +263,17 @@ function verifyRuntime(toolRoot, git) {
     files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed), metadata: before }))
   }
   return Object.freeze({ reviewedCommit, reviewedRef, files: Object.freeze(files) })
+}
+
+function assertBootstrapSnapshot(runtime) {
+  const bootstrap = runtime.files.find((file) => file.path === 'tools/oracle-lab/phase-1-authority-bootstrap.mjs')
+  if (!bootstrap) fail('authority_restart_runtime_binding_mismatch')
+  const snapshot = fileURLToPath(import.meta.url)
+  const before = lstatSync(snapshot, { bigint: true })
+  if (!before.isFile() || before.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
+  const bytes = readFileSync(snapshot)
+  const after = lstatSync(snapshot, { bigint: true })
+  if (!sameMetadata(before, after) || !bytes.equals(bootstrap.bytes)) fail('authority_restart_runtime_binding_mismatch')
 }
 
 function assertReviewedRuntimeUnchanged(runtime, toolRoot) {
@@ -445,11 +457,15 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(inventoryCache(argv[2]))}\n`)
     return
   }
-  const toolRoot = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'))
+  if (process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'reviewed-git-object-v2'
+    || typeof process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT !== 'string'
+    || !path.isAbsolute(process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT)) fail('authority_restart_unsafe_startup_environment')
+  const toolRoot = realpathSync(process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT)
   const parsedRoots = parseBootstrapRootFlags(argv)
   assertDistinctRuntimeRoots(toolRoot, parsedRoots)
   const git = selectTool('git')
   const runtime = verifyRuntime(toolRoot, git)
+  assertBootstrapSnapshot(runtime)
   const npm = selectTool('npm')
   const dependencies = prepareDependencies(runtime, npm)
   try { await runAuthorityCommand(toolRoot, git, dependencies, argv) }
