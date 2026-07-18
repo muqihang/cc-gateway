@@ -8,7 +8,7 @@ Resume the paused Phase 1 once, under Oracle Delivery Operating Model v2, withou
 authorization loop or reimplementing completed Task 1-7 work. The recovery must:
 
 1. freeze a new Program Baseline Envelope and sequence-zero Run Lease;
-2. prove one real pre-replay RED from current main;
+2. prove four real pre-replay RED families from current main plus one replay-required sentinel;
 3. rehydrate the exact reviewed 8 CC Gateway and 10 Sub2API implementation commits from validated
    source bundles into fresh branches;
 4. prove B1-B3 and the Phase 1 listener slice GREEN while preserving the exact B4-B6 RED corpus;
@@ -21,14 +21,22 @@ Critical and zero Important findings, and its fresh sequence-zero lease is issue
 
 ## 2. Authority And Precedence
 
-For this recovery only, conflicts are resolved in this order:
+Product authority and delivery-mechanics authority are separate lanes. A document in one lane cannot
+silently override the other lane.
 
-1. `docs/superpowers/roadmaps/2026-07-18-oracle-lab-delivery-operating-model-v2.md`
-2. `docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md`
-3. this Recovery Plan and its embedded Phase Acceptance Contract
-4. `docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md`
-   for Task 1-8 product requirements, file ownership, and acceptance semantics only
-5. the seven-phase roadmap and the four design/amendment documents in their existing precedence
+Product requirements retain their existing precedence:
+
+1. `docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md`
+2. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md`
+3. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md`
+4. `docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md`
+5. `docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md`
+   as the Phase 1 realization of those requirements
+
+The seven-phase roadmap owns phase scope, dependencies, and handoff. Delivery mechanics are governed
+by the operating model, the accepted transition report and terminal record, and then this plan's
+embedded contract. This Recovery Plan may narrow only Phase 1 execution mechanics. It cannot
+override product requirements, requirement precedence, roadmap ownership, or later-phase scope.
 
 The old Phase 1 plan's Mandatory Preflight, execution-context renewal, authority-repair instances
 `0001`/`0002`, fixed v8 branch names, repeated holistic-plan review, and restart artifact lifecycle
@@ -99,23 +107,26 @@ successors, or any transition not listed here.
 <!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_BEGIN -->
 ```json
 [
-  {"id":"P1R-01","from":"candidate","to":"baseline_frozen","command":"freeze-recovery-authority","condition":"always","allowed_delta":["git:cc:add:plan-review-and-context","external:add:baseline-envelope","external:add:sequence-zero-run-lease"]},
-  {"id":"P1R-02","from":"baseline_frozen","to":"vertical_red_confirmed","command":"run-pre-replay-vertical-red","condition":"exact-recovery-replay-required","allowed_delta":["disposable:add:cc-pre-replay-root","disposable:add:sub2api-pre-replay-root","external:add:pre-replay-red-record","forbid:product-branch-change","forbid:restart-artifact"]},
-  {"id":"P1R-03","from":"vertical_red_confirmed","to":"replay_complete","command":"rehydrate-reviewed-implementation","condition":"exact-8x10-replay","allowed_delta":["git:cc:exact-eight-replay-commits","git:sub2api:exact-ten-replay-commits","external:add:replay-mapping-record"]},
-  {"id":"P1R-04","from":"replay_complete","to":"task7_green_confirmed","command":"run-replay-verification","condition":"t0-t1-t2-green","allowed_delta":["external:add:recovery-transaction-record","git:cc:none","git:sub2api:none"]},
-  {"id":"P1R-05","from":"task7_green_confirmed","to":"feature_capture_authorized","command":"issue-feature-capture-lease","condition":"fresh-clean-candidate-heads","allowed_delta":["git:cc:add:feature-context","external:add:feature-capture-run-lease","git:sub2api:none"]},
-  {"id":"P1R-06","from":"feature_capture_authorized","to":"feature_green_confirmed","command":"capture-feature-evidence","condition":"feature-candidate-green","allowed_delta":["git:cc:add:feature-baseline-and-results","external:add:feature-transaction-record","git:sub2api:none"]},
-  {"id":"P1R-07","from":"feature_green_confirmed","to":"review_decided","command":"run-bounded-integrated-review","condition":"review-verdict-recorded","allowed_delta":["git:cc:add:feature-review-attestation","external:add:integrated-review-verdict","git:sub2api:none"]},
-  {"id":"P1R-08A","from":"review_decided","to":"integrated_reviewed","command":"accept-zero-material-findings","condition":"critical-important-zero","allowed_delta":["state-only"]},
-  {"id":"P1R-08B","from":"review_decided","to":"closure_required","command":"apply-one-product-closure-wave","condition":"critical-important-nonzero","allowed_delta":["git:cc:declared-product-fix-paths","git:sub2api:declared-product-fix-paths","git:combined:max-one-closure-wave"]},
-  {"id":"P1R-09","from":"closure_required","to":"integrated_reviewed","command":"rerun-affected-gates-and-closure-review","condition":"affected-t0-t1-t2-green-and-critical-important-zero","allowed_delta":["external:add:closure-transaction-record","external:add:closure-review-verdict","git:cc:add:closure-feature-evidence","git:sub2api:none"]},
-  {"id":"P1R-10","from":"integrated_reviewed","to":"integrated","command":"ordinary-merge-and-post-integration-capture","condition":"both-merges-and-post-integration-green","allowed_delta":["git:cc-main:ordinary-merge","git:sub2api-main:ordinary-merge","git:cc:add:attempt-evidence","external:add:post-integration-transaction-record"]},
-  {"id":"P1R-11","from":"integrated","to":"exit_verified","command":"commit-phase1-handoff-and-receipt","condition":"receipt-chain-and-handoff-green","allowed_delta":["git:cc:add:handoff-receipt-and-registry-delta","external:add:phase1-exit-record"]}
+  {"id":"P1R-01","from":"baseline_frozen","to":"vertical_red_confirmed","command":"run-pre-replay-vertical-red","condition":"exact-real-b1-b2-b3-listener-red-and-replay-sentinel","allowed_delta":["disposable:add:cc-pre-replay-root","disposable:add:sub2api-pre-replay-root","external:add:pre-replay-b1-red-record","external:add:pre-replay-b2-red-record","external:add:pre-replay-b3-red-record","external:add:pre-replay-listener-red-record","external:add:replay-required-sentinel","forbid:external-side-effect","forbid:listener-socket","forbid:product-branch-change","forbid:restart-artifact"]},
+  {"id":"P1R-02","from":"vertical_red_confirmed","to":"replay_complete","command":"rehydrate-reviewed-implementation","condition":"exact-8x10-replay","allowed_delta":["git:cc:exact-eight-replay-commits","git:sub2api:exact-ten-replay-commits","external:add:replay-mapping-record"]},
+  {"id":"P1R-03","from":"replay_complete","to":"task7_green_confirmed","command":"run-replay-verification","condition":"t0-t1-t2-green","allowed_delta":["external:add:recovery-transaction-record","git:cc:none","git:sub2api:none"]},
+  {"id":"P1R-04","from":"task7_green_confirmed","to":"feature_capture_authorized","command":"issue-feature-capture-lease","condition":"fresh-clean-candidate-heads","allowed_delta":["git:cc:add:feature-context","external:add:feature-capture-run-lease","git:sub2api:none"]},
+  {"id":"P1R-05","from":"feature_capture_authorized","to":"feature_green_confirmed","command":"capture-feature-evidence","condition":"feature-candidate-green","allowed_delta":["git:cc:add:feature-baseline-and-results","external:add:feature-transaction-record","git:sub2api:none"]},
+  {"id":"P1R-06","from":"feature_green_confirmed","to":"review_decided","command":"run-stable-tip-campaign-and-bounded-integrated-review","condition":"stable-tip-t3-green-bound-to-t2-and-review-verdict-recorded","allowed_delta":["external:add:stable-tip-t3-campaign-record","external:add:integrated-review-verdict","git:cc:none","git:sub2api:none"]},
+  {"id":"P1R-07A","from":"review_decided","to":"integrated_reviewed","command":"accept-zero-material-findings","condition":"critical-important-zero","allowed_delta":["git:cc:add:feature-review-attestation","git:sub2api:none"]},
+  {"id":"P1R-07B","from":"review_decided","to":"closure_required","command":"apply-one-product-closure-wave","condition":"critical-important-nonzero","allowed_delta":["git:cc:declared-product-fix-paths","git:sub2api:declared-product-fix-paths","git:combined:max-one-closure-wave"]},
+  {"id":"P1R-08","from":"closure_required","to":"integrated_reviewed","command":"rerun-affected-gates-campaigns-and-closure-review","condition":"affected-t0-t1-t2-t3-green-and-critical-important-zero","allowed_delta":["external:add:closure-transaction-record","external:add:closure-t3-campaign-record","external:add:closure-review-verdict","git:cc:add:closure-feature-evidence-and-attestation","git:sub2api:none"]},
+  {"id":"P1R-09","from":"integrated_reviewed","to":"implementation_merged","command":"ordinary-merge-reviewed-implementation","condition":"both-ordinary-merges-match-reviewed-candidates","allowed_delta":["git:cc-main:ordinary-merge","git:sub2api-main:ordinary-merge"]},
+  {"id":"P1R-10","from":"implementation_merged","to":"post_integration_captured","command":"capture-and-commit-post-integration-evidence","condition":"merged-main-t2-green-and-exact-artifact-receipt-topology","allowed_delta":["git:cc:add:exact-post-integration-artifact-commit","git:cc:add:one-file-receipt-child","external:add:post-integration-transaction-record","git:sub2api:none"]},
+  {"id":"P1R-11","from":"post_integration_captured","to":"evidence_review_decided","command":"review-post-integration-evidence","condition":"independent-evidence-review-verdict-recorded","allowed_delta":["external:add:post-integration-evidence-review-verdict","git:cc:none","git:sub2api:none"]},
+  {"id":"P1R-12","from":"evidence_review_decided","to":"evidence_merged","command":"ordinary-merge-post-integration-evidence","condition":"critical-important-zero-and-evidence-pr-merged","allowed_delta":["git:cc-main:ordinary-evidence-merge","git:sub2api:none"]},
+  {"id":"P1R-13","from":"evidence_merged","to":"final_remote_verified","command":"verify-final-remote-mains","condition":"fresh-final-remote-verifier-green","allowed_delta":["external:add:final-remote-verification-record","git:cc:none","git:sub2api:none"]},
+  {"id":"P1R-14","from":"final_remote_verified","to":"exit_verified","command":"publish-phase1-exit","condition":"receipt-chain-handoff-and-final-remote-green","allowed_delta":["external:add:phase1-exit-record"]}
 ]
 ```
 <!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_END -->
 
-Canonical contract digest: `sha256:b452bac4b990ae4359c433a36242bb6a2323587f3702cac56c4b74239c7f883d`.
+Canonical contract digest: `sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe`.
 
 `exit_verified` is terminal. It produces a terminal record rather than a fictitious successor lease.
 
@@ -124,7 +135,7 @@ Canonical contract digest: `sha256:b452bac4b990ae4359c433a36242bb6a2323587f3702c
 The accepted Recovery Plan authorizes one pre-baseline bootstrap wave because the current delivery
 authority intentionally recognizes only the completed `DM-*` transition contract. This exception
 exists only to make the reviewed Recovery contract executable; it cannot touch product, evidence,
-registry, review/context, source bundle, or Sub2API paths.
+registry, review/context artifact, source bundle, or Sub2API paths.
 
 Exact bootstrap path boundary:
 
@@ -136,7 +147,28 @@ Exact bootstrap path boundary:
   successor, terminal, and mutation coverage;
 - modify `tests/oracle-lab-delivery-authority.test.ts` only for cross-contract isolation and legacy
   transition regression;
+- minimally extend `docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json` and
+  `docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json` with a closed Recovery
+  mode; the legacy mode and all legacy fixtures remain byte-for-byte semantically valid;
+- modify `tests/oracle-lab-phase-1-planning.test.ts` only to validate the Recovery-mode plan path,
+  branch constants, immutable envelope bindings, carrier-schema digests, and sequence-zero topology;
 - modify `package.json` only to add one `oracle:phase1:recovery` entry point.
+
+Recovery mode in the two existing carrier schemas uses a top-level closed discriminator; it is not a
+new schema family. It permits only this plan path, branches `codex/oracle-phase-1-recovery-cc` and
+`codex/oracle-phase-1-recovery-sub2api`, and a closed `recovery_authority` object binding the operating
+model, roadmap, transition plan, accepted transition report, terminal controller-chain and acceptance
+records, canonical Recovery contract, both source bundles, and shared contract. Both schema digests
+are frozen after bootstrap merge and included in the Program Baseline Envelope. Legacy plan paths,
+v8 branches, or mixed legacy/Recovery fields are rejected in Recovery mode.
+
+The Recovery plan-review carrier binds exactly the two accepted reviewer roles, identities, reviewed
+commit/digest, scopes, verdicts, and finding counts; both must be approved with zero Critical and zero
+Important. The Recovery execution-context carrier replaces legacy planning provenance with the
+closed authority bindings above, retains the two carrier-schema path/digest bindings, and binds the
+fresh CC/Sub2API main and implementation heads, exact Recovery branches, remote URL digests,
+protected paths, disabled capabilities, and selected requirements. No optional or free-form field is
+accepted in either Recovery mode.
 
 Before bootstrap implementation, the new focused test must prove current main rejects the exact
 Recovery marker as unsupported. This is bootstrap TDD RED, not the Phase 1 vertical RED. Implement
@@ -144,13 +176,18 @@ the minimum closed selection; caller-provided marker names, rows, digests, sourc
 or allowed deltas remain forbidden.
 
 Run bootstrap focused tests, legacy delivery-transition tests, planning tests, build, and one real
-bundle-to-pre-replay dry transaction that stops at `phase1_recovery_replay_required`. One bounded
-cross-repository/authority review examines the immutable bootstrap tip. Batch material findings
-once and perform one closure review; remaining material findings stop Recovery. Merge by ordinary
-PR. After merge, discard every bootstrap test lease and freeze Mandatory Entry from the new main.
+bundle-to-pre-replay dry transaction that reaches the four real RED records plus
+`phase1_recovery_replay_required`. One bounded cross-repository/authority review examines the
+immutable bootstrap tip. Batch material findings once and perform one closure review; remaining
+material findings stop Recovery. Merge by ordinary PR. After merge, discard every bootstrap test
+lease and freeze Mandatory Entry from the new main.
 
-The bootstrap wave does not authorize P1R-01. The fresh sequence-zero Run Lease issued after its
-merge is the first authority for the Phase Acceptance Contract.
+The immutable-tip acceptance review that closes this document is the sole pre-bootstrap approval
+gate. After merge, the controller verifies that the committed plan bytes and digest exactly equal
+the reviewed bytes; it does not commission a second plan review. Bootstrap review covers only the
+implementation of this accepted contract. Bootstrap does not authorize P1R-01. Mandatory Entry then
+creates the approved Recovery carrier artifacts, freezes the envelope, and issues sequence zero as
+one explicit pre-contract entry operation. That lease is the first authority for P1R-01.
 
 ## 7. Workspace And Resource Budget
 
@@ -184,51 +221,78 @@ source bundles remain read-only until Phase 1 reaches `exit_verified`.
 5. Initialize/sync each worktree's own CodeGraph. CodeGraph may index tracked files automatically,
    but controllers and reviewers must not directly query the protected keepalive test.
 
-### 8.2 One bounded acceptance-contract review
+### 8.2 Bind the accepted acceptance-contract review
 
-Two independent read-only reviewers are required because the contract crosses repositories and
-authority boundaries:
+The two independent read-only reviewers required because the contract crosses repositories and
+authority boundaries are the pre-bootstrap reviewers of this immutable plan tip:
 
 - Reviewer A: product ownership, B1-B3/listener transaction, expected RED/GREEN, path union;
 - Reviewer B: bundle authority, lease/state transitions, evidence, resources, rollback, and stop
   rules.
 
-They review this merged plan, the exact contract JSON, current code anchors, and source-history
-anchors. They do not re-review all prose in the old Phase 1 plan. Findings are returned once,
-batched once, and closed once. Minor or optional hardening enters the durable ledger. Material
-findings remaining after closure stop Recovery and require operator simplification; no plan-repair
-loop starts automatically.
+They review the exact contract JSON, current code anchors, and source-history anchors. They do not
+re-review all prose in the old Phase 1 plan. Findings are returned once, batched once, and closed
+once. Minor or optional hardening enters the durable ledger. Material findings remaining after
+closure stop Recovery and require operator simplification; no plan-repair loop starts
+automatically. Mandatory Entry verifies the merge retained the exact reviewed plan bytes and binds
+those already accepted verdicts into the plan-review carrier; it does not run another holistic plan
+review.
 
 ### 8.3 Program Baseline Envelope and sequence zero
 
-Reuse the existing Phase 1 plan-review and execution-context schemas as physical carriers. Create:
+Reuse the Recovery mode added to the existing Phase 1 plan-review and execution-context schemas as
+physical carriers. Create:
 
 - `docs/superpowers/evidence/phase-1/phase-1-plan-review.json`;
 - `docs/superpowers/evidence/phase-1/phase-1-execution-context.json`.
 
 The context binds the accepted transition report, terminal record, this plan and contract digest,
 source bundles, freshly fetched heads, branches, remote identities, shared contract, disabled
-capabilities, protected paths, and selected requirements. Derive a logical Program Baseline
-Envelope from immutable fields and issue an external sequence-zero Run Lease for `P1R-01`.
+capabilities, protected paths, selected requirements, and both freshly merged carrier-schema
+digests. Derive a logical Program Baseline Envelope from immutable fields and issue an external
+sequence-zero Run Lease for `P1R-01`.
 
-The initial CC commit adds exactly the review and context paths. Sub2API remains unchanged. Initial
-pre/post-commit gates validate that topology. Run Lease refresh may update only time, clean-state,
-and identical heads. Declared transitions use chained successors. Refresh never reopens plan review.
+This carrier commit, envelope freeze, and sequence-zero issuance are a controller-authorized
+pre-contract entry operation, not an observed `P1R-*` delta. The initial CC commit adds exactly the
+review and context paths. Sub2API remains unchanged. Initial pre/post-commit gates validate that
+topology. Run Lease refresh may update only time, clean-state, and identical heads. Declared
+transitions use chained successors. Refresh never reopens plan review.
 
 ## 9. Real Pre-Replay RED
 
 Run from fresh disposable roots created from the new baseline commits, before importing source
 objects. The Recovery driver must first verify both bundles, authority artifacts, tool root, shared
-contract, branches, and clean state. It then attempts the real Phase 1 catalog-to-feature-artifact
-transaction.
+contract, branches, and clean state. A controller-owned closed harness then invokes the actual
+current-main product entrypoints, not a mock catalog or missing-adapter shortcut, and records four
+independent RED families:
 
-The unique expected RED is:
+1. **B1:** execute
+   `TestFormalPoolBrowserEgressAttestationRejectsUntrustedProofs` through the real
+   `FormalPoolOnboardingService`; exact failure classification is `b1_proof_finalization_missing`,
+   with zero proxy-observer and account-creation calls;
+2. **B2:** execute `TestFormalPoolOnboardingAuthorizationRejectsCrossBoundaryOperations` and
+   `TestFormalPoolOnboardingAuthorizationDimensionsAreIndependent` through the real handler,
+   middleware, service, and reservation paths; exact classification is
+   `b2_authority_reservation_missing`, with zero external dependency calls;
+3. **B3:** execute `TestFormalPoolOnboardingPublicOriginAuthority` through the real route; hostile
+   Host and `X-Forwarded-*` mutation changing emitted authority produces exact classification
+   `b3_public_origin_authority_missing`, with zero external calls;
+4. **Listener/TLS:** invoke the real CC `startProxy` with the remote-listener-without-prerequisites
+   and invalid-TLS/upstream fixtures; exact classifications are `listener_boundary_not_enforced` and
+   `tls_boundary_order_not_enforced`. The harness closes any unexpectedly returned server, proves
+   zero upstream calls, and proves no listener remains after the command.
+
+Each family has its own command identity, exact failing leaf names/count, parser lifecycle, side-
+effect counters, before/after root inventory, and immutable external RED record. An unrelated Go,
+Node, import, dependency, or compilation failure cannot satisfy a family. After those four real
+transactions, the driver attempts the current-main catalog-to-feature-artifact transaction. Its
+additional expected replay sentinel is:
 
 ```text
 phase1_recovery_replay_required
 ```
 
-It is valid only when all of these are simultaneously true:
+The sentinel is valid only when all of these are simultaneously true:
 
 - the current-main roots lack the reviewed Phase 1 command catalog and evidence adapter;
 - no source object or product change has been imported;
@@ -237,8 +301,9 @@ It is valid only when all of these are simultaneously true:
 - attempts to supply any pre-transition review/context/restart bytes fail separately as
   `phase1_recovery_historical_authority_forbidden`.
 
-A compiler error, missing dependency, stale ref, dirty root, bundle failure, network attempt, or any
-B4-B6 leaf is unrelated and cannot satisfy P1R-02.
+A compiler error, missing dependency, stale ref, dirty root, bundle failure, network attempt, any
+B4-B6 leaf, or the replay sentinel without all four real RED records is unrelated and cannot satisfy
+P1R-01.
 
 ## 10. Exact Rehydration
 
@@ -247,9 +312,35 @@ then replays to the fresh feature branches. It never fetches source worktree HEA
 never creates archival local branches in implementation roots.
 
 CC source authority is `d5a711614177906d18486b98ff4c5d45d97e04c7`; Sub2API source authority is
-`20217731da9521f9676434b7bd5f9cb73020c32c`. Replay exactly the 8 CC and 10 Sub2API source commits
-already compiled by transition instance `0002`, in the same order. Continue to skip the two exact
-historical authority-only CC commits and every old review, context, and restart artifact.
+`20217731da9521f9676434b7bd5f9cb73020c32c`. This plan directly authorizes these exact ordered source
+commits; no retired restart instance supplies runtime authority:
+
+```text
+CC: 410fbe0c784c9eea04685cc251909d8df75b6871
+    e2972e6f6b27c658d9a6e91379ba9cea834cd4cb
+    beabd36547daa6236c1caa142a0a1b5a926bbde3
+    bedc81ca5c0aa9e0991a2f0bc42b62c4dd62f8db
+    540962ea9c068c82d5dbe07b5aeae172fa6258e6
+    e43f50816c8b693f875fc485a99dcdf9d985080e
+    8cbc5c633c7f791b395198aedd2db2e55f01915b
+    d5a711614177906d18486b98ff4c5d45d97e04c7
+
+Sub2API: 267b3d074248a7e1f7cf16bf302f91b41fa754ec
+         cff380892f64720c046d581723d0faf13cb566fc
+         b90254865b11be445a73faeeb0bbf1c0ff5384dd
+         e49100746f8e00d83168864dab2a4235053d16d7
+         33cac77640cccf5bbd87ab79ea9e44ef2c125da7
+         7ffaebdaa32aa3b9896cf6a3c554a671255b98d3
+         da7a01ac692553c9886c4ef14d0f9d5cb29c0a45
+         75dc3c0fd38acea12f373207521d9927c01c25ad
+         0f2271946686458458e959d3952e56f75c9e50fe
+         20217731da9521f9676434b7bd5f9cb73020c32c
+```
+
+Skip exactly CC commits `1c8f25bb1ca31c5c16262fec71f93dd1e14f512d` and
+`6621c7a78432a895d261054e291aed74c04978c3`, which contain only historical authority artifacts.
+Every old review, context, and restart artifact remains excluded. No other gap or source commit is
+allowed.
 
 For every mapping prove:
 
@@ -333,16 +424,24 @@ reuse, idempotency duplication, public-origin header mutation, listener/TLS nega
 ignored-state mutation, dependency drift, and evidence parser mutations. Repetition count follows a
 declared flakiness or confidence hypothesis; there is no ceremonial three-run rule.
 
+The campaign record binds the immutable feature tip and exact T2 transaction digest. P1R-06 cannot
+record a review verdict until that record is GREEN. A closure batch reruns every T3 campaign whose
+declared inputs, changed paths, or covered invariants intersect the batch. Recovery uses the simpler
+closed rule that all Phase 1 product closure paths are intersecting, so P1R-08 always requires a new
+closure-tip T3 record; it does not reuse the earlier campaign through a caller-asserted disjointness
+claim.
+
 ## 13. Task 8 Completion
 
-After P1R-04 GREEN, issue a fresh feature-capture lease at identical clean candidate heads. Use a
+After P1R-03 GREEN, issue a fresh feature-capture lease at identical clean candidate heads. Use a
 new immutable namespace, starting at the first unused `feature-NNNN`; never reuse prior ignored or
 historical output.
 
 1. Capture feature baseline and command results through `captureAndRunPhase1`.
 2. Commit exactly those two paths as one child of the tested CC head; Sub2API does not move.
-3. Run the bounded integrated review against the tested implementation trees and T2/T3 records.
-4. Commit exactly the feature-review attestation after zero-Critical/zero-Important approval.
+3. Run the stable-tip T3 campaign, then the bounded integrated review against the tested
+   implementation trees and exact T2/T3 records. The verdict is external and changes no repository.
+4. Commit exactly the feature-review attestation only after zero-Critical/zero-Important approval.
 5. If material findings exist, batch them once across declared product paths, rerun affected
    T0/T1/T2/T3, recapture baseline/results/review attestation under the next immutable feature
    namespace, and perform one closure review. Earlier evidence remains historical and cannot be
@@ -353,15 +452,31 @@ or production/canary requirements.
 
 ## 14. Merge, Post-Integration, And Exit
 
-Merge Sub2API and CC candidate branches by ordinary merge commits only. Then use fresh clean main
-roots and a distinct controller root to:
+Merge Sub2API and CC candidate branches by ordinary implementation PR merge commits only. Then use
+fresh clean main roots and a distinct controller root to:
 
 1. verify merge parents and reviewed candidate ancestry;
-2. recapture post-integration results under the first unused `attempt-NNNN` namespace;
+2. recapture post-integration results under the first unused `attempt-NNNN` namespace and rerun the
+   merged-main T2 transaction;
 3. validate implementation-tree equality with the feature review;
-4. commit integration entry, results, receipt, handoff, and only the exact registry deltas authorized
-   by the original Task 8 requirements;
-5. produce a Phase Transaction Record and terminal `exit_verified` record.
+4. create one exact artifact commit containing integration entry, baseline, results, handoff, exit
+   report, and only the three governance-file deltas authorized by the original Task 8 requirements;
+5. create its sole one-file child containing only the self-reference-safe integration receipt;
+6. independently review both exact commits, receipt-chain topology, merged-main bindings, RED
+   inventories, sandbox proof, leak audit, disabled capabilities, and governance transitions;
+7. after zero Critical and zero Important findings, merge the post-integration evidence branch by an
+   ordinary evidence PR merge commit;
+8. fetch both remotes into new clean detached roots and run the closed final-remote verifier. It must
+   prove remote identities, implementation-tree equality, merge ancestry, artifact/receipt commit
+   topology, complete reachable receipt history, evidence-only CC descendants, no Sub2API tracked
+   descendant delta, and ignored-state stability during verification;
+9. produce the Phase Transaction Record and terminal `exit_verified` record only after the final
+   verifier returns GREEN (`ready` or a fully validated later `superseded` receipt).
+
+Changes requested by the post-integration evidence review stop the attempt and follow only the
+evidence-retry rules already defined by the original Task 8 plan. They cannot modify implementation,
+reuse an invalid receipt, or enter `evidence_merged`. Implementation-tree drift invalidates the
+feature review and stops this Recovery Plan rather than opening another repair loop.
 
 The final report must state B1-B3/listener outcomes, exact B4-B6 expected RED status, tested and
 merged heads, artifact digests, Minor ledger, retained cleanup candidates, and disabled
@@ -386,8 +501,9 @@ Evidence and review:
 - one CC feature baseline/results commit;
 - one CC feature-review attestation commit;
 - at most one combined closure wave if required;
-- ordinary merge commits;
-- bounded post-integration evidence commits defined by Task 8.
+- ordinary implementation merge commits;
+- one exact post-integration artifact commit and its one-file receipt child;
+- one ordinary post-integration evidence PR merge commit.
 
 Run Lease records and large transaction records remain external; repository evidence stores safe
 digests and closed summaries only.
@@ -397,7 +513,8 @@ digests and closed summaries only.
 Stop without another repair loop when:
 
 - either source bundle, source head, remote identity, shared contract, or plan authority drifts;
-- P1R-02 does not reach its one exact RED after all preceding checks pass;
+- P1R-01 does not reach all four real RED records and its replay sentinel after all preceding checks
+  pass;
 - replay needs caller mappings, hidden refs, conflict resolution, extra commits, or protected-file
   modification;
 - any preserved B4-B6 name/count/family/lifecycle differs;
@@ -405,6 +522,8 @@ Stop without another repair loop when:
   contract bytes;
 - resource use exceeds the declared roots or free space falls below 12 GiB before a new heavy step;
 - a second integrated-review fix wave would be required;
+- post-integration evidence review reports material implementation drift, or final-remote
+  verification is not GREEN;
 - Critical or Important findings remain after the one closure review.
 
 The controller reports one classified blocker and an exact retained-root list. It does not edit the
@@ -425,20 +544,23 @@ digests are available from integrated history or retained archives.
 
 - accepted Recovery Plan review verdict;
 - Program Baseline Envelope digest and sequence-zero Run Lease;
-- exact pre-replay RED record;
+- four exact real pre-replay RED records plus the replay-required sentinel;
 - 8/10 replay mapping record;
 - T0/T1/T2/T3 results on immutable tips;
 - feature baseline, command results, and review attestation;
-- ordinary merge identities and post-integration attempt receipt;
-- Phase 1 handoff, exit record, Minor ledger, and cleanup candidates;
+- ordinary implementation and evidence merge identities, exact artifact/receipt commit chain, and
+  post-integration attempt receipt;
+- final-remote verification, Phase 1 handoff, exit record, Minor ledger, and cleanup candidates;
 - explicit confirmation that the protected keepalive test was not directly accessed or changed.
 
 ## 19. Exit Gate
 
-This plan may be approved only when its bounded acceptance-contract review returns zero Critical and
-zero Important findings. Approval authorizes only the exact Recovery Runtime Bootstrap path set.
-After that bootstrap merges and Mandatory Entry passes, sequence-zero authority permits P1R-01.
-Each later command requires the current unexpired chained Run Lease.
+This plan may be approved only when its bounded pre-bootstrap acceptance-contract review returns zero
+Critical and zero Important findings. Approval authorizes only the exact Recovery Runtime Bootstrap
+path set. After the plan and bootstrap merge, byte-identity validation plus Mandatory Entry creates
+the Recovery carriers and envelope and issues sequence zero as a pre-contract entry operation.
+Sequence-zero authority then permits P1R-01. Each later command requires the current unexpired
+chained Run Lease.
 
 Phase 1 completes only at `exit_verified`. A merged Recovery Plan, GREEN preflight, replay success,
 or feature review alone is not Phase 1 completion.
