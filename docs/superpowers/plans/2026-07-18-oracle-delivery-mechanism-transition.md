@@ -150,18 +150,49 @@ candidate
   -> expected_red_confirmed
   -> implementation_complete
   -> vertical_green_confirmed
-  -> integrated_reviewed
+  -> review_decided
+       -> integrated_reviewed                         (zero Critical/Important)
+       -> closure_required -> closure_green_confirmed (one C/I batch)
+                           -> integrated_reviewed      (zero Critical/Important)
   -> merged_green_confirmed
   -> transition_accepted
 ```
 
-Every state has one successor. A Critical or Important contract contradiction stops the transition;
-it does not create another repair instance.
+The only branch is the objective integrated-review verdict. Zero Critical/Important proceeds
+directly; a nonzero result permits exactly one closure path. A material finding after closure stops
+the transition and does not create another repair instance.
+
+The following block is the executable transition contract. Its JSON bytes are parsed from the
+committed reviewed plan between the exact markers. Array order is normative. For each row,
+`transition_contract_digest` is SHA-256 of its canonical JSON and `permitted_delta_digest` is
+SHA-256 of canonical JSON of its `allowed_delta` array. IDs, commands, conditions, and deltas are
+never supplied by the caller.
+
+<!-- ORACLE_DELIVERY_TRANSITIONS_BEGIN -->
+```json
+[
+  {"id":"DM-01","from":"candidate","to":"source_authority_frozen","command":"freeze-source-authority","condition":"always","allowed_delta":["external:add:cc-source.bundle","external:add:sub2api-source.bundle","external:append:controller-log"]},
+  {"id":"DM-02","from":"source_authority_frozen","to":"expected_red_confirmed","command":"reproduce-real-red","condition":"exact-authority-restart-runtime-binding-mismatch","allowed_delta":["disposable:add:cc-replay-root","disposable:add:sub2api-replay-root","external:append:controller-log","forbid:restart-artifact"]},
+  {"id":"DM-03","from":"expected_red_confirmed","to":"implementation_complete","command":"implement-declared-nine-path-wave","condition":"focused-tests-green","allowed_delta":["git:implementation-root:declared-nine-paths","git:implementation-root:max-four-commits"]},
+  {"id":"DM-04","from":"implementation_complete","to":"vertical_green_confirmed","command":"run-real-green-transaction","condition":"t0-t1-t2-green","allowed_delta":["disposable:add:cc-green-root","disposable:add:sub2api-green-root","external:add:transaction-record","git:implementation-root:none"]},
+  {"id":"DM-05","from":"vertical_green_confirmed","to":"review_decided","command":"run-bounded-integrated-review","condition":"review-verdict-recorded","allowed_delta":["external:add:review-verdict","git:implementation-root:none"]},
+  {"id":"DM-06A","from":"review_decided","to":"integrated_reviewed","command":"accept-zero-material-findings","condition":"critical-important-zero","allowed_delta":["state-only"]},
+  {"id":"DM-06B","from":"review_decided","to":"closure_required","command":"apply-one-closure-batch","condition":"critical-important-nonzero","allowed_delta":["git:implementation-root:declared-nine-paths","git:implementation-root:max-one-closure-commit"]},
+  {"id":"DM-07","from":"closure_required","to":"closure_green_confirmed","command":"rerun-green-and-closure-review","condition":"t0-t1-t2-green-and-critical-important-zero","allowed_delta":["disposable:add:cc-closure-root","disposable:add:sub2api-closure-root","external:add:closure-transaction-record","external:add:closure-review-verdict","git:implementation-root:none"]},
+  {"id":"DM-08","from":"closure_green_confirmed","to":"integrated_reviewed","command":"accept-closure","condition":"critical-important-zero","allowed_delta":["state-only"]},
+  {"id":"DM-09","from":"integrated_reviewed","to":"merged_green_confirmed","command":"merge-and-rerun-real-green","condition":"ordinary-merge-and-t2-green","allowed_delta":["git:remote-main:ordinary-merge","disposable:add:cc-merged-root","disposable:add:sub2api-merged-root","external:add:merged-transaction-record"]},
+  {"id":"DM-10","from":"merged_green_confirmed","to":"transition_accepted","command":"commit-transition-exit-report","condition":"operator-accepts-exit","allowed_delta":["git:remote-main:add:docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md"]}
+]
+```
+<!-- ORACLE_DELIVERY_TRANSITIONS_END -->
+
+`declared-nine-paths` is exactly the four Create paths and five Modify paths enumerated by Tasks
+1-3. A closure batch cannot add a tenth path.
 
 ### 5.2 Program Baseline Envelope
 
 For this transition, the envelope is a canonical in-memory projection plus a digest in the
-transaction record. No new persisted envelope schema is introduced. It binds:
+controller log and transaction record. No new persisted envelope schema is introduced. It binds:
 
 - exact Operating Model, roadmap, transition-plan, and product-authority digests;
 - exact CC Gateway and Sub2API main commits and remote URL digests;
@@ -180,15 +211,45 @@ implementation continues. Expiry alone never changes the envelope.
 
 ### 5.3 Run Lease
 
-The existing Phase 1 execution-context JSON remains the P1 physical carrier. The transition adds
-pure projection and validation functions:
+Before `DM-01`, the controller derives the envelope from committed plan bytes and live frozen inputs,
+selects the exact `DM-01` row from the bound transition block, and issues an in-memory sequence-zero
+lease. No bundle, disposable root, or implementation edit may exist first.
+
+For this transition, each in-memory lease is the canonical object:
+
+```text
+envelope_digest
+sequence
+state
+transition_id
+transition_contract_digest
+permitted_delta_digest
+predecessor_lease_digest
+issued_at
+expires_at
+repository_heads_and_clean_state_digests
+observed_delta_digest
+```
+
+`predecessor_lease_digest` is `null` only for sequence zero. `observed_delta_digest` is empty before
+the command and is replaced by the digest of canonical concrete delta records only when issuing the
+successor. `permitted_delta_digest` binds the policy tokens; it is not a digest of concrete records.
+For each closed command ID, the validator interprets those bound tokens and proves the concrete
+records are exactly permitted or a permitted subset where the token explicitly defines a maximum.
+Every `forbid:*` assertion must remain absent. No caller supplies an interpreter or exception.
+Lease digests are appended to the controller log and final transaction record but no lease file is
+persisted.
+
+The existing Phase 1 execution-context JSON remains the later P1 Recovery physical carrier for
+repository observations and time bounds. The transition adds pure projection and validation
+functions:
 
 - `derivePhase1BaselineEnvelope` includes only fields that must remain identical across the context
   chain: plan, planning provenance, approval, gate schemas, baseline/remote identities, shared
   contract, authority order, selected requirements, branch identity, and disabled capabilities;
-- `derivePhase1RunLease` includes sequence, mode, stage, artifact path, predecessor, issue/expiry,
-  authorized parent heads, clean-state observation, validation status, transition identifier, and
-  resulting state;
+- `derivePhase1RunLease` combines sequence, mode, stage, artifact path, predecessor, issue/expiry,
+  authorized parent heads, clean-state observation, and validation status from existing context
+  bytes with the exact transition row selected from the committed Phase 1 Recovery Plan;
 - `validatePhase1LeaseSuccessor` requires the predecessor digest, contiguous sequence, unexpired
   execution, exact contract-declared transition, observed allowed delta, resulting clean heads, and
   unique next state;
@@ -196,8 +257,10 @@ pure projection and validation functions:
 - a valid successor may advance head and state without reopening the envelope review;
 - an immutable projection change fails and requires a replacement envelope.
 
-These functions validate existing bytes. They do not mint a new context, overwrite a context, or
-change schema v2.
+The transition identifier, state edge, command, condition, and permitted delta always come from the
+reviewed plan transition block, never from existing context bytes or a caller. These functions
+validate existing bytes plus that bound row. They do not mint a new context, overwrite a context,
+or change schema v2.
 
 ### 5.4 Real Vertical Transaction
 
@@ -255,13 +318,17 @@ dependency authority bytes come exclusively from the reviewed tool commit.
 Files changed: none.
 
 1. Fetch both remotes and freeze actual main commits without changing an operator checkout.
-2. Validate the four preserved roots and create/verify read-only source bundles outside the repo.
-3. Create exclusive disposable rehearsal roots.
-4. Replay the exact compiled histories.
-5. Reproduce the legacy launch from the disposable CC replacement root and require exactly
+2. Compute the committed transition contract, freeze the envelope, and issue the sequence-zero
+   `DM-01` lease before creating any output.
+3. Validate the four preserved roots and create/verify read-only source bundles outside the repo;
+   validate the observed delta and issue the `DM-02` successor lease.
+4. Create exclusive disposable rehearsal roots.
+5. Replay the exact compiled histories.
+6. Reproduce the legacy launch from the disposable CC replacement root and require exactly
    `authority_restart_runtime_binding_mismatch` after replay, with no restart artifact.
-6. Record command, heads, bundle digests, failure code, and absence of artifact in the controller
-   log. Any earlier or different failure is accidental regression and blocks implementation.
+7. Validate the `DM-02` observed delta and condition, record command, heads, bundle digests, failure
+   code, and absence of artifact, then issue the `DM-03` successor lease. Any earlier or different
+   failure is accidental regression and blocks implementation.
 
 ### Task 1: Extract Envelope and Lease Semantics
 
@@ -276,6 +343,9 @@ Modify:
 
 Requirements:
 
+- parse the exact committed transition JSON markers and reject duplicate IDs, malformed rows,
+  ambiguous conditional successors, unknown commands, and noncanonical ordering;
+- build and validate the exact in-memory lease object and per-row digests defined in Section 5;
 - canonical immutable and lease projections over existing context bytes;
 - digest-chained same-state refresh and successor validation;
 - exact rejection of immutable drift, skipped/duplicate sequence, wrong predecessor, expired
@@ -470,6 +540,7 @@ Only a separately approved Phase 1 Recovery Plan may use the transition exit rep
 | A clean tool root silently becomes caller authority | Tool `HEAD`, fetched upstream ref, remote identity, committed plan, and runtime bytes are envelope-bound; caller-selected commits are forbidden. |
 | Sub2API replay objects disappear during cleanup | The unpublished source branch is bundled and verified before any cleanup candidate can be approved. |
 | Existing Phase 0 schemas are broadened into a migration project | No schema is changed or added; the Phase 1 context remains the physical carrier and projections are pure. |
+| Lease transition authority is invented from old context bytes | IDs, commands, conditions, and allowed deltas come only from the committed canonical transition block; context contributes live observations, not authority. |
 | Lease renewal triggers another holistic review | Same-state refresh and declared successor validation use the frozen envelope and focused checks only. |
 | Synthetic tests replace the failed real state | Temporary-graph tests are T0/T1 only; actual preserved commits and roots are mandatory T2 before review and after merge. |
 | A repair finding starts another PR chain | One C/I batch and one closure review are allowed; remaining material findings stop for simplification. |
