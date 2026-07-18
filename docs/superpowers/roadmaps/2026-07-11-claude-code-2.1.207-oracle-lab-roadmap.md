@@ -15,10 +15,10 @@
 - Normative precedence: `review_amendments > hardening_amendments > adversarial_validation_v2 > oracle_lab_design`; no conflict, requirement, or authority statement may be silently replaced or superseded
 - Delivery state: Phase 0 complete; `docs/superpowers/evidence/phase-0/phase-0-exit-baseline.json` (`sha256:d3263421bfb3c1e9b0f52557e1501d5e9ab6ff33616f26c2aa7cc2d4ad4f3ea6`) is the immutable reviewed-input baseline, and `docs/superpowers/evidence/phase-0/phase-0-exit-receipt.json` binds the final roadmap bytes and Phase 0 handoff commit. Phase 1 remains gated on that receipt and the Phase 0 exit contract.
 - P0.1 governance state: P0.1 implementation candidate; completion is controlled exclusively by the successor receipt; P1 remains blocked by the integrated-main entry gates.
-- Delivery Operating Model v2 candidate:
+- Delivery Operating Model v2 approved on 2026-07-18:
   `docs/superpowers/roadmaps/2026-07-18-oracle-lab-delivery-operating-model-v2.md`.
-  It governs delivery mechanics only after operator approval; it does not change product authority,
-  phase ownership, the dependency DAG, or any existing completion claim.
+  It governs delivery mechanics but does not change product authority, phase ownership, the
+  dependency DAG, or any existing completion claim.
 - Program pause, 2026-07-18: all phase execution is paused while Delivery Operating Model v2 is
   reviewed. The Phase 1 review, context, replay heads, and post-replay failure are preserved as
   historical inputs only; no restart artifact exists and they do not authorize resumed execution.
@@ -423,7 +423,7 @@ rollback_reference
 next_phase_entry_conditions
 ```
 
-## Delivery Operating Model v2 Amendment (Candidate, 2026-07-18)
+## Delivery Operating Model v2 Amendment (Approved, 2026-07-18)
 
 This amendment is documentation-only. It does not reopen Phase 0, change the dependency DAG,
 authorize Phase 1 recovery, or grant production or canary authority. If approved, all future
@@ -452,9 +452,9 @@ and reach GREEN before final integrated review. For a mid-execution authority re
 affected real transaction must pass before the repair PR is merged. Review verdicts, broad-suite
 repetition, and synthetic fixtures cannot waive these requirements.
 
-The current program remains paused. After operator approval, the next artifact is a short Delivery
-Mechanism Transition Plan; only after that transition is accepted may a separate Phase 1 Recovery
-Plan authorize fresh execution.
+The current program remains paused. With operator approval recorded, the next artifact is a short
+Delivery Mechanism Transition Plan; only after that transition is accepted may a separate Phase 1
+Recovery Plan authorize fresh execution.
 
 ## Historical Phase 0 Planning Record (Complete)
 

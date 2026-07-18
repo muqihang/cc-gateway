@@ -4,7 +4,8 @@
 
 - Date: 2026-07-18
 - Scope: all seven top-level Oracle Lab delivery phases
-- State: candidate operating model; no implementation or execution authority until operator approval
+- State: operator-approved operating model; implementation and phase execution remain blocked until
+  the separately approved Delivery Mechanism Transition Plan and applicable phase recovery plan
 - Product authority remains, in precedence order:
   1. Review Amendments
   2. Hardening Amendments
@@ -564,8 +565,8 @@ Current Phase 1 execution remains paused. Its authorization, review, context, re
 failure reproduction are retained as historical evidence only. No current restart artifact exists.
 They MUST NOT authorize resumed execution after a plan, tool, schema, or operating-model change.
 
-After operator approval of this document, the next artifact is a short Delivery Mechanism
-Transition Plan. It MUST:
+With operator approval recorded, the next artifact is a short Delivery Mechanism Transition Plan.
+It MUST:
 
 1. inventory existing gates as retain, simplify, retire, or defer;
 2. prefer existing manifests and schemas;
@@ -695,5 +696,6 @@ future client change. It also cannot recover time already spent on Phase 1. Its 
 narrower: it makes the next real transaction the primary proof, caps review and repair loops, and
 forces an explicit stop when the architecture cannot satisfy its own state transitions.
 
-No implementation should encode this model until the operator approves both this self-audit and
-the bounded independent mechanism review.
+The operator approved this self-audited model after its bounded independent closure review reached
+zero Critical, Important, and Minor findings. Implementation still requires the separately approved
+Delivery Mechanism Transition Plan.
