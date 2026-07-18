@@ -507,7 +507,14 @@ for (const required of [
   ['NODE_OPTIONS', ['NODE', 'PATH'].join('_')].join(' '),
   'DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH LD_PRELOAD',
   'phase-1-authority-bootstrap.mjs',
+  'bootstrap_loader',
+  'ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID="$bootstrap_oid"',
+  '"$tool_head:tools/oracle-lab/phase-1-authority-bootstrap.mjs"',
+  '"$node_executable" --input-type=module -e "$bootstrap_loader" "$@"',
 ]) assert.ok(launcher.includes(required), required)
+assert.equal(launcher.includes('"$node_executable" "$bootstrap_entry"'), false, 'launcher must never execute the live bootstrap pathname')
+assert.equal(launcher.includes('bootstrap_snapshot'), false, 'reviewed bootstrap must never be materialized at a same-UID-replaceable pathname')
+assert.equal(launcher.includes('/tmp/oracle-phase1-authority-bootstrap.'), false, 'reviewed bootstrap must execute from an anonymous verified stream')
 const bootstrap = readFileSync(path.join(root, 'tools/oracle-lab/phase-1-authority-bootstrap.mjs'), 'utf8')
 for (const required of [
   'COPYFILE_FICLONE_FORCE',

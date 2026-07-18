@@ -17,7 +17,7 @@ import {
 } from 'node:fs'
 import { userInfo } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 
 const RUNTIME_PATHS = Object.freeze([
   'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
@@ -51,6 +51,14 @@ function canonicalJson(value) {
 
 function sha256(value) {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`
+}
+
+function gitBlobOid(bytes, expectedOid) {
+  const algorithm = /^[0-9a-f]{40}$/.test(expectedOid)
+    ? 'sha1'
+    : /^[0-9a-f]{64}$/.test(expectedOid) ? 'sha256' : ''
+  if (algorithm === '') fail('authority_restart_runtime_binding_mismatch')
+  return createHash(algorithm).update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
 }
 
 function sameMetadata(left, right) {
@@ -235,6 +243,8 @@ function assertDistinctRuntimeRoots(toolRoot, parsedRoots) {
 function verifyRuntime(toolRoot, git) {
   if (realpathSync(process.execPath) !== realpathSync(selectTool('node'))) fail('authority_restart_unsafe_startup_environment')
   if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
+    || process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'reviewed-git-object-v3'
+    || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID ?? '')
     || process.env.HOME !== '/dev/null'
     || process.env.TMPDIR !== '/tmp') fail('authority_restart_unsafe_startup_environment')
   const replacementRefs = runGit(toolRoot, git, ['for-each-ref', '--format=%(refname)', 'refs/replace'])
@@ -259,9 +269,19 @@ function verifyRuntime(toolRoot, git) {
     const after = lstatSync(target, { bigint: true })
     const reviewed = runGit(toolRoot, git, ['show', `${reviewedCommit}:${file}`])
     if (!sameMetadata(before, after) || !working.equals(reviewed)) fail('authority_restart_runtime_binding_mismatch')
-    files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed), metadata: before }))
+    const oid = gitText(toolRoot, git, ['rev-parse', `${reviewedCommit}:${file}`])
+    files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed), metadata: before, oid }))
   }
   return Object.freeze({ reviewedCommit, reviewedRef, files: Object.freeze(files) })
+}
+
+function assertBootstrapStream(runtime) {
+  const bootstrap = runtime.files.find((file) => file.path === 'tools/oracle-lab/phase-1-authority-bootstrap.mjs')
+  if (!bootstrap) fail('authority_restart_runtime_binding_mismatch')
+  const expectedOid = process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP_OID ?? ''
+  if (bootstrap.oid !== expectedOid || gitBlobOid(bootstrap.bytes, expectedOid) !== expectedOid) {
+    fail('authority_restart_runtime_binding_mismatch')
+  }
 }
 
 function assertReviewedRuntimeUnchanged(runtime, toolRoot) {
@@ -445,11 +465,15 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(inventoryCache(argv[2]))}\n`)
     return
   }
-  const toolRoot = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'))
+  if (process.env.ORACLE_PHASE1_AUTHORITY_BOOTSTRAP !== 'reviewed-git-object-v3'
+    || typeof process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT !== 'string'
+    || !path.isAbsolute(process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT)) fail('authority_restart_unsafe_startup_environment')
+  const toolRoot = realpathSync(process.env.ORACLE_PHASE1_AUTHORITY_TOOL_ROOT)
   const parsedRoots = parseBootstrapRootFlags(argv)
   assertDistinctRuntimeRoots(toolRoot, parsedRoots)
   const git = selectTool('git')
   const runtime = verifyRuntime(toolRoot, git)
+  assertBootstrapStream(runtime)
   const npm = selectTool('npm')
   const dependencies = prepareDependencies(runtime, npm)
   try { await runAuthorityCommand(toolRoot, git, dependencies, argv) }
