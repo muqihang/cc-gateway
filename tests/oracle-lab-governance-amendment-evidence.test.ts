@@ -21,6 +21,12 @@ const reviewedToolchainRelative = 'docs/superpowers/registry/oracle-lab-p0-1-rev
 const taskPlanRelative = 'docs/superpowers/plans/2026-07-12-claude-code-2.1.207-p0-1-wp-r0-governance-reconciliation.md'
 const sub2apiSourceRoot = '/Users/muqihang/chelingxi_workspace/sub2api-zhumeng-main/.worktrees/oracle-p0-1'
 const productionBranch = 'codex/oracle-p0-1-governance'
+const productionRemoteTrackingRef = `refs/remotes/muqihang/${productionBranch}`
+const productionAuthenticationRef = 'refs/oracle-lab/authenticated-production-head'
+const productionHeads = {
+  cc_gateway: '38cf6ab4d02cd2cda9b0728ced236972235587e1',
+  sub2api: '0a97b3f3b84b5c679788b3694d5840e235031f07',
+} as const
 const MiB = 1024 * 1024
 const PRODUCTION_CLI_TIMEOUT_MS = 90_000
 const PRODUCTION_CLI_MAX_BUFFER = 16 * MiB
@@ -452,10 +458,57 @@ function cloneSharedSparseRepository(
   branch = productionBranch,
   startingRef = branch,
 ): string {
+  const resolveOptionalCommit = (ref: string): string | null => {
+    const observed = spawnSync('git', ['-C', sourceRepository, 'rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+    })
+    if (observed.error || observed.signal !== null || observed.status === null) {
+      throw new Error('historical production ref resolution did not exit normally')
+    }
+    if (observed.status !== 0) return null
+    const commit = observed.stdout.trim()
+    if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('historical production ref resolved to a malformed commit')
+    return commit
+  }
+  let authenticatedProductionHead: string | null = null
+  const branchCommit = (() => {
+    const localRef = `refs/heads/${branch}`
+    const localCommit = resolveOptionalCommit(localRef)
+    if (branch !== productionBranch) {
+      if (localCommit === null) throw new Error(`source branch is missing: ${branch}`)
+      return localCommit
+    }
+    const ccMarker = existsSync(path.join(sourceRepository, 'sidecar/egress-tls-sidecar/go.mod'))
+    const sub2apiMarker = existsSync(path.join(sourceRepository, 'backend/go.mod'))
+    if (ccMarker === sub2apiMarker) throw new Error('historical production ref repository role is ambiguous')
+    const expectedCommit = ccMarker ? productionHeads.cc_gateway : productionHeads.sub2api
+    const remoteCommit = resolveOptionalCommit(productionRemoteTrackingRef)
+    const authenticationCommit = resolveOptionalCommit(productionAuthenticationRef)
+    if (authenticationCommit !== null) {
+      if (authenticationCommit !== expectedCommit) {
+        throw new Error('authenticated historical production ref head mismatch')
+      }
+      if (localCommit === null) throw new Error('authenticated historical production ref is missing')
+      authenticatedProductionHead = expectedCommit
+      return localCommit
+    }
+    if (localCommit !== null && localCommit !== expectedCommit) {
+      throw new Error('authenticated historical production ref head mismatch')
+    }
+    if (remoteCommit !== null && remoteCommit !== expectedCommit) {
+      throw new Error('authenticated historical production ref head mismatch')
+    }
+    if (localCommit === null && remoteCommit === null) {
+      throw new Error('authenticated historical production ref is missing')
+    }
+    authenticatedProductionHead = expectedCommit
+    return expectedCommit
+  })()
+  const checkoutCommit = startingRef === branch ? branchCommit : resolveOptionalCommit(startingRef)
+  if (checkoutCommit === null) throw new Error(`starting ref is missing: ${startingRef}`)
   mkdirSync(path.dirname(destination), { recursive: true })
   execFileSync('git', [
-    'clone', '-q', '--shared', '--no-checkout', '--single-branch', '--branch', branch,
-    sourceRepository, destination,
+    'clone', '-q', '--shared', '--no-checkout', sourceRepository, destination,
   ], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER })
   execFileSync('git', ['-C', destination, 'sparse-checkout', 'init', '--no-cone'], {
     stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
@@ -463,18 +516,80 @@ function cloneSharedSparseRepository(
   execFileSync('git', ['-C', destination, 'sparse-checkout', 'set', '--no-cone', '--stdin'], {
     input: `${[...sparsePaths].join('\n')}\n`, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
   })
-  const checkoutArgs = startingRef === branch
-    ? ['-C', destination, 'checkout', '-q', branch]
-    : ['-C', destination, 'checkout', '-q', '-B', branch, startingRef]
-  execFileSync('git', checkoutArgs, {
+  execFileSync('git', ['-C', destination, 'checkout', '-q', '-B', branch, checkoutCommit], {
     stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
   })
+  if (authenticatedProductionHead !== null) {
+    execFileSync('git', ['-C', destination, 'update-ref', productionAuthenticationRef, authenticatedProductionHead], {
+      stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+    })
+  }
+  assert.equal(git(destination, 'branch', '--show-current'), branch)
+  assert.equal(git(destination, 'rev-parse', 'HEAD'), checkoutCommit)
   const repository = realpathSync(destination)
   const alternates = path.join(repository, '.git/objects/info/alternates')
   assert.equal(lstatSync(alternates).isFile(), true, 'shared clone must use a regular alternates file')
   assert.equal(readFileSync(alternates, 'utf8').trim().length > 0, true)
   return repository
 }
+
+function freshHistoricalRefSource(label: string, remoteCommit: string | null): string {
+  const parent = mkdtempSync(path.join(tmpdir(), `oracle-p0-1-fresh-source-${label}-`))
+  const source = path.join(parent, 'source')
+  execFileSync('git', ['clone', '-q', '--shared', '--no-checkout', root, source], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  execFileSync('git', ['-C', source, 'checkout', '-q', '--detach', productionHeads.cc_gateway], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  execFileSync('git', ['-C', source, 'update-ref', '-d', `refs/heads/${productionBranch}`], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  execFileSync('git', ['-C', source, 'update-ref', '-d', productionRemoteTrackingRef], {
+    stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+  })
+  if (remoteCommit !== null) {
+    execFileSync('git', ['-C', source, 'update-ref', productionRemoteTrackingRef, remoteCommit], {
+      stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: PRODUCTION_CLI_MAX_BUFFER,
+    })
+  }
+  return source
+}
+
+const freshHistoricalSource = freshHistoricalRefSource('valid', productionHeads.cc_gateway)
+const freshHistoricalClone = cloneSharedSparseRepository(
+  freshHistoricalSource,
+  path.join(path.dirname(freshHistoricalSource), 'destination'),
+  ['package.json'],
+)
+assert.equal(git(freshHistoricalClone, 'rev-parse', 'HEAD'), productionHeads.cc_gateway)
+assert.equal(git(freshHistoricalClone, 'branch', '--show-current'), productionBranch)
+
+const missingHistoricalSource = freshHistoricalRefSource('missing', null)
+assert.throws(
+  () => cloneSharedSparseRepository(missingHistoricalSource, path.join(path.dirname(missingHistoricalSource), 'destination'), ['package.json']),
+  /authenticated historical production ref is missing/,
+)
+
+const wrongHistoricalSource = freshHistoricalRefSource('wrong', git(root, 'rev-parse', 'HEAD'))
+assert.throws(
+  () => cloneSharedSparseRepository(wrongHistoricalSource, path.join(path.dirname(wrongHistoricalSource), 'destination'), ['package.json']),
+  /authenticated historical production ref head mismatch/,
+)
+
+const conflictingHistoricalSource = freshHistoricalRefSource('conflicting', productionHeads.cc_gateway)
+git(conflictingHistoricalSource, 'update-ref', `refs/heads/${productionBranch}`, git(root, 'rev-parse', 'HEAD'))
+assert.throws(
+  () => cloneSharedSparseRepository(conflictingHistoricalSource, path.join(path.dirname(conflictingHistoricalSource), 'destination'), ['package.json']),
+  /authenticated historical production ref head mismatch/,
+)
+
+const wrongAuthenticationSource = freshHistoricalRefSource('wrong-anchor', productionHeads.cc_gateway)
+git(wrongAuthenticationSource, 'update-ref', productionAuthenticationRef, git(root, 'rev-parse', 'HEAD'))
+assert.throws(
+  () => cloneSharedSparseRepository(wrongAuthenticationSource, path.join(path.dirname(wrongAuthenticationSource), 'destination'), ['package.json']),
+  /authenticated historical production ref head mismatch/,
+)
 
 function linkCloneDependencies(repository: string, dependencyRoot: string): void {
   const exclude = path.join(repository, '.git/info/exclude')
