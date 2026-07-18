@@ -21,8 +21,8 @@ case $0 in
   *) launcher=$PWD/$0 ;;
 esac
 script_dir=${launcher%/*}
-repository_root=${script_dir%/tools/oracle-lab}
-repository_root=$(cd -P "$repository_root" 2>/dev/null && pwd -P) || fail_startup
+tool_root=${script_dir%/tools/oracle-lab}
+tool_root=$(cd -P "$tool_root" 2>/dev/null && pwd -P) || fail_startup
 
 select_tool() {
   for candidate in "$@"; do
@@ -36,7 +36,26 @@ select_tool() {
 
 node_executable=$(select_tool /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node) || fail_startup
 git_executable=$(select_tool /opt/homebrew/bin/git /usr/local/bin/git /usr/bin/git) || fail_startup
-bootstrap_entry=$repository_root/tools/oracle-lab/phase-1-authority-bootstrap.mjs
+bootstrap_entry=$tool_root/tools/oracle-lab/phase-1-authority-bootstrap.mjs
+
+reviewed_git() {
+  /usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 \
+    "$git_executable" -C "$tool_root" "$@"
+}
+
+tool_branch=$(reviewed_git symbolic-ref --quiet --short HEAD 2>/dev/null) || fail_startup
+case $tool_branch in
+  main|codex/*) ;;
+  *) fail_startup ;;
+esac
+tool_upstream=refs/remotes/muqihang/$tool_branch
+tool_head=$(reviewed_git rev-parse --verify --end-of-options 'HEAD^{commit}' 2>/dev/null) || fail_startup
+reviewed_head=$(reviewed_git rev-parse --verify --end-of-options "$tool_upstream^{commit}" 2>/dev/null) || fail_startup
+[ "$tool_head" = "$reviewed_head" ] || fail_startup
+[ "$(reviewed_git remote get-url muqihang 2>/dev/null)" = 'https://github.com/muqihang/cc-gateway.git' ] || fail_startup
+[ -z "$(reviewed_git status --porcelain=v1 --untracked-files=all --ignore-submodules=none 2>/dev/null)" ] || fail_startup
 
 for file in \
   docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json \
@@ -44,10 +63,12 @@ for file in \
   tools/oracle-lab/phase-1-authority-bootstrap.mjs \
   tools/oracle-lab/phase-1-authority-restart.ts \
   tools/oracle-lab/secure-runtime.ts \
+  package.json \
   package-lock.json
 do
-  current_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" hash-object -- "$file") || fail_startup
-  reviewed_oid=$(/usr/bin/env -i HOME=/dev/null PATH=/usr/bin:/bin LANG=C LC_ALL=C GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$git_executable" -C "$repository_root" rev-parse "refs/remotes/muqihang/main:$file") || fail_startup
+  [ -f "$tool_root/$file" ] && [ ! -L "$tool_root/$file" ] || fail_startup
+  current_oid=$(reviewed_git hash-object -- "$file") || fail_startup
+  reviewed_oid=$(reviewed_git rev-parse "$tool_upstream:$file") || fail_startup
   [ "$current_oid" = "$reviewed_oid" ] || fail_startup
 done
 

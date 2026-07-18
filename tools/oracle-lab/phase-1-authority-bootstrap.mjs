@@ -28,6 +28,8 @@ const RUNTIME_PATHS = Object.freeze([
   'package.json',
   'package-lock.json',
 ])
+const EXPECTED_TOOL_REMOTE_URL_DIGEST = 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a'
+const ROOT_FLAGS = Object.freeze(['cc-source-root', 'cc-replacement-root', 'sub2api-source-root', 'sub2api-replacement-root'])
 
 const TOOL_CANDIDATES = Object.freeze({
   node: Object.freeze(['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node']),
@@ -196,27 +198,80 @@ function exactFlag(argv, name) {
   return values[0]
 }
 
-function verifyRuntime(repositoryRoot, git) {
+function parseBootstrapRootFlags(argv) {
+  const command = argv[0]
+  if (!['validate-runtime', 'validate-source', 'build', 'validate-pre-commit', 'validate-post-commit'].includes(command)) {
+    fail('authority_restart_cli_arguments_invalid')
+  }
+  const values = {}
+  for (let index = 1; index < argv.length; index += 2) {
+    const token = argv[index]
+    const value = argv[index + 1]
+    if (typeof token !== 'string' || !token.startsWith('--') || typeof value !== 'string' || value.startsWith('--')) {
+      fail('authority_restart_cli_arguments_invalid')
+    }
+    const name = token.slice(2)
+    if (!ROOT_FLAGS.includes(name)) continue
+    if (Object.hasOwn(values, name) || !path.isAbsolute(value)) fail('authority_restart_cli_arguments_invalid')
+    values[name] = value
+  }
+  const expected = command === 'validate-runtime' ? ['cc-replacement-root'] : ROOT_FLAGS
+  if (expected.some((name) => !Object.hasOwn(values, name))
+    || Object.keys(values).some((name) => !expected.includes(name))) fail('authority_restart_cli_arguments_invalid')
+  return Object.freeze({ command, values: Object.freeze(values) })
+}
+
+function canonicalExistingRoot(value) {
+  try { return realpathSync(value) } catch { fail('authority_restart_cli_arguments_invalid') }
+}
+
+function assertDistinctRuntimeRoots(toolRoot, parsedRoots) {
+  const roots = [toolRoot, canonicalExistingRoot(parsedRoots.values['cc-replacement-root'])]
+  if (parsedRoots.command !== 'validate-runtime') roots.push(canonicalExistingRoot(parsedRoots.values['sub2api-replacement-root']))
+  if (new Set(roots).size !== roots.length) fail('authority_restart_tool_replacement_alias')
+  return Object.freeze(roots)
+}
+
+function verifyRuntime(toolRoot, git) {
   if (realpathSync(process.execPath) !== realpathSync(selectTool('node'))) fail('authority_restart_unsafe_startup_environment')
   if (process.env.ORACLE_PHASE1_AUTHORITY_LAUNCHER !== 'posix-v1'
     || process.env.HOME !== '/dev/null'
     || process.env.TMPDIR !== '/tmp') fail('authority_restart_unsafe_startup_environment')
-  const replacementRefs = runGit(repositoryRoot, git, ['for-each-ref', '--format=%(refname)', 'refs/replace'])
+  const replacementRefs = runGit(toolRoot, git, ['for-each-ref', '--format=%(refname)', 'refs/replace'])
   if (replacementRefs.length !== 0) fail('authority_restart_runtime_binding_mismatch')
-  const reviewedMain = resolveCommit(repositoryRoot, git, 'refs/remotes/muqihang/main')
+  const branch = gitText(toolRoot, git, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+  if (branch !== 'main' && !branch.startsWith('codex/')) fail('authority_restart_runtime_binding_mismatch')
+  const reviewedRef = `refs/remotes/muqihang/${branch}`
+  const reviewedCommit = resolveCommit(toolRoot, git, reviewedRef)
+  if (resolveCommit(toolRoot, git, 'HEAD') !== reviewedCommit) fail('authority_restart_runtime_binding_mismatch')
+  const remoteUrl = gitText(toolRoot, git, ['remote', 'get-url', 'muqihang'])
+  if (sha256(Buffer.from(remoteUrl, 'utf8')) !== EXPECTED_TOOL_REMOTE_URL_DIGEST) fail('authority_restart_runtime_binding_mismatch')
+  if (runGit(toolRoot, git, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).length !== 0) {
+    fail('authority_restart_runtime_binding_mismatch')
+  }
   const files = []
   for (const file of RUNTIME_PATHS) {
-    const target = path.join(repositoryRoot, file)
+    const target = path.join(toolRoot, file)
     let before
     try { before = lstatSync(target, { bigint: true }) } catch { fail('authority_restart_runtime_binding_mismatch') }
     if (!before.isFile() || before.isSymbolicLink()) fail('authority_restart_runtime_binding_mismatch')
     const working = readFileSync(target)
     const after = lstatSync(target, { bigint: true })
-    const reviewed = runGit(repositoryRoot, git, ['show', `${reviewedMain}:${file}`])
+    const reviewed = runGit(toolRoot, git, ['show', `${reviewedCommit}:${file}`])
     if (!sameMetadata(before, after) || !working.equals(reviewed)) fail('authority_restart_runtime_binding_mismatch')
-    files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed) }))
+    files.push(Object.freeze({ path: file, bytes: Buffer.from(reviewed), metadata: before }))
   }
-  return Object.freeze({ reviewedMain, files: Object.freeze(files) })
+  return Object.freeze({ reviewedCommit, reviewedRef, files: Object.freeze(files) })
+}
+
+function assertReviewedRuntimeUnchanged(runtime, toolRoot) {
+  for (const file of runtime.files) {
+    const target = path.join(toolRoot, file.path)
+    let metadata
+    try { metadata = lstatSync(target, { bigint: true }) } catch { fail('authority_restart_runtime_binding_mismatch') }
+    if (!metadata.isFile() || metadata.isSymbolicLink() || !sameMetadata(file.metadata, metadata)
+      || !readFileSync(target).equals(file.bytes)) fail('authority_restart_runtime_binding_mismatch')
+  }
 }
 
 function installDependencies(targetRoot, npm, commandCache) {
@@ -331,7 +386,7 @@ function authorityFromCommit(root, git, file, commit) {
   return Object.freeze({ path: file, digest: sha256(bytes), commit })
 }
 
-async function runAuthorityCommand(repositoryRoot, git, dependencies, argv) {
+async function runAuthorityCommand(toolRoot, git, dependencies, argv) {
   const apiPath = path.join(dependencies.dependencyRoot, 'node_modules/tsx/dist/esm/api/index.mjs')
   const toolPath = path.join(dependencies.dependencyRoot, 'tools/oracle-lab/phase-1-authority-restart.ts')
   for (const target of [apiPath, toolPath]) {
@@ -390,14 +445,15 @@ async function main(argv) {
     process.stdout.write(`${JSON.stringify(inventoryCache(argv[2]))}\n`)
     return
   }
-  const repositoryRoot = realpathSync(exactFlag(argv, '--cc-replacement-root'))
-  const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-  if (repositoryRoot !== moduleRoot) fail('authority_restart_runtime_binding_mismatch')
+  const toolRoot = realpathSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'))
+  const parsedRoots = parseBootstrapRootFlags(argv)
+  assertDistinctRuntimeRoots(toolRoot, parsedRoots)
   const git = selectTool('git')
-  const runtime = verifyRuntime(repositoryRoot, git)
+  const runtime = verifyRuntime(toolRoot, git)
   const npm = selectTool('npm')
   const dependencies = prepareDependencies(runtime, npm)
-  await runAuthorityCommand(repositoryRoot, git, dependencies, argv)
+  try { await runAuthorityCommand(toolRoot, git, dependencies, argv) }
+  finally { assertReviewedRuntimeUnchanged(runtime, toolRoot) }
 }
 
 try {

@@ -20,6 +20,18 @@ export type ChangedPath = Readonly<{
   new_path: string | null
 }>
 
+export const AUTHORITY_TOOL_RUNTIME_PATHS = Object.freeze([
+  'docs/superpowers/schemas/oracle-lab-phase-1-authority-restart.schema.json',
+  'tools/oracle-lab/oracle-phase1-authority-restart',
+  'tools/oracle-lab/phase-1-authority-bootstrap.mjs',
+  'tools/oracle-lab/phase-1-authority-restart.ts',
+  'tools/oracle-lab/secure-runtime.ts',
+  'package.json',
+  'package-lock.json',
+])
+
+const REPLAY_PROTECTED_RUNTIME_PATHS = new Set(AUTHORITY_TOOL_RUNTIME_PATHS.filter((entry) => entry !== 'package.json' && entry !== 'package-lock.json'))
+
 type RepositoryBinding = Readonly<{
   supersededHead: string
   archivalBranch: string
@@ -593,6 +605,16 @@ export function validatePhase1AuthorityRestartSource(options: SourceValidateOpti
   const subRoot = realpathSync(options.sub2apiRoot)
   assertSourceRepository(ccRoot, bindings.ccGateway, bindings.projectedTreePolicy.historicalAuthorityPaths)
   assertSourceRepository(subRoot, bindings.sub2api, bindings.projectedTreePolicy.historicalAuthorityPaths)
+  for (const [root, binding] of [[ccRoot, bindings.ccGateway], [subRoot, bindings.sub2api]] as const) {
+    for (const commit of binding.sourceCommits) {
+      for (const changed of inspectChangedPaths(root, commit)) {
+        if ((changed.old_path !== null && REPLAY_PROTECTED_RUNTIME_PATHS.has(changed.old_path))
+          || (changed.new_path !== null && REPLAY_PROTECTED_RUNTIME_PATHS.has(changed.new_path))) {
+          fail('authority_restart_runtime_replay_overlap', 'source replay changes a protected authority runtime path')
+        }
+      }
+    }
+  }
   if (soleParent(ccRoot, bindings.ccGateway.quarantineCheckpoint) !== bindings.ccGateway.quarantineParent) fail('authority_restart_checkpoint_mismatch', 'quarantine checkpoint topology drifted')
   if (inspectStablePatchId(ccRoot, bindings.ccGateway.quarantineCheckpoint) !== bindings.ccGateway.quarantinePatchId
     || !same(inspectChangedPaths(ccRoot, bindings.ccGateway.quarantineCheckpoint), bindings.ccGateway.quarantineChangedPaths)) {
