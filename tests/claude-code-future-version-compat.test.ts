@@ -139,7 +139,7 @@ function nativeLikeBody(version: string, overrides: Record<string, unknown> = {}
 }
 
 test('observed Claude Code versions at or above 2.1.179 pass only through strip_attribution and strip billing markers', async () => {
-  for (const version of ['2.1.179', '2.1.180', '2.1.181', '2.1.185', '2.1.191', '2.1.193', '2.1.195', '2.1.200']) {
+  for (const version of ['2.1.179', '2.1.180', '2.1.181', '2.1.185', '2.1.191', '2.1.193', '2.1.195', '2.1.200', '2.1.215']) {
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(gatewayConfig(upstream.url, proxy.url))
@@ -318,7 +318,7 @@ test('observed Claude Code versions at or above 2.1.179 cannot self-promote to o
     { ref: 'claude_code_2_1_179_first_party_signed_cch', policy: 'signed_cch' },
     { ref: 'claude_code_2_1_179_custom_base_no_cch', policy: 'no_cch' },
   ]
-  for (const version of ['2.1.181', '2.1.185', '2.1.193', '2.1.195', '2.1.200']) {
+  for (const version of ['2.1.181', '2.1.185', '2.1.193', '2.1.195', '2.1.200', '2.1.215']) {
     for (const tc of cases) {
       const upstream = await startFakeUpstream()
       const proxy = await startFakeConnectProxy()

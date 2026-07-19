@@ -1,0 +1,9 @@
+{
+  "observed_at": "2026-07-19T10:03:03Z",
+  "package": "@anthropic-ai/claude-code",
+  "reference": "2.1.207",
+  "active": "2.1.215",
+  "official_tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.215.tgz",
+  "dist_integrity": "sha512-lsWBvyMyBqg/rOZ06o/HEhlpOzHsH8IBf9RH4u5gzizQ1LWS/oXAh5nqWNUu3hn2d8QkyYg0aseNzMDlGD+3qg==",
+  "artifact_sha256": "sha256:1a5cf8e491689154264c0b2f28371bf645cdee2903b45c497915868308502d7b"
+}
