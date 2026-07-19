@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 type JsonObject = Record<string, any>
 
@@ -48,6 +49,7 @@ const REVIEWED_TRANSITION_SOURCE_DIGEST = 'sha256:08952a6f2ba48b671b6f8792651040
 const RECOVERY_TRANSITION_START = '<!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_BEGIN -->'
 const RECOVERY_TRANSITION_END = '<!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_END -->'
 const REVIEWED_RECOVERY_SOURCE_DIGEST = 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe'
+const REVIEWED_RECOVERY_CONTEXT_SCHEMA_DIGEST = 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099'
 const DIGEST = /^sha256:[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40,64}$/
 const DELIVERY_TRANSITION_ID = /^DM-[0-9]{2}[A-Z]?$/
@@ -240,6 +242,26 @@ function reviewedContractForTransition(planBytes: Buffer | string, transitionId:
   fail('delivery_transition_contract_mismatch', 'transition authority kind is unsupported')
 }
 
+function assertContextAuthority(
+  context: JsonObject,
+  transitionId: string,
+  executionContextSchemaBytes?: Buffer | string,
+): void {
+  const recovery = RECOVERY_TRANSITION_ID.test(transitionId)
+  const expectedKind = recovery ? 'phase_1_recovery_context' : 'phase_1_execution_context'
+  if (context.context_kind !== expectedKind) fail('delivery_context_authority_mismatch', 'context kind does not match transition authority')
+  if (!recovery || context.sequence !== 0) return
+  if (executionContextSchemaBytes === undefined) fail('delivery_context_authority_mismatch', 'Recovery sequence zero requires the reviewed carrier schema')
+  const schemaBytes = Buffer.isBuffer(executionContextSchemaBytes) ? executionContextSchemaBytes : Buffer.from(executionContextSchemaBytes, 'utf8')
+  if (`sha256:${createHash('sha256').update(schemaBytes).digest('hex')}` !== REVIEWED_RECOVERY_CONTEXT_SCHEMA_DIGEST) {
+    fail('delivery_context_authority_mismatch', 'Recovery carrier schema bytes are not reviewed')
+  }
+  let schema: unknown
+  try { schema = JSON.parse(schemaBytes.toString('utf8')) } catch { fail('delivery_context_authority_mismatch', 'Recovery carrier schema is malformed') }
+  const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
+  if (!validate(context)) fail('delivery_context_authority_mismatch', 'Recovery sequence-zero context fails the closed carrier schema')
+}
+
 function repositoryEnvelope(repository: JsonObject): JsonObject {
   const projection = {
     baseline_main_head: repository.baseline_main_head,
@@ -345,9 +367,14 @@ export function derivePhase1RunLease(context: unknown, input: Readonly<{
   transition_id: string
   predecessor_lease_digest: string | null
   observed_delta_digest: string | null
+  execution_context_schema_bytes?: Buffer | string
 }>): Phase1RunLease {
   if (!isObject(context) || !Number.isInteger(context.sequence) || !DIGEST.test(input.envelope_digest)) {
     fail('delivery_context_invalid', 'lease context or envelope digest is invalid')
+  }
+  assertContextAuthority(context, input.transition_id, input.execution_context_schema_bytes)
+  if (input.envelope_digest !== digestDeliveryValue(derivePhase1BaselineEnvelope(context))) {
+    fail('delivery_envelope_digest_mismatch', 'lease envelope digest does not match the derived immutable baseline')
   }
   const contract = reviewedContractForTransition(input.plan_bytes, input.transition_id)
   const transition = contract.rows.find((row) => row.id === input.transition_id)
@@ -376,6 +403,24 @@ export function derivePhase1RunLease(context: unknown, input: Readonly<{
   }
   validateLeaseShape(lease)
   return deepFreeze(lease)
+}
+
+export function validatePhase1RunLeaseAuthority(input: Readonly<{
+  lease: Phase1RunLease
+  context: unknown
+  plan_bytes: Buffer | string
+}>): void {
+  validateLeaseShape(input.lease)
+  if (!isObject(input.context)) fail('delivery_context_invalid', 'lease authority context is malformed')
+  assertContextAuthority(input.context, input.lease.transition_id)
+  if (input.lease.envelope_digest !== digestDeliveryValue(derivePhase1BaselineEnvelope(input.context))) {
+    fail('delivery_envelope_digest_mismatch', 'lease envelope digest does not match the derived immutable baseline')
+  }
+  assertLeaseMatchesContext(input.lease, input.context)
+  const contract = reviewedContractForTransition(input.plan_bytes, input.lease.transition_id)
+  const transition = contract.rows.find((row) => row.id === input.lease.transition_id)
+  if (!transition) fail('delivery_transition_contract_mismatch', 'lease transition is absent from reviewed authority')
+  assertLeaseMatchesTransition(input.lease, transition)
 }
 
 function validateChainCommon(input: Readonly<{

@@ -141,6 +141,20 @@ test('run leases form one digest chain and enforce refresh versus successor sema
     predecessor_lease_digest: null,
     observed_delta_digest: null,
   })
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: `sha256:${'f'.repeat(64)}`,
+    plan_bytes: planBytes,
+    transition_id: dm01.id,
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_envelope_digest_mismatch')
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(initialContext)),
+    plan_bytes: recoveryPlanBytes,
+    transition_id: 'P1R-01',
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_context_authority_mismatch')
 
   const refreshContext = contextFixture(1)
   refreshContext.repositories.cc_gateway.authorized_parent_head = initialContext.repositories.cc_gateway.authorized_parent_head

@@ -42,7 +42,7 @@ const expectedImplementationBranches = {
 } as const
 const expectedGateSchemaDigests = {
   execution_context: 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099',
-  plan_review: 'sha256:ad1503924ad92c223e60d66f5f3bfd918fa95eb1954744fed5710c1f98b8d816',
+  plan_review: 'sha256:4d49e5682dbade4f7bd22d44cd7fadeeb1669de5b66e690fb4c988f3f07a34e0',
 } as const
 const recoveryPlanDigest = 'sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b'
 const recoveryReviewedCommit = '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef'
@@ -612,6 +612,7 @@ test('Phase 1 Recovery carriers bind the exact plan, dual review, authority enve
     transition_id: 'P1R-01',
     predecessor_lease_digest: null,
     observed_delta_digest: null,
+    execution_context_schema_bytes: await readFile(executionContextSchemaPath),
   })
   assert.equal(lease.state, 'baseline_frozen')
   assert.equal(lease.transition_id, 'P1R-01')
@@ -629,7 +630,9 @@ test('Phase 1 Recovery carriers bind the exact plan, dual review, authority enve
   for (const mutate of [
     (value: Value) => { value.reviewers.pop() },
     (value: Value) => { value.reviewers.reverse() },
+    (value: Value) => { value.reviewers[1].reviewer_id = value.reviewers[0].reviewer_id },
     (value: Value) => { value.reviewers[0].finding_counts.important = 1 },
+    (value: Value) => { value.recovery_authority.terminal_controller_chain = clone(value.recovery_authority.terminal_acceptance_record) },
     (value: Value) => { value.recovery_authority.recovery_contract.digest = `sha256:${'f'.repeat(64)}` },
   ]) {
     const changed = clone(review); mutate(changed)

@@ -8,6 +8,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -17,14 +18,20 @@ import { userInfo } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
-import { canonicalDeliveryJson } from './delivery-authority.js'
-import { runReviewedGit } from './secure-runtime.js'
+import { canonicalDeliveryJson, digestDeliveryValue, validatePhase1RunLeaseAuthority, type Phase1RunLease } from './delivery-authority.js'
+import {
+  assertNoGitReplacementRefs,
+  REVIEWED_GIT_ENVIRONMENT,
+  REVIEWED_GIT_EXECUTABLE,
+  runReviewedGit,
+} from './secure-runtime.js'
 
 type JsonObject = Record<string, any>
 type RecoveryFamily = 'b1' | 'b2' | 'b3' | 'listener_tls'
 
 type RepositoryBinding = Readonly<{
   remote_url_digest: string
+  bootstrap_head: string
   recovery_branch: string
   source_head: string
   source_commits: readonly string[]
@@ -42,6 +49,10 @@ export type Phase1RecoveryBindings = Readonly<{
   sub2api: RepositoryBinding
   pre_replay_red: Readonly<Record<RecoveryFamily, readonly string[]>>
   pre_replay_classifications: Readonly<Record<RecoveryFamily, readonly string[]>>
+  pre_replay_failure_signatures: Readonly<Record<RecoveryFamily, Readonly<{
+    failed_tests_digest: string
+    required_output_markers: readonly string[]
+  }>>>
 }>
 
 export type Phase1RecoveryCli = Readonly<{
@@ -60,10 +71,35 @@ type RedRecord = Readonly<{
   classifications: readonly string[]
   external_side_effect_count: 0
   unauthorized_socket_count: 0
+  failure_signature_digest: string
+  observer: Readonly<{
+    boundary: 'sandbox_network_deny' | 'active_listener_inventory'
+    external_side_effect_count: 0
+    unauthorized_socket_count: 0
+  }>
 }>
 
 export type Phase1RecoveryInputValidationHooks = Readonly<{
   after_bundle_read?: (bundle: string) => void
+  after_quarantine_open?: (bundle: string) => void
+}>
+
+export type Phase1RecoveryReplayObservation = Readonly<{
+  cc_gateway: Readonly<{ source_root: string; replacement_root: string }>
+  sub2api: Readonly<{ source_root: string; replacement_root: string }>
+}>
+
+export type Phase1RecoveryT2Observation = Readonly<{
+  lease: Phase1RunLease
+  context: JsonObject
+  plan_bytes: Buffer | string
+  cc_root: string
+  sub2api_root: string
+  owned_outcomes: Readonly<{ b1: 'green'; b2: 'green'; b3: 'green'; listener_tls: 'green' }>
+  preserved_red: Readonly<{ cc_event_count: 61; cc_unique_count: 61; sidecar_event_count: 51; sidecar_unique_count: 51 }>
+  command_result_digests: Readonly<{ t0: string; t1: string; owned: string; preserved_red: string }>
+  external_side_effect_count: number
+  unauthorized_socket_count: number
 }>
 
 export type Phase1RecoveryDependencies = Readonly<{
@@ -78,11 +114,11 @@ export type Phase1RecoveryDependencies = Readonly<{
 const COMMIT = /^[0-9a-f]{40,64}$/
 const DIGEST = /^sha256:[0-9a-f]{64}$/
 const RECOVERY_FAMILIES = Object.freeze(['b1', 'b2', 'b3', 'listener_tls'] as const)
-const RECORD_KEYS = Object.freeze(['classifications', 'external_side_effect_count', 'family', 'leaf_names', 'status', 'unauthorized_socket_count'])
+const RECORD_KEYS = Object.freeze(['classifications', 'external_side_effect_count', 'failure_signature_digest', 'family', 'leaf_names', 'observer', 'status', 'unauthorized_socket_count'])
 const REPLAY_RECORD_KEYS = Object.freeze(['cc_gateway', 'record_kind', 'schema_version', 'status', 'sub2api'])
 const REPLAY_REPOSITORY_KEYS = Object.freeze(['protected_path_intersection_count', 'replacement_commits', 'skipped_source_commits', 'source_commits'])
 const T2_KEYS = Object.freeze([
-  'external_side_effect_count', 'lease_digest', 'owned_outcomes', 'preserved_red', 'record_kind',
+  'command_result_digests', 'external_side_effect_count', 'lease_digest', 'owned_outcomes', 'preserved_red', 'record_kind',
   'repositories_clean', 'schema_version', 'status', 'tested_heads', 'unauthorized_socket_count',
 ])
 const CLI_FLAGS = Object.freeze({
@@ -113,6 +149,7 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
+    bootstrap_head: 'ac12e0863afbd2385dde9a4aa865ee9397f3b8fa',
     recovery_branch: 'codex/oracle-phase-1-recovery-cc',
     source_head: 'd5a711614177906d18486b98ff4c5d45d97e04c7',
     source_commits: Object.freeze([
@@ -133,6 +170,7 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   }),
   sub2api: Object.freeze({
     remote_url_digest: 'sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9',
+    bootstrap_head: 'b0b77933716487da5fca00329443f88ce9a1c3db',
     recovery_branch: 'codex/oracle-phase-1-recovery-sub2api',
     source_head: '20217731da9521f9676434b7bd5f9cb73020c32c',
     source_commits: Object.freeze([
@@ -164,6 +202,33 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
     b2: Object.freeze(['b2_authority_reservation_missing']),
     b3: Object.freeze(['b3_public_origin_authority_missing']),
     listener_tls: Object.freeze(['listener_boundary_not_enforced', 'tls_boundary_order_not_enforced']),
+  }),
+  pre_replay_failure_signatures: Object.freeze({
+    b1: Object.freeze({
+      failed_tests_digest: 'sha256:cd1b16c6a9ef61f56098d5762a0b0858f0302c19be836238d9392397cfc6df54',
+      required_output_markers: Object.freeze([
+        'client-chosen text must not attest browser egress',
+        'proofs must be bound to exactly one onboarding session',
+        'a proxy re-test must invalidate every earlier proof',
+      ]),
+    }),
+    b2: Object.freeze({
+      failed_tests_digest: 'sha256:7934a21e3f5864fc7f1278488a8ee8978f4cf3862fed72058f07c2a993d96be5',
+      required_output_markers: Object.freeze([
+        'authorization must deny before lookup, state, version, or dependency handling',
+        'stale version must be rejected as a state/version conflict',
+      ]),
+    }),
+    b3: Object.freeze({
+      failed_tests_digest: 'sha256:ac6ea66b37d6fedb326b6d10bc728b7d69577a675302338aa2823d6d942018a1',
+      required_output_markers: Object.freeze([
+        'without configured origin or trusted ingress, changing one request-derived origin dimension must not change the returned authority',
+      ]),
+    }),
+    listener_tls: Object.freeze({
+      failed_tests_digest: 'sha256:5e66b867586bca0f26a69cc866f2e30b7f0019feb9c1a775c7c2bdfb9632f8b2',
+      required_output_markers: Object.freeze(['ERR_SOCKET_BAD_PORT', 'ENOENT']),
+    }),
   }),
 })
 
@@ -219,7 +284,7 @@ export function parsePhase1RecoveryCli(argv: readonly string[]): Phase1RecoveryC
   return Object.freeze({ command: 'pre-replay-red', ...parsed }) as Phase1RecoveryCli
 }
 
-function validateReplayRepository(value: unknown, binding: RepositoryBinding): void {
+function validateReplayRepository(value: unknown, binding: RepositoryBinding): asserts value is JsonObject {
   if (!isObject(value) || !exactKeys(value, REPLAY_REPOSITORY_KEYS)
     || !same(value.source_commits, binding.source_commits)
     || !same(value.skipped_source_commits, binding.skipped_source_commits)
@@ -232,25 +297,142 @@ function validateReplayRepository(value: unknown, binding: RepositoryBinding): v
   }
 }
 
-export function validatePhase1RecoveryReplayMapping(value: unknown, bindings: Phase1RecoveryBindings = PHASE1_RECOVERY_BINDINGS): void {
+function stablePatchId(root: string, commit: string, parent: string): string {
+  const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', parent, commit]).stdout
+  assertNoGitReplacementRefs(root)
+  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--stable'], {
+    cwd: root,
+    input: patch,
+    encoding: 'buffer',
+    env: { ...REVIEWED_GIT_ENVIRONMENT },
+    maxBuffer: 32 * 1024 * 1024,
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const output = Buffer.from(observed.stdout ?? []).toString('utf8').trim().split(/\s+/)[0]
+  if (observed.error || observed.signal !== null || observed.status !== 0 || !/^[0-9a-f]{40,64}$/.test(output)) {
+    fail('phase1_recovery_mapping_invalid', 'stable patch-id is unavailable')
+  }
+  return output
+}
+
+function soleParent(root: string, commit: string): string {
+  const fields = gitText(root, ['rev-list', '--parents', '-n', '1', commit]).split(' ')
+  if (fields.length !== 2 || fields[0] !== commit || !COMMIT.test(fields[1])) fail('phase1_recovery_mapping_invalid', 'mapped commit must have exactly one parent')
+  return fields[1]
+}
+
+function pathStatusDigest(root: string, parent: string, commit: string): Readonly<{ digest: string; paths: readonly string[] }> {
+  const output = runReviewedGit(root, ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', parent, commit]).stdout
+  const fields = output.toString('utf8').split('\0').filter(Boolean)
+  const paths: string[] = []
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++]
+    if (!/^[ACDMRTUXB][0-9]*$/.test(status)) fail('phase1_recovery_mapping_invalid', 'mapped path status is malformed')
+    const count = status.startsWith('R') || status.startsWith('C') ? 2 : 1
+    for (let pathIndex = 0; pathIndex < count; pathIndex += 1) {
+      const changedPath = fields[index++]
+      if (!changedPath || changedPath.startsWith('/') || changedPath.split('/').includes('..')) fail('phase1_recovery_mapping_invalid', 'mapped path is unsafe')
+      paths.push(changedPath)
+    }
+  }
+  return Object.freeze({ digest: sha256(output), paths: Object.freeze(paths) })
+}
+
+const PROTECTED_REPLAY_PATHS = Object.freeze([
+  'backend/internal/service/openai_compact_sse_keepalive_test.go',
+  'docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
+  'docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
+])
+
+function validateObservedReplayRepository(value: JsonObject, binding: RepositoryBinding, observation: Readonly<{ source_root: string; replacement_root: string }>): void {
+  const sourceRoot = assertRealPath(observation.source_root, 'directory', 'phase1_recovery_mapping_invalid')
+  const replacementRoot = assertRealPath(observation.replacement_root, 'directory', 'phase1_recovery_mapping_invalid')
+  const replacementStatus = runReviewedGit(replacementRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
+  const replacementBase = gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
+  if (replacementStatus.length !== 0 || replacementBase !== binding.bootstrap_head
+    || gitText(sourceRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== binding.source_head
+    || gitText(replacementRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== binding.recovery_branch
+    || gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== value.replacement_commits.at(-1)) {
+    fail('phase1_recovery_mapping_invalid', 'observed replay endpoints do not match compiled authority')
+  }
+  for (const skippedCommit of binding.skipped_source_commits) {
+    if (gitText(sourceRoot, ['rev-parse', '--verify', '--end-of-options', `${skippedCommit}^{commit}`]) !== skippedCommit) {
+      fail('phase1_recovery_mapping_invalid', 'compiled skipped source commit is unavailable')
+    }
+  }
+  let expectedReplacementParent = binding.bootstrap_head
+  for (let index = 0; index < binding.source_commits.length; index += 1) {
+    const sourceCommit = binding.source_commits[index]
+    const replacementCommit = value.replacement_commits[index]
+    const sourceParent = soleParent(sourceRoot, sourceCommit)
+    const replacementParent = soleParent(replacementRoot, replacementCommit)
+    if (replacementParent !== expectedReplacementParent || stablePatchId(sourceRoot, sourceCommit, sourceParent) !== stablePatchId(replacementRoot, replacementCommit, replacementParent)) {
+      fail('phase1_recovery_mapping_invalid', 'observed replay parent or patch-id drifted')
+    }
+    const sourcePaths = pathStatusDigest(sourceRoot, sourceParent, sourceCommit)
+    const replacementPaths = pathStatusDigest(replacementRoot, replacementParent, replacementCommit)
+    if (sourcePaths.digest !== replacementPaths.digest || sourcePaths.paths.some((entry) => PROTECTED_REPLAY_PATHS.includes(entry))) {
+      fail('phase1_recovery_mapping_invalid', 'observed replay path/status or protected-path boundary drifted')
+    }
+    expectedReplacementParent = replacementCommit
+  }
+}
+
+export function validatePhase1RecoveryReplayMapping(
+  value: unknown,
+  bindings: Phase1RecoveryBindings,
+  observation: Phase1RecoveryReplayObservation,
+): void {
   if (!isObject(value) || !exactKeys(value, REPLAY_RECORD_KEYS) || value.schema_version !== 1
     || value.record_kind !== 'phase_1_recovery_replay_mapping' || value.status !== 'equivalent') {
     fail('phase1_recovery_mapping_invalid', 'Recovery replay mapping record is malformed')
   }
   validateReplayRepository(value.cc_gateway, bindings.cc_gateway)
   validateReplayRepository(value.sub2api, bindings.sub2api)
+  validateObservedReplayRepository(value.cc_gateway, bindings.cc_gateway, observation.cc_gateway)
+  validateObservedReplayRepository(value.sub2api, bindings.sub2api, observation.sub2api)
 }
 
-export function validatePhase1RecoveryT2Record(value: unknown): void {
-  if (!isObject(value) || !exactKeys(value, T2_KEYS) || value.schema_version !== 1
-    || value.record_kind !== 'phase_1_recovery_t2' || value.status !== 'green'
-    || !DIGEST.test(String(value.lease_digest)) || !isObject(value.tested_heads)
-    || !COMMIT.test(String(value.tested_heads.cc_gateway)) || !COMMIT.test(String(value.tested_heads.sub2api))
-    || !same(value.owned_outcomes, { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' })
-    || !same(value.preserved_red, { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 })
-    || value.external_side_effect_count !== 0 || value.unauthorized_socket_count !== 0
-    || !same(value.repositories_clean, { cc_gateway: true, sub2api: true })) {
-    fail('phase1_recovery_t2_invalid', 'Recovery T2 record does not bind the exact owned and preserved outcomes')
+export function derivePhase1RecoveryT2Record(observation: Phase1RecoveryT2Observation): Readonly<JsonObject> {
+  validatePhase1RunLeaseAuthority({ lease: observation.lease, context: observation.context, plan_bytes: observation.plan_bytes })
+  if (observation.lease.transition_id !== 'P1R-03' || observation.lease.state !== 'replay_complete'
+    || !same(observation.owned_outcomes, { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' })
+    || !same(observation.preserved_red, { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 })
+    || !exactKeys(observation.command_result_digests as JsonObject, ['owned', 'preserved_red', 't0', 't1'])
+    || Object.values(observation.command_result_digests).some((digest) => !DIGEST.test(digest))
+    || observation.external_side_effect_count !== 0 || observation.unauthorized_socket_count !== 0) {
+    fail('phase1_recovery_t2_invalid', 'Recovery T2 observation does not bind the exact lease and command outcomes')
+  }
+  const roots = {
+    cc_gateway: assertRealPath(observation.cc_root, 'directory', 'phase1_recovery_t2_invalid'),
+    sub2api: assertRealPath(observation.sub2api_root, 'directory', 'phase1_recovery_t2_invalid'),
+  }
+  const testedHeads: JsonObject = {}
+  for (const [name, root] of Object.entries(roots)) {
+    if (runReviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout.length !== 0) {
+      fail('phase1_recovery_t2_invalid', 'Recovery T2 repository is not clean')
+    }
+    testedHeads[name] = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
+  }
+  return deepFreeze({
+    schema_version: 1,
+    record_kind: 'phase_1_recovery_t2',
+    status: 'green',
+    lease_digest: digestDeliveryValue(observation.lease),
+    tested_heads: testedHeads,
+    owned_outcomes: observation.owned_outcomes,
+    preserved_red: observation.preserved_red,
+    command_result_digests: observation.command_result_digests,
+    external_side_effect_count: 0,
+    unauthorized_socket_count: 0,
+    repositories_clean: { cc_gateway: true, sub2api: true },
+  })
+}
+
+export function validatePhase1RecoveryT2Record(value: unknown, observation: Phase1RecoveryT2Observation): void {
+  if (!isObject(value) || !exactKeys(value, T2_KEYS) || !same(value, derivePhase1RecoveryT2Record(observation))) {
+    fail('phase1_recovery_t2_invalid', 'Recovery T2 record differs from the observed lease, roots, or command outcomes')
   }
 }
 
@@ -270,8 +452,10 @@ function assertRealPath(input: string, kind: 'directory' | 'file', code: string)
 function assertRepository(rootInput: string, binding: RepositoryBinding): string {
   const root = assertRealPath(rootInput, 'directory', 'phase1_recovery_root_invalid')
   const status = runReviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
+  const head = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
   if (status.length !== 0 || sha256(gitText(root, ['remote', 'get-url', 'muqihang'])) !== binding.remote_url_digest
-    || gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== gitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])) {
+    || head !== binding.bootstrap_head
+    || head !== gitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])) {
     fail('phase1_recovery_root_invalid', 'Recovery root is not clean current main authority')
   }
   return root
@@ -298,14 +482,51 @@ function readStableBundle(bundleInput: string, binding: RepositoryBinding, hooks
   }
 }
 
-function verifyQuarantinedBundle(root: string, bundle: string, binding: RepositoryBinding): void {
-  const metadata = lstatSync(bundle)
-  if (!metadata.isFile() || metadata.isSymbolicLink() || sha256(readFileSync(bundle)) !== binding.bundle_digest) {
-    fail('phase1_recovery_bundle_invalid', 'quarantined source bundle drifted')
+function verifyQuarantinedBundle(
+  root: string,
+  bundle: string,
+  binding: RepositoryBinding,
+  hooks: Phase1RecoveryInputValidationHooks = {},
+): void {
+  let descriptor = -1
+  try {
+    descriptor = openSync(bundle, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    const before = fstatSync(descriptor)
+    if (!before.isFile() || before.size < 1 || before.size > 1024 * 1024 * 1024) fail('phase1_recovery_bundle_invalid', 'quarantined source bundle has an unsafe type or size')
+    const bytes = Buffer.alloc(Number(before.size))
+    let offset = 0
+    while (offset < bytes.length) {
+      const read = readSync(descriptor, bytes, offset, bytes.length - offset, offset)
+      if (read < 1) fail('phase1_recovery_bundle_invalid', 'quarantined source bundle is truncated')
+      offset += read
+    }
+    hooks.after_quarantine_open?.(bundle)
+    const pathBefore = lstatSync(bundle)
+    if (pathBefore.isSymbolicLink() || !pathBefore.isFile() || pathBefore.dev !== before.dev || pathBefore.ino !== before.ino
+      || pathBefore.size !== before.size || sha256(bytes) !== binding.bundle_digest) {
+      fail('phase1_recovery_bundle_invalid', 'quarantined source bundle drifted')
+    }
+    assertNoGitReplacementRefs(root)
+    const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['bundle', 'verify', '/dev/fd/3'], {
+      cwd: root,
+      encoding: 'buffer',
+      env: { ...REVIEWED_GIT_ENVIRONMENT },
+      maxBuffer: 32 * 1024 * 1024,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe', descriptor],
+    })
+    const output = Buffer.concat([Buffer.from(observed.stdout ?? []), Buffer.from(observed.stderr ?? [])]).toString('utf8')
+    const after = fstatSync(descriptor)
+    const pathAfter = lstatSync(bundle)
+    if (observed.error || observed.signal !== null || observed.status !== 0
+      || after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs
+      || pathAfter.isSymbolicLink() || !pathAfter.isFile() || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino
+      || !output.split('\n').some((entry) => entry.startsWith(binding.source_head))) {
+      fail('phase1_recovery_bundle_invalid', 'quarantined source bundle verification drifted')
+    }
+  } finally {
+    if (descriptor >= 0) closeSync(descriptor)
   }
-  runReviewedGit(root, ['bundle', 'verify', bundle])
-  const heads = runReviewedGit(root, ['bundle', 'list-heads', bundle]).stdout.toString('utf8').trim().split('\n')
-  if (!heads.some((entry) => entry.startsWith(`${binding.source_head} `))) fail('phase1_recovery_bundle_invalid', 'source bundle head is absent')
 }
 
 function prepareOutputRoot(outputInput: string): string {
@@ -337,8 +558,8 @@ export function validatePhase1RecoveryInputs(
   const subCopy = path.join(quarantine, 'sub2api-source.bundle')
   writeFileSync(ccCopy, ccBundle.bytes, { flag: 'wx', mode: 0o400 })
   writeFileSync(subCopy, subBundle.bytes, { flag: 'wx', mode: 0o400 })
-  verifyQuarantinedBundle(ccRoot, ccCopy, bindings.cc_gateway)
-  verifyQuarantinedBundle(subRoot, subCopy, bindings.sub2api)
+  verifyQuarantinedBundle(ccRoot, ccCopy, bindings.cc_gateway, hooks)
+  verifyQuarantinedBundle(subRoot, subCopy, bindings.sub2api, hooks)
 }
 
 export function validatePhase1RecoveryOutputs(input: Phase1RecoveryCli, bindings: Phase1RecoveryBindings = PHASE1_RECOVERY_BINDINGS): void {
@@ -351,15 +572,32 @@ export function validatePhase1RecoveryOutputs(input: Phase1RecoveryCli, bindings
   verifyQuarantinedBundle(subRoot, path.join(output, 'bundle-quarantine/sub2api-source.bundle'), bindings.sub2api)
 }
 
-function parseGoFailedLeaves(stdout: string): readonly string[] {
+export function parsePhase1RecoveryGoRedEvidence(
+  stdout: string,
+  family: 'b1' | 'b2' | 'b3',
+  bindings: Phase1RecoveryBindings = PHASE1_RECOVERY_BINDINGS,
+): Readonly<{ top_level_leaves: readonly string[]; failure_signature_digest: string }> {
   const failed = new Set<string>()
+  const failedTests = new Set<string>()
+  let output = ''
   for (const line of stdout.split('\n')) {
     if (!line) continue
     let event: JsonObject
     try { event = JSON.parse(line) } catch { fail('phase1_recovery_vertical_red_mismatch', 'Go RED output is malformed') }
-    if (event.Action === 'fail' && typeof event.Test === 'string' && event.Test.length > 0) failed.add(event.Test.split('/')[0])
+    if (event.Action === 'output' && typeof event.Output === 'string') output += event.Output
+    if (event.Action === 'fail' && typeof event.Test === 'string' && event.Test.length > 0) {
+      failed.add(event.Test.split('/')[0])
+      failedTests.add(event.Test)
+    }
   }
-  return Object.freeze([...failed].sort(compareBytes))
+  const topLevelLeaves = Object.freeze([...failed].sort(compareBytes))
+  const signatureDigest = sha256(Buffer.from(JSON.stringify([...failedTests].sort(compareBytes)), 'utf8'))
+  const signature = bindings.pre_replay_failure_signatures[family]
+  if (!same(topLevelLeaves, bindings.pre_replay_red[family]) || signatureDigest !== signature.failed_tests_digest
+    || signature.required_output_markers.some((marker) => !output.includes(marker))) {
+    fail('phase1_recovery_vertical_red_mismatch', 'Go RED semantic failure signature drifted')
+  }
+  return Object.freeze({ top_level_leaves: topLevelLeaves, failure_signature_digest: signatureDigest })
 }
 
 function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings: Phase1RecoveryBindings): RedRecord {
@@ -372,7 +610,8 @@ function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings
   const goMetadata = lstatSync(GO_EXECUTABLE)
   if (!moduleCacheMetadata.isDirectory() || moduleCacheMetadata.isSymbolicLink() || (moduleCacheMetadata.mode & 0o022) !== 0
     || !goMetadata.isFile() || goMetadata.isSymbolicLink()) fail('phase1_recovery_dependency_invalid', 'reviewed Go toolchain is unavailable')
-  const result = spawnSync(GO_EXECUTABLE, ['test', '-mod=readonly', '-tags', 'phase0red', packagePath, '-run', pattern, '-count=1', '-json'], {
+  const sandboxProfile = '(version 1) (allow default) (deny network*)'
+  const result = spawnSync('/usr/bin/sandbox-exec', ['-p', sandboxProfile, GO_EXECUTABLE, 'test', '-mod=readonly', '-tags', 'phase0red', packagePath, '-run', pattern, '-count=1', '-json'], {
     cwd: path.join(input.sub2api_root, 'backend'),
     encoding: 'utf8',
     timeout: 180_000,
@@ -393,9 +632,16 @@ function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings
   if (result.error || result.status === 0 || result.status === null || result.signal !== null) {
     fail('phase1_recovery_vertical_red_mismatch', 'Go RED did not reach the exact expected failure lifecycle')
   }
-  const leaves = parseGoFailedLeaves(result.stdout)
-  if (!same(leaves, expected)) fail('phase1_recovery_vertical_red_mismatch', 'Go RED failing leaves drifted')
-  return Object.freeze({ family, status: 'expected_fail', leaf_names: expected, classifications: bindings.pre_replay_classifications[family], external_side_effect_count: 0, unauthorized_socket_count: 0 })
+  const evidence = parsePhase1RecoveryGoRedEvidence(result.stdout, family, bindings)
+  const deniedAttempts = (result.stderr.match(/(?:operation not permitted|sandbox|deny network)/gi) ?? []).length
+  if (deniedAttempts !== 0) fail('phase1_recovery_external_side_effect', 'Go RED attempted a forbidden external network effect')
+  const observer = Object.freeze({ boundary: 'sandbox_network_deny' as const, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const })
+  return Object.freeze({ family, status: 'expected_fail', leaf_names: evidence.top_level_leaves, classifications: bindings.pre_replay_classifications[family], failure_signature_digest: evidence.failure_signature_digest, observer, external_side_effect_count: observer.external_side_effect_count, unauthorized_socket_count: observer.unauthorized_socket_count })
+}
+
+function activeListenerCount(): number {
+  const handles = (process as unknown as { _getActiveHandles?: () => unknown[] })._getActiveHandles?.() ?? []
+  return handles.filter((handle) => isObject(handle) && handle.listening === true && typeof handle.address === 'function').length
 }
 
 async function runListenerRed(input: Phase1RecoveryCli, bindings: Phase1RecoveryBindings): Promise<RedRecord> {
@@ -404,6 +650,7 @@ async function runListenerRed(input: Phase1RecoveryCli, bindings: Phase1Recovery
   const startProxy = proxyModule.startProxy as (config: JsonObject) => unknown
   const baseConfig = helperModule.baseConfig as (overrides?: JsonObject) => JsonObject
   const observed: string[] = []
+  const listenersBefore = activeListenerCount()
   try {
     startProxy(baseConfig({ server: { host: '0.0.0.0', port: -1, tls: { cert: '', key: '' } } }))
   } catch (error) {
@@ -415,7 +662,12 @@ async function runListenerRed(input: Phase1RecoveryCli, bindings: Phase1Recovery
     if ((error as { code?: string }).code === 'ENOENT') observed.push('tls_boundary_order_not_enforced')
   }
   if (!same(observed, bindings.pre_replay_red.listener_tls)) fail('phase1_recovery_vertical_red_mismatch', 'listener/TLS RED ordering drifted')
-  return Object.freeze({ family: 'listener_tls', status: 'expected_fail', leaf_names: bindings.pre_replay_red.listener_tls, classifications: bindings.pre_replay_classifications.listener_tls, external_side_effect_count: 0, unauthorized_socket_count: 0 })
+  const unauthorizedSocketCount = Math.max(0, activeListenerCount() - listenersBefore)
+  if (unauthorizedSocketCount !== 0) fail('phase1_recovery_external_side_effect', 'listener/TLS RED left an unauthorized listener')
+  const failureSignatureDigest = sha256(Buffer.from(JSON.stringify(observed), 'utf8'))
+  if (failureSignatureDigest !== bindings.pre_replay_failure_signatures.listener_tls.failed_tests_digest) fail('phase1_recovery_vertical_red_mismatch', 'listener/TLS failure signature drifted')
+  const observer = Object.freeze({ boundary: 'active_listener_inventory' as const, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const })
+  return Object.freeze({ family: 'listener_tls', status: 'expected_fail', leaf_names: bindings.pre_replay_red.listener_tls, classifications: bindings.pre_replay_classifications.listener_tls, failure_signature_digest: failureSignatureDigest, observer, external_side_effect_count: observer.external_side_effect_count, unauthorized_socket_count: observer.unauthorized_socket_count })
 }
 
 function defaultReplayRequired(input: Phase1RecoveryCli): boolean {
@@ -440,6 +692,8 @@ function validateRedRecord(value: unknown, family: RecoveryFamily, bindings: Pha
   if (!isObject(value) || !exactKeys(value, RECORD_KEYS) || value.family !== family || value.status !== 'expected_fail'
     || !same(value.leaf_names, bindings.pre_replay_red[family])
     || !same(value.classifications, bindings.pre_replay_classifications[family]) || value.external_side_effect_count !== 0
+    || value.failure_signature_digest !== bindings.pre_replay_failure_signatures[family].failed_tests_digest
+    || !isObject(value.observer) || value.observer.external_side_effect_count !== 0 || value.observer.unauthorized_socket_count !== 0
     || value.unauthorized_socket_count !== 0) {
     fail('phase1_recovery_vertical_red_mismatch', 'pre-replay RED record is not exact')
   }

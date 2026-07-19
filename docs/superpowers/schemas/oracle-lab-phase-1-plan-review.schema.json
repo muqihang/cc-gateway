@@ -57,8 +57,8 @@
       "maxItems": 2,
       "uniqueItems": true,
       "prefixItems": [
-        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "product"}}}]},
-        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "authority"}}}]}
+        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "product"}, "reviewer_id": {"const": "p1-recovery-product-review"}}}]},
+        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "authority"}, "reviewer_id": {"const": "p1-recovery-authority-review"}}}]}
       ],
       "items": false
     },
@@ -167,7 +167,7 @@
         "roadmap": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md"}, "digest": {"const": "sha256:00519348d9dd8972dbea92a647d67c2fc42e9015ece6dcb0eb427df02480b107"}}}]},
         "transition_plan": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md"}, "digest": {"const": "sha256:f21023b1d6705855e00ee0f9ceafc78c6cf1c7b928982fd88e821faffa7a8111"}}}]},
         "transition_exit_report": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md"}, "digest": {"const": "sha256:44c9322ba157c1ce4f3b9a974387026aad143f73c6991848be3f50f13af00f48"}}}]},
-        "terminal_controller_chain": {"$ref": "#/$defs/controller_digest"},
+        "terminal_controller_chain": {"allOf": [{"$ref": "#/$defs/controller_digest"}, {"properties": {"kind": {"const": "terminal_controller_chain"}, "digest": {"const": "sha256:3faa939ec6f78a7478a5ea5c2773ea74d5ea42d0b699e1880798cac980192433"}}}]},
         "terminal_acceptance_record": {"allOf": [{"$ref": "#/$defs/controller_digest"}, {"properties": {"kind": {"const": "terminal_acceptance_record"}, "digest": {"const": "sha256:00f84b989d0db40d0c47429bcd5d444709159027f21f4dec0e33812b9c539ecd"}}}]},
         "recovery_contract": {
           "type": "object", "additionalProperties": false, "required": ["plan_path", "digest"],

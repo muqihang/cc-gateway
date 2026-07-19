@@ -15,6 +15,8 @@ import {
 } from '../tools/oracle-lab/delivery-authority.js'
 import {
   PHASE1_RECOVERY_BINDINGS,
+  derivePhase1RecoveryT2Record,
+  parsePhase1RecoveryGoRedEvidence,
   parsePhase1RecoveryCli,
   runPhase1RecoveryPreReplay,
   validatePhase1RecoveryInputs,
@@ -80,11 +82,13 @@ function inputFixture() {
   git(subSource, 'bundle', 'create', subBundle, '--all')
   const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
   bindings.cc_gateway.remote_url_digest = sha256(ccUrl)
+  bindings.cc_gateway.bootstrap_head = git(ccRoot, 'rev-parse', 'HEAD')
   bindings.cc_gateway.source_head = ccSourceHead
   bindings.cc_gateway.source_commits = [ccSourceHead]
   bindings.cc_gateway.skipped_source_commits = []
   bindings.cc_gateway.bundle_digest = sha256(readFileSync(ccBundle))
   bindings.sub2api.remote_url_digest = sha256(subUrl)
+  bindings.sub2api.bootstrap_head = git(subRoot, 'rev-parse', 'HEAD')
   bindings.sub2api.source_head = subSourceHead
   bindings.sub2api.source_commits = [subSourceHead]
   bindings.sub2api.skipped_source_commits = []
@@ -148,24 +152,54 @@ function context(sequence: number, state: string): Value {
   }
 }
 
-function mappingFixture(): Value {
-  return {
+function mappingFixture() {
+  const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-recovery-mapping-'))
+  const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
+  const observation: Value = {}
+  const repositories: Value = {}
+  for (const [name, file] of [['cc_gateway', 'cc-product.txt'], ['sub2api', 'sub-product.txt']] as const) {
+    const sourceRoot = path.join(parent, `${name}-source`)
+    const replacementRoot = path.join(parent, `${name}-replacement`)
+    initRepository(sourceRoot, `https://example.invalid/${name}-source.git`)
+    const baseline = initRepository(replacementRoot, `https://example.invalid/${name}-replacement.git`)
+    const skipped: string[] = []
+    if (name === 'cc_gateway') {
+      const evidence = path.join(sourceRoot, 'docs/superpowers/evidence/phase-1')
+      mkdirSync(evidence, { recursive: true })
+      for (const index of [1, 2]) {
+        const skippedFile = path.join(evidence, `historical-${index}.json`)
+        writeFileSync(skippedFile, `{"historical":${index}}\n`)
+        git(sourceRoot, 'add', path.relative(sourceRoot, skippedFile))
+        git(sourceRoot, 'commit', '-qm', `historical authority ${index}`)
+        skipped.push(git(sourceRoot, 'rev-parse', 'HEAD'))
+      }
+    }
+    writeFileSync(path.join(sourceRoot, file), 'reviewed product delta\n')
+    git(sourceRoot, 'add', file)
+    git(sourceRoot, 'commit', '-qm', 'source product delta')
+    const sourceCommit = git(sourceRoot, 'rev-parse', 'HEAD')
+    git(replacementRoot, 'switch', '-qc', bindings[name].recovery_branch)
+    writeFileSync(path.join(replacementRoot, file), 'reviewed product delta\n')
+    git(replacementRoot, 'add', file)
+    git(replacementRoot, 'commit', '-qm', 'replacement product delta')
+    const replacementCommit = git(replacementRoot, 'rev-parse', 'HEAD')
+    bindings[name].bootstrap_head = baseline
+    bindings[name].source_head = sourceCommit
+    bindings[name].source_commits = [sourceCommit]
+    bindings[name].skipped_source_commits = skipped
+    observation[name] = { source_root: sourceRoot, replacement_root: replacementRoot }
+    repositories[name] = {
+      source_commits: [sourceCommit], replacement_commits: [replacementCommit], skipped_source_commits: [...bindings[name].skipped_source_commits], protected_path_intersection_count: 0,
+    }
+  }
+  const record = {
     schema_version: 1,
     record_kind: 'phase_1_recovery_replay_mapping',
     status: 'equivalent',
-    cc_gateway: {
-      source_commits: [...PHASE1_RECOVERY_BINDINGS.cc_gateway.source_commits],
-      replacement_commits: PHASE1_RECOVERY_BINDINGS.cc_gateway.source_commits.map((_, index) => '12345678'[index].repeat(40)),
-      skipped_source_commits: [...PHASE1_RECOVERY_BINDINGS.cc_gateway.skipped_source_commits],
-      protected_path_intersection_count: 0,
-    },
-    sub2api: {
-      source_commits: [...PHASE1_RECOVERY_BINDINGS.sub2api.source_commits],
-      replacement_commits: PHASE1_RECOVERY_BINDINGS.sub2api.source_commits.map((_, index) => 'abcdef0123'[index].repeat(40)),
-      skipped_source_commits: [],
-      protected_path_intersection_count: 0,
-    },
+    cc_gateway: repositories.cc_gateway,
+    sub2api: repositories.sub2api,
   }
+  return { record, bindings, observation }
 }
 
 test('Recovery authority selects the exact committed contract and rejects legacy/caller drift', () => {
@@ -212,6 +246,13 @@ test('Recovery input validator authenticates real bundles and rejects root, type
   writeFileSync(path.join(dirty.input.cc_root, 'untracked.txt'), 'dirty\n')
   expectCode(() => validatePhase1RecoveryInputs(dirty.input, dirty.bindings as any), 'phase1_recovery_root_invalid')
 
+  const forgedRemoteMain = inputFixture()
+  writeFileSync(path.join(forgedRemoteMain.input.cc_root, 'forged.txt'), 'forged\n')
+  git(forgedRemoteMain.input.cc_root, 'add', 'forged.txt')
+  git(forgedRemoteMain.input.cc_root, 'commit', '-qm', 'forged main')
+  git(forgedRemoteMain.input.cc_root, 'update-ref', 'refs/remotes/muqihang/main', git(forgedRemoteMain.input.cc_root, 'rev-parse', 'HEAD'))
+  expectCode(() => validatePhase1RecoveryInputs(forgedRemoteMain.input, forgedRemoteMain.bindings as any), 'phase1_recovery_root_invalid')
+
   const linked = inputFixture()
   const link = path.join(linked.parent, 'cc-link.bundle')
   symlinkSync(linked.ccBundle, link)
@@ -236,38 +277,64 @@ test('Recovery input validator authenticates real bundles and rejects root, type
       writeFileSync(bundle, bytes, { mode: 0o600 })
     },
   }), 'phase1_recovery_bundle_invalid')
+
+  const quarantineRaced = inputFixture()
+  let quarantineReplaced = false
+  expectCode(() => validatePhase1RecoveryInputs(quarantineRaced.input, quarantineRaced.bindings as any, {
+    after_quarantine_open: (bundle) => {
+      if (quarantineReplaced || path.basename(bundle) !== 'cc-source.bundle') return
+      quarantineReplaced = true
+      const bytes = readFileSync(bundle)
+      renameSync(bundle, `${bundle}.moved`)
+      writeFileSync(bundle, bytes, { mode: 0o400 })
+    },
+  }), 'phase1_recovery_bundle_invalid')
 })
 
 test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, duplicate, and protected intersections', () => {
-  const valid = mappingFixture()
-  assert.doesNotThrow(() => validatePhase1RecoveryReplayMapping(valid))
+  const fixture = mappingFixture()
+  assert.doesNotThrow(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any))
   for (const mutate of [
-    (value: Value) => { value.cc_gateway.source_commits.reverse() },
+    (value: Value) => { value.cc_gateway.source_commits[0] = 'f'.repeat(40) },
     (value: Value) => { value.cc_gateway.source_commits.pop() },
     (value: Value) => { value.sub2api.source_commits.push('f'.repeat(40)) },
-    (value: Value) => { value.sub2api.replacement_commits[1] = value.sub2api.replacement_commits[0] },
+    (value: Value) => { value.sub2api.replacement_commits.push(value.sub2api.replacement_commits[0]) },
     (value: Value) => { value.cc_gateway.skipped_source_commits.reverse() },
     (value: Value) => { value.cc_gateway.protected_path_intersection_count = 1 },
   ]) {
-    const changed = clone(valid); mutate(changed)
-    expectCode(() => validatePhase1RecoveryReplayMapping(changed), 'phase1_recovery_mapping_invalid')
+    const changed = clone(fixture.record); mutate(changed)
+    expectCode(() => validatePhase1RecoveryReplayMapping(changed, fixture.bindings, fixture.observation as any), 'phase1_recovery_mapping_invalid')
   }
+
+  const forgedReplacement = mappingFixture()
+  writeFileSync(path.join(forgedReplacement.observation.cc_gateway.replacement_root, 'forged.txt'), 'forged\n')
+  expectCode(() => validatePhase1RecoveryReplayMapping(forgedReplacement.record, forgedReplacement.bindings, forgedReplacement.observation as any), 'phase1_recovery_mapping_invalid')
 })
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {
-  const valid = {
-    schema_version: 1,
-    record_kind: 'phase_1_recovery_t2',
-    status: 'green',
-    lease_digest: `sha256:${'1'.repeat(64)}`,
-    tested_heads: { cc_gateway: '2'.repeat(40), sub2api: '3'.repeat(40) },
+  const roots = inputFixture()
+  const t2Context = context(2, 'replay_complete')
+  const t2Lease = derivePhase1RunLease(t2Context, {
+    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(t2Context)),
+    plan_bytes: planBytes,
+    transition_id: 'P1R-03',
+    predecessor_lease_digest: `sha256:${'4'.repeat(64)}`,
+    observed_delta_digest: null,
+  })
+  const observation = {
+    lease: t2Lease,
+    context: t2Context,
+    plan_bytes: planBytes,
+    cc_root: roots.input.cc_root,
+    sub2api_root: roots.input.sub2api_root,
     owned_outcomes: { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' },
     preserved_red: { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 },
+    command_result_digests: { t0: `sha256:${'9'.repeat(64)}`, t1: `sha256:${'a'.repeat(64)}`, owned: `sha256:${'b'.repeat(64)}`, preserved_red: `sha256:${'c'.repeat(64)}` },
     external_side_effect_count: 0,
     unauthorized_socket_count: 0,
-    repositories_clean: { cc_gateway: true, sub2api: true },
   }
-  assert.doesNotThrow(() => validatePhase1RecoveryT2Record(valid))
+  const valid = derivePhase1RecoveryT2Record(observation as any)
+  assert.doesNotThrow(() => validatePhase1RecoveryT2Record(valid, observation as any))
   for (const mutate of [
     (value: Value) => { value.owned_outcomes.b2 = 'red' },
     (value: Value) => { value.preserved_red.cc_unique_count = 60 },
@@ -275,8 +342,28 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
     (value: Value) => { value.repositories_clean.sub2api = false },
   ]) {
     const changed = clone(valid); mutate(changed)
-    expectCode(() => validatePhase1RecoveryT2Record(changed), 'phase1_recovery_t2_invalid')
+    expectCode(() => validatePhase1RecoveryT2Record(changed, observation as any), 'phase1_recovery_t2_invalid')
   }
+  const forgedLease = { ...observation, lease: { ...observation.lease, envelope_digest: `sha256:${'f'.repeat(64)}` } }
+  expectCode(() => validatePhase1RecoveryT2Record(valid, forgedLease as any), 'delivery_envelope_digest_mismatch')
+  writeFileSync(path.join(roots.input.cc_root, 'dirty.txt'), 'dirty\n')
+  expectCode(() => derivePhase1RecoveryT2Record(observation as any), 'phase1_recovery_t2_invalid')
+})
+
+test('Go RED evidence requires the exact semantic subtest signature and assertion marker', () => {
+  const tests = [
+    'TestFormalPoolOnboardingPublicOriginAuthority',
+    'TestFormalPoolOnboardingPublicOriginAuthority/forwarded_host_is_untrusted',
+    'TestFormalPoolOnboardingPublicOriginAuthority/forwarded_proto_is_untrusted',
+    'TestFormalPoolOnboardingPublicOriginAuthority/host_is_untrusted',
+  ]
+  const events = [
+    ...tests.map((Test) => JSON.stringify({ Action: 'fail', Test })),
+    JSON.stringify({ Action: 'output', Output: 'without configured origin or trusted ingress, changing one request-derived origin dimension must not change the returned authority' }),
+  ].join('\n')
+  assert.equal(parsePhase1RecoveryGoRedEvidence(events, 'b3').failure_signature_digest, PHASE1_RECOVERY_BINDINGS.pre_replay_failure_signatures.b3.failed_tests_digest)
+  expectCode(() => parsePhase1RecoveryGoRedEvidence(events.replace('/host_is_untrusted', '/unrelated_failure'), 'b3'), 'phase1_recovery_vertical_red_mismatch')
+  expectCode(() => parsePhase1RecoveryGoRedEvidence(events.replace('changing one request-derived origin dimension', 'unrelated assertion'), 'b3'), 'phase1_recovery_vertical_red_mismatch')
 })
 
 test('pre-replay transaction requires four exact real RED records plus the replay sentinel', async () => {
@@ -284,7 +371,7 @@ test('pre-replay transaction requires four exact real RED records plus the repla
     validate_inputs: () => undefined,
     validate_outputs: () => undefined,
     observe_baseline: () => ({ cc_gateway: '1'.repeat(40), sub2api: '2'.repeat(40) }),
-    run_red: (family) => ({ family, status: 'expected_fail', leaf_names: PHASE1_RECOVERY_BINDINGS.pre_replay_red[family], classifications: PHASE1_RECOVERY_BINDINGS.pre_replay_classifications[family], external_side_effect_count: 0, unauthorized_socket_count: 0 }),
+    run_red: (family) => ({ family, status: 'expected_fail', leaf_names: PHASE1_RECOVERY_BINDINGS.pre_replay_red[family], classifications: PHASE1_RECOVERY_BINDINGS.pre_replay_classifications[family], failure_signature_digest: PHASE1_RECOVERY_BINDINGS.pre_replay_failure_signatures[family].failed_tests_digest, observer: { boundary: family === 'listener_tls' ? 'active_listener_inventory' : 'sandbox_network_deny', external_side_effect_count: 0, unauthorized_socket_count: 0 }, external_side_effect_count: 0, unauthorized_socket_count: 0 }),
     replay_required: () => true,
     persist_record: () => undefined,
   }
@@ -294,7 +381,7 @@ test('pre-replay transaction requires four exact real RED records plus the repla
   assert.deepEqual(record.families.map((entry: Value) => entry.family), ['b1', 'b2', 'b3', 'listener_tls'])
   assert.equal(record.replay_sentinel, 'phase1_recovery_replay_required')
 
-  const missing = { ...dependencies, run_red: (family: keyof typeof PHASE1_RECOVERY_BINDINGS.pre_replay_red) => ({ family, status: family === 'b3' ? 'pass' : 'expected_fail', leaf_names: PHASE1_RECOVERY_BINDINGS.pre_replay_red[family], classifications: PHASE1_RECOVERY_BINDINGS.pre_replay_classifications[family], external_side_effect_count: 0, unauthorized_socket_count: 0 }) }
+  const missing = { ...dependencies, run_red: (family: keyof typeof PHASE1_RECOVERY_BINDINGS.pre_replay_red) => ({ family, status: family === 'b3' ? 'pass' : 'expected_fail', leaf_names: PHASE1_RECOVERY_BINDINGS.pre_replay_red[family], classifications: PHASE1_RECOVERY_BINDINGS.pre_replay_classifications[family], failure_signature_digest: PHASE1_RECOVERY_BINDINGS.pre_replay_failure_signatures[family].failed_tests_digest, observer: { boundary: family === 'listener_tls' ? 'active_listener_inventory' as const : 'sandbox_network_deny' as const, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const }, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const }) }
   await assert.rejects(runPhase1RecoveryPreReplay(input, PHASE1_RECOVERY_BINDINGS, missing), (error: unknown) => (error as { code?: string }).code === 'phase1_recovery_vertical_red_mismatch')
 })
 
