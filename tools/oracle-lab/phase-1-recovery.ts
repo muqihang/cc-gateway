@@ -32,6 +32,7 @@ type RecoveryFamily = 'b1' | 'b2' | 'b3' | 'listener_tls'
 type RepositoryBinding = Readonly<{
   remote_url_digest: string
   bootstrap_head: string
+  entry_floor_head: string
   recovery_branch: string
   source_head: string
   source_commits: readonly string[]
@@ -146,6 +147,7 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
     bootstrap_head: 'ac12e0863afbd2385dde9a4aa865ee9397f3b8fa',
+    entry_floor_head: '0eff3cc1e68e3d1c9ba5d7026a802bf6dcf06f49',
     recovery_branch: 'codex/oracle-phase-1-recovery-cc',
     source_head: 'd5a711614177906d18486b98ff4c5d45d97e04c7',
     source_commits: Object.freeze([
@@ -167,6 +169,7 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   sub2api: Object.freeze({
     remote_url_digest: 'sha256:22c1a9e3cf8e76d2a20bf24a1ff66fa5d7417ba8b8b83a948c8b3ffa5c33a1a9',
     bootstrap_head: 'b0b77933716487da5fca00329443f88ce9a1c3db',
+    entry_floor_head: 'b0b77933716487da5fca00329443f88ce9a1c3db',
     recovery_branch: 'codex/oracle-phase-1-recovery-sub2api',
     source_head: '20217731da9521f9676434b7bd5f9cb73020c32c',
     source_commits: Object.freeze([
@@ -318,6 +321,16 @@ function soleParent(root: string, commit: string): string {
   return fields[1]
 }
 
+function containsExecutionFloor(root: string, binding: RepositoryBinding, head: string): boolean {
+  if (!COMMIT.test(binding.bootstrap_head) || !COMMIT.test(binding.entry_floor_head) || !COMMIT.test(head)) return false
+  try {
+    return runReviewedGit(root, ['merge-base', '--is-ancestor', binding.bootstrap_head, binding.entry_floor_head], { allowedExitCodes: [0, 1] }).status === 0
+      && runReviewedGit(root, ['merge-base', '--is-ancestor', binding.entry_floor_head, head], { allowedExitCodes: [0, 1] }).status === 0
+  } catch {
+    return false
+  }
+}
+
 function pathStatusDigest(root: string, parent: string, commit: string): Readonly<{ digest: string; paths: readonly string[] }> {
   const output = runReviewedGit(root, ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', parent, commit]).stdout
   const fields = output.toString('utf8').split('\0').filter(Boolean)
@@ -346,7 +359,7 @@ function validateObservedReplayRepository(value: JsonObject, binding: Repository
   const replacementRoot = assertRealPath(observation.replacement_root, 'directory', 'phase1_recovery_mapping_invalid')
   const replacementStatus = runReviewedGit(replacementRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
   const replacementBase = gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
-  if (replacementStatus.length !== 0 || replacementBase !== binding.bootstrap_head
+  if (replacementStatus.length !== 0 || !containsExecutionFloor(replacementRoot, binding, replacementBase)
     || gitText(sourceRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== binding.source_head
     || gitText(replacementRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== binding.recovery_branch
     || gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== value.replacement_commits.at(-1)) {
@@ -357,7 +370,7 @@ function validateObservedReplayRepository(value: JsonObject, binding: Repository
       fail('phase1_recovery_mapping_invalid', 'compiled skipped source commit is unavailable')
     }
   }
-  let expectedReplacementParent = binding.bootstrap_head
+  let expectedReplacementParent = replacementBase
   for (let index = 0; index < binding.source_commits.length; index += 1) {
     const sourceCommit = binding.source_commits[index]
     const replacementCommit = value.replacement_commits[index]
@@ -500,9 +513,9 @@ function assertRepository(rootInput: string, binding: RepositoryBinding): string
   const root = assertRealPath(rootInput, 'directory', 'phase1_recovery_root_invalid')
   const status = runReviewedGit(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
   const head = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
+  const remoteMain = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
   if (status.length !== 0 || sha256(gitText(root, ['remote', 'get-url', 'muqihang'])) !== binding.remote_url_digest
-    || head !== binding.bootstrap_head
-    || head !== gitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])) {
+    || head !== remoteMain || !containsExecutionFloor(root, binding, head)) {
     fail('phase1_recovery_root_invalid', 'Recovery root is not clean current main authority')
   }
   return root
