@@ -34,8 +34,8 @@ const planBytes = readFileSync(planPath)
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
-const executionContextSchemaDigest = 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099'
-const planReviewSchemaDigest = 'sha256:4d49e5682dbade4f7bd22d44cd7fadeeb1669de5b66e690fb4c988f3f07a34e0'
+const executionContextSchemaDigest = 'sha256:449f3758498d5b2deff3bd9061aea3963b902433f49053387b3a307221087dfe'
+const planReviewSchemaDigest = 'sha256:0669d6eb90b46184942a9193fcf73dc731b9edc974d965e0a7a174332064bf37'
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
@@ -224,7 +224,7 @@ function context(sequence: number, authorizedHeads: Readonly<{ cc_gateway: strin
   }
 }
 
-function mappingFixture() {
+function mappingFixture(options: Readonly<{ ccContextDrift?: boolean }> = {}) {
   const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-recovery-mapping-'))
   const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
   const observation: Value = {}
@@ -234,6 +234,11 @@ function mappingFixture() {
     const replacementRoot = path.join(parent, `${name}-replacement`)
     initRepository(sourceRoot, `https://example.invalid/${name}-source.git`)
     const baseline = initRepository(replacementRoot, `https://example.invalid/${name}-replacement.git`)
+    if (options.ccContextDrift && name === 'cc_gateway') {
+      writeFileSync(path.join(replacementRoot, 'baseline.txt'), 'baseline\ncurrent-main-context\n')
+      git(replacementRoot, 'add', 'baseline.txt')
+      git(replacementRoot, 'commit', '-qm', 'add current-main context')
+    }
     writeFileSync(path.join(replacementRoot, 'entry-floor.txt'), 'merged bootstrap authority\n')
     git(replacementRoot, 'add', 'entry-floor.txt')
     git(replacementRoot, 'commit', '-qm', 'advance execution baseline')
@@ -259,13 +264,18 @@ function mappingFixture() {
         skipped.push(git(sourceRoot, 'rev-parse', 'HEAD'))
       }
     }
-    writeFileSync(path.join(sourceRoot, file), 'reviewed product delta\n')
-    git(sourceRoot, 'add', file)
+    const productPath = options.ccContextDrift && name === 'cc_gateway' ? 'baseline.txt' : file
+    writeFileSync(path.join(sourceRoot, productPath), options.ccContextDrift && name === 'cc_gateway'
+      ? 'baseline\nreviewed product delta\n'
+      : 'reviewed product delta\n')
+    git(sourceRoot, 'add', productPath)
     git(sourceRoot, 'commit', '-qm', 'source product delta')
     const sourceCommit = git(sourceRoot, 'rev-parse', 'HEAD')
     git(replacementRoot, 'switch', '-qc', bindings[name].recovery_branch)
-    writeFileSync(path.join(replacementRoot, file), 'reviewed product delta\n')
-    git(replacementRoot, 'add', file)
+    writeFileSync(path.join(replacementRoot, productPath), options.ccContextDrift && name === 'cc_gateway'
+      ? 'baseline\nreviewed product delta\ncurrent-main-context\n'
+      : 'reviewed product delta\n')
+    git(replacementRoot, 'add', productPath)
     git(replacementRoot, 'commit', '-qm', 'replacement product delta')
     const replacementCommit = git(replacementRoot, 'rev-parse', 'HEAD')
     bindings[name].bootstrap_head = baseline
@@ -429,6 +439,11 @@ test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, du
     changed.record.cc_gateway.replacement_commits = [git(replacementRoot, 'rev-parse', 'HEAD')]
     expectCode(() => validatePhase1RecoveryReplayMapping(changed.record, changed.bindings, changed.observation as any), 'phase1_recovery_mapping_invalid')
   }
+})
+
+test('Recovery replay mapping accepts additive current-main context with the same semantic patch', () => {
+  const fixture = mappingFixture({ ccContextDrift: true })
+  assert.doesNotThrow(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any))
 })
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {

@@ -41,10 +41,10 @@ const expectedImplementationBranches = {
   sub2api: 'codex/oracle-phase-1-sub2api-v8',
 } as const
 const expectedGateSchemaDigests = {
-  execution_context: 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099',
-  plan_review: 'sha256:4d49e5682dbade4f7bd22d44cd7fadeeb1669de5b66e690fb4c988f3f07a34e0',
+  execution_context: 'sha256:449f3758498d5b2deff3bd9061aea3963b902433f49053387b3a307221087dfe',
+  plan_review: 'sha256:0669d6eb90b46184942a9193fcf73dc731b9edc974d965e0a7a174332064bf37',
 } as const
-const recoveryPlanDigest = 'sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b'
+const recoveryPlanDigest = 'sha256:aec9d53c2c6f1262d4663fb0658c73e3c1feb5bfb7fa039fd8eeab97be713ff6'
 const recoveryReviewedCommit = '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']

@@ -345,7 +345,7 @@ allowed.
 For every mapping prove:
 
 - source object and sole parent;
-- stable patch-id;
+- zero-context stable semantic patch-id (`git diff --binary --full-index -U0 | git patch-id --stable`);
 - UTF-8 sorted path/status/mode tuples;
 - contiguous replacement parent;
 - no protected-path intersection;
@@ -355,6 +355,12 @@ For every mapping prove:
 The mapping record is safe metadata only. It contains no raw patch, secret, absolute root, or source
 material. Any conflict, empty commit, extra commit, skipped product commit, changed mode, unexpected
 path, or caller-selected mapping stops Recovery without conflict resolution.
+
+The semantic patch fingerprint intentionally excludes hunk context so an unrelated adjacent line
+already present on the reviewed current main cannot change the source-to-replacement identity. This
+does not relax any other mapping proof: exact sole parents, zero-context content delta, UTF-8 sorted
+path/status/mode tuples, protected-path exclusion, projected-tree equality, and clean replacement
+state remain mandatory.
 
 ## 11. Replayed Product Anchors
 

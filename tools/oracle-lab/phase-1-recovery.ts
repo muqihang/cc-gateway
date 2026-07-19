@@ -141,7 +141,7 @@ const OUTPUT_RECORD = 'phase-1-recovery-pre-replay-red.json'
 export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   plan_path: 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md',
   contract_digest: 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe',
-  plan_digest: 'sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b',
+  plan_digest: 'sha256:aec9d53c2c6f1262d4663fb0658c73e3c1feb5bfb7fa039fd8eeab97be713ff6',
   reviewed_plan_commit: '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef',
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
@@ -297,7 +297,9 @@ function validateReplayRepository(value: unknown, binding: RepositoryBinding): a
 }
 
 function stablePatchId(root: string, commit: string, parent: string): string {
-  const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', parent, commit]).stdout
+  // Exclude hunk context from the semantic fingerprint. Current main may add an
+  // unrelated adjacent line while the source and replacement change remains identical.
+  const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', '-U0', parent, commit]).stdout
   assertNoGitReplacementRefs(root)
   const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--stable'], {
     cwd: root,
