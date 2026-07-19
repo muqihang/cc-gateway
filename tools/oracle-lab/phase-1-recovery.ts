@@ -354,12 +354,43 @@ const PROTECTED_REPLAY_PATHS = Object.freeze([
   'docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
 ])
 
-function validateObservedReplayRepository(value: JsonObject, binding: RepositoryBinding, observation: Readonly<{ source_root: string; replacement_root: string }>): void {
+const RECOVERY_CARRIER_PATHS = Object.freeze([
+  'docs/superpowers/evidence/phase-1/phase-1-execution-context.json',
+  'docs/superpowers/evidence/phase-1/phase-1-plan-review.json',
+])
+
+function replacementBaseForReplay(root: string, binding: RepositoryBinding, value: JsonObject, requiresCarrier: boolean): string {
+  const remoteMain = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
+  if (!containsExecutionFloor(root, binding, remoteMain)) {
+    fail('phase1_recovery_mapping_invalid', 'replacement remote main does not contain the Recovery execution floor')
+  }
+  if (!requiresCarrier) return remoteMain
+
+  const carrierCommit = soleParent(root, value.replacement_commits[0])
+  if (soleParent(root, carrierCommit) !== remoteMain) {
+    fail('phase1_recovery_mapping_invalid', 'CC Recovery carrier is not the sole child between remote main and product replay')
+  }
+  const delta = runReviewedGit(root, ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', remoteMain, carrierCommit]).stdout
+    .toString('utf8').split('\0').filter(Boolean)
+  const expectedDelta = RECOVERY_CARRIER_PATHS.flatMap((carrierPath) => ['A', carrierPath])
+  if (!same(delta, expectedDelta)) {
+    fail('phase1_recovery_mapping_invalid', 'CC Recovery carrier delta is not the exact two-path authority boundary')
+  }
+  const treeEntries = gitText(root, ['ls-tree', '--full-tree', carrierCommit, '--', ...RECOVERY_CARRIER_PATHS])
+    .split('\n').filter(Boolean)
+  if (treeEntries.length !== RECOVERY_CARRIER_PATHS.length
+    || treeEntries.some((entry, index) => !entry.startsWith('100644 blob ') || !entry.endsWith(`\t${RECOVERY_CARRIER_PATHS[index]}`))) {
+    fail('phase1_recovery_mapping_invalid', 'CC Recovery carrier paths must be regular tracked JSON files')
+  }
+  return carrierCommit
+}
+
+function validateObservedReplayRepository(value: JsonObject, binding: RepositoryBinding, observation: Readonly<{ source_root: string; replacement_root: string }>, requiresCarrier: boolean): void {
   const sourceRoot = assertRealPath(observation.source_root, 'directory', 'phase1_recovery_mapping_invalid')
   const replacementRoot = assertRealPath(observation.replacement_root, 'directory', 'phase1_recovery_mapping_invalid')
   const replacementStatus = runReviewedGit(replacementRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']).stdout
-  const replacementBase = gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'refs/remotes/muqihang/main^{commit}'])
-  if (replacementStatus.length !== 0 || !containsExecutionFloor(replacementRoot, binding, replacementBase)
+  const replacementBase = replacementBaseForReplay(replacementRoot, binding, value, requiresCarrier)
+  if (replacementStatus.length !== 0
     || gitText(sourceRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== binding.source_head
     || gitText(replacementRoot, ['symbolic-ref', '--quiet', '--short', 'HEAD']) !== binding.recovery_branch
     || gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}']) !== value.replacement_commits.at(-1)) {
@@ -399,8 +430,8 @@ export function validatePhase1RecoveryReplayMapping(
   }
   validateReplayRepository(value.cc_gateway, bindings.cc_gateway)
   validateReplayRepository(value.sub2api, bindings.sub2api)
-  validateObservedReplayRepository(value.cc_gateway, bindings.cc_gateway, observation.cc_gateway)
-  validateObservedReplayRepository(value.sub2api, bindings.sub2api, observation.sub2api)
+  validateObservedReplayRepository(value.cc_gateway, bindings.cc_gateway, observation.cc_gateway, true)
+  validateObservedReplayRepository(value.sub2api, bindings.sub2api, observation.sub2api, false)
 }
 
 function readStableResultArtifact(fileInput: string): Readonly<{ bytes: Buffer; value: JsonObject }> {
