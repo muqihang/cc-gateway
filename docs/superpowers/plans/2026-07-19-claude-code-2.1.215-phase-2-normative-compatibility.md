@@ -275,6 +275,14 @@ The CBOR envelope binds:
 - response-policy reference and retry owner;
 - Ed25519 key ID and signature over the deterministic unsigned envelope bytes.
 
+The exact signature input is the ASCII domain separator
+`oracle-sidecar-capability-v1\x00` followed by the deterministic unsigned-envelope CBOR bytes; the
+four-byte frame length is not part of the signature input. Capability keys belong to a dedicated
+`sidecar_capability` role and key epoch. A verifier must reject a key ID from the `root`,
+`manifest`, `checkpoint`, or `revocation` roles, reject role or epoch reuse, and reject a signature
+created for any other signed object even when the same public-key bytes appear in a malformed test
+trust state. Production key reuse across roles is forbidden.
+
 Replay identity is `(key_epoch, capability_id, attempt_id, nonce)`. The pure ledger transition
 model supports `reserve`, `commit`, `expire`, and `revoke`, rejects reuse after any terminal state,
 and defines conflict results for stale replica generations. Clock decisions take an explicit wall
@@ -462,7 +470,9 @@ keys are committed.
 and encoding, IPv6 authority, duplicate query values, proxy/profile/credential generations,
 destination class, deadline, key epoch, response policy, signature, replay reserve/commit, expired
 reservation, revoked epoch, restart snapshot, and stale replica generation. Mutate every signed
-field and require denial.
+field and require denial. Also reject missing or changed domain separation, manifest/checkpoint/
+revocation signatures presented as capability signatures, a key assigned to the wrong role, key
+role reuse, and an otherwise valid signature from the wrong key epoch.
 
 **Implementation:** add encoder, strict decoder, signature verification, and pure replay transition.
 Do not alter `EgressSidecarControl`, `prepareEgressSidecarRequest`, Go `control.Validate`,
@@ -567,7 +577,9 @@ Phase 3A entry conditions. It is a human handoff, not an authority artifact.
 
 ## 9. Review Protocol
 
-Use one integrated review after Task 8 passes.
+Use one independent, read-only integrated review of the immutable Task 8 heads. The reviewer must
+review the two exact base-to-head ranges and may not expand Phase 2 scope or request optional
+hardening as a blocking finding.
 
 Review for:
 
@@ -580,11 +592,13 @@ Review for:
 - accidental secrets, raw request material, or production-capable configuration.
 
 Classify findings as Critical, Important, or Minor. Apply at most one consolidated fix wave for all
-real Critical/Important findings, rerun affected focused gates and Task 8, then perform one closure
-review. Minor findings go into the short handoff and do not reopen implementation.
+real Critical/Important findings, rerun affected focused gates and Task 8, then perform one
+independent closure review. When the integrated review reports zero Critical and zero Important,
+it is final and no closure review is run. Minor findings go into the short handoff and do not reopen
+implementation.
 
-If the closure review still has any Critical or Important finding, stop. Do not add a new reviewer
-round, schema, authority process, branch, clone, or recovery mechanism.
+If a required closure review still has any Critical or Important finding, stop. Do not add a new
+reviewer round, schema, authority process, branch, clone, or recovery mechanism.
 
 ## 10. Completion Definition
 
@@ -602,7 +616,8 @@ Phase 2 is complete only when all of these are true:
 - all focused tests, one serial full local suite per affected repository, the joint gate, and
   build/typecheck pass;
 - Phase 1 B4-B6 exact expected RED inventories are unchanged;
-- integrated and closure review have zero Critical or Important findings;
+- the independent integrated review has zero Critical or Important findings, and the independent
+  closure review also has zero Critical or Important findings when a fix wave made it necessary;
 - ordinary PRs merge and one post-merge verification confirms main commit/tree, bundle digest,
   joint gate, builds, and the exact RED inventories;
 - the handoff names Phase 3A as next and does not claim profile evidence, runtime enforcement,
