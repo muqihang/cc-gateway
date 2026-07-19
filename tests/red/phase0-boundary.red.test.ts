@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import dns from "node:dns";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
@@ -316,13 +317,14 @@ for (const [name, mutate, ordinaryPath] of b4Cases) {
     mutate(config, context);
     const dnsLookups: string[] = [];
     const originalLookup = dns.lookup;
+    const gateway = startProxy(config);
+    if (!gateway.listening) await once(gateway, "listening");
     (dns as any).lookup = (hostname: string, options: any, callback?: any) => {
       dnsLookups.push(hostname);
       const cb = typeof options === "function" ? options : callback;
       if (typeof options === "object" && options?.all) cb(null, [{ address: "127.0.0.1", family: 4 }]);
       else cb(null, "127.0.0.1", 4);
     };
-    const gateway = startProxy(config);
     try {
       const response = await httpJson(serverUrl(gateway, "/v1/messages?beta=true"), {
         headers: b4Headers(context),
