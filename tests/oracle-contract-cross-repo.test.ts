@@ -8,10 +8,10 @@ import canonicalize from 'canonicalize'
 
 import { sha256File } from '../tools/oracle-contract/check-shared-contract.js'
 import { CrossRepoContractError, checkCrossRepoContract } from '../tools/oracle-contract/check-cross-repo.js'
+import { resolveSub2apiTestRoot } from './oracle-contract-test-roots.js'
 
 const ccGatewayRoot = process.cwd()
-const sub2apiRoot = process.env.SUB2API_ROOT
-assert.ok(sub2apiRoot, 'SUB2API_ROOT must identify the clean Phase 2 Sub2API worktree')
+const sub2apiRoot = resolveSub2apiTestRoot()
 
 function expectCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (error: unknown) => error instanceof CrossRepoContractError && error.code === code)

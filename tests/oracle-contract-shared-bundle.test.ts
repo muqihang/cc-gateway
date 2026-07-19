@@ -13,10 +13,10 @@ import {
   checkSharedContract,
   sha256File,
 } from '../tools/oracle-contract/check-shared-contract.js'
+import { resolveSub2apiTestRoot } from './oracle-contract-test-roots.js'
 
 const ccGatewayRoot = process.cwd()
-const sub2apiRoot = process.env.SUB2API_ROOT
-assert.ok(sub2apiRoot, 'SUB2API_ROOT must identify the clean Phase 2 Sub2API worktree')
+const sub2apiRoot = resolveSub2apiTestRoot()
 
 const ccBundle = path.join(ccGatewayRoot, 'contracts/oracle-lab/v1')
 const subBundle = path.join(sub2apiRoot, 'backend/internal/service/testdata/oracle_lab_contract/v1')
