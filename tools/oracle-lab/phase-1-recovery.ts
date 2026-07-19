@@ -6,15 +6,17 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { constants as fsConstants } from 'node:fs'
-import { userInfo } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
@@ -141,8 +143,8 @@ const OUTPUT_RECORD = 'phase-1-recovery-pre-replay-red.json'
 export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   plan_path: 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md',
   contract_digest: 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe',
-  plan_digest: 'sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b',
-  reviewed_plan_commit: '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef',
+  plan_digest: 'sha256:fdd61eb31c0e1662c3d4ebe438a99379277accf29d75e685b9e3d2a02fcc0029',
+  reviewed_plan_commit: '0a640baf62392f74e22618959c152e0cef024f43',
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
@@ -296,10 +298,12 @@ function validateReplayRepository(value: unknown, binding: RepositoryBinding): a
   }
 }
 
-function stablePatchId(root: string, commit: string, parent: string): string {
-  const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', parent, commit]).stdout
+function semanticPatchId(root: string, commit: string, parent: string): string {
+  // Exclude hunk context from the semantic fingerprint. Current main may add an
+  // unrelated adjacent line while the source and replacement change remains identical.
+  const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', '-U0', parent, commit]).stdout
   assertNoGitReplacementRefs(root)
-  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--stable'], {
+  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--verbatim'], {
     cwd: root,
     input: patch,
     encoding: 'buffer',
@@ -310,9 +314,57 @@ function stablePatchId(root: string, commit: string, parent: string): string {
   })
   const output = Buffer.from(observed.stdout ?? []).toString('utf8').trim().split(/\s+/)[0]
   if (observed.error || observed.signal !== null || observed.status !== 0 || !/^[0-9a-f]{40,64}$/.test(output)) {
-    fail('phase1_recovery_mapping_invalid', 'stable patch-id is unavailable')
+    fail('phase1_recovery_mapping_invalid', 'verbatim semantic patch-id is unavailable')
   }
   return output
+}
+
+function runProjectionGit(root: string, args: readonly string[], environment: NodeJS.ProcessEnv, input?: Buffer): Buffer {
+  assertNoGitReplacementRefs(root)
+  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, [...args], {
+    cwd: root,
+    input,
+    encoding: 'buffer',
+    env: environment,
+    maxBuffer: 32 * 1024 * 1024,
+    shell: false,
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+  })
+  if (observed.error || observed.signal !== null || observed.status !== 0) {
+    fail('phase1_recovery_mapping_invalid', 'source delta could not be projected onto the replacement parent')
+  }
+  return Buffer.from(observed.stdout ?? [])
+}
+
+function projectedTree(
+  sourceRoot: string,
+  sourceCommit: string,
+  sourceParent: string,
+  replacementRoot: string,
+  replacementParent: string,
+): string {
+  const patch = runReviewedGit(sourceRoot, ['diff', '--binary', '--full-index', '-U0', sourceParent, sourceCommit]).stdout
+  const commonDirectory = realpathSync(gitText(replacementRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
+  const replacementObjects = realpathSync(path.join(commonDirectory, 'objects'))
+  if (replacementObjects.includes(path.delimiter)) {
+    fail('phase1_recovery_mapping_invalid', 'replacement object database path is not representable safely')
+  }
+  const scratch = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-recovery-projection-'))
+  const scratchObjects = path.join(scratch, 'objects')
+  mkdirSync(scratchObjects, { mode: 0o700 })
+  const environment = {
+    ...REVIEWED_GIT_ENVIRONMENT,
+    GIT_INDEX_FILE: path.join(scratch, 'index'),
+    GIT_OBJECT_DIRECTORY: scratchObjects,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: replacementObjects,
+  }
+  try {
+    runProjectionGit(replacementRoot, ['read-tree', replacementParent], environment)
+    runProjectionGit(replacementRoot, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn'], environment, patch)
+    return runProjectionGit(replacementRoot, ['write-tree'], environment).toString('utf8').trim()
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 }
 
 function soleParent(root: string, commit: string): string {
@@ -407,13 +459,18 @@ function validateObservedReplayRepository(value: JsonObject, binding: Repository
     const replacementCommit = value.replacement_commits[index]
     const sourceParent = soleParent(sourceRoot, sourceCommit)
     const replacementParent = soleParent(replacementRoot, replacementCommit)
-    if (replacementParent !== expectedReplacementParent || stablePatchId(sourceRoot, sourceCommit, sourceParent) !== stablePatchId(replacementRoot, replacementCommit, replacementParent)) {
-      fail('phase1_recovery_mapping_invalid', 'observed replay parent or patch-id drifted')
+    if (replacementParent !== expectedReplacementParent || semanticPatchId(sourceRoot, sourceCommit, sourceParent) !== semanticPatchId(replacementRoot, replacementCommit, replacementParent)) {
+      fail('phase1_recovery_mapping_invalid', 'observed replay parent or semantic patch drifted')
     }
     const sourcePaths = pathStatusDigest(sourceRoot, sourceParent, sourceCommit)
     const replacementPaths = pathStatusDigest(replacementRoot, replacementParent, replacementCommit)
     if (sourcePaths.digest !== replacementPaths.digest || sourcePaths.paths.some((entry) => PROTECTED_REPLAY_PATHS.includes(entry))) {
       fail('phase1_recovery_mapping_invalid', 'observed replay path/status or protected-path boundary drifted')
+    }
+    const expectedTree = projectedTree(sourceRoot, sourceCommit, sourceParent, replacementRoot, replacementParent)
+    const replacementTree = gitText(replacementRoot, ['rev-parse', '--verify', '--end-of-options', `${replacementCommit}^{tree}`])
+    if (expectedTree !== replacementTree) {
+      fail('phase1_recovery_mapping_invalid', 'observed replay tree differs from the projected source delta')
     }
     expectedReplacementParent = replacementCommit
   }
