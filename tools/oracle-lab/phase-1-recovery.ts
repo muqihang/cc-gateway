@@ -142,7 +142,7 @@ export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   plan_path: 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md',
   contract_digest: 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe',
   plan_digest: 'sha256:8c1d2a9ec1532f30d241a41d00d24998d37ac1f0babb45cd5b945a7c2405fcf2',
-  reviewed_plan_commit: '48b9fae0da983077ae81d1164ccb693586a2ab4e',
+  reviewed_plan_commit: '8981ee2607de6df2310d198e2a0669190949b718',
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',

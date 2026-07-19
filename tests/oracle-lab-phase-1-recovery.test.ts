@@ -34,8 +34,8 @@ const planBytes = readFileSync(planPath)
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
-const executionContextSchemaDigest = 'sha256:d111eeacc388fa0d33e6d8ac5b4c1b5f66b9aa0c462cfd545cead9d607375519'
-const planReviewSchemaDigest = 'sha256:8866b255c1184777fcc84a5d2f7909718a07b7275287cdb617dc4e647c48dd3c'
+const executionContextSchemaDigest = 'sha256:679484ecae101b566db110e2a0eece952289e838ec20911d6563ee2cc139d9d2'
+const planReviewSchemaDigest = 'sha256:82ff0c9eea348c4663440ce84d3bd2fe8c91a2142d679cfc58e7201964a1f43e'
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',

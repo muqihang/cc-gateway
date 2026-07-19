@@ -77,7 +77,7 @@
             "properties": {
               "path": {"const": "docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md"},
               "digest": {"const": "sha256:8c1d2a9ec1532f30d241a41d00d24998d37ac1f0babb45cd5b945a7c2405fcf2"},
-              "reviewed_commit": {"const": "48b9fae0da983077ae81d1164ccb693586a2ab4e"}
+              "reviewed_commit": {"const": "8981ee2607de6df2310d198e2a0669190949b718"}
             }
           },
           "reviewer_id": {"const": "phase1-recovery-acceptance-review"},
