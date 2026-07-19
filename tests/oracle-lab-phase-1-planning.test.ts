@@ -41,11 +41,11 @@ const expectedImplementationBranches = {
   sub2api: 'codex/oracle-phase-1-sub2api-v8',
 } as const
 const expectedGateSchemaDigests = {
-  execution_context: 'sha256:449f3758498d5b2deff3bd9061aea3963b902433f49053387b3a307221087dfe',
-  plan_review: 'sha256:0669d6eb90b46184942a9193fcf73dc731b9edc974d965e0a7a174332064bf37',
+  execution_context: 'sha256:d111eeacc388fa0d33e6d8ac5b4c1b5f66b9aa0c462cfd545cead9d607375519',
+  plan_review: 'sha256:8866b255c1184777fcc84a5d2f7909718a07b7275287cdb617dc4e647c48dd3c',
 } as const
-const recoveryPlanDigest = 'sha256:aec9d53c2c6f1262d4663fb0658c73e3c1feb5bfb7fa039fd8eeab97be713ff6'
-const recoveryReviewedCommit = '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef'
+const recoveryPlanDigest = 'sha256:8c1d2a9ec1532f30d241a41d00d24998d37ac1f0babb45cd5b945a7c2405fcf2'
+const recoveryReviewedCommit = '48b9fae0da983077ae81d1164ccb693586a2ab4e'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
 const redInventoryStart = '<!-- PHASE1_RED_FAILURE_INVENTORY_START -->'

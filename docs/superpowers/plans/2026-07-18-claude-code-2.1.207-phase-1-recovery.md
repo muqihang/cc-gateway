@@ -345,7 +345,7 @@ allowed.
 For every mapping prove:
 
 - source object and sole parent;
-- zero-context stable semantic patch-id (`git diff --binary --full-index -U0 | git patch-id --stable`);
+- zero-context verbatim semantic patch-id (`git diff --binary --full-index -U0 | git patch-id --verbatim`);
 - UTF-8 sorted path/status/mode tuples;
 - contiguous replacement parent;
 - no protected-path intersection;
@@ -357,10 +357,11 @@ material. Any conflict, empty commit, extra commit, skipped product commit, chan
 path, or caller-selected mapping stops Recovery without conflict resolution.
 
 The semantic patch fingerprint intentionally excludes hunk context so an unrelated adjacent line
-already present on the reviewed current main cannot change the source-to-replacement identity. This
-does not relax any other mapping proof: exact sole parents, zero-context content delta, UTF-8 sorted
-path/status/mode tuples, protected-path exclusion, projected-tree equality, and clean replacement
-state remain mandatory.
+already present on the reviewed current main cannot change the source-to-replacement identity. The
+verbatim mode retains whitespace in every added and removed line, so string, regex, indentation, and
+other whitespace-sensitive content cannot collide. This does not relax any other mapping proof:
+exact sole parents, zero-context verbatim content delta, UTF-8 sorted path/status/mode tuples,
+protected-path exclusion, projected-tree equality, and clean replacement state remain mandatory.
 
 ## 11. Replayed Product Anchors
 

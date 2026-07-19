@@ -34,8 +34,8 @@ const planBytes = readFileSync(planPath)
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
-const executionContextSchemaDigest = 'sha256:449f3758498d5b2deff3bd9061aea3963b902433f49053387b3a307221087dfe'
-const planReviewSchemaDigest = 'sha256:0669d6eb90b46184942a9193fcf73dc731b9edc974d965e0a7a174332064bf37'
+const executionContextSchemaDigest = 'sha256:d111eeacc388fa0d33e6d8ac5b4c1b5f66b9aa0c462cfd545cead9d607375519'
+const planReviewSchemaDigest = 'sha256:8866b255c1184777fcc84a5d2f7909718a07b7275287cdb617dc4e647c48dd3c'
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
@@ -224,7 +224,7 @@ function context(sequence: number, authorizedHeads: Readonly<{ cc_gateway: strin
   }
 }
 
-function mappingFixture(options: Readonly<{ ccContextDrift?: boolean }> = {}) {
+function mappingFixture(options: Readonly<{ ccContextDrift?: boolean; ccContentDrift?: boolean }> = {}) {
   const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-recovery-mapping-'))
   const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
   const observation: Value = {}
@@ -273,7 +273,7 @@ function mappingFixture(options: Readonly<{ ccContextDrift?: boolean }> = {}) {
     const sourceCommit = git(sourceRoot, 'rev-parse', 'HEAD')
     git(replacementRoot, 'switch', '-qc', bindings[name].recovery_branch)
     writeFileSync(path.join(replacementRoot, productPath), options.ccContextDrift && name === 'cc_gateway'
-      ? 'baseline\nreviewed product delta\ncurrent-main-context\n'
+      ? `baseline\n${options.ccContentDrift ? 'reviewedproduct delta' : 'reviewed product delta'}\ncurrent-main-context\n`
       : 'reviewed product delta\n')
     git(replacementRoot, 'add', productPath)
     git(replacementRoot, 'commit', '-qm', 'replacement product delta')
@@ -444,6 +444,11 @@ test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, du
 test('Recovery replay mapping accepts additive current-main context with the same semantic patch', () => {
   const fixture = mappingFixture({ ccContextDrift: true })
   assert.doesNotThrow(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any))
+})
+
+test('Recovery replay mapping rejects whitespace changes inside the zero-context content delta', () => {
+  const fixture = mappingFixture({ ccContextDrift: true, ccContentDrift: true })
+  expectCode(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any), 'phase1_recovery_mapping_invalid')
 })
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {

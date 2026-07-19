@@ -141,8 +141,8 @@ const OUTPUT_RECORD = 'phase-1-recovery-pre-replay-red.json'
 export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   plan_path: 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md',
   contract_digest: 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe',
-  plan_digest: 'sha256:aec9d53c2c6f1262d4663fb0658c73e3c1feb5bfb7fa039fd8eeab97be713ff6',
-  reviewed_plan_commit: '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef',
+  plan_digest: 'sha256:8c1d2a9ec1532f30d241a41d00d24998d37ac1f0babb45cd5b945a7c2405fcf2',
+  reviewed_plan_commit: '48b9fae0da983077ae81d1164ccb693586a2ab4e',
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
@@ -296,12 +296,12 @@ function validateReplayRepository(value: unknown, binding: RepositoryBinding): a
   }
 }
 
-function stablePatchId(root: string, commit: string, parent: string): string {
+function semanticPatchId(root: string, commit: string, parent: string): string {
   // Exclude hunk context from the semantic fingerprint. Current main may add an
   // unrelated adjacent line while the source and replacement change remains identical.
   const patch = runReviewedGit(root, ['diff', '--binary', '--full-index', '-U0', parent, commit]).stdout
   assertNoGitReplacementRefs(root)
-  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--stable'], {
+  const observed = spawnSync(REVIEWED_GIT_EXECUTABLE, ['patch-id', '--verbatim'], {
     cwd: root,
     input: patch,
     encoding: 'buffer',
@@ -312,7 +312,7 @@ function stablePatchId(root: string, commit: string, parent: string): string {
   })
   const output = Buffer.from(observed.stdout ?? []).toString('utf8').trim().split(/\s+/)[0]
   if (observed.error || observed.signal !== null || observed.status !== 0 || !/^[0-9a-f]{40,64}$/.test(output)) {
-    fail('phase1_recovery_mapping_invalid', 'stable patch-id is unavailable')
+    fail('phase1_recovery_mapping_invalid', 'verbatim semantic patch-id is unavailable')
   }
   return output
 }
@@ -409,8 +409,8 @@ function validateObservedReplayRepository(value: JsonObject, binding: Repository
     const replacementCommit = value.replacement_commits[index]
     const sourceParent = soleParent(sourceRoot, sourceCommit)
     const replacementParent = soleParent(replacementRoot, replacementCommit)
-    if (replacementParent !== expectedReplacementParent || stablePatchId(sourceRoot, sourceCommit, sourceParent) !== stablePatchId(replacementRoot, replacementCommit, replacementParent)) {
-      fail('phase1_recovery_mapping_invalid', 'observed replay parent or patch-id drifted')
+    if (replacementParent !== expectedReplacementParent || semanticPatchId(sourceRoot, sourceCommit, sourceParent) !== semanticPatchId(replacementRoot, replacementCommit, replacementParent)) {
+      fail('phase1_recovery_mapping_invalid', 'observed replay parent or semantic patch drifted')
     }
     const sourcePaths = pathStatusDigest(sourceRoot, sourceParent, sourceCommit)
     const replacementPaths = pathStatusDigest(replacementRoot, replacementParent, replacementCommit)
