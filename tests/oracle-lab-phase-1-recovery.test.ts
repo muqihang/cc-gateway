@@ -15,10 +15,13 @@ import {
 } from '../tools/oracle-lab/delivery-authority.js'
 import {
   PHASE1_RECOVERY_BINDINGS,
+  PHASE1_RECOVERY_GO_RED_TIMEOUT_MS,
   derivePhase1RecoveryT2Record,
   parsePhase1RecoveryGoRedEvidence,
   parsePhase1RecoveryCli,
+  phase1RecoveryGoBuildCacheRoot,
   runPhase1RecoveryPreReplay,
+  validatePhase1RecoveryGoRedLifecycle,
   validatePhase1RecoveryInputs,
   validatePhase1RecoveryOutputs,
   validatePhase1RecoveryReplayMapping,
@@ -34,8 +37,8 @@ const planBytes = readFileSync(planPath)
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
-const executionContextSchemaDigest = 'sha256:6b6916404bcefe085de8ce8992493cded3c8e06978ca2ca1ec60afefb0d596d2'
-const planReviewSchemaDigest = 'sha256:375b125cfc68e7356cbeda0752f9ddc9cc6d490c6b8dea66f6828dcad9be2c32'
+const executionContextSchemaDigest = 'sha256:be08c74d1f89f85313a52cf5fae30066fc6e4dd8ebc94e7b3a8e9a346aa94593'
+const planReviewSchemaDigest = 'sha256:ca17243a046c0d94c4e2cd6e5bb700cff6a5c7d7e73260ad28d90245abd4c40f'
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
@@ -619,6 +622,31 @@ test('Go RED evidence requires the exact semantic subtest signature and assertio
   expectCode(() => parsePhase1RecoveryGoRedEvidence(events.replace('changing one request-derived origin dimension', 'unrelated assertion'), 'b3'), 'phase1_recovery_vertical_red_mismatch')
 })
 
+test('Go RED execution reuses one cold-build cache and reports an exact lifecycle failure', () => {
+  assert.equal(PHASE1_RECOVERY_GO_RED_TIMEOUT_MS, 600_000)
+  assert.equal(phase1RecoveryGoBuildCacheRoot('/tmp/recovery-output'), '/tmp/recovery-output/go-build-cache')
+
+  const timeout = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })
+  expectCode(
+    () => validatePhase1RecoveryGoRedLifecycle({ error: timeout, status: null, signal: 'SIGTERM' }),
+    'phase1_recovery_vertical_red_timeout',
+  )
+  const spawnFailure = Object.assign(new Error('spawn failed'), { code: 'ENOENT' })
+  expectCode(
+    () => validatePhase1RecoveryGoRedLifecycle({ error: spawnFailure, status: null, signal: null }),
+    'phase1_recovery_vertical_red_spawn_failed',
+  )
+  expectCode(
+    () => validatePhase1RecoveryGoRedLifecycle({ status: null, signal: 'SIGKILL' }),
+    'phase1_recovery_vertical_red_terminated',
+  )
+  expectCode(
+    () => validatePhase1RecoveryGoRedLifecycle({ status: 0, signal: null }),
+    'phase1_recovery_vertical_red_unexpected_green',
+  )
+  assert.doesNotThrow(() => validatePhase1RecoveryGoRedLifecycle({ status: 1, signal: null }))
+})
+
 test('pre-replay transaction requires four exact real RED records plus the replay sentinel', async () => {
   const dependencies: Phase1RecoveryDependencies = {
     validate_inputs: () => undefined,
@@ -633,6 +661,7 @@ test('pre-replay transaction requires four exact real RED records plus the repla
   assert.equal(record.status, 'red_confirmed')
   assert.deepEqual(record.families.map((entry: Value) => entry.family), ['b1', 'b2', 'b3', 'listener_tls'])
   assert.equal(record.replay_sentinel, 'phase1_recovery_replay_required')
+  assert.deepEqual(record.cleanup_candidates, ['bundle-quarantine', 'go-build-cache'])
 
   const missing = { ...dependencies, run_red: (family: keyof typeof PHASE1_RECOVERY_BINDINGS.pre_replay_red) => ({ family, status: family === 'b3' ? 'pass' : 'expected_fail', leaf_names: PHASE1_RECOVERY_BINDINGS.pre_replay_red[family], classifications: PHASE1_RECOVERY_BINDINGS.pre_replay_classifications[family], failure_signature_digest: PHASE1_RECOVERY_BINDINGS.pre_replay_failure_signatures[family].failed_tests_digest, observer: { boundary: family === 'listener_tls' ? 'active_listener_inventory' as const : 'sandbox_network_deny' as const, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const }, external_side_effect_count: 0 as const, unauthorized_socket_count: 0 as const }) }
   await assert.rejects(runPhase1RecoveryPreReplay(input, PHASE1_RECOVERY_BINDINGS, missing), (error: unknown) => (error as { code?: string }).code === 'phase1_recovery_vertical_red_mismatch')

@@ -41,11 +41,11 @@ const expectedImplementationBranches = {
   sub2api: 'codex/oracle-phase-1-sub2api-v8',
 } as const
 const expectedGateSchemaDigests = {
-  execution_context: 'sha256:6b6916404bcefe085de8ce8992493cded3c8e06978ca2ca1ec60afefb0d596d2',
-  plan_review: 'sha256:375b125cfc68e7356cbeda0752f9ddc9cc6d490c6b8dea66f6828dcad9be2c32',
+  execution_context: 'sha256:be08c74d1f89f85313a52cf5fae30066fc6e4dd8ebc94e7b3a8e9a346aa94593',
+  plan_review: 'sha256:ca17243a046c0d94c4e2cd6e5bb700cff6a5c7d7e73260ad28d90245abd4c40f',
 } as const
-const recoveryPlanDigest = 'sha256:fdd61eb31c0e1662c3d4ebe438a99379277accf29d75e685b9e3d2a02fcc0029'
-const recoveryReviewedCommit = '0a640baf62392f74e22618959c152e0cef024f43'
+const recoveryPlanDigest = 'sha256:fd9e152163bad9b60468910e49aad1c7bf64d5402da2c6ca65943dad96917214'
+const recoveryReviewedCommit = '9a0143d7a3a7c32bd83a17130fa87df1f04355cc'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
 const redInventoryStart = '<!-- PHASE1_RED_FAILURE_INVENTORY_START -->'
@@ -633,6 +633,12 @@ test('Phase 1 Recovery carriers bind the exact plan, dual review, authority enve
   assert.deepEqual(envelope.recovery_authority, recoveryAuthorityFixture())
   assert.equal('planning_provenance' in envelope, false)
   const planBytes = await readFile(path.join(root, recoveryPlanPath))
+  const recoveryPlan = planBytes.toString('utf8')
+  assert.equal(digest(planBytes), recoveryPlanDigest)
+  assert.match(recoveryPlan, /real bundle-to-pre-replay dry transaction is an executable merge gate/)
+  assert.match(recoveryPlan, /share exactly one exclusive\s+`<output-root>\/go-build-cache`/)
+  assert.match(recoveryPlan, /fixed 600 second cold-start budget/)
+  assert.match(recoveryPlan, /timeout, spawn failure, signal\/no-status\s+termination, unexpected GREEN, and semantic signature mismatch are distinct fail-closed error\s+codes/)
   const lease = derivePhase1RunLease(context, {
     envelope_digest: digestDeliveryValue(envelope),
     plan_bytes: planBytes,

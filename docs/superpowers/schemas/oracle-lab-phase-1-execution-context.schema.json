@@ -227,16 +227,16 @@
           "plan": {
             "properties": {
               "path": {"const": "docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md"},
-              "digest": {"const": "sha256:fdd61eb31c0e1662c3d4ebe438a99379277accf29d75e685b9e3d2a02fcc0029"},
-              "reviewed_commit": {"const": "0a640baf62392f74e22618959c152e0cef024f43"}
+              "digest": {"const": "sha256:fd9e152163bad9b60468910e49aad1c7bf64d5402da2c6ca65943dad96917214"},
+              "reviewed_commit": {"const": "9a0143d7a3a7c32bd83a17130fa87df1f04355cc"}
             }
           },
           "approval_receipt": {
             "required": ["reviewer_roles"],
             "properties": {
               "reviewer_id": {"const": "phase1-recovery-acceptance-review"},
-              "reviewed_plan_commit": {"const": "0a640baf62392f74e22618959c152e0cef024f43"},
-              "reviewed_plan_digest": {"const": "sha256:fdd61eb31c0e1662c3d4ebe438a99379277accf29d75e685b9e3d2a02fcc0029"}
+              "reviewed_plan_commit": {"const": "9a0143d7a3a7c32bd83a17130fa87df1f04355cc"},
+              "reviewed_plan_digest": {"const": "sha256:fd9e152163bad9b60468910e49aad1c7bf64d5402da2c6ca65943dad96917214"}
             }
           },
           "repositories": {
