@@ -9,6 +9,7 @@ import {
   derivePhase1RunLease,
   digestDeliveryValue,
   parseDeliveryTransitionContract,
+  parsePhase1RecoveryContract,
   validatePhase1LeaseRefresh,
   validatePhase1LeaseSuccessor,
 } from '../tools/oracle-lab/delivery-authority.js'
@@ -18,6 +19,7 @@ type Value = Record<string, any>
 const root = path.resolve(new URL('..', import.meta.url).pathname)
 const planPath = path.join(root, 'docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md')
 const planBytes = readFileSync(planPath)
+const recoveryPlanBytes = readFileSync(path.join(root, 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md'))
 
 function clone<T>(value: T): T { return structuredClone(value) }
 
@@ -101,6 +103,16 @@ test('committed delivery transition contract is exact, canonical, and unambiguou
   expectCode(() => parseDeliveryTransitionContract(replaceTransitionBlock((rows) => rows.map((row) => row.id === 'DM-06B' ? { ...row, condition: 'critical-important-zero' } : row))), 'delivery_transition_ambiguous_successor')
 })
 
+test('delivery and Recovery authority kinds remain closed and cross-contract isolated', () => {
+  const delivery = parseDeliveryTransitionContract(planBytes)
+  const recovery = parsePhase1RecoveryContract(recoveryPlanBytes)
+  assert.equal(delivery.rows.every((row) => row.id.startsWith('DM-')), true)
+  assert.equal(recovery.rows.every((row) => row.id.startsWith('P1R-')), true)
+  expectCode(() => parseDeliveryTransitionContract(recoveryPlanBytes), 'delivery_transition_malformed')
+  expectCode(() => parsePhase1RecoveryContract(planBytes), 'delivery_transition_malformed')
+  expectCode(() => parsePhase1RecoveryContract(Buffer.from(recoveryPlanBytes.toString('utf8').replace('P1R-01', 'DM-01'))), 'delivery_transition_malformed')
+})
+
 test('baseline projection excludes mutable lease observations and rejects immutable drift', () => {
   const initial = contextFixture(0)
   const successor = contextFixture(1)
@@ -129,6 +141,20 @@ test('run leases form one digest chain and enforce refresh versus successor sema
     predecessor_lease_digest: null,
     observed_delta_digest: null,
   })
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: `sha256:${'f'.repeat(64)}`,
+    plan_bytes: planBytes,
+    transition_id: dm01.id,
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_envelope_digest_mismatch')
+  expectCode(() => derivePhase1RunLease(initialContext, {
+    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(initialContext)),
+    plan_bytes: recoveryPlanBytes,
+    transition_id: 'P1R-01',
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  }), 'delivery_context_authority_mismatch')
 
   const refreshContext = contextFixture(1)
   refreshContext.repositories.cc_gateway.authorized_parent_head = initialContext.repositories.cc_gateway.authorized_parent_head
