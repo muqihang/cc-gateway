@@ -16,14 +16,14 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "review_kind": {"const": "phase_1_plan_review"},
+    "review_kind": {"enum": ["phase_1_plan_review", "phase_1_recovery_plan_review"]},
     "generated_at": {"type": "string", "format": "date-time"},
     "plan": {
       "type": "object",
       "additionalProperties": false,
       "required": ["path", "digest", "reviewed_commit"],
       "properties": {
-        "path": {"const": "docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md"},
+        "path": {"enum": ["docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md", "docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md"]},
         "digest": {"$ref": "#/$defs/digest"},
         "reviewed_commit": {"$ref": "#/$defs/commit"}
       }
@@ -50,9 +50,54 @@
         "harness_and_evidence_bindings",
         "commands_tests_and_rollback"
       ]
-    }
+    },
+    "reviewers": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "product"}}}]},
+        {"allOf": [{"$ref": "#/$defs/reviewer"}, {"properties": {"role": {"const": "authority"}}}]}
+      ],
+      "items": false
+    },
+    "recovery_authority": {"$ref": "#/$defs/recovery_authority"}
   },
   "allOf": [
+    {
+      "if": {
+        "properties": {"review_kind": {"const": "phase_1_recovery_plan_review"}},
+        "required": ["review_kind"]
+      },
+      "then": {
+        "required": ["reviewers", "recovery_authority"],
+        "properties": {
+          "plan": {
+            "properties": {
+              "path": {"const": "docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md"},
+              "digest": {"const": "sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b"},
+              "reviewed_commit": {"const": "09ae6a67242d19c28351c568b0d46a5a2e9ab8ef"}
+            }
+          },
+          "reviewer_id": {"const": "phase1-recovery-acceptance-review"},
+          "decision": {"const": "approved"},
+          "finding_counts": {
+            "properties": {
+              "critical": {"const": 0},
+              "important": {"const": 0}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "review_kind": {"const": "phase_1_plan_review"},
+          "plan": {"properties": {"path": {"const": "docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md"}}}
+        },
+        "not": {"anyOf": [{"required": ["reviewers"]}, {"required": ["recovery_authority"]}]}
+      }
+    },
     {
       "if": {
         "properties": {"decision": {"const": "approved"}},
@@ -83,6 +128,70 @@
   ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "reviewer_id", "decision", "finding_counts"],
+      "properties": {
+        "role": {"enum": ["product", "authority"]},
+        "reviewer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
+        "decision": {"const": "approved"},
+        "finding_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["critical", "important", "minor"],
+          "properties": {
+            "critical": {"const": 0},
+            "important": {"const": 0},
+            "minor": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "path_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "digest"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "recovery_authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operating_model", "roadmap", "transition_plan", "transition_exit_report", "terminal_controller_chain", "terminal_acceptance_record", "recovery_contract", "source_bundles", "shared_contract"],
+      "properties": {
+        "operating_model": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/roadmaps/2026-07-18-oracle-lab-delivery-operating-model-v2.md"}, "digest": {"const": "sha256:a53e7384d6cf353877af82f16196b8d58ed823277e76e03337dfc9fadff7d0ea"}}}]},
+        "roadmap": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md"}, "digest": {"const": "sha256:00519348d9dd8972dbea92a647d67c2fc42e9015ece6dcb0eb427df02480b107"}}}]},
+        "transition_plan": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md"}, "digest": {"const": "sha256:f21023b1d6705855e00ee0f9ceafc78c6cf1c7b928982fd88e821faffa7a8111"}}}]},
+        "transition_exit_report": {"allOf": [{"$ref": "#/$defs/path_digest"}, {"properties": {"path": {"const": "docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md"}, "digest": {"const": "sha256:44c9322ba157c1ce4f3b9a974387026aad143f73c6991848be3f50f13af00f48"}}}]},
+        "terminal_controller_chain": {"$ref": "#/$defs/controller_digest"},
+        "terminal_acceptance_record": {"allOf": [{"$ref": "#/$defs/controller_digest"}, {"properties": {"kind": {"const": "terminal_acceptance_record"}, "digest": {"const": "sha256:00f84b989d0db40d0c47429bcd5d444709159027f21f4dec0e33812b9c539ecd"}}}]},
+        "recovery_contract": {
+          "type": "object", "additionalProperties": false, "required": ["plan_path", "digest"],
+          "properties": {"plan_path": {"const": "docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md"}, "digest": {"const": "sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe"}}
+        },
+        "source_bundles": {
+          "type": "object", "additionalProperties": false, "required": ["cc_gateway", "sub2api"],
+          "properties": {"cc_gateway": {"const": "sha256:27e9e3cea6a2d18eb1e6423e9e7589aa53b5779fcf71a55008bbdbca838c9fd3"}, "sub2api": {"const": "sha256:3df0933834ed3bcc692b421e317c19314c1594492571a4abeae84375152fe47e"}}
+        },
+        "shared_contract": {
+          "type": "object", "additionalProperties": false, "required": ["path", "digest"],
+          "properties": {"path": {"const": "backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json"}, "digest": {"const": "sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"}}
+        }
+      }
+    },
+    "controller_digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "digest"],
+      "properties": {
+        "kind": {"enum": ["terminal_controller_chain", "terminal_acceptance_record"]},
+        "digest": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [{"if": {"properties": {"kind": {"const": "terminal_controller_chain"}}}, "then": {"properties": {"digest": {"const": "sha256:3faa939ec6f78a7478a5ea5c2773ea74d5ea42d0b699e1880798cac980192433"}}}}]
+    }
   }
 }

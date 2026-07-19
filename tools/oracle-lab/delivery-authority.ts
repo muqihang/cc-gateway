@@ -28,19 +28,38 @@ export type Phase1RunLease = Readonly<{
   observed_delta_digest: string | null
 }>
 
+export type Phase1TerminalRecord = Readonly<{
+  schema_version: 1
+  record_kind: 'phase_1_terminal_record'
+  envelope_digest: string
+  sequence: number
+  state: string
+  transition_id: string
+  transition_contract_digest: string
+  predecessor_lease_digest: string
+  observed_delta_digest: string
+  completed_at: string
+  repository_heads_and_clean_state_digests: Phase1RunLease['repository_heads_and_clean_state_digests']
+}>
+
 const TRANSITION_START = '<!-- ORACLE_DELIVERY_TRANSITIONS_BEGIN -->'
 const TRANSITION_END = '<!-- ORACLE_DELIVERY_TRANSITIONS_END -->'
 const REVIEWED_TRANSITION_SOURCE_DIGEST = 'sha256:08952a6f2ba48b671b6f8792651040a7292e2a2a4bc8036d8d9e851dc6e46463'
+const RECOVERY_TRANSITION_START = '<!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_BEGIN -->'
+const RECOVERY_TRANSITION_END = '<!-- ORACLE_PHASE1_RECOVERY_TRANSITIONS_END -->'
+const REVIEWED_RECOVERY_SOURCE_DIGEST = 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe'
 const DIGEST = /^sha256:[0-9a-f]{64}$/
 const COMMIT = /^[0-9a-f]{40,64}$/
-const TRANSITION_ID = /^DM-[0-9]{2}[A-Z]?$/
+const DELIVERY_TRANSITION_ID = /^DM-[0-9]{2}[A-Z]?$/
+const RECOVERY_TRANSITION_ID = /^P1R-(?:0[1-9]|1[0-4])(?:[AB])?$/
+const TRANSITION_ID = /^(?:DM-[0-9]{2}[A-Z]?|P1R-(?:0[1-9]|1[0-4])(?:[AB])?)$/
 const TRANSITION_KEYS = ['allowed_delta', 'command', 'condition', 'from', 'id', 'to']
 const LEASE_KEYS = [
   'envelope_digest', 'expires_at', 'issued_at', 'observed_delta_digest', 'permitted_delta_digest',
   'predecessor_lease_digest', 'repository_heads_and_clean_state_digests', 'sequence', 'state',
   'transition_contract_digest', 'transition_id',
 ]
-const SUPPORTED_COMMANDS = new Set([
+const DELIVERY_COMMANDS = new Set([
   'freeze-source-authority',
   'reproduce-real-red',
   'implement-declared-nine-path-wave',
@@ -52,6 +71,23 @@ const SUPPORTED_COMMANDS = new Set([
   'accept-closure',
   'merge-and-rerun-real-green',
   'commit-transition-exit-report',
+])
+const RECOVERY_COMMANDS = new Set([
+  'run-pre-replay-vertical-red',
+  'rehydrate-reviewed-implementation',
+  'run-replay-verification',
+  'issue-feature-capture-lease',
+  'capture-feature-evidence',
+  'run-stable-tip-campaign-and-bounded-integrated-review',
+  'accept-zero-material-findings',
+  'apply-one-product-closure-wave',
+  'rerun-affected-gates-campaigns-and-closure-review',
+  'ordinary-merge-reviewed-implementation',
+  'capture-and-commit-post-integration-evidence',
+  'review-post-integration-evidence',
+  'ordinary-merge-post-integration-evidence',
+  'verify-final-remote-mains',
+  'publish-phase1-exit',
 ])
 const DECLARED_IMPLEMENTATION_PATHS = Object.freeze([
   'tests/oracle-lab-delivery-authority.test.ts',
@@ -106,9 +142,9 @@ export function digestDeliveryValue(value: unknown): string {
   return `sha256:${createHash('sha256').update(canonicalDeliveryJson(value)).digest('hex')}`
 }
 
-function validateTransitionRow(value: unknown): asserts value is DeliveryTransition {
+function validateTransitionRow(value: unknown, idPattern: RegExp, commands: ReadonlySet<string>): asserts value is DeliveryTransition {
   if (!isObject(value) || !exactKeys(value, TRANSITION_KEYS)
-    || typeof value.id !== 'string' || !TRANSITION_ID.test(value.id)
+    || typeof value.id !== 'string' || !idPattern.test(value.id)
     || typeof value.from !== 'string' || value.from.length === 0
     || typeof value.to !== 'string' || value.to.length === 0
     || typeof value.command !== 'string'
@@ -118,27 +154,33 @@ function validateTransitionRow(value: unknown): asserts value is DeliveryTransit
     || new Set(value.allowed_delta).size !== value.allowed_delta.length) {
     fail('delivery_transition_malformed', 'delivery transition row is malformed')
   }
-  if (!SUPPORTED_COMMANDS.has(value.command)) fail('delivery_transition_unknown_command', 'delivery transition command is not reviewed')
+  if (!commands.has(value.command)) fail('delivery_transition_unknown_command', 'delivery transition command is not reviewed')
 }
 
-export function parseDeliveryTransitionContract(planBytes: Buffer | string): Readonly<{
+function parseTransitionContract(planBytes: Buffer | string, binding: Readonly<{
+  start: string
+  end: string
+  id_pattern: RegExp
+  commands: ReadonlySet<string>
+  digest_kind: 'source-order' | 'canonical'
+}>): Readonly<{
   rows: readonly DeliveryTransition[]
   source_digest: string
 }> {
   const plan = Buffer.isBuffer(planBytes) ? planBytes.toString('utf8') : planBytes
   if (Buffer.from(plan, 'utf8').toString('utf8') !== plan) fail('delivery_transition_malformed', 'transition plan must be valid UTF-8')
-  const starts = plan.split(TRANSITION_START).length - 1
-  const ends = plan.split(TRANSITION_END).length - 1
-  if (starts !== 1 || ends !== 1 || plan.indexOf(TRANSITION_START) >= plan.indexOf(TRANSITION_END)) {
+  const starts = plan.split(binding.start).length - 1
+  const ends = plan.split(binding.end).length - 1
+  if (starts !== 1 || ends !== 1 || plan.indexOf(binding.start) >= plan.indexOf(binding.end)) {
     fail('delivery_transition_malformed', 'transition markers must occur exactly once in order')
   }
-  const marked = plan.slice(plan.indexOf(TRANSITION_START) + TRANSITION_START.length, plan.indexOf(TRANSITION_END))
+  const marked = plan.slice(plan.indexOf(binding.start) + binding.start.length, plan.indexOf(binding.end))
   const match = marked.match(/^\n```json\n([\s\S]*?)\n```\n$/)
   if (!match) fail('delivery_transition_malformed', 'transition marker body must be one exact JSON fence')
   let parsed: unknown
   try { parsed = JSON.parse(match[1]) } catch { fail('delivery_transition_malformed', 'transition JSON is malformed') }
   if (!Array.isArray(parsed) || parsed.length === 0) fail('delivery_transition_malformed', 'transition contract must be a nonempty array')
-  for (const row of parsed) validateTransitionRow(row)
+  for (const row of parsed) validateTransitionRow(row, binding.id_pattern, binding.commands)
   const rows = parsed as DeliveryTransition[]
   const ids = rows.map((row) => row.id)
   if (new Set(ids).size !== ids.length) fail('delivery_transition_duplicate_id', 'transition IDs must be unique')
@@ -154,8 +196,34 @@ export function parseDeliveryTransitionContract(planBytes: Buffer | string): Rea
     }
   }
   const frozen = deepFreeze(structuredClone(rows))
-  const sourceDigest = `sha256:${createHash('sha256').update(JSON.stringify(rows)).digest('hex')}`
+  const sourceDigest = binding.digest_kind === 'canonical'
+    ? digestDeliveryValue(rows)
+    : `sha256:${createHash('sha256').update(JSON.stringify(rows)).digest('hex')}`
   return deepFreeze({ rows: frozen, source_digest: sourceDigest })
+}
+
+export function parseDeliveryTransitionContract(planBytes: Buffer | string): ReturnType<typeof parseTransitionContract> {
+  return parseTransitionContract(planBytes, {
+    start: TRANSITION_START,
+    end: TRANSITION_END,
+    id_pattern: DELIVERY_TRANSITION_ID,
+    commands: DELIVERY_COMMANDS,
+    digest_kind: 'source-order',
+  })
+}
+
+export function parsePhase1RecoveryContract(planBytes: Buffer | string): ReturnType<typeof parseTransitionContract> {
+  const contract = parseTransitionContract(planBytes, {
+    start: RECOVERY_TRANSITION_START,
+    end: RECOVERY_TRANSITION_END,
+    id_pattern: RECOVERY_TRANSITION_ID,
+    commands: RECOVERY_COMMANDS,
+    digest_kind: 'canonical',
+  })
+  if (contract.source_digest !== REVIEWED_RECOVERY_SOURCE_DIGEST) {
+    fail('delivery_transition_source_drift', 'Recovery authority is not the exact reviewed plan block')
+  }
+  return contract
 }
 
 function reviewedTransitionContract(planBytes: Buffer | string): ReturnType<typeof parseDeliveryTransitionContract> {
@@ -164,6 +232,12 @@ function reviewedTransitionContract(planBytes: Buffer | string): ReturnType<type
     fail('delivery_transition_source_drift', 'transition authority is not the exact reviewed plan block')
   }
   return contract
+}
+
+function reviewedContractForTransition(planBytes: Buffer | string, transitionId: string): ReturnType<typeof parseTransitionContract> {
+  if (DELIVERY_TRANSITION_ID.test(transitionId)) return reviewedTransitionContract(planBytes)
+  if (RECOVERY_TRANSITION_ID.test(transitionId)) return parsePhase1RecoveryContract(planBytes)
+  fail('delivery_transition_contract_mismatch', 'transition authority kind is unsupported')
 }
 
 function repositoryEnvelope(repository: JsonObject): JsonObject {
@@ -183,16 +257,20 @@ function repositoryEnvelope(repository: JsonObject): JsonObject {
 }
 
 export function derivePhase1BaselineEnvelope(context: unknown): Readonly<JsonObject> {
-  if (!isObject(context) || context.schema_version !== 2 || context.context_kind !== 'phase_1_execution_context'
+  if (!isObject(context) || context.schema_version !== 2
+    || (context.context_kind !== 'phase_1_execution_context' && context.context_kind !== 'phase_1_recovery_context')
     || !isObject(context.repositories) || !isObject(context.repositories.cc_gateway) || !isObject(context.repositories.sub2api)) {
     fail('delivery_context_invalid', 'Phase 1 execution context is malformed')
   }
   const repositories = Object.fromEntries(Object.keys(context.repositories).sort(compareBytes).map((name) => [name, repositoryEnvelope(context.repositories[name])]))
+  const authority = context.context_kind === 'phase_1_recovery_context'
+    ? { recovery_authority: context.recovery_authority }
+    : { planning_provenance: context.planning_provenance }
   const projection = {
     schema_version: context.schema_version,
     context_kind: context.context_kind,
     plan: context.plan,
-    planning_provenance: context.planning_provenance,
+    ...authority,
     approval_receipt: context.approval_receipt,
     gate_schemas: context.gate_schemas,
     repositories,
@@ -271,11 +349,12 @@ export function derivePhase1RunLease(context: unknown, input: Readonly<{
   if (!isObject(context) || !Number.isInteger(context.sequence) || !DIGEST.test(input.envelope_digest)) {
     fail('delivery_context_invalid', 'lease context or envelope digest is invalid')
   }
-  const contract = reviewedTransitionContract(input.plan_bytes)
+  const contract = reviewedContractForTransition(input.plan_bytes, input.transition_id)
   const transition = contract.rows.find((row) => row.id === input.transition_id)
   if (!transition) fail('delivery_transition_contract_mismatch', 'selected transition is absent from the reviewed plan')
-  if (context.sequence === 0 && (transition !== contract.rows[0] || transition.from !== 'candidate')) {
-    fail('delivery_transition_initial_invalid', 'sequence zero must bind the first candidate transition')
+  const initialState = RECOVERY_TRANSITION_ID.test(transition.id) ? 'baseline_frozen' : 'candidate'
+  if (context.sequence === 0 && (transition !== contract.rows[0] || transition.from !== initialState)) {
+    fail('delivery_transition_initial_invalid', 'sequence zero must bind the first transition from its reviewed entry state')
   }
   if ((context.sequence === 0) !== (input.predecessor_lease_digest === null)
     || (input.predecessor_lease_digest !== null && !DIGEST.test(input.predecessor_lease_digest))
@@ -328,7 +407,7 @@ export function validatePhase1LeaseRefresh(input: Readonly<{
   now: number
 }>): void {
   validateChainCommon(input)
-  const contract = reviewedTransitionContract(input.plan_bytes)
+  const contract = reviewedContractForTransition(input.plan_bytes, input.previous_lease.transition_id)
   const transition = contract.rows.find((row) => row.id === input.previous_lease.transition_id)
   if (!transition) fail('delivery_transition_contract_mismatch', 'refresh transition is absent from the reviewed plan')
   assertLeaseMatchesTransition(input.previous_lease, transition)
@@ -394,7 +473,7 @@ export function validatePhase1LeaseSuccessor(input: Readonly<{
 }>): void {
   validateChainCommon(input)
   if (input.now >= Date.parse(input.previous_lease.expires_at)) fail('delivery_lease_expired', 'expired lease cannot authorize a transition command')
-  const contract = reviewedTransitionContract(input.plan_bytes)
+  const contract = reviewedContractForTransition(input.plan_bytes, input.previous_lease.transition_id)
   const previous = contract.rows.find((row) => row.id === input.previous_lease.transition_id)
   if (!previous) fail('delivery_transition_contract_mismatch', 'previous transition row is unavailable')
   assertLeaseMatchesTransition(input.previous_lease, previous)
@@ -413,4 +492,45 @@ export function validatePhase1LeaseSuccessor(input: Readonly<{
   }
   assertLeaseMatchesTransition(input.next_lease, selected)
   assertObservedDelta(previous, input.observed_delta, input.next_lease.observed_delta_digest)
+}
+
+export function derivePhase1TerminalRecord(input: Readonly<{
+  lease: Phase1RunLease
+  context: unknown
+  plan_bytes: Buffer | string
+  observed_delta: readonly JsonObject[]
+  completed_at: string
+  now: number
+}>): Phase1TerminalRecord {
+  validateLeaseShape(input.lease)
+  assertLeaseMatchesContext(input.lease, input.context)
+  const contract = reviewedContractForTransition(input.plan_bytes, input.lease.transition_id)
+  const transition = contract.rows.find((row) => row.id === input.lease.transition_id)
+  if (!transition) fail('delivery_transition_contract_mismatch', 'terminal transition row is unavailable')
+  assertLeaseMatchesTransition(input.lease, transition)
+  if (transition.to !== 'exit_verified' || contract.rows.some((row) => row.from === transition.to)) {
+    fail('delivery_terminal_transition_invalid', 'selected transition is not the reviewed terminal edge')
+  }
+  const completed = Date.parse(input.completed_at)
+  if (!Number.isFinite(input.now) || completed !== input.now || input.now < Date.parse(input.lease.issued_at)
+    || input.now >= Date.parse(input.lease.expires_at)) {
+    fail('delivery_lease_expired', 'terminal transition is outside its executable lease window')
+  }
+  if (input.lease.observed_delta_digest !== null) fail('delivery_terminal_transition_invalid', 'terminal lease already contains an observed delta')
+  const observedDeltaDigest = digestDeliveryValue(input.observed_delta)
+  assertObservedDelta(transition, input.observed_delta, observedDeltaDigest)
+  const record: Phase1TerminalRecord = {
+    schema_version: 1,
+    record_kind: 'phase_1_terminal_record',
+    envelope_digest: input.lease.envelope_digest,
+    sequence: input.lease.sequence,
+    state: transition.to,
+    transition_id: transition.id,
+    transition_contract_digest: input.lease.transition_contract_digest,
+    predecessor_lease_digest: digestDeliveryValue(input.lease),
+    observed_delta_digest: observedDeltaDigest,
+    completed_at: input.completed_at,
+    repository_heads_and_clean_state_digests: input.lease.repository_heads_and_clean_state_digests,
+  }
+  return deepFreeze(record)
 }

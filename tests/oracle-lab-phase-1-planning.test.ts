@@ -9,14 +9,18 @@ import Ajv2020 from 'ajv/dist/2020.js'
 import {
   assertPhase1BaselineEnvelopeUnchanged,
   derivePhase1BaselineEnvelope,
+  derivePhase1RunLease,
+  digestDeliveryValue,
   parseDeliveryTransitionContract,
 } from '../tools/oracle-lab/delivery-authority.js'
+import { PHASE1_RECOVERY_BINDINGS } from '../tools/oracle-lab/phase-1-recovery.js'
 import { runReviewedGit } from '../tools/oracle-lab/secure-runtime.js'
 
 type Value = Record<string, any>
 
 const root = process.cwd()
 const planPath = 'docs/superpowers/plans/2026-07-15-claude-code-2.1.207-phase-1-control-plane-boundary-repairs.md'
+const recoveryPlanPath = 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md'
 const deliveryTransitionPlanPath = 'docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md'
 const entryPath = 'docs/superpowers/evidence/phase-1/phase-1-entry-baseline.json'
 const contextPath = 'docs/superpowers/evidence/phase-1/phase-1-context.json'
@@ -37,9 +41,11 @@ const expectedImplementationBranches = {
   sub2api: 'codex/oracle-phase-1-sub2api-v8',
 } as const
 const expectedGateSchemaDigests = {
-  execution_context: 'sha256:0c9d478bbc5aa810da044c07c6fc0ffaf016aa014ff416b2ea75c6069dec4e56',
-  plan_review: 'sha256:9c4262da2cc8620f6297ecdaacb39c6741fdaba3564a4c795da3d5149abab65a',
+  execution_context: 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099',
+  plan_review: 'sha256:ad1503924ad92c223e60d66f5f3bfd918fa95eb1954744fed5710c1f98b8d816',
 } as const
+const recoveryPlanDigest = 'sha256:ccbf47fa2bb7185efe96bc1bf3f90150e679c6e7f6082db8f04ae25b8c98a41b'
+const recoveryReviewedCommit = '09ae6a67242d19c28351c568b0d46a5a2e9ab8ef'
 const p01ResultsPath = 'docs/superpowers/evidence/p0-1/p0-1-command-results.json'
 const selectedRequirements = ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008']
 const redInventoryStart = '<!-- PHASE1_RED_FAILURE_INVENTORY_START -->'
@@ -364,6 +370,49 @@ function planReviewFixture(): Value {
   }
 }
 
+function recoveryAuthorityFixture(): Value {
+  const pathDigest = (relative: string, digestValue: string) => ({ path: relative, digest: digestValue })
+  return {
+    operating_model: pathDigest('docs/superpowers/roadmaps/2026-07-18-oracle-lab-delivery-operating-model-v2.md', 'sha256:a53e7384d6cf353877af82f16196b8d58ed823277e76e03337dfc9fadff7d0ea'),
+    roadmap: pathDigest('docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', 'sha256:00519348d9dd8972dbea92a647d67c2fc42e9015ece6dcb0eb427df02480b107'),
+    transition_plan: pathDigest('docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md', 'sha256:f21023b1d6705855e00ee0f9ceafc78c6cf1c7b928982fd88e821faffa7a8111'),
+    transition_exit_report: pathDigest('docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md', 'sha256:44c9322ba157c1ce4f3b9a974387026aad143f73c6991848be3f50f13af00f48'),
+    terminal_controller_chain: { kind: 'terminal_controller_chain', digest: 'sha256:3faa939ec6f78a7478a5ea5c2773ea74d5ea42d0b699e1880798cac980192433' },
+    terminal_acceptance_record: { kind: 'terminal_acceptance_record', digest: 'sha256:00f84b989d0db40d0c47429bcd5d444709159027f21f4dec0e33812b9c539ecd' },
+    recovery_contract: { plan_path: recoveryPlanPath, digest: PHASE1_RECOVERY_BINDINGS.contract_digest },
+    source_bundles: { cc_gateway: PHASE1_RECOVERY_BINDINGS.cc_gateway.bundle_digest, sub2api: PHASE1_RECOVERY_BINDINGS.sub2api.bundle_digest },
+    shared_contract: { path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', digest: PHASE1_RECOVERY_BINDINGS.shared_contract_digest },
+  }
+}
+
+function recoveryExecutionContextFixture(): Value {
+  const value = executionContextFixture()
+  value.context_kind = 'phase_1_recovery_context'
+  value.plan = { path: recoveryPlanPath, digest: recoveryPlanDigest, reviewed_commit: recoveryReviewedCommit }
+  delete value.planning_provenance
+  value.recovery_authority = recoveryAuthorityFixture()
+  value.approval_receipt.reviewer_id = 'phase1-recovery-acceptance-review'
+  value.approval_receipt.reviewed_plan_commit = recoveryReviewedCommit
+  value.approval_receipt.reviewed_plan_digest = recoveryPlanDigest
+  value.approval_receipt.reviewer_roles = ['product', 'authority']
+  value.repositories.cc_gateway.implementation_branch = PHASE1_RECOVERY_BINDINGS.cc_gateway.recovery_branch
+  value.repositories.sub2api.implementation_branch = PHASE1_RECOVERY_BINDINGS.sub2api.recovery_branch
+  return value
+}
+
+function recoveryPlanReviewFixture(): Value {
+  const value = planReviewFixture()
+  value.review_kind = 'phase_1_recovery_plan_review'
+  value.plan = { path: recoveryPlanPath, digest: recoveryPlanDigest, reviewed_commit: recoveryReviewedCommit }
+  value.reviewer_id = 'phase1-recovery-acceptance-review'
+  value.reviewers = [
+    { role: 'product', reviewer_id: 'p1-recovery-product-review', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 } },
+    { role: 'authority', reviewer_id: 'p1-recovery-authority-review', decision: 'approved', finding_counts: { critical: 0, important: 0, minor: 0 } },
+  ]
+  value.recovery_authority = recoveryAuthorityFixture()
+  return value
+}
+
 function executionContextBindings(value: Value): boolean {
   return value.plan.reviewed_commit === value.approval_receipt.reviewed_plan_commit
     && value.plan.digest === value.approval_receipt.reviewed_plan_digest
@@ -543,6 +592,52 @@ test('Phase 1 execution context requires exact plan approval and closed authoriz
   assert.equal(validator(blockedContext), false)
   expectsGateCode(() => requireContextGate(validator(blockedContext), 'context_schema_invalid', 'blocked context schema'), 'context_schema_invalid')
   expectsGateCode(() => requireContextGate(reviewValidator({}), 'context_approval_invalid', 'invalid approval schema'), 'context_approval_invalid')
+})
+
+test('Phase 1 Recovery carriers bind the exact plan, dual review, authority envelope, branches, and sequence-zero lease', async () => {
+  const contextValidator = compile(await json(executionContextSchemaPath))
+  const reviewValidator = compile(await json(planReviewSchemaPath))
+  const context = recoveryExecutionContextFixture()
+  const review = recoveryPlanReviewFixture()
+  assert.equal(contextValidator(context), true, JSON.stringify(contextValidator.errors))
+  assert.equal(reviewValidator(review), true, JSON.stringify(reviewValidator.errors))
+  assert.equal(executionContextBindings(context), true)
+  const envelope = derivePhase1BaselineEnvelope(context)
+  assert.deepEqual(envelope.recovery_authority, recoveryAuthorityFixture())
+  assert.equal('planning_provenance' in envelope, false)
+  const planBytes = await readFile(path.join(root, recoveryPlanPath))
+  const lease = derivePhase1RunLease(context, {
+    envelope_digest: digestDeliveryValue(envelope),
+    plan_bytes: planBytes,
+    transition_id: 'P1R-01',
+    predecessor_lease_digest: null,
+    observed_delta_digest: null,
+  })
+  assert.equal(lease.state, 'baseline_frozen')
+  assert.equal(lease.transition_id, 'P1R-01')
+
+  for (const mutate of [
+    (value: Value) => { value.plan.path = planPath },
+    (value: Value) => { value.repositories.cc_gateway.implementation_branch = expectedImplementationBranches.cc_gateway },
+    (value: Value) => { value.approval_receipt.reviewer_roles.reverse() },
+    (value: Value) => { value.recovery_authority.source_bundles.cc_gateway = `sha256:${'f'.repeat(64)}` },
+    (value: Value) => { value.planning_provenance = executionContextFixture().planning_provenance },
+  ]) {
+    const changed = clone(context); mutate(changed)
+    assert.equal(contextValidator(changed), false)
+  }
+  for (const mutate of [
+    (value: Value) => { value.reviewers.pop() },
+    (value: Value) => { value.reviewers.reverse() },
+    (value: Value) => { value.reviewers[0].finding_counts.important = 1 },
+    (value: Value) => { value.recovery_authority.recovery_contract.digest = `sha256:${'f'.repeat(64)}` },
+  ]) {
+    const changed = clone(review); mutate(changed)
+    assert.equal(reviewValidator(changed), false)
+  }
+  const legacyWithRecovery = executionContextFixture()
+  legacyWithRecovery.recovery_authority = recoveryAuthorityFixture()
+  assert.equal(contextValidator(legacyWithRecovery), false)
 })
 
 test('Phase 1 execution context successor chain is immutable, contiguous, fresh, and latest-only', async () => {
@@ -1654,15 +1749,18 @@ test('Phase 1 plan closes context refresh, review, merge-topology, and retry lif
 test('Phase 1 mid-execution plan repair restarts canonical initial authority instead of mutating a successor chain', async () => {
   const plan = await readFile(path.join(root, planPath), 'utf8')
   const executionContextSchema = await json(executionContextSchemaPath)
+  const authorityMode = executionContextSchema.allOf.find((entry: Value) => entry.if?.properties?.context_kind)
 
   assert.equal(
-    executionContextSchema.properties.repositories.properties.cc_gateway.allOf[1].properties.implementation_branch.const,
+    authorityMode.else.properties.repositories.properties.cc_gateway.properties.implementation_branch.const,
     expectedImplementationBranches.cc_gateway,
   )
   assert.equal(
-    executionContextSchema.properties.repositories.properties.sub2api.allOf[1].properties.implementation_branch.const,
+    authorityMode.else.properties.repositories.properties.sub2api.properties.implementation_branch.const,
     expectedImplementationBranches.sub2api,
   )
+  assert.equal(authorityMode.then.properties.repositories.properties.cc_gateway.properties.implementation_branch.const, PHASE1_RECOVERY_BINDINGS.cc_gateway.recovery_branch)
+  assert.equal(authorityMode.then.properties.repositories.properties.sub2api.properties.implementation_branch.const, PHASE1_RECOVERY_BINDINGS.sub2api.recovery_branch)
   assert.match(
     plan,
     /current replacement branch and worktree: `codex\/oracle-phase-1-sub2api-v8` and `codex\/oracle-phase-1-cc-gateway-v8`/,
