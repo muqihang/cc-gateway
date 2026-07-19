@@ -3,7 +3,7 @@
 ## Scope
 
 - Frozen bases: CC Gateway `1302a8c1a2f8c2a5bd92a5bc0da8bd11458c513f`; Sub2API `b0b77933716487da5fca00329443f88ce9a1c3db`.
-- Tested product heads: CC Gateway `d99738c600075c44c7bc741365555a4e23fdfded` (tree `8b2759d915d6a1baf077465f3720110a368a68ed`); Sub2API `45cbd7241e5f74ee5812fff6ffa39553c19da5ed` (tree `82cae3a8e36dd8f62968d68894f7fc8a9067ab2b`).
+- Tested product heads: CC Gateway `d99738c600075c44c7bc741365555a4e23fdfded` (tree `8b2759d915d6a1baf077465f3720110a368a68ed`); Sub2API `a759b455600e9a4c5c361a492e4f3ce3cd5ad70f` (tree `b76d6000a8a0b10e9c6a953adf7095978787a284`).
 - Shared contract: `backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json`, SHA-256 `70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1`.
 - Active Claude Code target: `2.1.215`; reference baseline: `2.1.207`. The pinned registry metadata and artifact SHA-256 are in `docs/superpowers/claude-code-active-target.json`.
 
