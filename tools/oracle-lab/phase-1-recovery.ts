@@ -139,12 +139,13 @@ const ACCOUNT_HOME = userInfo().homedir
 const GO_MODULE_CACHE = path.join(ACCOUNT_HOME, 'go/pkg/mod')
 const GO_EXECUTABLE = path.join(GO_MODULE_CACHE, 'golang.org/toolchain@v0.0.1-go1.26.5.darwin-arm64/bin/go')
 const OUTPUT_RECORD = 'phase-1-recovery-pre-replay-red.json'
+export const PHASE1_RECOVERY_GO_RED_TIMEOUT_MS = 600_000
 
 export const PHASE1_RECOVERY_BINDINGS: Phase1RecoveryBindings = Object.freeze({
   plan_path: 'docs/superpowers/plans/2026-07-18-claude-code-2.1.207-phase-1-recovery.md',
   contract_digest: 'sha256:4fb422c47b62519552fe1d21dee53576309df145c280d05c41d575bfdb82c3fe',
-  plan_digest: 'sha256:fdd61eb31c0e1662c3d4ebe438a99379277accf29d75e685b9e3d2a02fcc0029',
-  reviewed_plan_commit: '0a640baf62392f74e22618959c152e0cef024f43',
+  plan_digest: 'sha256:fd9e152163bad9b60468910e49aad1c7bf64d5402da2c6ca65943dad96917214',
+  reviewed_plan_commit: '9a0143d7a3a7c32bd83a17130fa87df1f04355cc',
   shared_contract_digest: 'sha256:70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
   cc_gateway: Object.freeze({
     remote_url_digest: 'sha256:52de8ee497a784b90b33345865754f3e6b9d5d96eed92549a15a4157cabb568a',
@@ -748,12 +749,40 @@ export function parsePhase1RecoveryGoRedEvidence(
   return Object.freeze({ top_level_leaves: topLevelLeaves, failure_signature_digest: signatureDigest })
 }
 
+export function phase1RecoveryGoBuildCacheRoot(outputRoot: string): string {
+  return path.join(outputRoot, 'go-build-cache')
+}
+
+export function validatePhase1RecoveryGoRedLifecycle(result: Readonly<{
+  error?: Error
+  status: number | null
+  signal: NodeJS.Signals | null
+}>): void {
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code
+    fail(
+      code === 'ETIMEDOUT' ? 'phase1_recovery_vertical_red_timeout' : 'phase1_recovery_vertical_red_spawn_failed',
+      'Go RED process did not complete normally',
+    )
+  }
+  if (result.signal !== null || result.status === null) {
+    fail('phase1_recovery_vertical_red_terminated', 'Go RED process terminated without an exit status')
+  }
+  if (result.status === 0) {
+    fail('phase1_recovery_vertical_red_unexpected_green', 'Go RED unexpectedly passed before replay')
+  }
+}
+
 function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings: Phase1RecoveryBindings): RedRecord {
   const expected = bindings.pre_replay_red[family]
   const packagePath = family === 'b1' ? './internal/service' : './internal/server/routes'
   const pattern = `^(${expected.join('|')})$`
-  const cacheRoot = path.join(input.output_root, `go-build-cache-${family}`)
-  mkdirSync(cacheRoot, { mode: 0o700 })
+  const cacheRoot = phase1RecoveryGoBuildCacheRoot(input.output_root)
+  if (!existsSync(cacheRoot)) mkdirSync(cacheRoot, { mode: 0o700 })
+  const cacheMetadata = lstatSync(cacheRoot)
+  if (!cacheMetadata.isDirectory() || cacheMetadata.isSymbolicLink() || (cacheMetadata.mode & 0o077) !== 0) {
+    fail('phase1_recovery_output_invalid', 'Go RED build cache has an unsafe type or mode')
+  }
   const moduleCacheMetadata = lstatSync(GO_MODULE_CACHE)
   const goMetadata = lstatSync(GO_EXECUTABLE)
   if (!moduleCacheMetadata.isDirectory() || moduleCacheMetadata.isSymbolicLink() || (moduleCacheMetadata.mode & 0o022) !== 0
@@ -762,7 +791,7 @@ function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings
   const result = spawnSync('/usr/bin/sandbox-exec', ['-p', sandboxProfile, GO_EXECUTABLE, 'test', '-mod=readonly', '-tags', 'phase0red', packagePath, '-run', pattern, '-count=1', '-json'], {
     cwd: path.join(input.sub2api_root, 'backend'),
     encoding: 'utf8',
-    timeout: 180_000,
+    timeout: PHASE1_RECOVERY_GO_RED_TIMEOUT_MS,
     maxBuffer: 16 * 1024 * 1024,
     env: {
       HOME: ACCOUNT_HOME,
@@ -777,9 +806,7 @@ function runGoRed(family: 'b1' | 'b2' | 'b3', input: Phase1RecoveryCli, bindings
       GOFLAGS: '-mod=readonly',
     },
   })
-  if (result.error || result.status === 0 || result.status === null || result.signal !== null) {
-    fail('phase1_recovery_vertical_red_mismatch', 'Go RED did not reach the exact expected failure lifecycle')
-  }
+  validatePhase1RecoveryGoRedLifecycle(result)
   const evidence = parsePhase1RecoveryGoRedEvidence(result.stdout, family, bindings)
   const deniedAttempts = (result.stderr.match(/(?:operation not permitted|sandbox|deny network)/gi) ?? []).length
   if (deniedAttempts !== 0) fail('phase1_recovery_external_side_effect', 'Go RED attempted a forbidden external network effect')
@@ -875,7 +902,7 @@ export async function runPhase1RecoveryPreReplay(
     source_bundle_digests: { cc_gateway: bindings.cc_gateway.bundle_digest, sub2api: bindings.sub2api.bundle_digest },
     families,
     replay_sentinel: 'phase1_recovery_replay_required',
-    cleanup_candidates: ['bundle-quarantine', 'go-build-cache-b1', 'go-build-cache-b2', 'go-build-cache-b3'],
+    cleanup_candidates: ['bundle-quarantine', 'go-build-cache'],
   })
   await dependencies.persist_record(input, record)
   return record
