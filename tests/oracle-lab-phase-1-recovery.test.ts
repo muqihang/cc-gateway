@@ -94,12 +94,14 @@ function inputFixture() {
   const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
   bindings.cc_gateway.remote_url_digest = sha256(ccUrl)
   bindings.cc_gateway.bootstrap_head = git(ccRoot, 'rev-parse', 'HEAD')
+  bindings.cc_gateway.entry_floor_head = bindings.cc_gateway.bootstrap_head
   bindings.cc_gateway.source_head = ccSourceHead
   bindings.cc_gateway.source_commits = [ccSourceHead]
   bindings.cc_gateway.skipped_source_commits = []
   bindings.cc_gateway.bundle_digest = sha256(readFileSync(ccBundle))
   bindings.sub2api.remote_url_digest = sha256(subUrl)
   bindings.sub2api.bootstrap_head = git(subRoot, 'rev-parse', 'HEAD')
+  bindings.sub2api.entry_floor_head = bindings.sub2api.bootstrap_head
   bindings.sub2api.source_head = subSourceHead
   bindings.sub2api.source_commits = [subSourceHead]
   bindings.sub2api.skipped_source_commits = []
@@ -232,6 +234,11 @@ function mappingFixture() {
     const replacementRoot = path.join(parent, `${name}-replacement`)
     initRepository(sourceRoot, `https://example.invalid/${name}-source.git`)
     const baseline = initRepository(replacementRoot, `https://example.invalid/${name}-replacement.git`)
+    writeFileSync(path.join(replacementRoot, 'entry-floor.txt'), 'merged bootstrap authority\n')
+    git(replacementRoot, 'add', 'entry-floor.txt')
+    git(replacementRoot, 'commit', '-qm', 'advance execution baseline')
+    const executionBaseline = git(replacementRoot, 'rev-parse', 'HEAD')
+    git(replacementRoot, 'update-ref', 'refs/remotes/muqihang/main', executionBaseline)
     const skipped: string[] = []
     if (name === 'cc_gateway') {
       const evidence = path.join(sourceRoot, 'docs/superpowers/evidence/phase-1')
@@ -254,6 +261,7 @@ function mappingFixture() {
     git(replacementRoot, 'commit', '-qm', 'replacement product delta')
     const replacementCommit = git(replacementRoot, 'rev-parse', 'HEAD')
     bindings[name].bootstrap_head = baseline
+    bindings[name].entry_floor_head = baseline
     bindings[name].source_head = sourceCommit
     bindings[name].source_commits = [sourceCommit]
     bindings[name].skipped_source_commits = skipped
@@ -316,12 +324,22 @@ test('Recovery input validator authenticates real bundles and rejects root, type
   writeFileSync(path.join(dirty.input.cc_root, 'untracked.txt'), 'dirty\n')
   expectCode(() => validatePhase1RecoveryInputs(dirty.input, dirty.bindings as any), 'phase1_recovery_root_invalid')
 
-  const forgedRemoteMain = inputFixture()
-  writeFileSync(path.join(forgedRemoteMain.input.cc_root, 'forged.txt'), 'forged\n')
-  git(forgedRemoteMain.input.cc_root, 'add', 'forged.txt')
-  git(forgedRemoteMain.input.cc_root, 'commit', '-qm', 'forged main')
-  git(forgedRemoteMain.input.cc_root, 'update-ref', 'refs/remotes/muqihang/main', git(forgedRemoteMain.input.cc_root, 'rev-parse', 'HEAD'))
-  expectCode(() => validatePhase1RecoveryInputs(forgedRemoteMain.input, forgedRemoteMain.bindings as any), 'phase1_recovery_root_invalid')
+  const advancedMain = inputFixture()
+  writeFileSync(path.join(advancedMain.input.cc_root, 'merged-bootstrap.txt'), 'merged bootstrap\n')
+  git(advancedMain.input.cc_root, 'add', 'merged-bootstrap.txt')
+  git(advancedMain.input.cc_root, 'commit', '-qm', 'merged bootstrap')
+  git(advancedMain.input.cc_root, 'update-ref', 'refs/remotes/muqihang/main', git(advancedMain.input.cc_root, 'rev-parse', 'HEAD'))
+  assert.doesNotThrow(() => validatePhase1RecoveryInputs(advancedMain.input, advancedMain.bindings as any))
+
+  const localDrift = inputFixture()
+  writeFileSync(path.join(localDrift.input.cc_root, 'local-only.txt'), 'local only\n')
+  git(localDrift.input.cc_root, 'add', 'local-only.txt')
+  git(localDrift.input.cc_root, 'commit', '-qm', 'local only')
+  expectCode(() => validatePhase1RecoveryInputs(localDrift.input, localDrift.bindings as any), 'phase1_recovery_root_invalid')
+
+  const missingFloor = inputFixture()
+  missingFloor.bindings.cc_gateway.entry_floor_head = 'f'.repeat(40)
+  expectCode(() => validatePhase1RecoveryInputs(missingFloor.input, missingFloor.bindings as any), 'phase1_recovery_root_invalid')
 
   const linked = inputFixture()
   const link = path.join(linked.parent, 'cc-link.bundle')
