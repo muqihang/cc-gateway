@@ -425,16 +425,21 @@ export function validatePhase1RunLeaseAuthority(input: Readonly<{
 }
 
 export function validatePhase1RunLeaseChain(input: Readonly<{
-  chain: readonly Readonly<{ lease: Phase1RunLease; context: unknown }>[]
+  chain: readonly Readonly<{ lease: Phase1RunLease; context: unknown; context_bytes: Buffer | string; artifact_commit: string }>[]
   plan_bytes: Buffer | string
   execution_context_schema_bytes: Buffer | string
 }>): void {
   if (!Array.isArray(input.chain) || input.chain.length === 0) fail('delivery_lease_predecessor_invalid', 'lease authority chain is empty')
   const contract = parsePhase1RecoveryContract(input.plan_bytes)
-  let previous: Readonly<{ lease: Phase1RunLease; context: unknown }> | undefined
+  let previous: Readonly<{ lease: Phase1RunLease; context: unknown; context_bytes: Buffer | string; artifact_commit: string }> | undefined
+  let previousContextDigest: string | undefined
   for (const [index, entry] of input.chain.entries()) {
     validatePhase1RunLeaseAuthority({ ...entry, plan_bytes: input.plan_bytes, execution_context_schema_bytes: input.execution_context_schema_bytes })
-    if (!isObject(entry.context) || entry.context.sequence !== index || entry.lease.sequence !== index) {
+    const contextBytes = Buffer.isBuffer(entry.context_bytes) ? entry.context_bytes : Buffer.from(entry.context_bytes, 'utf8')
+    let parsedContext: unknown
+    try { parsedContext = JSON.parse(contextBytes.toString('utf8')) } catch { fail('delivery_context_authority_mismatch', 'lease context artifact bytes are malformed') }
+    if (!isObject(entry.context) || canonicalDeliveryJson(parsedContext) !== canonicalDeliveryJson(entry.context)
+      || !COMMIT.test(entry.artifact_commit) || entry.context.sequence !== index || entry.lease.sequence !== index) {
       fail('delivery_lease_sequence_invalid', 'lease authority chain sequence is not contiguous from zero')
     }
     const transition = contract.rows.find((row) => row.id === entry.lease.transition_id)
@@ -443,13 +448,18 @@ export function validatePhase1RunLeaseChain(input: Readonly<{
       ? entry.lease.predecessor_lease_digest !== null || contextPredecessor !== null
       : entry.lease.predecessor_lease_digest !== digestDeliveryValue(previous.lease)
         || entry.lease.observed_delta_digest === null
+        || entry.lease.envelope_digest !== previous.lease.envelope_digest
         || !isObject(contextPredecessor)
+        || contextPredecessor.digest !== previousContextDigest
         || contextPredecessor.sequence !== previous.context.sequence
         || contextPredecessor.path !== previous.context.artifact_path
-        || contextPredecessor.stage !== previous.context.stage)) {
+        || contextPredecessor.stage !== previous.context.stage
+        || contextPredecessor.artifact_commit !== previous.artifact_commit)) {
       fail('delivery_lease_predecessor_invalid', 'lease authority chain predecessor or transition edge drifted')
     }
+    if (previous !== undefined) assertPhase1BaselineEnvelopeUnchanged(previous.context, entry.context)
     previous = entry
+    previousContextDigest = `sha256:${createHash('sha256').update(contextBytes).digest('hex')}`
   }
 }
 

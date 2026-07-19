@@ -90,7 +90,7 @@ export type Phase1RecoveryReplayObservation = Readonly<{
 }>
 
 export type Phase1RecoveryT2Observation = Readonly<{
-  lease_chain: readonly Readonly<{ lease: Phase1RunLease; context: JsonObject }>[]
+  lease_chain: readonly Readonly<{ lease: Phase1RunLease; context: JsonObject; context_bytes: Buffer | string; artifact_commit: string }>[]
   plan_bytes: Buffer | string
   execution_context_schema_bytes: Buffer | string
   cc_root: string
@@ -450,6 +450,11 @@ export function derivePhase1RecoveryT2Record(observation: Phase1RecoveryT2Observ
       fail('phase1_recovery_t2_invalid', 'Recovery T2 repository is not clean')
     }
     testedHeads[name] = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
+  }
+  const authorizedHeads = currentLease.repository_heads_and_clean_state_digests
+  if (!exactKeys(authorizedHeads as JsonObject, ['cc_gateway', 'sub2api'])
+    || Object.entries(testedHeads).some(([name, head]) => authorizedHeads[name]?.head !== head)) {
+    fail('phase1_recovery_t2_invalid', 'Recovery T2 tested heads differ from the current lease authority')
   }
   const leaseDigest = digestDeliveryValue(currentLease)
   const results = Object.fromEntries((['t0', 't1', 'owned', 'preserved_red'] as const).map((kind) => {

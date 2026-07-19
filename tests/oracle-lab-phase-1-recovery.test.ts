@@ -142,7 +142,10 @@ function recoveryAuthority(): Value {
   }
 }
 
-function context(sequence: number): Value {
+function context(sequence: number, authorizedHeads: Readonly<{ cc_gateway: string; sub2api: string }> = {
+  cc_gateway: PHASE1_RECOVERY_BINDINGS.cc_gateway.bootstrap_head,
+  sub2api: PHASE1_RECOVERY_BINDINGS.sub2api.bootstrap_head,
+}): Value {
   const generated = new Date(Date.parse('2026-07-18T18:00:00Z') + sequence * 60_000).toISOString()
   const artifactPath = sequence === 0
     ? 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
@@ -187,13 +190,13 @@ function context(sequence: number): Value {
     recovery_authority: recoveryAuthority(),
     repositories: {
       cc_gateway: {
-        baseline_main_head: ccHead, authorized_parent_head: ccHead, observed_remote_main_head: ccHead,
+        baseline_main_head: ccHead, authorized_parent_head: authorizedHeads.cc_gateway, observed_remote_main_head: ccHead,
         remote_name: 'muqihang', remote_url_digest: PHASE1_RECOVERY_BINDINGS.cc_gateway.remote_url_digest,
         tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: PHASE1_RECOVERY_BINDINGS.cc_gateway.recovery_branch,
         pre_issue_clean: true, validation_status: validationStatus([]),
       },
       sub2api: {
-        baseline_main_head: subHead, authorized_parent_head: subHead, observed_remote_main_head: subHead,
+        baseline_main_head: subHead, authorized_parent_head: authorizedHeads.sub2api, observed_remote_main_head: subHead,
         remote_name: 'muqihang', remote_url_digest: PHASE1_RECOVERY_BINDINGS.sub2api.remote_url_digest,
         tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: PHASE1_RECOVERY_BINDINGS.sub2api.recovery_branch,
         pre_issue_clean: true, validation_status: validationStatus([]),
@@ -380,7 +383,23 @@ test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, du
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {
   const roots = inputFixture()
-  const contexts = [context(0), context(1), context(2)]
+  const testedHeads = {
+    cc_gateway: git(roots.input.cc_root, 'rev-parse', 'HEAD'),
+    sub2api: git(roots.input.sub2api_root, 'rev-parse', 'HEAD'),
+  }
+  const contexts: Value[] = []
+  const contextBytes: Buffer[] = []
+  const artifactCommits: string[] = []
+  for (const sequence of [0, 1, 2]) {
+    const leaseContext = context(sequence, testedHeads)
+    if (sequence > 0) {
+      leaseContext.predecessor.digest = sha256(contextBytes[sequence - 1])
+      leaseContext.predecessor.artifact_commit = artifactCommits[sequence - 1]
+    }
+    contexts.push(leaseContext)
+    contextBytes.push(Buffer.from(`${JSON.stringify(leaseContext)}\n`))
+    artifactCommits.push(testedHeads.cc_gateway)
+  }
   const leases = [] as ReturnType<typeof derivePhase1RunLease>[]
   for (const [index, leaseContext] of contexts.entries()) {
     leases.push(derivePhase1RunLease(leaseContext, {
@@ -391,10 +410,6 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
       observed_delta_digest: index === 0 ? null : `sha256:${String(index).repeat(64)}`,
       execution_context_schema_bytes: executionContextSchemaBytes,
     }))
-  }
-  const testedHeads = {
-    cc_gateway: git(roots.input.cc_root, 'rev-parse', 'HEAD'),
-    sub2api: git(roots.input.sub2api_root, 'rev-parse', 'HEAD'),
   }
   const leaseDigest = digestDeliveryValue(leases[2])
   const artifacts = {
@@ -411,7 +426,7 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
   }
   for (const kind of ['t0', 't1', 'owned', 'preserved_red'] as const) writeFileSync(artifacts[kind], `${JSON.stringify(results[kind])}\n`)
   const observation = {
-    lease_chain: leases.map((lease, index) => ({ lease, context: contexts[index] })),
+    lease_chain: leases.map((lease, index) => ({ lease, context: contexts[index], context_bytes: contextBytes[index], artifact_commit: artifactCommits[index] })),
     plan_bytes: planBytes,
     execution_context_schema_bytes: executionContextSchemaBytes,
     cc_root: roots.input.cc_root,
@@ -449,6 +464,32 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
   expectCode(() => derivePhase1RecoveryT2Record(brokenChain as any), 'delivery_lease_predecessor_invalid')
   expectCode(() => derivePhase1RecoveryT2Record({ ...observation, lease_chain: observation.lease_chain.slice(1) } as any), 'delivery_lease_sequence_invalid')
 
+  for (const mutate of [
+    (value: Value) => { value.predecessor.digest = `sha256:${'f'.repeat(64)}` },
+    (value: Value) => { value.predecessor.artifact_commit = 'f'.repeat(40) },
+  ]) {
+    const changedContext = clone(contexts[2]); mutate(changedContext)
+    const changedChain = observation.lease_chain.map((entry, index) => index === 2
+      ? { ...entry, context: changedContext, context_bytes: Buffer.from(`${JSON.stringify(changedContext)}\n`) }
+      : entry)
+    expectCode(() => derivePhase1RecoveryT2Record({ ...observation, lease_chain: changedChain } as any), 'delivery_lease_predecessor_invalid')
+  }
+
+  const driftedContext = clone(contexts[2])
+  driftedContext.repositories.cc_gateway.baseline_main_head = 'f'.repeat(40)
+  const driftedLease = derivePhase1RunLease(driftedContext, {
+    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(driftedContext)),
+    plan_bytes: planBytes,
+    transition_id: 'P1R-03',
+    predecessor_lease_digest: digestDeliveryValue(leases[1]),
+    observed_delta_digest: `sha256:${'2'.repeat(64)}`,
+    execution_context_schema_bytes: executionContextSchemaBytes,
+  })
+  const driftedChain = observation.lease_chain.map((entry, index) => index === 2
+    ? { ...entry, lease: driftedLease, context: driftedContext, context_bytes: Buffer.from(`${JSON.stringify(driftedContext)}\n`) }
+    : entry)
+  expectCode(() => derivePhase1RecoveryT2Record({ ...observation, lease_chain: driftedChain } as any), 'delivery_lease_predecessor_invalid')
+
   const invalidSuccessor = context(2)
   invalidSuccessor.recovery_state = 'caller_selected'
   expectCode(() => derivePhase1RunLease(invalidSuccessor, {
@@ -468,6 +509,10 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
   writeFileSync(artifacts.t0, `${JSON.stringify(results.t0, null, 2)}\n`)
   expectCode(() => validatePhase1RecoveryT2Record(valid, observation as any), 'phase1_recovery_t2_invalid')
   writeFileSync(artifacts.t0, originalT0)
+  writeFileSync(path.join(roots.input.cc_root, 'advanced.txt'), 'advanced\n')
+  git(roots.input.cc_root, 'add', 'advanced.txt')
+  git(roots.input.cc_root, 'commit', '-qm', 'advance tested head')
+  expectCode(() => derivePhase1RecoveryT2Record(observation as any), 'phase1_recovery_t2_invalid')
   writeFileSync(path.join(roots.input.cc_root, 'dirty.txt'), 'dirty\n')
   expectCode(() => derivePhase1RecoveryT2Record(observation as any), 'phase1_recovery_t2_invalid')
 })
