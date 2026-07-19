@@ -239,6 +239,14 @@ function mappingFixture() {
     git(replacementRoot, 'commit', '-qm', 'advance execution baseline')
     const executionBaseline = git(replacementRoot, 'rev-parse', 'HEAD')
     git(replacementRoot, 'update-ref', 'refs/remotes/muqihang/main', executionBaseline)
+    if (name === 'cc_gateway') {
+      const evidence = path.join(replacementRoot, 'docs/superpowers/evidence/phase-1')
+      mkdirSync(evidence, { recursive: true })
+      writeFileSync(path.join(evidence, 'phase-1-plan-review.json'), '{"approved":true}\n')
+      writeFileSync(path.join(evidence, 'phase-1-execution-context.json'), '{"sequence":0}\n')
+      git(replacementRoot, 'add', 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json')
+      git(replacementRoot, 'commit', '-qm', 'authorize Phase 1 Recovery entry')
+    }
     const skipped: string[] = []
     if (name === 'cc_gateway') {
       const evidence = path.join(sourceRoot, 'docs/superpowers/evidence/phase-1')
@@ -397,6 +405,30 @@ test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, du
   const forgedReplacement = mappingFixture()
   writeFileSync(path.join(forgedReplacement.observation.cc_gateway.replacement_root, 'forged.txt'), 'forged\n')
   expectCode(() => validatePhase1RecoveryReplayMapping(forgedReplacement.record, forgedReplacement.bindings, forgedReplacement.observation as any), 'phase1_recovery_mapping_invalid')
+
+  for (const carrierMutation of ['missing', 'extra-path', 'symlink'] as const) {
+    const changed = mappingFixture()
+    const replacementRoot = changed.observation.cc_gateway.replacement_root
+    const remoteMain = git(replacementRoot, 'rev-parse', 'refs/remotes/muqihang/main')
+    git(replacementRoot, 'switch', '--detach', remoteMain)
+    if (carrierMutation !== 'missing') {
+      const evidence = path.join(replacementRoot, 'docs/superpowers/evidence/phase-1')
+      mkdirSync(evidence, { recursive: true })
+      writeFileSync(path.join(evidence, 'phase-1-plan-review.json'), '{"approved":true}\n')
+      if (carrierMutation === 'symlink') symlinkSync('phase-1-plan-review.json', path.join(evidence, 'phase-1-execution-context.json'))
+      else writeFileSync(path.join(evidence, 'phase-1-execution-context.json'), '{"sequence":0}\n')
+      if (carrierMutation === 'extra-path') writeFileSync(path.join(evidence, 'unexpected.json'), '{}\n')
+      git(replacementRoot, 'add', 'docs/superpowers/evidence/phase-1')
+      git(replacementRoot, 'commit', '-qm', 'forged Recovery carrier')
+    }
+    writeFileSync(path.join(replacementRoot, 'cc-product.txt'), 'reviewed product delta\n')
+    git(replacementRoot, 'add', 'cc-product.txt')
+    git(replacementRoot, 'commit', '-qm', 'replacement product delta')
+    git(replacementRoot, 'branch', '-f', changed.bindings.cc_gateway.recovery_branch, 'HEAD')
+    git(replacementRoot, 'switch', changed.bindings.cc_gateway.recovery_branch)
+    changed.record.cc_gateway.replacement_commits = [git(replacementRoot, 'rev-parse', 'HEAD')]
+    expectCode(() => validatePhase1RecoveryReplayMapping(changed.record, changed.bindings, changed.observation as any), 'phase1_recovery_mapping_invalid')
+  }
 })
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {
