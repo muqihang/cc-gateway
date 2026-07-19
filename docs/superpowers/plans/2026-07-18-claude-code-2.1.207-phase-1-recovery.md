@@ -359,9 +359,17 @@ path, or caller-selected mapping stops Recovery without conflict resolution.
 The semantic patch fingerprint intentionally excludes hunk context so an unrelated adjacent line
 already present on the reviewed current main cannot change the source-to-replacement identity. The
 verbatim mode retains whitespace in every added and removed line, so string, regex, indentation, and
-other whitespace-sensitive content cannot collide. This does not relax any other mapping proof:
-exact sole parents, zero-context verbatim content delta, UTF-8 sorted path/status/mode tuples,
-protected-path exclusion, projected-tree equality, and clean replacement state remain mandatory.
+other whitespace-sensitive content cannot collide. Because patch-id intentionally ignores hunk line
+numbers, it is necessary but not sufficient: the validator must also load the replacement parent into
+an isolated command-scoped index/object database, apply the exact source `-U0` binary patch with
+`git apply --cached --unidiff-zero`, and require the resulting `git write-tree` OID to equal the
+replacement commit tree OID. The scratch object database may read the authenticated replacement
+object database only as an alternate and must be removed without changing the replacement repository.
+This rejects relocating an otherwise identical delta between repeated hunks while retaining the
+adjacent-current-main compatibility proved by the semantic fingerprint. It does not relax any other
+mapping proof: exact sole parents, zero-context verbatim content delta, UTF-8 sorted
+path/status/mode tuples, protected-path exclusion, projected-tree equality, and clean replacement
+state remain mandatory.
 
 ## 11. Replayed Product Anchors
 
