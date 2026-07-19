@@ -19,11 +19,7 @@ type config struct {
 }
 
 func main() {
-	cfg, err := buildConfigFromEnv()
-	if err != nil {
-		log.Fatal(err)
-	}
-	ln, err := net.Listen("tcp", cfg.Listen)
+	cfg, ln, err := openListenerFromEnvironment(os.Getenv, os.Environ(), net.Listen)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -34,22 +30,29 @@ func main() {
 }
 
 func buildConfigFromEnv() (config, error) {
-	listen := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_LISTEN"))
+	return buildConfigFromEnvironment(os.Getenv, os.Environ())
+}
+
+func buildConfigFromEnvironment(getenv func(string) string, environ []string) (config, error) {
+	listen := strings.TrimSpace(getenv("EGRESS_TLS_SIDECAR_LISTEN"))
 	if listen == "" {
 		listen = "127.0.0.1:0"
 	}
 	if !isLoopbackListen(listen) {
 		return config{}, errors.New("listen address must be loopback")
 	}
-	token := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN"))
+	token := strings.TrimSpace(getenv("EGRESS_TLS_SIDECAR_CONTROL_TOKEN"))
 	if len(token) < 24 {
 		return config{}, errors.New("control token missing")
 	}
-	dialMode := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_DIAL_MODE"))
+	dialMode := strings.TrimSpace(getenv("EGRESS_TLS_SIDECAR_DIAL_MODE"))
 	if dialMode == "" {
 		dialMode = "production"
 	}
-	override := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC"))
+	if err := validatedProductionTrustEnvironment(dialMode, environ); err != nil {
+		return config{}, err
+	}
+	override := strings.TrimSpace(getenv("EGRESS_TLS_SIDECAR_TEST_DIAL_OVERRIDE_API_ANTHROPIC"))
 	dialOverrides := map[string]string(nil)
 	allowTestDialOverride := false
 	requireProxyEgress := true
@@ -68,12 +71,12 @@ func buildConfigFromEnv() (config, error) {
 	default:
 		return config{}, errors.New("dial mode must be production or test")
 	}
-	egressBuckets := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS"))
-	proxyRefs := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS"))
+	egressBuckets := splitCSV(getenv("EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS"))
+	proxyRefs := splitCSV(getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS"))
 	if len(egressBuckets) == 0 || len(proxyRefs) == 0 {
 		return config{}, errors.New("egress/proxy allowlists missing")
 	}
-	proxyBindingSecret := strings.TrimSpace(os.Getenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET"))
+	proxyBindingSecret := strings.TrimSpace(getenv("EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET"))
 	if requireProxyEgress {
 		if weakProductionMaterial(proxyBindingSecret) {
 			return config{}, errors.New("proxy binding secret missing or weak")
@@ -82,7 +85,7 @@ func buildConfigFromEnv() (config, error) {
 			return config{}, errors.New("proxy binding secret must be independent")
 		}
 	}
-	profileRefs := splitCSV(os.Getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROFILE_REFS"))
+	profileRefs := splitCSV(getenv("EGRESS_TLS_SIDECAR_ALLOWED_PROFILE_REFS"))
 	if len(profileRefs) == 0 {
 		profileRefs = []string{profile.ClaudeCode2179Ref, profile.ClaudeCode2197Ref}
 	}
@@ -103,6 +106,43 @@ func buildConfigFromEnv() (config, error) {
 			ProxyBindingSecret:    proxyBindingSecret,
 		},
 	}, nil
+}
+
+func validatedProductionTrustEnvironment(dialMode string, environ []string) error {
+	if dialMode != "production" {
+		return nil
+	}
+	for _, entry := range environ {
+		parts := strings.SplitN(entry, "=", 2)
+		key := strings.ToUpper(strings.TrimSpace(parts[0]))
+		value := ""
+		if len(parts) == 2 {
+			value = strings.TrimSpace(parts[1])
+		}
+		if key == "NODE_TLS_REJECT_UNAUTHORIZED" && value == "0" {
+			return errors.New("production trust environment override forbidden")
+		}
+		if (key == "NODE_EXTRA_CA_CERTS" || key == "SSL_CERT_FILE" || key == "SSL_CERT_DIR") && value != "" {
+			return errors.New("production trust environment override forbidden")
+		}
+	}
+	return nil
+}
+
+func openListenerFromEnvironment(
+	getenv func(string) string,
+	environ []string,
+	listen func(network, address string) (net.Listener, error),
+) (config, net.Listener, error) {
+	cfg, err := buildConfigFromEnvironment(getenv, environ)
+	if err != nil {
+		return config{}, nil, err
+	}
+	ln, err := listen("tcp", cfg.Listen)
+	if err != nil {
+		return config{}, nil, err
+	}
+	return cfg, ln, nil
 }
 
 func splitCSV(value string) []string {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import dns from "node:dns";
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
@@ -81,9 +82,11 @@ function requestInput(overrides: Record<string, unknown> = {}) {
 }
 
 const fixture = resolveFormalPoolContract({
+  explicitPath: process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH,
   gatewayRoot: new URL("../..", import.meta.url).pathname,
   sub2apiRoot: process.env.SUB2API_ROOT,
   manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+  expectedDigest: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
 }).fixture as any;
 
 function canonicalContext(value: Record<string, unknown>): string {
@@ -314,13 +317,14 @@ for (const [name, mutate, ordinaryPath] of b4Cases) {
     mutate(config, context);
     const dnsLookups: string[] = [];
     const originalLookup = dns.lookup;
+    const gateway = startProxy(config);
+    if (!gateway.listening) await once(gateway, "listening");
     (dns as any).lookup = (hostname: string, options: any, callback?: any) => {
       dnsLookups.push(hostname);
       const cb = typeof options === "function" ? options : callback;
       if (typeof options === "object" && options?.all) cb(null, [{ address: "127.0.0.1", family: 4 }]);
       else cb(null, "127.0.0.1", 4);
     };
-    const gateway = startProxy(config);
     try {
       const response = await httpJson(serverUrl(gateway, "/v1/messages?beta=true"), {
         headers: b4Headers(context),

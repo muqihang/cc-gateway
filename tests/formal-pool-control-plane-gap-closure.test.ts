@@ -1,7 +1,7 @@
 import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/formal-pool-control-plane-gap-closure.test.ts')
 
@@ -217,6 +217,7 @@ async function withGateway<T>(version: '2.1.179' | '2.1.185' | '2.1.197', fn: (g
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(config(upstream.url, proxy.url, version, extraSharedPool))
+  await waitForListening(gateway)
   try {
     return await fn(gateway, upstream)
   } finally {

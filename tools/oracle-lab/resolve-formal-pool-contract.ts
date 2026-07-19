@@ -184,9 +184,13 @@ export function resolveFormalPoolContract(input: {
   if (previouslyObserved && previouslyObserved !== contractDigest) throw new Error('formal-pool contract digest changed during this process')
   observedDigests.set(contractReal, contractDigest)
 
+  const exactPinnedExplicitPath = sourceCategory === 'explicit_env'
+    && !input.sub2apiRoot
+    && input.expectedDigest !== undefined
+    && contractDigest === input.expectedDigest
   if (branch !== 'main') {
-    if (!input.sub2apiRoot) throw new Error('explicit feature-worktree contract requires an explicitly declared sub2apiRoot')
-    validateManifest({ gatewayRoot, manifestPath: input.manifestPath, rootReal, branch, head, contractDigest })
+    if (!input.sub2apiRoot && !exactPinnedExplicitPath) throw new Error('explicit feature-worktree contract requires an explicitly declared sub2apiRoot or exact expectedDigest')
+    if (!exactPinnedExplicitPath) validateManifest({ gatewayRoot, manifestPath: input.manifestPath, rootReal, branch, head, contractDigest })
     if (sourceCategory !== 'explicit_env') sourceCategory = 'declared_worktree'
   }
   if (input.expectedBranch && branch !== input.expectedBranch) throw new Error(`Sub2API branch mismatch: expected ${input.expectedBranch}, found ${branch}`)

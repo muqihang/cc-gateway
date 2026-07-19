@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, readdirSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/claude-platform-aws-cp5.test.ts')
 
@@ -173,7 +173,6 @@ function awsBody(sessionId = defaultSessionId) {
 function awsSub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Record<string, unknown> = {}) {
   return baseConfig({
     mode: 'sub2api',
-    upstream: { url: upstreamUrl },
     auth: { gateway_token: 'gateway-token', internal_control_token: internalControlToken, tokens: [] },
     oauth: undefined,
     shared_pool: {
@@ -219,6 +218,11 @@ function awsSub2apiConfig(upstreamUrl: string, proxyUrl: string, overrides: Reco
     },
     env: { ...baseConfig().env, version: '2.1.175', version_base: '2.1.175' },
     ...overrides,
+    upstream: {
+      url: upstreamUrl,
+      tls: { verification: 'required', trust_store: 'system' },
+      ...((overrides.upstream as Record<string, unknown> | undefined) || {}),
+    },
   } as any)
 }
 
@@ -291,7 +295,7 @@ function firstPartyHeaders(contextOverrides: Record<string, unknown> = {}) {
 function firstPartyConfig(upstreamUrl: string, proxyUrl: string) {
   return baseConfig({
     mode: 'sub2api',
-    upstream: { url: upstreamUrl },
+    upstream: { url: upstreamUrl, tls: { verification: 'required', trust_store: 'system' } },
     auth: { gateway_token: 'gateway-token', internal_control_token: internalControlToken, tokens: [] },
     oauth: undefined,
     shared_pool: {
@@ -328,6 +332,7 @@ test('claude platform aws forwards only server-selected workspace/auth to final 
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -363,6 +368,7 @@ test('claude platform aws forwards only server-selected workspace/auth to final 
 test('first-party formal-pool traffic cannot use the AWS Claude Platform upstream host', async () => {
   const proxy = await startDenyConnectProxy()
   const gateway = startProxy(firstPartyConfig('https://aws-external-anthropic.us-east-1.api.aws', proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -382,6 +388,7 @@ test('claude platform aws requires workspace identity and rejects workspace ref 
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const missing = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -409,6 +416,7 @@ test('claude platform aws rejects attested credential binding hmac mismatch', as
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -429,6 +437,7 @@ test('claude platform aws rejects region host path and internal beta query misma
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const regionMismatch = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -471,6 +480,7 @@ test('aws endpoint host is allowed only for claude platform aws provider kind', 
       production_upstream_enabled: true,
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const wrongProvider = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -499,6 +509,7 @@ test('claude platform aws configured upstream requires valid provider attestatio
       production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const missingAttestation = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -535,6 +546,7 @@ test('claude platform aws final verifier catches final body profile mismatch bef
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -556,6 +568,7 @@ test('claude platform aws session ledger rejects workspace endpoint auth beta pr
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const first = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -619,6 +632,7 @@ test('claude platform aws rejects raw workspace id mismatch against workspace re
       },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -668,6 +682,7 @@ test('claude platform aws rejects workspace ref not recomputed from raw workspac
       },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -716,6 +731,7 @@ test('claude platform aws rejects workspace binding hmac tuple mismatch', async 
       },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -739,6 +755,7 @@ test('claude platform aws runtime registration persists aws fields and rejects c
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, { account_identities: {}, egress_buckets: {} }))
+  await waitForListening(gateway)
 
   try {
     const runtimeAccountRef = 'opaque:account-ref:v1:cpaws-runtime-a'
@@ -831,6 +848,7 @@ test('claude platform aws runtime replay blocks old mappings without aws capabil
   }
   await import('fs').then(({ writeFileSync }) => writeFileSync(mappingFile, JSON.stringify({ version: 1, mappings: { [legacy.account_id]: legacy } }, null, 2)))
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, { account_identities: {}, egress_buckets: {} }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -871,6 +889,7 @@ test('claude platform aws production requires explicit workspace authority secre
       production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -894,7 +913,7 @@ test('claude platform aws production rejects configured upstream endpoint mismat
   const ledgerDir = mkdtempSync(join(tmpdir(), 'cc-gateway-cpaws-prod-ledger-'))
   const previousLedgerFile = process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE
   process.env.CC_GATEWAY_FORMAL_POOL_SESSION_LEDGER_FILE = join(ledgerDir, 'formal-pool-session-ledger.json')
-  const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url, {
+  const gateway = startProxy(awsSub2apiConfig('https://aws-external-anthropic.us-west-2.api.aws', proxy.url, {
     shared_pool: {
       context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
       context_attestation_secret: attestationSecret,
@@ -903,6 +922,7 @@ test('claude platform aws production rejects configured upstream endpoint mismat
       production_budget: { mode: 'observe_only', enforcement_enabled: false, p0_hard_block_only: true },
     },
   }))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {
@@ -933,6 +953,7 @@ test('claude platform aws raw capture artifacts contain only safe summaries', as
   })
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(awsSub2apiConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
 
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages'), {

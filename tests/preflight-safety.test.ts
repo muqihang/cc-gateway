@@ -2,7 +2,7 @@ import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { startProxy } from '../src/proxy.js'
 import { evaluateUpstreamSafety } from '../src/upstream-safety.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/preflight-safety.test.ts')
 
@@ -235,6 +235,7 @@ test('real modes reject nonlocal non-Anthropic upstreams unless explicitly suppo
 
 test('preflight gateway fails closed before account/session gates when upstream is real Anthropic', async () => {
   const gateway = startProxy(sharedPreflightConfig('https://api.anthropic.com'))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: sharedHeaders,
@@ -253,6 +254,7 @@ test('messages-shaped preflight with identity and bucket uses localhost mock onl
   const config = sharedPreflightConfig(upstream.url)
   config.egress_buckets!['bucket-a'].proxy_url = proxy.url
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
 	  const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
 	    headers: signedSharedHeaders(),

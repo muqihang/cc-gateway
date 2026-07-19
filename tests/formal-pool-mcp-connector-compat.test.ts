@@ -3,7 +3,7 @@ import { createHmac } from 'crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
 import { startProxy } from '../src/proxy.js'
-import { baseConfig, close, finish, httpJson, listen, serverUrl, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, listen, serverUrl, test, waitForListening } from './helpers.js'
 
 console.log('\ntests/formal-pool-mcp-connector-compat.test.ts')
 
@@ -261,6 +261,7 @@ async function sendFormalPoolRequest(input: {
 } = {}) {
   const sidecar = await startMockSidecar()
   const gateway = startProxy(gatewayConfig(sidecar.url, input.configOverrides || {}))
+  await waitForListening(gateway)
   try {
     const ctx = context(input.contextOverrides || {})
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {

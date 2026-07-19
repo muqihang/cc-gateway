@@ -12,6 +12,51 @@ import (
 	"cc-gateway/egress-tls-sidecar/internal/summary"
 )
 
+func TestUTLSConfigForRequestRequiresDualLoopbackTestAuthority(t *testing.T) {
+	p, ok := profile.Lookup("tls-profile:claude-code-2.1.179-real-oracle-tcp-v1")
+	if !ok {
+		t.Fatal("profile missing")
+	}
+	production, err := utlsConfigForRequest(Request{Profile: p, TargetHost: "api.anthropic.com"})
+	if err != nil {
+		t.Fatalf("production config error: %v", err)
+	}
+	if production.InsecureSkipVerify {
+		t.Fatal("production uTLS config must verify certificates")
+	}
+
+	for name, req := range map[string]Request{
+		"dial without allow": {
+			Profile: p, TargetHost: "api.anthropic.com", DialAddress: "127.0.0.1:443",
+		},
+		"allow without dial": {
+			Profile: p, TargetHost: "api.anthropic.com", AllowTestDialOverride: true,
+		},
+		"non-loopback dial with allow": {
+			Profile: p, TargetHost: "api.anthropic.com", DialAddress: "192.0.2.10:443", AllowTestDialOverride: true,
+		},
+		"malformed dial with allow": {
+			Profile: p, TargetHost: "api.anthropic.com", DialAddress: "not-a-listener", AllowTestDialOverride: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := utlsConfigForRequest(req); err == nil {
+				t.Fatal("expected test dial authority rejection")
+			}
+		})
+	}
+
+	testOnly, err := utlsConfigForRequest(Request{
+		Profile: p, TargetHost: "api.anthropic.com", DialAddress: "127.0.0.1:443", AllowTestDialOverride: true,
+	})
+	if err != nil {
+		t.Fatalf("dual-authority test config error: %v", err)
+	}
+	if !testOnly.InsecureSkipVerify {
+		t.Fatal("explicit loopback test override must preserve raw ClientHello fixture behavior")
+	}
+}
+
 func TestLogicalSNISidecarClientHelloMatchesPlan70Oracle(t *testing.T) {
 	p, ok := profile.Lookup("tls-profile:claude-code-2.1.179-real-oracle-tcp-v1")
 	if !ok {

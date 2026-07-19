@@ -6,6 +6,7 @@ import { join } from 'path'
 import { request as httpRequest } from 'http'
 import type { AddressInfo } from 'net'
 import type { Config } from '../src/config.js'
+import type { ProxyStartupPrimitives } from '../src/proxy.js'
 
 let passed = 0
 let failed = 0
@@ -78,6 +79,34 @@ export function baseConfig(overrides: Partial<Config> = {}): Config {
   } as Config
 }
 
+export function observedStartupPrimitives() {
+  const calls: string[] = []
+  const fakeServer = {
+    address: () => ({ address: '127.0.0.1', family: 'IPv4', port: 0 }),
+    close: (callback?: (error?: Error) => void) => { callback?.() },
+    listening: false,
+  } as any
+  const primitives: ProxyStartupPrimitives = Object.freeze({
+    readTLSFile: () => {
+      calls.push('tls_read')
+      return Buffer.from('inert-test-tls-material')
+    },
+    createHTTPServer: () => {
+      calls.push('http_server_create')
+      return fakeServer
+    },
+    createHTTPSServer: () => {
+      calls.push('https_server_create')
+      return fakeServer
+    },
+    listen: (_server, _port, _host, ready) => {
+      calls.push('listen')
+      ready()
+    },
+  })
+  return { calls, primitives }
+}
+
 export function writeConfigYaml(yaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'cc-gateway-test-'))
   const file = join(dir, 'config.yaml')
@@ -94,6 +123,9 @@ server:
     key: ""
 upstream:
   url: "https://api.anthropic.com"
+  tls:
+    verification: required
+    trust_store: system
 providers:
   anthropic: true
 auth:
@@ -188,6 +220,22 @@ export function listen(server: Server): Promise<void> {
       return
     }
     server.listen(0, '127.0.0.1', () => resolve())
+  })
+}
+
+export function waitForListening(server: Server): Promise<void> {
+  if (server.listening) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const onListening = () => {
+      server.off('error', onError)
+      resolve()
+    }
+    const onError = (error: Error) => {
+      server.off('listening', onListening)
+      reject(error)
+    }
+    server.once('listening', onListening)
+    server.once('error', onError)
   })
 }
 

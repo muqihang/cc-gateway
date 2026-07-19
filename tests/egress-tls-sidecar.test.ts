@@ -5,7 +5,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { readFileSync } from 'fs'
 import { request as httpsRequest } from 'https'
 import type { AddressInfo } from 'net'
-import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeConnectProxy, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, finish, httpJson, listen, serverUrl, startFakeConnectProxy, startFakeUpstream, test, waitForListening } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
 import { prepareEgressSidecarRequest, validateEgressSidecarConfig } from '../src/egress-sidecar-client.js'
 import { resolveFormalPoolContract, type SharedContractFixture } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
@@ -25,6 +25,7 @@ const sharedContract = resolveFormalPoolContract({
   gatewayRoot: repoRoot,
   sub2apiRoot: process.env.SUB2API_ROOT,
   manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+  expectedDigest: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
 })
 const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
   ? 'explicit_env'
@@ -209,7 +210,6 @@ function formalPoolContext(overrides: Record<string, unknown> = {}) {
 function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Record<string, unknown> = {}) {
   return baseConfig({
     mode: 'sub2api',
-    upstream: { url: upstreamUrl },
     auth: { gateway_token: 'gateway-token', internal_control_token: internalControlToken, tokens: [] },
     oauth: undefined,
     shared_pool: {
@@ -258,6 +258,11 @@ function sidecarConfig(upstreamUrl: string, sidecarUrl: string, overrides: Recor
     },
     env: { ...baseConfig().env, version: '2.1.179', version_base: '2.1.179' },
     ...overrides,
+    upstream: {
+      url: upstreamUrl,
+      tls: { verification: 'required', trust_store: 'system' },
+      ...((overrides.upstream as Record<string, unknown> | undefined) || {}),
+    },
   } as any)
 }
 
@@ -397,6 +402,7 @@ test('sidecar mock messages response bridge is disabled by default and preserves
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 200, response.body)
@@ -433,6 +439,7 @@ test('sidecar mock messages response bridge returns messages body only after TLS
       mock_messages_response: { enabled: true, mode: 'local_smoke' },
     },
   }))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 200, response.body)
@@ -486,7 +493,7 @@ test('sidecar mock messages response bridge fails closed for direct provider ups
 test('sidecar mock messages response bridge fails closed at runtime if production-like config bypasses load validation', async () => {
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
-  const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url, {
+  const gateway = startProxy(sidecarConfig('https://api.anthropic.com', sidecar.url, {
     shared_pool: {
       context_attestation_secret_ref: 'opaque:attestation-ref:v1:test',
       context_attestation_secret: attestationSecret,
@@ -507,6 +514,7 @@ test('sidecar mock messages response bridge fails closed at runtime if productio
       mock_messages_response: { enabled: true, mode: 'local_smoke' },
     },
   }))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 403, response.body)
@@ -544,6 +552,7 @@ test('sidecar mock messages response bridge fails closed before Node direct fall
     },
   } as any)
   const gateway = startProxy(config)
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: { 'x-api-key': 'client-token' },
@@ -753,6 +762,7 @@ test('TLS sidecar response missing malformed duplicate or conflicting summary bu
     const upstream = await startFakeUpstream()
     const sidecar = await startSummaryHeaderSidecar(value)
     const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+    await waitForListening(gateway)
     try {
       const response = await postThroughGateway(gateway, { nonce: `summary-${caseName}` })
       assert.equal(response.status, 502, response.body)
@@ -770,6 +780,7 @@ test('TLS sidecar path sends only safe authenticated control metadata and never 
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 200, response.body)
@@ -822,6 +833,7 @@ test('TLS sidecar forwarded upstream 429 with TLS proof is preserved instead of 
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar({ status: 429 })
   const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway, { nonce: 'sidecar-forwarded-429' })
     assert.equal(response.status, 429, response.body)
@@ -843,6 +855,7 @@ test('TLS sidecar response streams first chunk before terminal upstream chunk', 
     chunkDelayMs: 250,
   })
   const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+  await waitForListening(gateway)
   try {
     const firstChunk = await firstGatewayChunk(serverUrl(gateway, '/v1/messages?beta=true'), formalPoolContext({ nonce: 'sidecar-stream-first-chunk' }))
     assert.equal(firstChunk.status, 200)
@@ -872,6 +885,7 @@ test('TLS sidecar disabled under strict formal-pool TLS fails closed without Nod
       expected_tls_summary_bucket: expectedTLSBucket,
     },
   }))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway, { nonce: 'sidecar-disabled-strict' })
     assert.equal(response.status, 403, response.body)
@@ -892,6 +906,7 @@ test('TLS sidecar unavailable fails closed without Node direct fallback', async 
   const proxy = await startFakeConnectProxy()
   await close(proxy.server)
   const gateway = startProxy(sidecarConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 502, response.body)
@@ -918,6 +933,7 @@ test('TLS sidecar logical target allowlist mismatch fails closed before sidecar 
       expected_tls_summary_bucket: expectedTLSBucket,
     },
   }))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 403, response.body)
@@ -947,6 +963,7 @@ test('TLS sidecar profile mismatch fails closed before sidecar request and witho
       expected_tls_summary_bucket: expectedTLSBucket,
     },
   }))
+  await waitForListening(gateway)
   try {
     const response = await postThroughGateway(gateway)
     assert.equal(response.status, 403, response.body)
@@ -968,6 +985,7 @@ test('TLS sidecar unauthenticated or TLS summary mismatch fails closed without f
     const upstream = await startFakeUpstream()
     const sidecar = await startMockSidecar(mockOptions)
     const gateway = startProxy(sidecarConfig(upstream.url, sidecar.url))
+    await waitForListening(gateway)
     try {
       const response = await postThroughGateway(gateway, { nonce: `sidecar-${caseName}` })
       assert.equal(response.status, caseName === 'unauthenticated' ? 502 : 502, response.body)
@@ -990,6 +1008,7 @@ test('mock E2E shared fixture reaches TLS sidecar and local upstream with cohere
   })
   const sidecar = await startMockSidecar({ forwardToTarget: true, forwardToUrl: upstream.url })
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, sidecar.url))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1020,6 +1039,7 @@ test('mock E2E forged client TLS headers do not alter sidecar profile authority'
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, sidecar.url))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1051,6 +1071,7 @@ test('mock E2E forged body TLS hint is rejected before sidecar authority or upst
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, sidecar.url))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -1079,6 +1100,7 @@ test('mock E2E forged query TLS hint is rejected before sidecar authority or ups
   const upstream = await startFakeUpstream()
   const sidecar = await startMockSidecar()
   const gateway = startProxy(sharedFixtureConfig(fixture, upstream.url, sidecar.url))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true&egress_tls_profile_ref=tls-profile:client-forged-query'), {
@@ -1123,6 +1145,7 @@ test('mock E2E account bucket profile mismatch fails closed before sidecar', asy
       },
     },
   }))
+  await waitForListening(gateway)
   const context = sharedFixtureContext(fixture)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {

@@ -2,7 +2,7 @@ import { strict as assert } from 'assert'
 import { createHmac } from 'crypto'
 import { loadConfig } from '../src/config.js'
 import { assertNoRawTLSProfileMaterial } from '../src/egress-tls-profile.js'
-import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, writeConfigYaml, configYaml } from './helpers.js'
+import { baseConfig, close, finish, httpJson, serverUrl, startFakeConnectProxy, startFakeUpstream, test, writeConfigYaml, configYaml, waitForListening } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
 
 console.log('\ntests/egress-tls-profile.test.ts')
@@ -205,6 +205,7 @@ test('strict mode fails closed when attested TLS profile is missing or mismatche
     const upstream = await startFakeUpstream()
     const proxy = await startFakeConnectProxy()
     const gateway = startProxy(tlsProfileConfig(upstream.url, proxy.url))
+    await waitForListening(gateway)
     const context = formalPoolContext({ nonce: `strict-${caseName}`, ...contextOverrides })
     if (contextOverrides.egress_tls_profile_ref === undefined) delete (context as any).egress_tls_profile_ref
     try {
@@ -240,6 +241,7 @@ test('strict profile authority fails closed when the TLS sidecar execution path 
   const upstream = await startFakeUpstream()
   const proxy = await startFakeConnectProxy()
   const gateway = startProxy(tlsProfileConfig(upstream.url, proxy.url))
+  await waitForListening(gateway)
   const context = formalPoolContext({ nonce: 'strict-no-sidecar-fail-closed' })
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -278,6 +280,7 @@ test('degraded mode with matching TLS refs still marks tls_profile_unverified', 
       egress_tls: { enabled: true, strict: false },
     },
   }))
+  await waitForListening(gateway)
   const context = formalPoolContext({ nonce: 'degraded-present-tls' })
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
@@ -323,6 +326,7 @@ test('degraded mode permits plumbing only and marks tls_profile_unverified', asy
       },
     },
   }))
+  await waitForListening(gateway)
   const context = formalPoolContext({ nonce: 'degraded-missing-tls' })
   delete (context as any).egress_tls_profile_ref
   try {

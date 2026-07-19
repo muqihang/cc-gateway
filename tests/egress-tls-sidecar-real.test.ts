@@ -8,7 +8,7 @@ import type { AddressInfo, Socket } from 'net'
 import { mkdtempSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { baseConfig, close, httpJson, listen, serverUrl, startFakeUpstream, test } from './helpers.js'
+import { baseConfig, close, httpJson, listen, serverUrl, startFakeUpstream, test, waitForListening } from './helpers.js'
 import { startProxy } from '../src/proxy.js'
 import { resolveFormalPoolContract } from '../tools/oracle-lab/resolve-formal-pool-contract.js'
 
@@ -21,6 +21,7 @@ const sharedContract = resolveFormalPoolContract({
   gatewayRoot: repoRoot,
   sub2apiRoot: process.env.SUB2API_ROOT,
   manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+  expectedDigest: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
 })
 const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
   ? 'explicit_env'
@@ -162,6 +163,7 @@ test('real Go uTLS sidecar local-only E2E proves TLS bucket before mock Messages
     tls_profiles: { 'shared-fixture-real-oracle-2179': { profile_ref: fixture.account.egress_tls_profile_ref, source: 'plan70-sni-oracle', enabled: true } },
     env: { ...baseConfig().env, platform: 'darwin', version: '2.1.179', version_base: '2.1.179', build_time: '2026-04-23T19:08:52Z' },
   } as any))
+  await waitForListening(gateway)
   try {
     const response = await httpJson(serverUrl(gateway, '/v1/messages?beta=true'), {
       headers: {

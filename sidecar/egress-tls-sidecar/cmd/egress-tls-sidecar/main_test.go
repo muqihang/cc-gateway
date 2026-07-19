@@ -1,10 +1,69 @@
 package main
 
 import (
+	"errors"
+	"net"
+	"strings"
 	"testing"
 
 	"cc-gateway/egress-tls-sidecar/internal/profile"
 )
+
+func productionEnvironment(overrides map[string]string) (func(string) string, []string) {
+	values := map[string]string{
+		"EGRESS_TLS_SIDECAR_LISTEN":                 "127.0.0.1:0",
+		"EGRESS_TLS_SIDECAR_CONTROL_TOKEN":          "sidecar-control-material-v1-local-safe-fixture-123456",
+		"EGRESS_TLS_SIDECAR_ALLOWED_EGRESS_BUCKETS": "bucket-a",
+		"EGRESS_TLS_SIDECAR_ALLOWED_PROXY_REFS":     "opaque:proxy-ref:v1:bucket-a",
+		"EGRESS_TLS_SIDECAR_PROXY_BINDING_SECRET":   "proxy-binding-material-v1-local-safe-fixture-123456",
+		"EGRESS_TLS_SIDECAR_DIAL_MODE":              "production",
+	}
+	for key, value := range overrides {
+		values[key] = value
+	}
+	environ := make([]string, 0, len(values))
+	for key, value := range values {
+		environ = append(environ, key+"="+value)
+	}
+	return func(key string) string { return values[key] }, environ
+}
+
+func TestProductionTrustEnvironmentRejectsOverridesBeforeListen(t *testing.T) {
+	secretCanary := "unsafe-trust-material-must-not-leak"
+	for name, override := range map[string]map[string]string{
+		"node verification disabled": {"NODE_TLS_REJECT_UNAUTHORIZED": "0"},
+		"extra ca":                   {"NODE_EXTRA_CA_CERTS": secretCanary},
+		"ssl cert file":              {"SSL_CERT_FILE": secretCanary},
+		"ssl cert dir":               {"SSL_CERT_DIR": secretCanary},
+	} {
+		t.Run(name, func(t *testing.T) {
+			getenv, environ := productionEnvironment(override)
+			listenCalls := 0
+			_, _, err := openListenerFromEnvironment(getenv, environ, func(_, _ string) (net.Listener, error) {
+				listenCalls++
+				return nil, errors.New("inert listen primitive must not run")
+			})
+			if err == nil {
+				t.Fatal("expected unsafe production trust environment rejection")
+			}
+			if listenCalls != 0 {
+				t.Fatalf("listen called %d times before trust rejection", listenCalls)
+			}
+			if strings.Contains(err.Error(), secretCanary) {
+				t.Fatalf("trust error leaked environment value: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidatedProductionTrustEnvironmentAllowsSystemTrust(t *testing.T) {
+	if err := validatedProductionTrustEnvironment("production", []string{"PATH=/usr/bin"}); err != nil {
+		t.Fatalf("system trust environment rejected: %v", err)
+	}
+	if err := validatedProductionTrustEnvironment("test", []string{"NODE_EXTRA_CA_CERTS=test-only-root.pem"}); err != nil {
+		t.Fatalf("test trust environment rejected: %v", err)
+	}
+}
 
 func TestBuildConfigProductionModeDoesNotRequireTestDialOverride(t *testing.T) {
 	t.Setenv("EGRESS_TLS_SIDECAR_LISTEN", "127.0.0.1:0")
