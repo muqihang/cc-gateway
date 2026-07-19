@@ -425,6 +425,26 @@ function executionContextBindings(value: Value): boolean {
     && value.gate_schemas.plan_review.digest === expectedGateSchemaDigests.plan_review
 }
 
+function liveGateSchemaAuthorityCommit(value: Value): string {
+  return value.context_kind === 'phase_1_recovery_context'
+    ? value.repositories.cc_gateway.observed_remote_main_head
+    : value.plan.reviewed_commit
+}
+
+function liveInitialAuthorityHead(value: Value): string {
+  return value.context_kind === 'phase_1_recovery_context'
+    ? value.repositories.cc_gateway.observed_remote_main_head
+    : value.plan.reviewed_commit
+}
+
+function livePlanningProvenanceBindings(value: Value): readonly (readonly [string, Value])[] {
+  if (value.context_kind === 'phase_1_recovery_context') return []
+  return [
+    ['planning entry', value.planning_provenance.entry],
+    ['planning context', value.planning_provenance.context],
+  ]
+}
+
 function executionContextWindowValid(value: Value, now: number): boolean {
   const generated = Date.parse(value.generated_at)
   const expires = Date.parse(value.expires_at)
@@ -602,6 +622,13 @@ test('Phase 1 Recovery carriers bind the exact plan, dual review, authority enve
   assert.equal(contextValidator(context), true, JSON.stringify(contextValidator.errors))
   assert.equal(reviewValidator(review), true, JSON.stringify(reviewValidator.errors))
   assert.equal(executionContextBindings(context), true)
+  assert.equal(liveGateSchemaAuthorityCommit(context), context.repositories.cc_gateway.observed_remote_main_head)
+  assert.equal(liveInitialAuthorityHead(context), context.repositories.cc_gateway.observed_remote_main_head)
+  assert.deepEqual(livePlanningProvenanceBindings(context), [])
+  const legacyContext = executionContextFixture()
+  assert.equal(liveGateSchemaAuthorityCommit(legacyContext), legacyContext.plan.reviewed_commit)
+  assert.equal(liveInitialAuthorityHead(legacyContext), legacyContext.plan.reviewed_commit)
+  assert.equal(livePlanningProvenanceBindings(legacyContext).length, 2)
   const envelope = derivePhase1BaselineEnvelope(context)
   assert.deepEqual(envelope.recovery_authority, recoveryAuthorityFixture())
   assert.equal('planning_provenance' in envelope, false)
@@ -993,9 +1020,9 @@ function validateSelectedContextGateObservation(expectedContext: Value, observat
       )
     }
     requireContextGate(
-      context.repositories.cc_gateway.authorized_parent_head === context.plan.reviewed_commit,
+      context.repositories.cc_gateway.authorized_parent_head === liveInitialAuthorityHead(context),
       'context_initial_head_mismatch',
-      'initial CC authorized parent differs from reviewed plan commit',
+      'initial CC authorized parent differs from the selected authority head',
     )
   }
 
@@ -1259,6 +1286,7 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
   }
   requireContextGate(reviewValidator(review), 'context_approval_invalid', JSON.stringify(reviewValidator.errors))
   requireContextGate(executionContextBindings(context), 'context_binding_drift', 'execution context approval binding drifted')
+  const schemaAuthorityCommit = liveGateSchemaAuthorityCommit(context)
   const currentPlanBytes = await readGateArtifact(root, context.plan.path, 'context_binding_drift', 'context_binding_drift')
   const reviewedPlanBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${context.plan.path}`], 'context_binding_drift')
   const remotePlanBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${context.plan.path}`], 'context_remote_authority_drift')
@@ -1271,9 +1299,9 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
       : expectedGateSchemaDigests.plan_review
     requireContextGate(binding.digest === expectedDigest, 'context_schema_binding_drift', `${binding.path} context binding drifted`)
     requireContextGate(binding.digest === digest(await readGateArtifact(root, binding.path, 'context_schema_binding_drift', 'context_schema_binding_drift')), 'context_schema_binding_drift', `${binding.path} working bytes drifted`)
-    const reviewedSchemaBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.plan.reviewed_commit}:${binding.path}`], 'context_schema_binding_drift')
+    const authoritySchemaBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${schemaAuthorityCommit}:${binding.path}`], 'context_schema_binding_drift')
     const remoteSchemaBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${binding.path}`], 'context_remote_authority_drift')
-    requireContextGate(binding.digest === digest(reviewedSchemaBytes), 'context_schema_binding_drift', `${binding.path} reviewed bytes drifted`)
+    requireContextGate(binding.digest === digest(authoritySchemaBytes), 'context_schema_binding_drift', `${binding.path} authority bytes drifted`)
     requireContextGate(binding.digest === digest(remoteSchemaBytes), 'context_remote_authority_drift', `${binding.path} remote bytes drifted`)
   }
   requireContextGate(context.approval_receipt.artifact.digest === digest(reviewArtifact.bytes), 'context_binding_drift', 'approval receipt bytes drifted')
@@ -1283,8 +1311,9 @@ test('required Phase 1 execution context binds live bytes, approval, expiry, and
   requireContextGate(review.decision === context.approval_receipt.decision, 'context_binding_drift', 'review decision drifted')
   requireContextGate(review.finding_counts.critical === context.approval_receipt.critical_findings, 'context_binding_drift', 'critical finding count drifted')
   requireContextGate(review.finding_counts.important === context.approval_receipt.important_findings, 'context_binding_drift', 'important finding count drifted')
-  requireContextGate(context.planning_provenance.entry.digest === digest(await readGateArtifact(root, context.planning_provenance.entry.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', 'planning entry bytes drifted')
-  requireContextGate(context.planning_provenance.context.digest === digest(await readGateArtifact(root, context.planning_provenance.context.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', 'planning context bytes drifted')
+  for (const [label, binding] of livePlanningProvenanceBindings(context)) {
+    requireContextGate(binding.digest === digest(await readGateArtifact(root, binding.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', `${label} bytes drifted`)
+  }
   for (const binding of context.authority_order as Value[]) {
     requireContextGate(binding.digest === digest(await readGateArtifact(root, binding.path, 'context_binding_drift', 'context_binding_drift')), 'context_binding_drift', `${binding.path} bytes drifted`)
     const remoteBytes = reviewedGitGate(root, ['show', '--format=', '--no-ext-diff', '--no-textconv', `${context.repositories.cc_gateway.observed_remote_main_head}:${binding.path}`], 'context_remote_authority_drift')
