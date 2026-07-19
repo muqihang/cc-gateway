@@ -21,6 +21,7 @@ const sharedContract = resolveFormalPoolContract({
   gatewayRoot: repoRoot,
   sub2apiRoot: process.env.SUB2API_ROOT,
   manifestPath: process.env.ORACLE_LAB_MANIFEST_PATH,
+  expectedDigest: '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1',
 })
 const expectedSourceCategory = process.env.SUB2API_FORMAL_POOL_CONTRACT_PATH
   ? 'explicit_env'

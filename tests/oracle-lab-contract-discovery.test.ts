@@ -132,6 +132,20 @@ test('explicit feature-worktree path is rejected without an explicitly declared 
   }), /explicit.*root|declared.*root|sub2apiRoot/i)
 })
 
+test('explicit feature-worktree path accepts an exact pinned digest without a manifest', () => {
+  const { root, gatewayRoot } = workspace()
+  const sub2apiRoot = join(root, 'feature-worktree')
+  mkdirSync(sub2apiRoot)
+  const repo = createRepository(sub2apiRoot, 'feature/formal-pool')
+  const result = resolveFormalPoolContract({
+    explicitPath: join(sub2apiRoot, contractRelativePath),
+    gatewayRoot,
+    expectedDigest: repo.digest,
+  })
+  assert.equal(result.sourceCategory, 'explicit_env')
+  assert.equal(result.digest, repo.digest)
+})
+
 test('declared feature worktree requires matching role path category HEAD branch digest and realpath', () => {
   const { root, gatewayRoot } = workspace()
   const sub2apiRoot = join(root, 'feature-worktree')
