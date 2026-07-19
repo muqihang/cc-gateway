@@ -182,6 +182,21 @@ immutable bootstrap tip. Batch material findings once and perform one closure re
 material findings stop Recovery. Merge by ordinary PR. After merge, discard every bootstrap test
 lease and freeze Mandatory Entry from the new main.
 
+The real bundle-to-pre-replay dry transaction is an executable merge gate, not a prose-only review
+item. It runs the candidate runtime against fresh current-main roots, the exact two source bundles,
+and a fresh external output root. The immutable-tip report and bounded review must record the
+successful command, the `phase-1-recovery-pre-replay-red.json` digest, and the four exact family
+signatures. Synthetic parser events, dependency-injected transaction tests, or an ordinary full
+suite cannot substitute for this gate.
+
+The B1-B3 Go RED commands in one transaction share exactly one exclusive
+`<output-root>/go-build-cache`, created as a real `0700` directory under the fresh output root. They
+do not inherit or select another `GOCACHE`; the reviewed read-only `GOMODCACHE` remains unchanged.
+Each family has a fixed 600 second cold-start budget. A timeout, spawn failure, signal/no-status
+termination, unexpected GREEN, and semantic signature mismatch are distinct fail-closed error
+codes. The shared cache is reported once as a cleanup candidate after the transaction; it is never
+evidence and is not reused across output roots or authority runs.
+
 The immutable-tip acceptance review that closes this document is the sole pre-bootstrap approval
 gate. After merge, the controller verifies that the committed plan bytes and digest exactly equal
 the reviewed bytes; it does not commission a second plan review. Bootstrap review covers only the
