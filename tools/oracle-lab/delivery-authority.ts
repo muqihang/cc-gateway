@@ -250,8 +250,8 @@ function assertContextAuthority(
   const recovery = RECOVERY_TRANSITION_ID.test(transitionId)
   const expectedKind = recovery ? 'phase_1_recovery_context' : 'phase_1_execution_context'
   if (context.context_kind !== expectedKind) fail('delivery_context_authority_mismatch', 'context kind does not match transition authority')
-  if (!recovery || context.sequence !== 0) return
-  if (executionContextSchemaBytes === undefined) fail('delivery_context_authority_mismatch', 'Recovery sequence zero requires the reviewed carrier schema')
+  if (!recovery) return
+  if (executionContextSchemaBytes === undefined) fail('delivery_context_authority_mismatch', 'Recovery authority requires the reviewed carrier schema')
   const schemaBytes = Buffer.isBuffer(executionContextSchemaBytes) ? executionContextSchemaBytes : Buffer.from(executionContextSchemaBytes, 'utf8')
   if (`sha256:${createHash('sha256').update(schemaBytes).digest('hex')}` !== REVIEWED_RECOVERY_CONTEXT_SCHEMA_DIGEST) {
     fail('delivery_context_authority_mismatch', 'Recovery carrier schema bytes are not reviewed')
@@ -259,7 +259,7 @@ function assertContextAuthority(
   let schema: unknown
   try { schema = JSON.parse(schemaBytes.toString('utf8')) } catch { fail('delivery_context_authority_mismatch', 'Recovery carrier schema is malformed') }
   const validate = new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(schema)
-  if (!validate(context)) fail('delivery_context_authority_mismatch', 'Recovery sequence-zero context fails the closed carrier schema')
+  if (!validate(context)) fail('delivery_context_authority_mismatch', 'Recovery context fails the closed carrier schema')
 }
 
 function repositoryEnvelope(repository: JsonObject): JsonObject {
@@ -409,10 +409,11 @@ export function validatePhase1RunLeaseAuthority(input: Readonly<{
   lease: Phase1RunLease
   context: unknown
   plan_bytes: Buffer | string
+  execution_context_schema_bytes?: Buffer | string
 }>): void {
   validateLeaseShape(input.lease)
   if (!isObject(input.context)) fail('delivery_context_invalid', 'lease authority context is malformed')
-  assertContextAuthority(input.context, input.lease.transition_id)
+  assertContextAuthority(input.context, input.lease.transition_id, input.execution_context_schema_bytes)
   if (input.lease.envelope_digest !== digestDeliveryValue(derivePhase1BaselineEnvelope(input.context))) {
     fail('delivery_envelope_digest_mismatch', 'lease envelope digest does not match the derived immutable baseline')
   }
@@ -421,6 +422,35 @@ export function validatePhase1RunLeaseAuthority(input: Readonly<{
   const transition = contract.rows.find((row) => row.id === input.lease.transition_id)
   if (!transition) fail('delivery_transition_contract_mismatch', 'lease transition is absent from reviewed authority')
   assertLeaseMatchesTransition(input.lease, transition)
+}
+
+export function validatePhase1RunLeaseChain(input: Readonly<{
+  chain: readonly Readonly<{ lease: Phase1RunLease; context: unknown }>[]
+  plan_bytes: Buffer | string
+  execution_context_schema_bytes: Buffer | string
+}>): void {
+  if (!Array.isArray(input.chain) || input.chain.length === 0) fail('delivery_lease_predecessor_invalid', 'lease authority chain is empty')
+  const contract = parsePhase1RecoveryContract(input.plan_bytes)
+  let previous: Readonly<{ lease: Phase1RunLease; context: unknown }> | undefined
+  for (const [index, entry] of input.chain.entries()) {
+    validatePhase1RunLeaseAuthority({ ...entry, plan_bytes: input.plan_bytes, execution_context_schema_bytes: input.execution_context_schema_bytes })
+    if (!isObject(entry.context) || entry.context.sequence !== index || entry.lease.sequence !== index) {
+      fail('delivery_lease_sequence_invalid', 'lease authority chain sequence is not contiguous from zero')
+    }
+    const transition = contract.rows.find((row) => row.id === entry.lease.transition_id)
+    const contextPredecessor = entry.context.predecessor
+    if (!transition || transition !== contract.rows[index] || (previous === undefined
+      ? entry.lease.predecessor_lease_digest !== null || contextPredecessor !== null
+      : entry.lease.predecessor_lease_digest !== digestDeliveryValue(previous.lease)
+        || entry.lease.observed_delta_digest === null
+        || !isObject(contextPredecessor)
+        || contextPredecessor.sequence !== previous.context.sequence
+        || contextPredecessor.path !== previous.context.artifact_path
+        || contextPredecessor.stage !== previous.context.stage)) {
+      fail('delivery_lease_predecessor_invalid', 'lease authority chain predecessor or transition edge drifted')
+    }
+    previous = entry
+  }
 }
 
 function validateChainCommon(input: Readonly<{

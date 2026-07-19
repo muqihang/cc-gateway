@@ -18,7 +18,7 @@ import { userInfo } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 
-import { canonicalDeliveryJson, digestDeliveryValue, validatePhase1RunLeaseAuthority, type Phase1RunLease } from './delivery-authority.js'
+import { canonicalDeliveryJson, digestDeliveryValue, validatePhase1RunLeaseChain, type Phase1RunLease } from './delivery-authority.js'
 import {
   assertNoGitReplacementRefs,
   REVIEWED_GIT_ENVIRONMENT,
@@ -90,16 +90,12 @@ export type Phase1RecoveryReplayObservation = Readonly<{
 }>
 
 export type Phase1RecoveryT2Observation = Readonly<{
-  lease: Phase1RunLease
-  context: JsonObject
+  lease_chain: readonly Readonly<{ lease: Phase1RunLease; context: JsonObject }>[]
   plan_bytes: Buffer | string
+  execution_context_schema_bytes: Buffer | string
   cc_root: string
   sub2api_root: string
-  owned_outcomes: Readonly<{ b1: 'green'; b2: 'green'; b3: 'green'; listener_tls: 'green' }>
-  preserved_red: Readonly<{ cc_event_count: 61; cc_unique_count: 61; sidecar_event_count: 51; sidecar_unique_count: 51 }>
-  command_result_digests: Readonly<{ t0: string; t1: string; owned: string; preserved_red: string }>
-  external_side_effect_count: number
-  unauthorized_socket_count: number
+  result_artifacts: Readonly<{ t0: string; t1: string; owned: string; preserved_red: string }>
 }>
 
 export type Phase1RecoveryDependencies = Readonly<{
@@ -394,15 +390,55 @@ export function validatePhase1RecoveryReplayMapping(
   validateObservedReplayRepository(value.sub2api, bindings.sub2api, observation.sub2api)
 }
 
+function readStableResultArtifact(fileInput: string): Readonly<{ bytes: Buffer; value: JsonObject }> {
+  const file = assertRealPath(fileInput, 'file', 'phase1_recovery_t2_invalid')
+  let descriptor = -1
+  try {
+    descriptor = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+    const before = fstatSync(descriptor)
+    if (!before.isFile() || before.size < 2 || before.size > 16 * 1024 * 1024) fail('phase1_recovery_t2_invalid', 'T2 result artifact has an unsafe size or type')
+    const bytes = readFileSync(descriptor)
+    const after = fstatSync(descriptor)
+    const pathAfter = lstatSync(file)
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+      || pathAfter.isSymbolicLink() || pathAfter.dev !== after.dev || pathAfter.ino !== after.ino || bytes.length !== after.size) {
+      fail('phase1_recovery_t2_invalid', 'T2 result artifact bytes are unstable')
+    }
+    let value: unknown
+    try { value = JSON.parse(bytes.toString('utf8')) } catch { fail('phase1_recovery_t2_invalid', 'T2 result artifact is malformed') }
+    if (!isObject(value)) fail('phase1_recovery_t2_invalid', 'T2 result artifact is not an object')
+    return Object.freeze({ bytes, value })
+  } finally {
+    if (descriptor >= 0) closeSync(descriptor)
+  }
+}
+
+function validateT2ResultArtifact(
+  value: JsonObject,
+  kind: 't0' | 't1' | 'owned' | 'preserved_red',
+  leaseDigest: string,
+  testedHeads: JsonObject,
+): void {
+  const baseKeys = ['lease_digest', 'record_kind', 'schema_version', 'status', 'tested_heads']
+  const extraKeys = kind === 't1' || kind === 'preserved_red' ? ['preserved_red']
+    : kind === 'owned' ? ['external_side_effect_count', 'owned_outcomes', 'unauthorized_socket_count'] : []
+  if (!exactKeys(value, [...baseKeys, ...extraKeys]) || value.schema_version !== 1
+    || value.record_kind !== `phase_1_recovery_${kind}_result` || value.status !== 'green'
+    || value.lease_digest !== leaseDigest || !same(value.tested_heads, testedHeads)
+    || ((kind === 't1' || kind === 'preserved_red') && !same(value.preserved_red, { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 }))
+    || (kind === 'owned' && (!same(value.owned_outcomes, { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' })
+      || value.external_side_effect_count !== 0 || value.unauthorized_socket_count !== 0))) {
+    fail('phase1_recovery_t2_invalid', 'T2 result artifact semantics drifted')
+  }
+}
+
 export function derivePhase1RecoveryT2Record(observation: Phase1RecoveryT2Observation): Readonly<JsonObject> {
-  validatePhase1RunLeaseAuthority({ lease: observation.lease, context: observation.context, plan_bytes: observation.plan_bytes })
-  if (observation.lease.transition_id !== 'P1R-03' || observation.lease.state !== 'replay_complete'
-    || !same(observation.owned_outcomes, { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' })
-    || !same(observation.preserved_red, { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 })
-    || !exactKeys(observation.command_result_digests as JsonObject, ['owned', 'preserved_red', 't0', 't1'])
-    || Object.values(observation.command_result_digests).some((digest) => !DIGEST.test(digest))
-    || observation.external_side_effect_count !== 0 || observation.unauthorized_socket_count !== 0) {
-    fail('phase1_recovery_t2_invalid', 'Recovery T2 observation does not bind the exact lease and command outcomes')
+  validatePhase1RunLeaseChain({ chain: observation.lease_chain, plan_bytes: observation.plan_bytes, execution_context_schema_bytes: observation.execution_context_schema_bytes })
+  const currentLease = observation.lease_chain.at(-1)?.lease
+  if (!currentLease || currentLease.transition_id !== 'P1R-03' || currentLease.state !== 'replay_complete'
+    || !exactKeys(observation.result_artifacts as JsonObject, ['owned', 'preserved_red', 't0', 't1'])
+    || new Set(Object.values(observation.result_artifacts)).size !== 4) {
+    fail('phase1_recovery_t2_invalid', 'Recovery T2 observation does not bind the exact lease chain and result artifacts')
   }
   const roots = {
     cc_gateway: assertRealPath(observation.cc_root, 'directory', 'phase1_recovery_t2_invalid'),
@@ -415,15 +451,21 @@ export function derivePhase1RecoveryT2Record(observation: Phase1RecoveryT2Observ
     }
     testedHeads[name] = gitText(root, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'])
   }
+  const leaseDigest = digestDeliveryValue(currentLease)
+  const results = Object.fromEntries((['t0', 't1', 'owned', 'preserved_red'] as const).map((kind) => {
+    const artifact = readStableResultArtifact(observation.result_artifacts[kind])
+    validateT2ResultArtifact(artifact.value, kind, leaseDigest, testedHeads)
+    return [kind, sha256(artifact.bytes)]
+  }))
   return deepFreeze({
     schema_version: 1,
     record_kind: 'phase_1_recovery_t2',
     status: 'green',
-    lease_digest: digestDeliveryValue(observation.lease),
+    lease_digest: leaseDigest,
     tested_heads: testedHeads,
-    owned_outcomes: observation.owned_outcomes,
-    preserved_red: observation.preserved_red,
-    command_result_digests: observation.command_result_digests,
+    owned_outcomes: { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' },
+    preserved_red: { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 },
+    command_result_digests: results,
     external_side_effect_count: 0,
     unauthorized_socket_count: 0,
     repositories_clean: { cc_gateway: true, sub2api: true },

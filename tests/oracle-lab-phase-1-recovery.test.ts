@@ -31,6 +31,17 @@ type Value = Record<string, any>
 const root = path.resolve(new URL('..', import.meta.url).pathname)
 const planPath = path.join(root, PHASE1_RECOVERY_BINDINGS.plan_path)
 const planBytes = readFileSync(planPath)
+const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
+const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
+const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
+const executionContextSchemaDigest = 'sha256:9860d5ae3e3500698052e166bba37197ee3a84a27dea2dac8f5700df863fa099'
+const planReviewSchemaDigest = 'sha256:4d49e5682dbade4f7bd22d44cd7fadeeb1669de5b66e690fb4c988f3f07a34e0'
+const authorityOrder = [
+  'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
+  'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
+  'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-adversarial-validation-v2.md',
+  'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-design.md',
+]
 
 function clone<T>(value: T): T { return structuredClone(value) }
 
@@ -111,44 +122,100 @@ function expectCode(fn: () => unknown, code: string): void {
   })
 }
 
-function context(sequence: number, state: string): Value {
+function validationStatus(entries: string[]): Value {
+  const sorted = [...entries].sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+  return { entries: sorted, digest: sha256(Buffer.from(sorted.join('\0'))) }
+}
+
+function recoveryAuthority(): Value {
+  const pathDigest = (relative: string, digest: string) => ({ path: relative, digest })
+  return {
+    operating_model: pathDigest('docs/superpowers/roadmaps/2026-07-18-oracle-lab-delivery-operating-model-v2.md', 'sha256:a53e7384d6cf353877af82f16196b8d58ed823277e76e03337dfc9fadff7d0ea'),
+    roadmap: pathDigest('docs/superpowers/roadmaps/2026-07-11-claude-code-2.1.207-oracle-lab-roadmap.md', 'sha256:00519348d9dd8972dbea92a647d67c2fc42e9015ece6dcb0eb427df02480b107'),
+    transition_plan: pathDigest('docs/superpowers/plans/2026-07-18-oracle-delivery-mechanism-transition.md', 'sha256:f21023b1d6705855e00ee0f9ceafc78c6cf1c7b928982fd88e821faffa7a8111'),
+    transition_exit_report: pathDigest('docs/superpowers/evidence/delivery-model/delivery-mechanism-transition-exit-report.md', 'sha256:44c9322ba157c1ce4f3b9a974387026aad143f73c6991848be3f50f13af00f48'),
+    terminal_controller_chain: { kind: 'terminal_controller_chain', digest: 'sha256:3faa939ec6f78a7478a5ea5c2773ea74d5ea42d0b699e1880798cac980192433' },
+    terminal_acceptance_record: { kind: 'terminal_acceptance_record', digest: 'sha256:00f84b989d0db40d0c47429bcd5d444709159027f21f4dec0e33812b9c539ecd' },
+    recovery_contract: { plan_path: PHASE1_RECOVERY_BINDINGS.plan_path, digest: PHASE1_RECOVERY_BINDINGS.contract_digest },
+    source_bundles: { cc_gateway: PHASE1_RECOVERY_BINDINGS.cc_gateway.bundle_digest, sub2api: PHASE1_RECOVERY_BINDINGS.sub2api.bundle_digest },
+    shared_contract: { path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', digest: PHASE1_RECOVERY_BINDINGS.shared_contract_digest },
+  }
+}
+
+function context(sequence: number): Value {
   const generated = new Date(Date.parse('2026-07-18T18:00:00Z') + sequence * 60_000).toISOString()
+  const artifactPath = sequence === 0
+    ? 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
+    : `docs/superpowers/evidence/phase-1/phase-1-execution-context-${String(sequence).padStart(4, '0')}.json`
+  const previousPath = sequence <= 1
+    ? 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
+    : `docs/superpowers/evidence/phase-1/phase-1-execution-context-${String(sequence - 1).padStart(4, '0')}.json`
+  const ccHead = PHASE1_RECOVERY_BINDINGS.cc_gateway.bootstrap_head
+  const subHead = PHASE1_RECOVERY_BINDINGS.sub2api.bootstrap_head
   return {
     schema_version: 2,
     context_kind: 'phase_1_recovery_context',
     context_mode: sequence === 0 ? 'initial' : 'successor',
     sequence,
     stage: sequence === 0 ? 'implementation_entry' : 'implementation',
-    artifact_path: sequence === 0
-      ? 'docs/superpowers/evidence/phase-1/phase-1-execution-context.json'
-      : `docs/superpowers/evidence/phase-1/phase-1-execution-context-${String(sequence).padStart(4, '0')}.json`,
-    predecessor: sequence === 0 ? null : { sequence: sequence - 1, digest: `sha256:${'1'.repeat(64)}` },
+    artifact_path: artifactPath,
+    predecessor: sequence === 0 ? null : {
+      path: previousPath,
+      digest: `sha256:${'1'.repeat(64)}`,
+      sequence: sequence - 1,
+      stage: sequence === 1 ? 'implementation_entry' : 'implementation',
+      artifact_commit: ccHead,
+    },
     generated_at: generated,
     expires_at: new Date(Date.parse(generated) + 4 * 60 * 60 * 1000).toISOString(),
-    plan: { path: PHASE1_RECOVERY_BINDINGS.plan_path, digest: `sha256:${'2'.repeat(64)}`, reviewed_commit: '2'.repeat(40) },
-    approval_receipt: { decision: 'approved', reviewed_plan_digest: `sha256:${'2'.repeat(64)}`, critical_findings: 0, important_findings: 0 },
-    gate_schemas: { execution_context: { path: 'context.schema.json', digest: `sha256:${'3'.repeat(64)}` } },
-    recovery_authority: { contract_digest: PHASE1_RECOVERY_BINDINGS.contract_digest },
+    plan: { path: PHASE1_RECOVERY_BINDINGS.plan_path, digest: PHASE1_RECOVERY_BINDINGS.plan_digest, reviewed_commit: PHASE1_RECOVERY_BINDINGS.reviewed_plan_commit },
+    approval_receipt: {
+      artifact: { path: 'docs/superpowers/evidence/phase-1/phase-1-plan-review.json', digest: `sha256:${'2'.repeat(64)}` },
+      decision: 'approved',
+      reviewer_id: 'phase1-recovery-acceptance-review',
+      review_round: 1,
+      reviewed_plan_commit: PHASE1_RECOVERY_BINDINGS.reviewed_plan_commit,
+      reviewed_plan_digest: PHASE1_RECOVERY_BINDINGS.plan_digest,
+      critical_findings: 0,
+      important_findings: 0,
+      reviewer_roles: ['product', 'authority'],
+    },
+    gate_schemas: {
+      execution_context: { path: executionContextSchemaPath, digest: executionContextSchemaDigest },
+      plan_review: { path: planReviewSchemaPath, digest: planReviewSchemaDigest },
+    },
+    recovery_authority: recoveryAuthority(),
     repositories: {
       cc_gateway: {
-        baseline_main_head: '4'.repeat(40), authorized_parent_head: '4'.repeat(40), observed_remote_main_head: '4'.repeat(40),
+        baseline_main_head: ccHead, authorized_parent_head: ccHead, observed_remote_main_head: ccHead,
         remote_name: 'muqihang', remote_url_digest: PHASE1_RECOVERY_BINDINGS.cc_gateway.remote_url_digest,
         tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: PHASE1_RECOVERY_BINDINGS.cc_gateway.recovery_branch,
-        pre_issue_clean: true, validation_status: { entries: [], digest: `sha256:${'5'.repeat(64)}` },
+        pre_issue_clean: true, validation_status: validationStatus([]),
       },
       sub2api: {
-        baseline_main_head: '6'.repeat(40), authorized_parent_head: '6'.repeat(40), observed_remote_main_head: '6'.repeat(40),
+        baseline_main_head: subHead, authorized_parent_head: subHead, observed_remote_main_head: subHead,
         remote_name: 'muqihang', remote_url_digest: PHASE1_RECOVERY_BINDINGS.sub2api.remote_url_digest,
         tracking_ref: 'refs/remotes/muqihang/main', implementation_branch: PHASE1_RECOVERY_BINDINGS.sub2api.recovery_branch,
-        pre_issue_clean: true, validation_status: { entries: [], digest: `sha256:${'7'.repeat(64)}` },
+        pre_issue_clean: true, validation_status: validationStatus([]),
       },
     },
-    shared_contract: { repository: 'sub2api', path: 'vectors.json', digest: PHASE1_RECOVERY_BINDINGS.shared_contract_digest },
-    authority_order: [{ path: 'authority.md', digest: `sha256:${'8'.repeat(64)}` }],
+    shared_contract: { repository: 'sub2api', path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', digest: PHASE1_RECOVERY_BINDINGS.shared_contract_digest },
+    authority_order: authorityOrder.map((authorityPath) => ({ path: authorityPath, digest: `sha256:${'8'.repeat(64)}` })),
     selected_requirements: ['AV-B1-001', 'AV-B2-001', 'AV-B3-001', 'RA-P0-008'],
-    implementation_entry: { status: 'authorized', conditions: ['closed'] },
-    disabled_capabilities: ['production_deployment', 'real_canary', 'external_network_requests'],
-    recovery_state: state,
+    implementation_entry: {
+      status: 'authorized',
+      conditions: [
+        'fresh_unexpired_execution_context', 'contiguous_immutable_context_chain', 'exact_stage_and_repository_state',
+        'exact_plan_digest_bound', 'independent_plan_approval_bound', 'critical_and_important_findings_zero',
+        'both_main_heads_frozen', 'shared_contract_unchanged', 'production_and_real_canary_disabled',
+      ],
+    },
+    disabled_capabilities: [
+      'real_upstream_access', 'real_credentials', 'provider_internal_authority', 'profile_promotion',
+      'production_deployment', 'real_canary', 'direct_egress_trust', 'unverified_pinned_wire_claims',
+      'unsupported_negative_capabilities', 'expired_or_missing_negative_capabilities', 'unrestricted_capture',
+      'external_network_requests',
+    ],
   }
 }
 
@@ -313,28 +380,49 @@ test('Recovery replay mapping is exact 8x10 and rejects reorder, skip, extra, du
 
 test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, lease, and zero side effects', () => {
   const roots = inputFixture()
-  const t2Context = context(2, 'replay_complete')
-  const t2Lease = derivePhase1RunLease(t2Context, {
-    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(t2Context)),
-    plan_bytes: planBytes,
-    transition_id: 'P1R-03',
-    predecessor_lease_digest: `sha256:${'4'.repeat(64)}`,
-    observed_delta_digest: null,
-  })
+  const contexts = [context(0), context(1), context(2)]
+  const leases = [] as ReturnType<typeof derivePhase1RunLease>[]
+  for (const [index, leaseContext] of contexts.entries()) {
+    leases.push(derivePhase1RunLease(leaseContext, {
+      envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(leaseContext)),
+      plan_bytes: planBytes,
+      transition_id: `P1R-0${index + 1}`,
+      predecessor_lease_digest: index === 0 ? null : digestDeliveryValue(leases[index - 1]),
+      observed_delta_digest: index === 0 ? null : `sha256:${String(index).repeat(64)}`,
+      execution_context_schema_bytes: executionContextSchemaBytes,
+    }))
+  }
+  const testedHeads = {
+    cc_gateway: git(roots.input.cc_root, 'rev-parse', 'HEAD'),
+    sub2api: git(roots.input.sub2api_root, 'rev-parse', 'HEAD'),
+  }
+  const leaseDigest = digestDeliveryValue(leases[2])
+  const artifacts = {
+    t0: path.join(roots.parent, 't0-result.json'),
+    t1: path.join(roots.parent, 't1-result.json'),
+    owned: path.join(roots.parent, 'owned-result.json'),
+    preserved_red: path.join(roots.parent, 'preserved-red-result.json'),
+  }
+  const results: Value = {
+    t0: { schema_version: 1, record_kind: 'phase_1_recovery_t0_result', status: 'green', lease_digest: leaseDigest, tested_heads: testedHeads },
+    t1: { schema_version: 1, record_kind: 'phase_1_recovery_t1_result', status: 'green', lease_digest: leaseDigest, tested_heads: testedHeads, preserved_red: { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 } },
+    owned: { schema_version: 1, record_kind: 'phase_1_recovery_owned_result', status: 'green', lease_digest: leaseDigest, tested_heads: testedHeads, owned_outcomes: { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' }, external_side_effect_count: 0, unauthorized_socket_count: 0 },
+    preserved_red: { schema_version: 1, record_kind: 'phase_1_recovery_preserved_red_result', status: 'green', lease_digest: leaseDigest, tested_heads: testedHeads, preserved_red: { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 } },
+  }
+  for (const kind of ['t0', 't1', 'owned', 'preserved_red'] as const) writeFileSync(artifacts[kind], `${JSON.stringify(results[kind])}\n`)
   const observation = {
-    lease: t2Lease,
-    context: t2Context,
+    lease_chain: leases.map((lease, index) => ({ lease, context: contexts[index] })),
     plan_bytes: planBytes,
+    execution_context_schema_bytes: executionContextSchemaBytes,
     cc_root: roots.input.cc_root,
     sub2api_root: roots.input.sub2api_root,
-    owned_outcomes: { b1: 'green', b2: 'green', b3: 'green', listener_tls: 'green' },
-    preserved_red: { cc_event_count: 61, cc_unique_count: 61, sidecar_event_count: 51, sidecar_unique_count: 51 },
-    command_result_digests: { t0: `sha256:${'9'.repeat(64)}`, t1: `sha256:${'a'.repeat(64)}`, owned: `sha256:${'b'.repeat(64)}`, preserved_red: `sha256:${'c'.repeat(64)}` },
-    external_side_effect_count: 0,
-    unauthorized_socket_count: 0,
+    result_artifacts: artifacts,
   }
   const valid = derivePhase1RecoveryT2Record(observation as any)
   assert.doesNotThrow(() => validatePhase1RecoveryT2Record(valid, observation as any))
+  for (const kind of ['t0', 't1', 'owned', 'preserved_red'] as const) {
+    assert.equal(valid.command_result_digests[kind], sha256(readFileSync(artifacts[kind])))
+  }
   for (const mutate of [
     (value: Value) => { value.owned_outcomes.b2 = 'red' },
     (value: Value) => { value.preserved_red.cc_unique_count = 60 },
@@ -344,8 +432,42 @@ test('Recovery T2 record binds owned GREEN, exact preserved RED, clean roots, le
     const changed = clone(valid); mutate(changed)
     expectCode(() => validatePhase1RecoveryT2Record(changed, observation as any), 'phase1_recovery_t2_invalid')
   }
-  const forgedLease = { ...observation, lease: { ...observation.lease, envelope_digest: `sha256:${'f'.repeat(64)}` } }
+  const forgedLease = {
+    ...observation,
+    lease_chain: observation.lease_chain.map((entry, index) => index === 2
+      ? { ...entry, lease: { ...entry.lease, envelope_digest: `sha256:${'f'.repeat(64)}` } }
+      : entry),
+  }
   expectCode(() => validatePhase1RecoveryT2Record(valid, forgedLease as any), 'delivery_envelope_digest_mismatch')
+
+  const brokenChain = {
+    ...observation,
+    lease_chain: observation.lease_chain.map((entry, index) => index === 2
+      ? { ...entry, lease: { ...entry.lease, predecessor_lease_digest: `sha256:${'f'.repeat(64)}` } }
+      : entry),
+  }
+  expectCode(() => derivePhase1RecoveryT2Record(brokenChain as any), 'delivery_lease_predecessor_invalid')
+  expectCode(() => derivePhase1RecoveryT2Record({ ...observation, lease_chain: observation.lease_chain.slice(1) } as any), 'delivery_lease_sequence_invalid')
+
+  const invalidSuccessor = context(2)
+  invalidSuccessor.recovery_state = 'caller_selected'
+  expectCode(() => derivePhase1RunLease(invalidSuccessor, {
+    envelope_digest: digestDeliveryValue(derivePhase1BaselineEnvelope(invalidSuccessor)),
+    plan_bytes: planBytes,
+    transition_id: 'P1R-03',
+    predecessor_lease_digest: digestDeliveryValue(leases[1]),
+    observed_delta_digest: `sha256:${'2'.repeat(64)}`,
+    execution_context_schema_bytes: executionContextSchemaBytes,
+  }), 'delivery_context_authority_mismatch')
+
+  const originalOwned = readFileSync(artifacts.owned)
+  writeFileSync(artifacts.owned, `${JSON.stringify({ ...results.owned, external_side_effect_count: 1 })}\n`)
+  expectCode(() => validatePhase1RecoveryT2Record(valid, observation as any), 'phase1_recovery_t2_invalid')
+  writeFileSync(artifacts.owned, originalOwned)
+  const originalT0 = readFileSync(artifacts.t0)
+  writeFileSync(artifacts.t0, `${JSON.stringify(results.t0, null, 2)}\n`)
+  expectCode(() => validatePhase1RecoveryT2Record(valid, observation as any), 'phase1_recovery_t2_invalid')
+  writeFileSync(artifacts.t0, originalT0)
   writeFileSync(path.join(roots.input.cc_root, 'dirty.txt'), 'dirty\n')
   expectCode(() => derivePhase1RecoveryT2Record(observation as any), 'phase1_recovery_t2_invalid')
 })
@@ -388,7 +510,7 @@ test('pre-replay transaction requires four exact real RED records plus the repla
 test('terminal Recovery transition emits a terminal record and cannot mint a successor lease', () => {
   const contract = parsePhase1RecoveryContract(planBytes)
   const final = contract.rows.at(-1)!
-  const current = context(14, final.from)
+  const current = context(14)
   const envelope = digestDeliveryValue(derivePhase1BaselineEnvelope(current))
   const lease = derivePhase1RunLease(current, {
     envelope_digest: envelope,
@@ -396,6 +518,7 @@ test('terminal Recovery transition emits a terminal record and cannot mint a suc
     transition_id: final.id,
     predecessor_lease_digest: `sha256:${'9'.repeat(64)}`,
     observed_delta_digest: null,
+    execution_context_schema_bytes: executionContextSchemaBytes,
   })
   const observed = [{ category: 'external:add:phase1-exit-record' }]
   const terminal = derivePhase1TerminalRecord({
