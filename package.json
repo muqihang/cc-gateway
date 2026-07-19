@@ -27,11 +27,15 @@
     "oracle:post-integration:receipt": "tsx tools/oracle-lab/post-integration-handoff.ts receipt",
     "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt",
     "oracle:phase1:recovery": "tsx tools/oracle-lab/phase-1-recovery.ts",
+    "oracle:phase2:contract": "tsx tools/oracle-contract/check-shared-contract.ts",
     "oracle:p0-1": "tools/oracle-lab/oracle-p0-1",
     "test:oracle:p0-1": "tsx tests/run-p0-1.ts",
     "test:oracle:non-p0-1": "tsx tests/run-all.ts --exclude-oracle-p0-1"
   },
   "dependencies": {
+    "@humanwhocodes/momoa": "3.3.10",
+    "canonicalize": "3.0.0",
+    "cborg": "5.1.7",
     "https-proxy-agent": "^9.0.0",
     "socks-proxy-agent": "^8.0.5",
     "yaml": "^2.7.0"
