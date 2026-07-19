@@ -34,8 +34,8 @@ const planBytes = readFileSync(planPath)
 const executionContextSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-execution-context.schema.json'
 const planReviewSchemaPath = 'docs/superpowers/schemas/oracle-lab-phase-1-plan-review.schema.json'
 const executionContextSchemaBytes = readFileSync(path.join(root, executionContextSchemaPath))
-const executionContextSchemaDigest = 'sha256:679484ecae101b566db110e2a0eece952289e838ec20911d6563ee2cc139d9d2'
-const planReviewSchemaDigest = 'sha256:82ff0c9eea348c4663440ce84d3bd2fe8c91a2142d679cfc58e7201964a1f43e'
+const executionContextSchemaDigest = 'sha256:6b6916404bcefe085de8ce8992493cded3c8e06978ca2ca1ec60afefb0d596d2'
+const planReviewSchemaDigest = 'sha256:375b125cfc68e7356cbeda0752f9ddc9cc6d490c6b8dea66f6828dcad9be2c32'
 const authorityOrder = [
   'docs/superpowers/specs/2026-07-12-claude-code-2.1.207-oracle-lab-review-amendments.md',
   'docs/superpowers/specs/2026-07-11-claude-code-2.1.207-oracle-lab-hardening-amendments.md',
@@ -224,7 +224,7 @@ function context(sequence: number, authorizedHeads: Readonly<{ cc_gateway: strin
   }
 }
 
-function mappingFixture(options: Readonly<{ ccContextDrift?: boolean; ccContentDrift?: boolean }> = {}) {
+function mappingFixture(options: Readonly<{ ccContextDrift?: boolean; ccContentDrift?: boolean; ccRelocatedHunk?: boolean }> = {}) {
   const parent = mkdtempSync(path.join(tmpdir(), 'oracle-phase1-recovery-mapping-'))
   const bindings = clone(PHASE1_RECOVERY_BINDINGS) as Value
   const observation: Value = {}
@@ -234,6 +234,13 @@ function mappingFixture(options: Readonly<{ ccContextDrift?: boolean; ccContentD
     const replacementRoot = path.join(parent, `${name}-replacement`)
     initRepository(sourceRoot, `https://example.invalid/${name}-source.git`)
     const baseline = initRepository(replacementRoot, `https://example.invalid/${name}-replacement.git`)
+    if (options.ccRelocatedHunk && name === 'cc_gateway') {
+      for (const repository of [sourceRoot, replacementRoot]) {
+        writeFileSync(path.join(repository, file), 'flag=false\nseparator\nflag=false\n')
+        git(repository, 'add', file)
+        git(repository, 'commit', '-qm', 'add repeated replay targets')
+      }
+    }
     if (options.ccContextDrift && name === 'cc_gateway') {
       writeFileSync(path.join(replacementRoot, 'baseline.txt'), 'baseline\ncurrent-main-context\n')
       git(replacementRoot, 'add', 'baseline.txt')
@@ -265,16 +272,20 @@ function mappingFixture(options: Readonly<{ ccContextDrift?: boolean; ccContentD
       }
     }
     const productPath = options.ccContextDrift && name === 'cc_gateway' ? 'baseline.txt' : file
-    writeFileSync(path.join(sourceRoot, productPath), options.ccContextDrift && name === 'cc_gateway'
-      ? 'baseline\nreviewed product delta\n'
-      : 'reviewed product delta\n')
+    writeFileSync(path.join(sourceRoot, productPath), options.ccRelocatedHunk && name === 'cc_gateway'
+      ? 'flag=true\nseparator\nflag=false\n'
+      : options.ccContextDrift && name === 'cc_gateway'
+        ? 'baseline\nreviewed product delta\n'
+        : 'reviewed product delta\n')
     git(sourceRoot, 'add', productPath)
     git(sourceRoot, 'commit', '-qm', 'source product delta')
     const sourceCommit = git(sourceRoot, 'rev-parse', 'HEAD')
     git(replacementRoot, 'switch', '-qc', bindings[name].recovery_branch)
-    writeFileSync(path.join(replacementRoot, productPath), options.ccContextDrift && name === 'cc_gateway'
-      ? `baseline\n${options.ccContentDrift ? 'reviewedproduct delta' : 'reviewed product delta'}\ncurrent-main-context\n`
-      : 'reviewed product delta\n')
+    writeFileSync(path.join(replacementRoot, productPath), options.ccRelocatedHunk && name === 'cc_gateway'
+      ? 'flag=false\nseparator\nflag=true\n'
+      : options.ccContextDrift && name === 'cc_gateway'
+        ? `baseline\n${options.ccContentDrift ? 'reviewedproduct delta' : 'reviewed product delta'}\ncurrent-main-context\n`
+        : 'reviewed product delta\n')
     git(replacementRoot, 'add', productPath)
     git(replacementRoot, 'commit', '-qm', 'replacement product delta')
     const replacementCommit = git(replacementRoot, 'rev-parse', 'HEAD')
@@ -448,6 +459,11 @@ test('Recovery replay mapping accepts additive current-main context with the sam
 
 test('Recovery replay mapping rejects whitespace changes inside the zero-context content delta', () => {
   const fixture = mappingFixture({ ccContextDrift: true, ccContentDrift: true })
+  expectCode(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any), 'phase1_recovery_mapping_invalid')
+})
+
+test('Recovery replay mapping rejects relocating the same delta between repeated hunks', () => {
+  const fixture = mappingFixture({ ccRelocatedHunk: true })
   expectCode(() => validatePhase1RecoveryReplayMapping(fixture.record, fixture.bindings, fixture.observation as any), 'phase1_recovery_mapping_invalid')
 })
 
