@@ -2,7 +2,10 @@ package control
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"strings"
@@ -45,15 +48,16 @@ func oracleCBOREncMode() (cbor.EncMode, error) {
 
 func oracleCBORDecMode() (cbor.DecMode, error) {
 	options := cbor.DecOptions{
-		DupMapKey:        cbor.DupMapKeyEnforcedAPF,
-		MaxNestedLevels:  32,
-		MaxArrayElements: 4096,
-		MaxMapPairs:      1024,
-		IndefLength:      cbor.IndefLengthForbidden,
-		TagsMd:           cbor.TagsForbidden,
-		IntDec:           cbor.IntDecConvertNone,
-		UTF8:             cbor.UTF8RejectInvalid,
-		DefaultMapType:   reflect.TypeOf(map[string]any{}),
+		DupMapKey:         cbor.DupMapKeyEnforcedAPF,
+		MaxNestedLevels:   32,
+		MaxArrayElements:  4096,
+		MaxMapPairs:       1024,
+		IndefLength:       cbor.IndefLengthForbidden,
+		TagsMd:            cbor.TagsForbidden,
+		IntDec:            cbor.IntDecConvertNone,
+		UTF8:              cbor.UTF8RejectInvalid,
+		ExtraReturnErrors: cbor.ExtraDecErrorUnknownField,
+		DefaultMapType:    reflect.TypeOf(map[string]any{}),
 	}
 	mode, err := options.DecMode()
 	if err != nil {
@@ -205,4 +209,268 @@ func UnframeOracleCBOR(frame []byte) ([]byte, error) {
 		return nil, oracleCBORError("cbor_trailing_data", "frame contains trailing data")
 	}
 	return append([]byte(nil), frame[4:]...), nil
+}
+
+var OracleSidecarCapabilityDomain = []byte("oracle-sidecar-capability-v1\x00")
+
+type OracleSidecarDestination struct {
+	Host string `json:"host" cbor:"host"`
+	Port int    `json:"port" cbor:"port"`
+}
+
+type OracleSidecarCapabilityUnsigned struct {
+	SchemaID                    string                     `json:"schema_id" cbor:"schema_id"`
+	SchemaMajor                 int                        `json:"schema_major" cbor:"schema_major"`
+	SchemaRevision              int                        `json:"schema_revision" cbor:"schema_revision"`
+	KeyEpoch                    int64                      `json:"key_epoch" cbor:"key_epoch"`
+	CapabilityID                string                     `json:"capability_id" cbor:"capability_id"`
+	AttemptID                   string                     `json:"attempt_id" cbor:"attempt_id"`
+	Nonce                       string                     `json:"nonce" cbor:"nonce"`
+	IssuedAtMS                  int64                      `json:"issued_at_ms" cbor:"issued_at_ms"`
+	DeadlineMS                  int64                      `json:"deadline_ms" cbor:"deadline_ms"`
+	Method                      string                     `json:"method" cbor:"method"`
+	Authority                   string                     `json:"authority" cbor:"authority"`
+	NormalizedPathQuery         string                     `json:"normalized_path_query" cbor:"normalized_path_query"`
+	OrderedHeadersSHA256        string                     `json:"ordered_headers_sha256" cbor:"ordered_headers_sha256"`
+	BodySHA256                  string                     `json:"body_sha256" cbor:"body_sha256"`
+	ContentLength               int64                      `json:"content_length" cbor:"content_length"`
+	ContentEncoding             string                     `json:"content_encoding" cbor:"content_encoding"`
+	ProfileGeneration           int64                      `json:"profile_generation" cbor:"profile_generation"`
+	ProxyGeneration             int64                      `json:"proxy_generation" cbor:"proxy_generation"`
+	CredentialGeneration        int64                      `json:"credential_generation" cbor:"credential_generation"`
+	TransportCellGeneration     int64                      `json:"transport_cell_generation" cbor:"transport_cell_generation"`
+	ContractDigest              string                     `json:"contract_digest" cbor:"contract_digest"`
+	ManifestDigest              string                     `json:"manifest_digest" cbor:"manifest_digest"`
+	DestinationPolicyGeneration int64                      `json:"destination_policy_generation" cbor:"destination_policy_generation"`
+	DestinationClass            string                     `json:"destination_class" cbor:"destination_class"`
+	AllowedDestinations         []OracleSidecarDestination `json:"allowed_destinations" cbor:"allowed_destinations"`
+	ResponsePolicyRef           string                     `json:"response_policy_ref" cbor:"response_policy_ref"`
+	RetryOwner                  string                     `json:"retry_owner" cbor:"retry_owner"`
+	KeyID                       string                     `json:"key_id" cbor:"key_id"`
+	KeyRole                     string                     `json:"key_role" cbor:"key_role"`
+}
+
+type OracleSidecarCapability struct {
+	OracleSidecarCapabilityUnsigned `cbor:",inline"`
+	Signature                       []byte `json:"signature" cbor:"signature"`
+}
+
+type OracleSidecarCapabilityKey struct {
+	KeyID     string
+	Role      string
+	Epoch     int64
+	Revoked   bool
+	PublicKey ed25519.PublicKey
+}
+
+type OracleSidecarVerifyContext struct {
+	Keys  map[string]OracleSidecarCapabilityKey
+	NowMS int64
+}
+
+type OracleSidecarVerifyDecision struct {
+	Allowed  bool
+	Code     string
+	Envelope *OracleSidecarCapability
+}
+
+func validOracleHexDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateOracleSidecarUnsigned(value OracleSidecarCapabilityUnsigned) error {
+	if value.SchemaID != "oracle.sidecar.capability" || value.SchemaMajor != 1 || value.SchemaRevision != 0 || value.KeyRole != "sidecar_capability" || value.Method != "POST" {
+		return oracleCBORError("sidecar_capability_schema_invalid", "invalid schema, role, or method")
+	}
+	if value.KeyEpoch < 1 || value.CapabilityID == "" || value.AttemptID == "" || value.Nonce == "" || value.Authority == "" || value.NormalizedPathQuery == "" || value.KeyID == "" || value.ResponsePolicyRef == "" {
+		return oracleCBORError("sidecar_capability_schema_invalid", "missing required sidecar capability field")
+	}
+	if value.IssuedAtMS < 0 || value.DeadlineMS < 0 || value.ContentLength < 0 || value.ProfileGeneration < 0 || value.ProxyGeneration < 0 || value.CredentialGeneration < 0 || value.TransportCellGeneration < 0 || value.DestinationPolicyGeneration < 0 {
+		return oracleCBORError("sidecar_capability_schema_invalid", "negative sidecar capability number")
+	}
+	if !validOracleHexDigest(value.OrderedHeadersSHA256) || !validOracleHexDigest(value.BodySHA256) || !validOracleHexDigest(value.ContractDigest) || !validOracleHexDigest(value.ManifestDigest) {
+		return oracleCBORError("sidecar_capability_schema_invalid", "invalid sidecar capability digest")
+	}
+	if !contains([]string{"identity", "gzip", "br", "zstd"}, value.ContentEncoding) || !contains([]string{"public_provider", "approved_proxy"}, value.DestinationClass) || !contains([]string{"none", "cc_gateway", "sub2api"}, value.RetryOwner) {
+		return oracleCBORError("sidecar_capability_schema_invalid", "invalid sidecar capability enum")
+	}
+	if len(value.AllowedDestinations) == 0 || len(value.AllowedDestinations) > 16 {
+		return oracleCBORError("sidecar_capability_schema_invalid", "invalid destination count")
+	}
+	for _, destination := range value.AllowedDestinations {
+		if destination.Host == "" || destination.Port < 1 || destination.Port > 65535 {
+			return oracleCBORError("sidecar_capability_schema_invalid", "invalid destination")
+		}
+	}
+	return nil
+}
+
+func OracleSidecarCapabilitySigningBytes(unsigned OracleSidecarCapabilityUnsigned) ([]byte, error) {
+	if err := validateOracleSidecarUnsigned(unsigned); err != nil {
+		return nil, err
+	}
+	encoded, err := EncodeOracleDeterministicCBOR(unsigned)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, 0, len(OracleSidecarCapabilityDomain)+len(encoded))
+	result = append(result, OracleSidecarCapabilityDomain...)
+	result = append(result, encoded...)
+	return result, nil
+}
+
+func SignOracleSidecarCapability(unsigned OracleSidecarCapabilityUnsigned, keyID string, keyEpoch int64, privateKey ed25519.PrivateKey) (OracleSidecarCapability, error) {
+	if unsigned.KeyID != keyID || unsigned.KeyEpoch != keyEpoch || unsigned.KeyRole != "sidecar_capability" {
+		return OracleSidecarCapability{}, oracleCBORError("sidecar_key_epoch_mismatch", "signing key does not match capability binding")
+	}
+	bytes, err := OracleSidecarCapabilitySigningBytes(unsigned)
+	if err != nil {
+		return OracleSidecarCapability{}, err
+	}
+	return OracleSidecarCapability{OracleSidecarCapabilityUnsigned: unsigned, Signature: ed25519.Sign(privateKey, bytes)}, nil
+}
+
+func EncodeOracleSidecarCapability(value OracleSidecarCapability) ([]byte, error) {
+	encoded, err := EncodeOracleDeterministicCBOR(value)
+	if err != nil {
+		return nil, err
+	}
+	return FrameOracleCBOR(encoded)
+}
+
+func oracleSidecarFailure(code string) OracleSidecarVerifyDecision {
+	return OracleSidecarVerifyDecision{Code: code}
+}
+
+func VerifyOracleSidecarCapability(frame []byte, context OracleSidecarVerifyContext) OracleSidecarVerifyDecision {
+	payload, err := UnframeOracleCBOR(frame)
+	if err != nil {
+		return oracleSidecarFailure(OracleCBORCode(err))
+	}
+	var envelope OracleSidecarCapability
+	if err := DecodeOracleDeterministicCBOR(payload, &envelope); err != nil {
+		return oracleSidecarFailure(OracleCBORCode(err))
+	}
+	if err := validateOracleSidecarUnsigned(envelope.OracleSidecarCapabilityUnsigned); err != nil || len(envelope.Signature) != ed25519.SignatureSize {
+		return oracleSidecarFailure("sidecar_capability_schema_invalid")
+	}
+	if envelope.IssuedAtMS > context.NowMS || envelope.DeadlineMS < context.NowMS || envelope.DeadlineMS < envelope.IssuedAtMS {
+		return oracleSidecarFailure("sidecar_capability_expired")
+	}
+	key, exists := context.Keys[envelope.KeyID]
+	if !exists {
+		return oracleSidecarFailure("sidecar_key_not_found")
+	}
+	if key.Role != "sidecar_capability" || envelope.KeyRole != "sidecar_capability" {
+		return oracleSidecarFailure("sidecar_key_role_invalid")
+	}
+	if key.Epoch != envelope.KeyEpoch {
+		return oracleSidecarFailure("sidecar_key_epoch_mismatch")
+	}
+	if key.Revoked {
+		return oracleSidecarFailure("sidecar_key_revoked")
+	}
+	for _, candidate := range context.Keys {
+		if candidate.KeyID != key.KeyID && candidate.Role != "sidecar_capability" && bytes.Equal(candidate.PublicKey, key.PublicKey) {
+			return oracleSidecarFailure("sidecar_key_role_reuse")
+		}
+	}
+	signingBytes, err := OracleSidecarCapabilitySigningBytes(envelope.OracleSidecarCapabilityUnsigned)
+	if err != nil || !ed25519.Verify(key.PublicKey, signingBytes, envelope.Signature) {
+		return oracleSidecarFailure("sidecar_signature_invalid")
+	}
+	return OracleSidecarVerifyDecision{Allowed: true, Code: "sidecar_capability_allow", Envelope: &envelope}
+}
+
+type OracleReplayEntry struct {
+	State       string `json:"state" cbor:"state"`
+	ExpiresAtMS int64  `json:"expires_at_ms" cbor:"expires_at_ms"`
+}
+
+type OracleReplayState struct {
+	LedgerGeneration int64                        `json:"ledger_generation" cbor:"ledger_generation"`
+	Entries          map[string]OracleReplayEntry `json:"entries" cbor:"entries"`
+}
+
+type OracleReplayCommand struct {
+	Operation          string
+	ExpectedGeneration int64
+	NowMS              int64
+	ExpiresAtMS        int64
+	KeyEpoch           int64
+	CapabilityID       string
+	AttemptID          string
+	Nonce              string
+}
+
+type OracleReplayDecision struct {
+	Allowed         bool
+	Code            string
+	NextState       *OracleReplayState
+	NextStateDigest string
+}
+
+func oracleReplayIdentity(command OracleReplayCommand) string {
+	identity := struct {
+		AttemptID    string `cbor:"attempt_id"`
+		CapabilityID string `cbor:"capability_id"`
+		KeyEpoch     int64  `cbor:"key_epoch"`
+		Nonce        string `cbor:"nonce"`
+	}{command.AttemptID, command.CapabilityID, command.KeyEpoch, command.Nonce}
+	encoded, _ := EncodeOracleDeterministicCBOR(identity)
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+func OracleReplayStateDigest(state OracleReplayState) string {
+	encoded, _ := EncodeOracleDeterministicCBOR(state)
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
+}
+
+func TransitionOracleReplayState(state OracleReplayState, command OracleReplayCommand) OracleReplayDecision {
+	if command.ExpectedGeneration != state.LedgerGeneration {
+		return OracleReplayDecision{Code: "replay_replica_conflict"}
+	}
+	identity := oracleReplayIdentity(command)
+	current, exists := state.Entries[identity]
+	var nextEntry OracleReplayEntry
+	switch command.Operation {
+	case "reserve":
+		if exists || command.ExpiresAtMS <= command.NowMS {
+			return OracleReplayDecision{Code: "replay_rejected"}
+		}
+		nextEntry = OracleReplayEntry{State: "reserved", ExpiresAtMS: command.ExpiresAtMS}
+	case "commit":
+		if !exists || current.State != "reserved" || current.ExpiresAtMS <= command.NowMS {
+			return OracleReplayDecision{Code: "replay_rejected"}
+		}
+		nextEntry = current
+		nextEntry.State = "committed"
+	case "expire":
+		if !exists || current.State != "reserved" || current.ExpiresAtMS > command.NowMS {
+			return OracleReplayDecision{Code: "replay_rejected"}
+		}
+		nextEntry = current
+		nextEntry.State = "expired"
+	case "revoke":
+		if !exists || current.State != "reserved" {
+			return OracleReplayDecision{Code: "replay_rejected"}
+		}
+		nextEntry = current
+		nextEntry.State = "revoked"
+	default:
+		return OracleReplayDecision{Code: "replay_rejected"}
+	}
+	next := OracleReplayState{LedgerGeneration: state.LedgerGeneration + 1, Entries: make(map[string]OracleReplayEntry, len(state.Entries)+1)}
+	for key, value := range state.Entries {
+		next.Entries[key] = value
+	}
+	next.Entries[identity] = nextEntry
+	code := map[string]string{"reserve": "replay_reserved", "commit": "replay_committed", "expire": "replay_expired", "revoke": "replay_revoked"}[command.Operation]
+	return OracleReplayDecision{Allowed: true, Code: code, NextState: &next, NextStateDigest: OracleReplayStateDigest(next)}
 }
