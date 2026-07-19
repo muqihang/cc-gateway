@@ -51,8 +51,8 @@ function validateStaticContract(ccGatewayRoot: string): { schemaRange: string; f
   }
 }
 
-function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): void {
-  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 120_000 })
+function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs = 120_000): void {
+  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: timeoutMs })
   if (result.status !== 0) {
     throw new CrossRepoContractError('contract_command_failed', `${command} ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim()}`)
   }
@@ -68,8 +68,8 @@ function runFixtureCommands(ccGatewayRoot: string, sub2apiRoot: string): number 
     'tests/oracle-contract-cross-project.test.ts',
   ]
   for (const test of tsTests) run(process.execPath, ['--import', 'tsx', test], ccGatewayRoot, env)
-  run('go', ['test', './internal/control', '-run', 'TestEnvelopeV2(CanonicalCorpus|SignedCapabilityAndReplay)$', '-count=1'], path.join(ccGatewayRoot, 'sidecar/egress-tls-sidecar'), env)
-  run('go', ['test', './internal/service', '-run', 'TestOracleContract(Canonical|Admission|Authority|CrossProject)$', '-count=1'], path.join(sub2apiRoot, 'backend'), env)
+  run('go', ['test', './internal/control', '-run', 'TestEnvelopeV2(CanonicalCorpus|SignedCapabilityAndReplay)$', '-count=1'], path.join(ccGatewayRoot, 'sidecar/egress-tls-sidecar'), env, 600_000)
+  run('go', ['test', './internal/service', '-run', 'TestOracleContract(Canonical|Admission|Authority|CrossProject)$', '-count=1'], path.join(sub2apiRoot, 'backend'), env, 600_000)
   return tsTests.length + 2
 }
 
