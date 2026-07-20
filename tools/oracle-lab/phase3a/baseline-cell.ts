@@ -28,6 +28,8 @@ type BaselineOptions = {
   changed_variable?: string
   control_value?: string
   treatment_value?: string
+  sequence_index?: number
+  randomization_seed?: number
 }
 
 const ARTIFACT = {
@@ -62,7 +64,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
     : ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', '00000000-0000-4000-8000-000000000215', '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions']
   return validateLaunchManifest({
     schema_version: 'oracle-lab-phase3a-launch-manifest.v1', run_id: options.run_id, parent_run_id: null,
-    pair_id: options.pair_id ?? `active-2.1.215-loopback-baseline-${profile}`, sequence_index: 0, randomization_seed: 215,
+    pair_id: options.pair_id ?? `active-2.1.215-loopback-baseline-${profile}`, sequence_index: options.sequence_index ?? 0, randomization_seed: options.randomization_seed ?? 215,
     phase: '3A', requirement_ids: ['HA-P1-001', 'HA-P1-002'],
     hypothesis_id: options.hypothesis_id ?? `active-baseline-loopback-json-${profile}`, evidence_level_ceiling: 'Observed',
     repositories: {
@@ -149,6 +151,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       command_profile: values['command-profile'] === 'minimal' ? 'minimal' : 'full',
       tz: values.tz, lang: values.lang, lc_all: values['lc-all'], pair_id: values['pair-id'], hypothesis_id: values['hypothesis-id'],
       changed_variable: values['changed-variable'], control_value: values['control-value'], treatment_value: values['treatment-value'],
+      sequence_index: values['sequence-index'] === undefined ? undefined : Number(values['sequence-index']), randomization_seed: values.seed === undefined ? undefined : Number(values.seed),
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) {
