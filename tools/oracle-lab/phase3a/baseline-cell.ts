@@ -20,6 +20,14 @@ type BaselineOptions = {
   plan_sha256: string
   toolchain_digest: string
   command_profile?: 'full' | 'minimal'
+  tz?: string
+  lang?: string
+  lc_all?: string
+  pair_id?: string
+  hypothesis_id?: string
+  changed_variable?: string
+  control_value?: string
+  treatment_value?: string
 }
 
 const ARTIFACT = {
@@ -34,6 +42,12 @@ const P2_BUNDLE = '2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78
 const PREDECESSOR = '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
 const PROMPT = Buffer.from('Phase 3A synthetic loopback baseline. Reply exactly OK.', 'utf8')
 
+export function baselineEnvironmentSelection(input: { tz?: string; lang?: string; lc_all?: string }): { tz: string; lang: string; lc_all: string } {
+  const selected = { tz: input.tz ?? 'UTC', lang: input.lang ?? 'C', lc_all: input.lc_all ?? input.lang ?? 'C' }
+  if (!/^[A-Za-z0-9_+.-]+(?:\/[A-Za-z0-9_+.-]+)*$/.test(selected.tz) || selected.tz.split('/').includes('..') || !/^[A-Za-z0-9_.-]+$/.test(selected.lang) || !/^[A-Za-z0-9_.-]+$/.test(selected.lc_all)) throw new Phase3AError('invalid_matrix_value', 'TZ/LANG/LC_ALL matrix value is invalid')
+  return selected
+}
+
 function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${canonicalJson(value)}\n`, { flag: 'wx', mode: 0o600 })
 }
@@ -42,14 +56,15 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
   if (sha256File(options.entrypoint) !== ARTIFACT.entrypoint_sha256) throw new Phase3AError('executable_digest_mismatch', 'baseline entrypoint differs from the frozen artifact')
   const baseUrl = upstreamUrl.replace(/\/$/, '')
   const profile = options.command_profile ?? 'full'
+  const locale = baselineEnvironmentSelection(options)
   const argv = profile === 'minimal'
     ? ['--print', '--output-format', 'json', '--model', 'claude-sonnet-4-6']
     : ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', '00000000-0000-4000-8000-000000000215', '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions']
   return validateLaunchManifest({
     schema_version: 'oracle-lab-phase3a-launch-manifest.v1', run_id: options.run_id, parent_run_id: null,
-    pair_id: `active-2.1.215-loopback-baseline-${profile}`, sequence_index: 0, randomization_seed: 215,
+    pair_id: options.pair_id ?? `active-2.1.215-loopback-baseline-${profile}`, sequence_index: 0, randomization_seed: 215,
     phase: '3A', requirement_ids: ['HA-P1-001', 'HA-P1-002'],
-    hypothesis_id: `active-baseline-loopback-json-${profile}`, evidence_level_ceiling: 'Observed',
+    hypothesis_id: options.hypothesis_id ?? `active-baseline-loopback-json-${profile}`, evidence_level_ceiling: 'Observed',
     repositories: {
       cc_gateway: { commit: options.cc_commit, tree: options.cc_tree, dirty_digest: sha256Bytes('') },
       sub2api: { commit: options.sub2api_commit, tree: options.sub2api_tree, dirty_digest: sha256Bytes('') },
@@ -72,10 +87,10 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
       explicit_empty: [],
       unset: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR', 'AWS_BEARER_TOKEN_BEDROCK', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'SSH_AUTH_SOCK'],
       home: `runs/${options.run_id}/home`, xdg: `runs/${options.run_id}/xdg`, tmp: `runs/${options.run_id}/tmp`,
-      tz: 'UTC', lang: 'C', lc_all: 'C', base_urls: [baseUrl],
+      tz: locale.tz, lang: locale.lang, lc_all: locale.lc_all, base_urls: [baseUrl],
     },
     network: { policy: 'declared_loopback_only', loopback_ports: [port], proxy_mode: 'none', ca_sha256: null, external_socket_budget: 0 },
-    matrix: { changed_variable: 'command-profile', control_value: 'minimal', treatment_value: profile, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(PROMPT), nonessential_traffic: false } },
+    matrix: { changed_variable: options.changed_variable ?? 'command-profile', control_value: options.control_value ?? 'minimal', treatment_value: options.treatment_value ?? profile, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(PROMPT), nonessential_traffic: false } },
     limits: { wall_ms: 120_000, cpu_ms: 120_000, rss_bytes: 4 * 1024 * 1024 * 1024, output_bytes: 8 * 1024 * 1024, processes: 32, retries: 8, sockets: 16, files: 4096 },
     capture: { hook: false, inspector: false, process: true, fs: true, network: true, tls: false, http: true, pcap: false, stdout: true, stderr: true },
     redaction_policy: 'oracle-lab-phase3a-redaction.v1', retention_class: 'synthetic-raw-14d', expiry: '2026-08-03T00:00:00.000Z', previous_manifest_sha256: null,
@@ -132,6 +147,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       cc_commit: values['cc-commit'], cc_tree: values['cc-tree'], sub2api_commit: values['sub2api-commit'], sub2api_tree: values['sub2api-tree'],
       plan_sha256: values['plan-sha256'], toolchain_digest: values['toolchain-digest'],
       command_profile: values['command-profile'] === 'minimal' ? 'minimal' : 'full',
+      tz: values.tz, lang: values.lang, lc_all: values['lc-all'], pair_id: values['pair-id'], hypothesis_id: values['hypothesis-id'],
+      changed_variable: values['changed-variable'], control_value: values['control-value'], treatment_value: values['treatment-value'],
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) {

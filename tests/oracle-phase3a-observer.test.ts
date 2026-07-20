@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { canonicalJson, sha256Bytes, sha256File } from '../tools/oracle-lab/phase3a/core.js'
+import { baselineEnvironmentSelection } from '../tools/oracle-lab/phase3a/baseline-cell.js'
 import { assertControlForInstrumentation, buildIsolatedEnvironment, type LaunchManifest, validateLaunchManifest } from '../tools/oracle-lab/phase3a/launch-manifest.js'
 import { startConnectProxy } from '../tools/oracle-lab/phase3a/observers/connect-proxy.js'
 import { startFakeUpstream } from '../tools/oracle-lab/phase3a/observers/fake-upstream.js'
@@ -14,6 +15,10 @@ import { descendants, enforceProcessLimits } from '../tools/oracle-lab/phase3a/p
 import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, extractSafeErrorTerms, fingerprintSafeErrorText, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
 
 console.log('\ntests/oracle-phase3a-observer.test.ts')
+
+assert.deepEqual(baselineEnvironmentSelection({}), { tz: 'UTC', lang: 'C', lc_all: 'C' })
+assert.deepEqual(baselineEnvironmentSelection({ tz: 'Asia/Shanghai', lang: 'zh_CN.UTF-8', lc_all: 'zh_CN.UTF-8' }), { tz: 'Asia/Shanghai', lang: 'zh_CN.UTF-8', lc_all: 'zh_CN.UTF-8' })
+assert.throws(() => baselineEnvironmentSelection({ tz: '../unsafe' }), (error: any) => error.code === 'invalid_matrix_value')
 
 const diagnosticMarker = 'synthetic-private-diagnostic-marker'
 const diagnostic = fingerprintSafeErrorText(Buffer.from(`Error: ${diagnosticMarker}\n`, 'utf8'))
