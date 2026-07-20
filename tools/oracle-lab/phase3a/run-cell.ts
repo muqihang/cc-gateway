@@ -45,6 +45,7 @@ export type CellResult = {
   retry_events: number
   hook_event_count: number
   safe_error_categories: string[]
+  safe_error_terms: string[]
   raw_output_persisted: false
 }
 
@@ -78,6 +79,12 @@ export function classifySafeErrorText(value: string): string[] {
   if (/capacity|overload|rate.?limit|quota/i.test(value)) categories.add('capacity')
   if (categories.size === 0 && value.length > 0) categories.add('unknown')
   return [...categories].sort()
+}
+
+const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'error', 'input', 'invalid', 'key', 'permission', 'print', 'prompt', 'require', 'response', 'session', 'stdin', 'token', 'unsupported', 'uuid'] as const
+
+export function extractSafeErrorTerms(value: string): string[] {
+  return SAFE_ERROR_TERMS.filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(value))
 }
 
 function profileEscape(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"') }
@@ -302,6 +309,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   const status: CellResult['status'] = closed.spawnError ? 'spawn-error' : terminationReason === 'wall_timeout' ? 'timeout' : terminationReason ? 'resource-limit' : closed.code === 0 ? 'complete' : 'failed'
   const safeErrorText = Buffer.concat(safeErrorChunks).toString('utf8')
   const safeErrorCategories = classifySafeErrorText(safeErrorText)
+  const safeErrorTerms = extractSafeErrorTerms(safeErrorText)
   for (const chunk of safeErrorChunks) chunk.fill(0)
   return {
     schema_version: 'oracle-lab-phase3a-cell-result.v1', run_id: manifest.run_id, status,
@@ -309,7 +317,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },
     process_samples: samples, max_processes: maxProcesses, max_sockets: maxSockets,
-    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, raw_output_persisted: false,
+    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, raw_output_persisted: false,
   }
 }
 
