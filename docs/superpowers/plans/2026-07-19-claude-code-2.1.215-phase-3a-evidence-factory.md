@@ -279,6 +279,7 @@ CC Gateway
     run-cell.ts               # process supervisor, limits, lineage, stdout/stderr capture
     normalize.ts              # safe AST/transcript/trace normalization
     converge.ts               # repetition, order, perturbation, stable/variable report
+    safe-error-classifier.ts  # in-memory allowlist classifier and leak canary fuzzing
     build-exit.ts             # exit report and Phase 3B/3.5 handoff bundle
     hooks/
       preload.cjs             # Node module/fs/net/http/tls/child_process/timer probes
@@ -348,11 +349,15 @@ placeholder class and digest, never by bytes.
 
 ### 6.2 Artifact index minimum fields
 
-Each artifact row records `artifact_id`, `run_id`, parent artifact IDs, relative path, media type,
-byte size, SHA-256, source URL or generating command digest, toolchain digest, created time in UTC,
-scope, sensitivity, redaction transform, retention/expiry, parser version, and validation status.
-The index itself records `previous_index_sha256`, creating a hash chain without creating an
-authorization protocol.
+Each artifact row directly records `artifact_schema_version`, `artifact_id`, `run_id`, parent
+artifact IDs, relative path, media type, byte size, SHA-256, source URL or generating command
+digest, **exact verification command digest**, toolchain digest, created time in UTC, scope,
+requirement IDs, owner, reviewer, sensitivity, redaction transform, retention/expiry, destruction
+procedure/disposition, environment-fingerprint cell, parser name/version/agreement, negative result,
+contradiction IDs/status, and validation status. These fields are mandatory on the row itself; an
+artifact cannot satisfy the gate by relying on an unbound launch or conclusion object. The index
+validator confirms each referenced run/conclusion digest and records `previous_index_sha256`,
+creating a hash chain without creating an authorization protocol.
 
 ### 6.3 Normalized observation and conclusion
 
@@ -442,6 +447,7 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 ### P3A-0.3 Toolchain and capability freeze
 
 - **Inputs:** host and future isolated Linux/Windows workers.
+- **Files:** `toolchain.ts` and `tests/oracle-phase3a-toolchain.test.ts`.
 - **Command:** `toolchain.ts` records `command -v`, version output, binary SHA-256, and capability
   probes for Node, TypeScript, Python, Go, curl, tar, jq, OpenSSL, CodeGraph, codesign/otool/nm,
   `xcrun llvm-objdump`, LIEF, Ghidra headless, rizin, mitmproxy, tcpdump, fs_usage, opensnoop,
@@ -452,6 +458,8 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   named fallback and evidence downgrade.
 - **Stop/budget:** 45 minutes. Tool absence is not a plan blocker unless no archive parser, AST
   parser, loopback guard, or network observer remains.
+- **Parallel/dependency:** after 0.1; platform probes may run in parallel, but the canonical
+  toolchain digest is emitted only after all selected workers report.
 - **Nearest deliverable:** capability matrix with `available|permission_denied|unsupported|unknown`.
 
 ### P3A-0.4 Schemas, RED fixtures, and evidence root guard
@@ -459,12 +467,16 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 - **Inputs:** Section 6 field contracts and P2 canonical JSON rules.
 - **Files/tests:** proposed schemas plus `tests/oracle-phase3a-schema.test.ts`,
   `tests/oracle-phase3a-evidence-root.test.ts`, `tests/oracle-phase3a-hermeticity.test.ts`.
+- **Command:** `npm exec tsx tests/oracle-phase3a-schema.test.ts`, followed by the evidence-root and
+  hermeticity focused tests from Section 16.
 - **RED:** missing parent lineage, floating version, non-loopback target, real credential-shaped
   value, raw prompt/body field, unknown schema field, path outside evidence root, or artifact hash
   mismatch must fail.
 - **Expected output:** strict schema errors with stable codes and JSON paths.
 - **Done:** canonical round trip is byte-identical; mutation corpus is green; no receipt/lease field.
 - **Stop/budget:** 4 hours, 500 fixture mutations max.
+- **Parallel/dependency:** after 0.2 and 0.3 so fixture rows bind real artifact/toolchain digests;
+  schema mutation families may run in parallel.
 - **Nearest deliverable:** strict schema and mutation corpus even if later observers are unavailable.
 - **Commit:** `test(oracle): define Phase 3A evidence contracts`, then
   `feat(oracle): add pinned artifact intake harness`.
@@ -475,9 +487,12 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 
 - **Inputs:** digest-verified wrapper, every listed package file, selected platform package, release
   binary, code signature, and package metadata.
+- **Files/symbols:** `static-inventory.ts`, `tree-digest.ts`, wrapper `install.cjs`/
+  `cli-wrapper.cjs`, and the selected native entrypoint/sections.
 - **Commands:** `file`, `codesign -dv/--verify`, `otool -hv/-L/-l`, `nm`,
   `xcrun llvm-objdump --macho --all-headers`, format-aware LIEF parsing, bounded `strings`, and
-  `static-inventory.ts`. Linux uses `readelf`/`objdump`; Windows uses `dumpbin` or LIEF/PE parsing.
+  `npm exec tsx tools/oracle-lab/phase3a/static-inventory.ts -- --artifact ARTIFACT_INDEX`.
+  Linux uses `readelf`/`objdump`; Windows uses `dumpbin` or LIEF/PE parsing.
 - **RED:** inventory must reject a file whose digest differs from intake or whose section range
   overlaps/out-runs the file.
 - **Output:** package tree, entrypoint graph, imports, symbols, code-sign facts, section table,
@@ -492,8 +507,10 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 
 - **Inputs:** section/resource candidates from 1.1.
 - **Files:** `extract-bundle.ts`; extraction recipes under `static/{digest}/recipes/`.
-- **Commands:** format-aware section extraction first; `binwalk`/LIEF/Ghidra/rizin only from the
-  frozen toolchain. No `eval`, no execution of extracted code, and no ad hoc binary mutation.
+- **Commands:** `npm exec tsx tools/oracle-lab/phase3a/extract-bundle.ts -- --entrypoint
+  ENTRYPOINT --inventory INVENTORY --out STATIC_ROOT`; format-aware extraction first, with
+  `binwalk`/LIEF/Ghidra/rizin only from the frozen toolchain. No `eval`, no execution of
+  extracted code, and no ad hoc binary mutation.
 - **RED:** running the recipe twice must produce byte-identical file inventories; corrupt offsets,
   recursive archives, decompression bombs, and unrecognized encoding become stable failures.
 - **Output:** chunk/resource index with offsets, lengths, hashes, entropy, encoding, parser, and
@@ -502,6 +519,7 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   the same hashes from the original archive.
 - **Stop/budget:** 8 hours per active artifact, 4 GiB output, max two extraction approaches per
   opaque region before marking `Unknown`.
+- **Parallel/dependency:** after 1.1; independent digest-bound sections may extract in parallel.
 - **Nearest deliverable:** offsets/hashes and a reproducible extractor even without decoded JS.
 
 ### P3A-1.3 Formatter, AST, module boundary, and repeatable deobfuscation
@@ -513,6 +531,8 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 - **Pipeline:** parse -> stable scope/module IDs -> safe constant-table decoding -> bundle-table
   boundary recovery -> side-effect-free constant folding -> stable identifier renaming ->
   TypeScript printer -> reparse -> AST canonical hash. Never evaluate vendor code.
+- **Command:** `npm exec tsx tools/oracle-lab/phase3a/recover-ast.ts -- --static-root
+  "$P3A_EVIDENCE_ROOT/static/$ENTRYPOINT_SHA256" --emit-formatted --emit-ast --emit-modules`.
 - **RED:** syntax corruption, nondeterministic names, AST drift after print/reparse, or changed
   literal bytes outside approved decoding fails. Minified input with known synthetic module tables
   must recover the fixture boundaries.
@@ -528,11 +548,16 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 ### P3A-1.4 Required xrefs, call graphs, control flow, and state machines
 
 - **Inputs:** AST/module graph plus native symbols/offsets.
+- **Files/symbols:** `recover-ast.ts`, frozen Ghidra/rizin scripts, 1.3 module IDs, and each
+  required root named below.
 - **Required roots:** env/config/system-property reads; HOME/XDG/TMP/TZ/LANG/locale/hostname/platform
-  access; Base URL and proxy selection; System Prompt construction/mutation; request headers/body
-  and final serialization; CCH/billing/cache/compact paths; telemetry/OTel/diagnostic/update/error
-  reporting; DNS/socket/TLS/HTTP; retry/timer/backoff; child/subtask/fork/process creation; daemon,
-  restart, resume, long-running and shutdown transitions.
+  access; complete configuration precedence; model alias/capability resolution; authentication
+  loading, helper selection, refresh and expiry; Base URL and proxy selection; System Prompt
+  construction/mutation; request headers/body and final serialization; request/session IDs,
+  timestamps, nonces and random sources; CCH/billing/cache/compact paths;
+  telemetry/OTel/diagnostic/update/error reporting; DNS/socket/TLS/HTTP and unknown transports;
+  retry/timer/backoff/jitter; child/subtask/fork/process creation and IPC; daemon, restart, resume,
+  long-running, suspend/wake and shutdown transitions.
 - **Commands:** `recover-ast.ts --roots ... --emit-xref --emit-callgraph --emit-cfg`; native-only
   reachability uses Ghidra headless/rizin scripts whose project and output digests are recorded.
 - **RED:** synthetic fixtures include indirect calls, aliasing, dynamic property reads, promise
@@ -542,11 +567,16 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 - **Done:** every required root has a static path/offset or `Unknown` with searched surfaces and the
   next minimal action. “String absent” is never an exit result.
 - **Stop/budget:** 16 analyst-hours; max 50,000 nodes per root before slicing by module.
+- **Parallel/dependency:** after 1.3; roots may be recovered independently, with a serial cross-root
+  alias/dynamic-edge merge.
 - **Nearest deliverable:** xrefs plus unresolved edge ledger.
 
 ### P3A-1.5 Structured current/change-point diff
 
 - **Inputs:** active 2.1.215 static graph and selected controls from Section 12.
+- **Files/symbols:** `structural-diff.ts`, the 1.1-1.4 indexes, and each Section 12 hypothesis ID.
+- **Command:** `npm exec tsx tools/oracle-lab/phase3a/structural-diff.ts -- --active 2.1.215
+  --control VERSION --hypothesis HYPOTHESIS_ID --static-root "$P3A_EVIDENCE_ROOT/static"`.
 - **Method:** compare package tree, sections, resource/chunk hashes, recovered module fingerprints,
   AST subtree hashes, API/env literal xrefs, call-graph neighborhoods, CFG/state transitions, and
   serialization schemas. Full-text diff is diagnostic only and cannot be the result.
@@ -558,6 +588,8 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   silently analyzed.
 - **Stop/budget:** 6 hours per selected control; stop expanding a control after its hypothesis is
   resolved or the relevant path is `Unknown`.
+- **Parallel/dependency:** after 1.4 and the control's P3A-0 intake; controls may diff in parallel.
+- **Nearest deliverable:** package/module/AST neighborhood delta with unresolved-path reasons.
 - **Commit:** `feat(oracle): recover Phase 3A static structure and change points`.
 
 ## 10. P3A-2: controlled dynamic observation
@@ -565,6 +597,9 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 ### P3A-2.1 Isolation guard and deterministic launch
 
 - **Inputs:** signed active binary, launch manifest, fake credentials, synthetic prompt/workspace.
+- **Files/symbols:** `launch-manifest.ts`, `run-cell.ts`,
+  `tests/oracle-phase3a-hermeticity.test.ts`, and existing
+  `evaluate_egress_guard`/`run_same_scope_self_tests` adapters.
 - **Isolation:** fresh HOME, `CLAUDE_CONFIG_DIR`, XDG config/cache/data/state, TMP/TEMP/TMPDIR,
   working directory, session ID, CA, and stdout/stderr per run; `env -i` allowlist; explicit TZ,
   LANG and LC_ALL; no keychain, credential helper, inherited file descriptor, shell startup file,
@@ -572,15 +607,20 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   local IPC endpoints and denies every external socket.
 - **RED:** attempt direct IPv4/IPv6, DNS, Unix socket, inherited listener, alternate loopback port,
   credential helper, or outside-root write; each must be observed and denied before client launch.
+- **Command:** `npm exec tsx tests/oracle-phase3a-hermeticity.test.ts`, then
+  `run-cell.ts --guard-self-test --manifest MANIFEST`; no client command runs unless GREEN.
 - **Output:** guard self-test and exact launch manifest.
 - **Done:** same-scope guard proves zero external socket budget. If macOS sandbox enforcement is
   unavailable, the cell cannot run merely with a proxy; use a rootless container/VM or mark blocked.
 - **Stop/budget:** 2 hours per platform, 20 self-test cases, 10 process max.
+- **Parallel/dependency:** after P3A-0.4; each platform guard is independent.
 - **Nearest deliverable:** capability/blocked report; never an unsafe best-effort run.
 
 ### P3A-2.2 Fake upstream, proxy, TLS, HTTP/SSE/compact observers
 
 - **Inputs:** Section 6 observers and existing Sub2API collector functions.
+- **Files/symbols:** `observers/fake-upstream.ts`, `observers/connect-proxy.ts`,
+  `SafeRequestCollector`, `capture_real_cli_sni_preserving_tls`, and their focused tests.
 - **Modes:** direct loopback HTTP base URL; SNI-preserving local CONNECT without target dial; local
   MITM with per-run CA/cert; JSON and SSE fake upstream; HTTP 400/401/403/429/5xx/529; reset,
   certificate failure, delayed first byte, idle timeout, partial/reordered/duplicated SSE, GOAWAY
@@ -595,17 +635,21 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
 - **Done:** request/response/stream/compact/telemetry lanes are captured locally; encrypted paths
   without a controlled decryption method remain `Unknown`.
 - **Stop/budget:** 6 hours implementation, 128 MiB/run transcript cap, 10,000 events/run.
+- **Parallel/dependency:** observer unit tests may run after 0.4; client capture waits for 2.1 GREEN.
 - **Nearest deliverable:** loopback transcript and TLS handshake summary.
 
 ### P3A-2.3 Multi-layer instrumentation and perturbation control
 
 - **Inputs:** static hook anchors and signed active binary.
+- **Files/symbols:** Section 6 `hooks/*`, `run-cell.ts`, and static anchors from 1.4.
 - **Layers:** Node `--require` preload, ESM `--loader`, module hooks, Bun preload, loopback
   Inspector/Debugger, and bounded probe/patch of a digest-verified isolated binary/bundle copy when
   preload/inspector cannot reach the path. Patches never touch the original or installed binary and
   record exact byte/AST diff and patched-copy digest.
 - **Observed APIs:** process/env reads, module resolution, fs, child_process, DNS/net/tls/http/fetch,
   timers/retries, update/error/telemetry calls, serialization boundaries, and process exit.
+- **Command:** `run-cell.ts --manifest CONTROL --instrumentation none`, then the digest-paired
+  `--manifest TREATMENT --instrumentation preload|loader|bun|inspector|probe-copy`.
 - **RED:** hook self-tests, missed native socket, recursive hook, output overflow, timestamp leakage,
   and an intentional perturbation fixture.
 - **Output:** hook events with monotonic sequence/process/thread/module/stack-anchor hashes and a
@@ -614,9 +658,16 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   `instrumentation_perturbed` and cannot support a Phase 3B input.
 - **Stop/budget:** 8 hours; two hook techniques plus one isolated-copy technique per root before
   `Unknown`.
+- **Parallel/dependency:** after 1.4 and 2.1; hook self-tests may run in parallel, while each
+  perturbation pair is serially indexed.
 - **Nearest deliverable:** hook reachability map and explicit unreachable anchors.
 
 ### P3A-2.4 Environment/Base URL/System Prompt differential matrix
+
+- **Inputs:** converged uninstrumented 2.1.215 baseline, static configuration/auth roots, exact
+  launch-manifest schema, synthetic workspace/auth helpers, and fake upstream.
+- **Files/symbols:** `launch-manifest.ts`, `run-cell.ts`, `normalize.ts`,
+  `build_isolated_cli_env`, `classify_request_summary`, and static roots from 1.4.
 
 Each pair changes one variable while holding archive, entrypoint, argv, synthetic input, fake
 upstream, proxy, CA, model, feature toggles, clock policy, and all other env values fixed.
@@ -633,6 +684,11 @@ Required dimensions:
 - controls: unrelated token, edit-distance lookalike (`alivun`, `chinax`), substring control
   (`labyrinth`), same length/punctuation, and empty/unset distinction;
 - clean vs inherited env, proxy-variable conflicts, official-hostname-via-CONNECT vs custom base;
+- deterministic configuration-precedence conflicts across CLI flags, env, user config, managed
+  config, IDE config, system proxy, shell startup, credential helpers, inherited descriptors and
+  local agents; each source is introduced alone before pairwise conflicts;
+- authentication lifecycle using placeholder-only API-key, setup-token, OAuth-shaped, helper,
+  expired/refresh-failed, refreshed, restart and resumed-session fixtures; no real keychain/login;
 - System Prompt bytes summarized by length, SHA-256, first difference, stable/variable span hashes,
   and canonical AST topology; request endpoint, headers, body AST, serialized-byte digest, CCH/cache
   class, and telemetry events.
@@ -641,47 +697,76 @@ Reserved hostnames terminate only at the local proxy/observer. No public DNS loo
 connection is allowed.
 
 - **RED:** matrix generator intentionally changes two values and must reject the pair.
+- **Command:** `npm exec tsx tools/oracle-lab/phase3a/launch-manifest.ts -- --matrix
+  environment-config-auth --emit MANIFEST_DIR`, validate every pair, then
+  `run-cell.ts --manifest MANIFEST --observer fake-upstream`.
 - **Output:** `pair.json`, two launch manifests, normalized observations, byte/AST diff, causal
-  boundary, and unchanged-fixed-variable digest.
+  boundary, unchanged-fixed-variable digest, configuration-precedence order, and auth transition
+  trace under the normalized-observation schema.
 - **Done:** every listed dimension is Reproduced or Unknown with next action; no behavior conclusion
   is inferred from token presence alone.
 - **Stop/budget:** 60 core pairs, max 12 repetitions/cell; risk-selected interactions only after
   single-variable effects exist.
+- **Parallel/dependency:** after 2.1-2.3 and active baseline convergence; independent pair IDs may
+  run in parallel, but each control/treatment block remains serial and randomized.
 - **Nearest deliverable:** completed pairs plus explicit unrun cells.
 
 ### P3A-2.5 Telemetry, diagnostics, updates, process, fs, env, and network
 
 - **Inputs:** static roots, nonessential traffic on/off, local OTLP HTTP collector, proxy observer.
+- **Files/symbols:** `run-cell.ts`, `hooks/*`, `process-sampler.ts`, fake OTLP endpoint in
+  `fake-upstream.ts`, and telemetry/update/error roots from 1.4.
 - **Capture:** event names/attribute schemas and safe values; update-check destinations/timers;
   diagnostic/error-report triggers; crash and timeout paths; env/fs read/write attempts; process
   tree and executable digests; DNS/socket/TLS/HTTP attempts; timers, backoff, retries, and shutdown.
 - **Dual source:** hook events must be corroborated by observer/OTLP transcript, filesystem snapshot,
   process sampler, socket table, or OS trace. An uncorroborated source states why.
 - **RED:** intentional hook-only fake event, observer-only network event, and missing lineage parent.
+- **Command:** generate paired nonessential-traffic manifests, run control/treatment through
+  `run-cell.ts`, then `normalize.ts --run RUN_ID --merge-timeline`.
 - **Output:** merged causal timeline keyed by monotonic sequence and process lineage.
 - **Done:** telemetry/update/error paths are reachable or Unknown; “no event” is bounded to the
   trigger, duration, and observers used.
 - **Stop/budget:** 30 minutes normal cell, 2 hours diagnostic cell, 256 MiB/run.
+- **Parallel/dependency:** after 2.1-2.3; trigger families may run in parallel after the local OTLP
+  and error-report endpoints pass observer RED/GREEN.
 - **Nearest deliverable:** single-source trace labeled at the lower evidence level.
 
 ### P3A-2.6 Child/subtask, restart, long-running, failure/retry, stream/compact
 
+- **Inputs:** static lineage/retry/random/IPC/state roots, converged active baseline, fake upstream
+  state machine, placeholder auth, and isolated state roots.
+- **Files/symbols:** `run-cell.ts`, `fake-upstream.ts`, `process-sampler.ts`,
+  `converge.ts`, and 1.4 daemon/lineage/randomness roots.
 - **Cells:** root vs child/subtask/fork; foreground vs background where locally terminable;
   cold/warm/restart/resume; clean shutdown vs kill/timeout/crash; 30-minute standard and 2-hour
   extended run; partial stream then error; retryable and terminal failures; stream-json slow reader;
-  compact/prompt-cache transition; child process exit and daemon replacement.
+  compact/prompt-cache transition; child process exit and daemon replacement; wall-clock forward/
+  backward jumps in a VM or injectable clock fixture, suspend/wake, monotonic-vs-wall timing,
+  fixed/varied random seeds, request/session ID/nonce generation, retry jitter, and IPC creation.
 - **Capture:** parent/child run IDs, process IDs, exec hashes, session IDs as salted hashes, state
   files, sockets, timers, retry attempts, partial output AST, System Prompt/request mutations,
   telemetry correlation IDs as safe hashes, and restart lineage.
 - **RED:** orphan process, lineage reuse, retry past limit, external socket, state write outside root,
   and missing terminal record.
+- **Command:** `launch-manifest.ts --matrix lifecycle-failure-random-time`, followed by bounded
+  `run-cell.ts` runs and `converge.ts --pair PAIR_ID`. Host clock is never changed; unavailable
+  virtual/injected time remains `Unknown`.
+- **Output:** normalized lifecycle/state-machine trace, randomness/timing classes, IPC/process graph,
+  request/response AST, and convergence record.
 - **Done:** each state transition has static anchor plus dynamic trace or a single-source reason.
 - **Stop/budget:** process max 32, retry max 8 except a dedicated bounded watchdog cell, standard
   30 min, extended 2 h, hard 4 h/cell.
+- **Parallel/dependency:** after 2.1-2.5 and active baseline convergence; destructive failure cells
+  use distinct roots and may run in parallel within process/disk limits.
 - **Nearest deliverable:** bounded state trace ending Unknown rather than an uncontrolled run.
 
 ### P3A-2.7 OS-level corroboration and platform limits
 
+- **Inputs:** completed hook/observer cells, platform capability matrix, exact process IDs and
+  loopback ports from launch manifests.
+- **Files/symbols:** `process-sampler.ts`, platform trace adapters, and normalized observation
+  source-agreement fields.
 - **macOS:** capability-probe `fs_usage`, `opensnoop`, `dtruss`, Endpoint Security availability,
   `lsof`, process sampling, socket tables, and loopback packet capture. SIP, entitlement, BPF, or
   root restrictions are recorded. No `sudo` is permitted. Fallback is hook + FSEvents/tree diff +
@@ -693,12 +778,25 @@ connection is allowed.
   process/TCP snapshots are fallback. No result is generalized from Wine.
 - **RED:** capability probe must distinguish missing binary, permission denied, SIP/entitlement,
   unsupported platform, and tool failure.
+- **Command:** `run-cell.ts --manifest MANIFEST --os-trace auto`; adapters execute only the frozen
+  available command and always run `normalize.ts --compare-sources RUN_ID`.
+- **Output/schema:** OS trace or capability failure artifact plus hook/observer/OS source-agreement
+  row in the normalized-observation schema. Unknown transport families (QUIC/UDP, WebSocket,
+  HTTP/2, Unix IPC, custom native sockets, encrypted or unparsed framing) each receive an explicit
+  discovery result and cannot be collapsed into “no network.”
 - **Done:** hook and network/file/process evidence have at least two sources for key conclusions, or
   the conclusion is explicitly single-source/Unknown.
 - **Stop/budget:** 4 hours/platform. Do not weaken host security or request elevated permissions.
+- **Parallel/dependency:** after 2.1 and at least one 2.2/2.3 cell; platform lanes may run in
+  parallel, but a key conclusion waits for source comparison.
+- **Nearest deliverable:** capability artifact, single-source trace, and explicit unknown-transport
+  ledger.
 
 ### P3A-2.8 Repetition, order randomization, and convergence
 
+- **Inputs:** normalized pair runs, observer/tool failures, perturbation comparisons, and declared
+  randomization seed.
+- **Files/symbols:** `converge.ts` and `tests/oracle-phase3a-convergence.test.ts`.
 - **Design:** one non-evidence warmup; minimum five evidence repetitions per selected cell; maximum
   twelve. Pair order is deterministically randomized in balanced blocks from a recorded seed. Stop
   after at least five when stable leaves are identical, no new variable leaf/value appears in the
@@ -706,10 +804,16 @@ connection is allowed.
   occurred. Otherwise run to twelve and classify unresolved variation.
 - **RED:** fixed three-run completion, identical seed/order for every pair, or a conclusion with a
   hidden failed repetition is rejected.
+- **Command:** `npm exec tsx tests/oracle-phase3a-convergence.test.ts`, then
+  `converge.ts --pair PAIR_ID --min 5 --max 12 --balanced-order --seed SEED`.
 - **Output:** stable/variable/unresolved leaves, run order, outliers, observer failures, and causal
   boundary. Single observations remain `Observed`, never `Reproduced`.
 - **Done:** convergence rules, not a positive result, determine GREEN.
 - **Stop/budget:** max 96 machine-hours for active-target dynamic campaign.
+- **Parallel/dependency:** consumes 2.4-2.7 outputs; pair convergence may run in parallel while the
+  final coverage report waits for all selected pair terminal states.
+- **Nearest deliverable:** per-pair stable/variable/unresolved report even when the campaign cap
+  prevents another repetition.
 - **Commit:** `feat(oracle): add hermetic Phase 3A dynamic observation harness`.
 
 ## 11. Differential output requirements
@@ -750,6 +854,13 @@ notes motivate a hypothesis but do not prove behavior.
 | `2.1.169` | legacy CCH compatibility boundary represented in current code; safe-mode/config changes help isolate customizations | static/fixture CCH control; runtime only if unresolved |
 | `2.1.81` | `--bare`, API-key-only bare auth, beta suppression, concurrent refresh, channel/WebSocket boundary | static plus targeted bare/auth/beta/transport control |
 
+Scheduling priority is explicit. Tier A is `2.1.214`, `2.1.212`, `2.1.211`, `2.1.208`, and
+`2.1.207`: intake and the listed structural/dynamic pair are mandatory. Tier B is `2.1.203`,
+`2.1.201`, `2.1.200`, `2.1.199`, `2.1.179`, `2.1.169`, and `2.1.81`: run the listed
+static/fixture control first, and add its dynamic pair only when the active/Tier-A result leaves that
+specific hypothesis unresolved. Budget exhaustion produces an explicit unrun/Unknown Tier-B row,
+not silent coverage or an expanded campaign.
+
 Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 
 - `2.1.213` has no official GitHub release artifact at planning time and is `Unknown`, not guessed;
@@ -762,6 +873,8 @@ Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 ### P3A-3 task contract
 
 - **Inputs:** official exact-version metadata/archive and Section 12 hypothesis.
+- **Files/symbols:** `intake.ts`, `structural-diff.ts`, generated targeted launch manifests,
+  and existing 2.1.179 native/CCH/TLS/env harness symbols from Section 5.
 - **Commands:** reuse P3A-0 intake and P3A-1 structural diff; then only generated cells whose
   `hypothesis_id` names the row.
 - **RED:** a control with no reason, floating tag, full Cartesian matrix, or inherited positive
@@ -769,8 +882,11 @@ Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 - **Output:** `change-point-matrix.json` with selection/exclusion reason, artifact digests, structural
   deltas, dynamic pairs, contradictions, and resolved/Unknown result.
 - **Done:** every selected control resolves its bounded question or names the missing minimal action.
-- **Stop/budget:** 6 static hours/control, 12 dynamic hours/control, 2 GiB/control. Stop a control as
-  soon as the hypothesis is resolved; do not expand laterally.
+- **Stop/budget:** automated intake/static work is capped at 3 hours/control and dynamic work at
+  6 machine-hours/control, but the **aggregate control lane** is capped at 16 analyst-hours and
+  48 machine-hours (active-target dynamic cap 96 + controls 48 = 144, below the global 160).
+  Stop a control as soon as its hypothesis is resolved; Tier B yields to Tier A and the global cap.
+  Disk remains 2 GiB/control with only one unpacked control tree retained at a time.
 - **Parallel:** controls may run in parallel after active baseline convergence, within disk/process
   budgets. Artifact index merge is serial.
 - **Nearest deliverable:** intake plus structured static diff, even if runtime is unavailable.
@@ -781,6 +897,8 @@ Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 ### P3A-4.1 Normalize and hash-link evidence
 
 - **Inputs:** all completed raw artifacts and manifests.
+- **Files/symbols:** `normalize.ts`, all Phase 3A schemas, artifact-index writer, and independent
+  request/TLS parsers.
 - **Command:** `normalize.ts --run RUN_ID`, independent parse where required, canonical JSON, schema
   validation, leak scan, artifact/index hash verification.
 - **RED:** unknown field, raw sensitive literal, parser disagreement, orphan artifact, parent-cycle,
@@ -788,9 +906,26 @@ Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 - **Output:** normalized observation, safe capsule, artifact index generation.
 - **Done:** reproducible bytes and parser agreement or explicit disagreement.
 - **Stop/budget:** 30 minutes/run, 512 MiB normalized output/run.
+- **Parallel/dependency:** after a cell reaches a terminal capture state; per-run normalization may
+  run in parallel, while index generation is serial.
 - **Nearest deliverable:** validated subset plus rejected-artifact ledger.
 
 ### P3A-4.2 Evidence levels and contradiction/expiry rules
+
+- **Inputs:** normalized observations, convergence/source-agreement reports, P2 authority ceilings,
+  and the static/dynamic cross-link index.
+- **Files/symbols:** `safe-error-classifier.ts`, `build-exit.ts`,
+  `tests/oracle-phase3a-safe-error.test.ts`, and the conclusion schema.
+- **Command:** run the safe-error mutation/fuzz corpus, then
+  `safe-error-classifier.ts --artifact-index INDEX --in-memory-only --emit-safe SAFE_ERRORS` and
+  `build-exit.ts --classify-conclusions`. The classifier has an exact allowlist of safe error
+  codes/categories, bounded lengths, and leak canaries for credentials, URLs/domains, prompts,
+  bodies, CCH, IDs, paths, control characters, Unicode confusables, and nested exception causes.
+  Raw error strings are classified in memory and discarded.
+- **RED:** unknown error class, canary leakage, truncated multibyte text, raw nested cause, missing
+  contradiction edge, expired evidence treated as current, or one run upgraded to Reproduced.
+- **Output/schema:** safe error taxonomy/leak report plus conclusion rows with the required level,
+  scope, supporting/contradicting artifacts, expiry and authority ceiling.
 
 Levels are:
 
@@ -807,9 +942,19 @@ IDs, lower the result to `Unknown`, disable Phase 3B use, and name the next mini
 Expired evidence remains addressable but unusable. A missing string can only support “not found by
 tool X in surfaces Y”; it cannot support “does not exist.”
 
+- **Done:** every conclusion validates; fuzz canaries are fully rejected/redacted; contradictions
+  and expiry lower authority deterministically; no raw error bytes persist.
+- **Stop/budget:** 4 hours, 10,000 fuzz cases, 1 MiB in-memory error limit and 16 KiB safe output
+  limit per case. Any leak stops exit generation.
+- **Parallel/dependency:** after 4.1 and relevant convergence; conclusion families may classify in
+  parallel, with a serial contradiction merge.
+- **Nearest deliverable:** safe error/leak report and Unknown conclusion ledger.
+
 ### P3A-4.3 Map evidence to P2 contract
 
 - **Inputs:** normalized request/response/CCH/TLS/state/failure facts and P2 bundle.
+- **Files/symbols:** `build-exit.ts`, P2 `decideBehaviorAdmission`, canonicalization,
+  cross-project types, and Sub2API `oracle_contract_*` fixture consumers.
 - **Output:** evidence references for wire, semantic, state-sequence, and failure-semantics fields;
   behavior-coherence/negative-capability candidates; no changed gate decision or runtime admission.
 - **RED:** an evidence row exceeding its authority ceiling, unknown capability treated as allowed,
@@ -817,10 +962,24 @@ tool X in surfaces Y”; it cannot support “does not exist.”
 - **Done:** TS and Go P2 fixture consumers accept the safe fixtures and reject mutations; original
   bundle digest remains `254511...bce`.
 - **Command:** the focused P2 TS/Go tests and joint checker in Sections 2 and 5.
+- **Stop/budget:** 3 hours; stop on any original P2 bundle-byte change or TS/Go interpretation
+  disagreement.
+- **Parallel/dependency:** after 4.1/4.2; four gate mappings may be built in parallel, then verified
+  together.
+- **Nearest deliverable:** evidence-reference map with all unusable rows explicitly disabled.
 
 ### P3A-4.4 Exit report exact contents
 
-`phase-3a-exit-report.md` and machine-readable companion include:
+- **Inputs:** terminal artifact index, toolchain/capability records, static/dynamic/change-point
+  reports, conclusions, P2 mapping, resource/retention records and leak scan.
+- **Files/symbols:** `build-exit.ts --exit-report`, exit/handoff schemas, and
+  `tests/oracle-phase3a-exit.test.ts`.
+- **Command:** `npm exec tsx tests/oracle-phase3a-exit.test.ts`, then
+  `build-exit.ts --exit-report --artifact-index INDEX --out phase-3a-exit-report.json`; render the
+  Markdown report only from the validated machine-readable bytes.
+- **RED:** omit each required section in turn, insert stale/perturbed/Unknown usable evidence, alter
+  an artifact digest, or add a prohibited scope claim; every mutation fails with a stable code.
+- **Output/schema:** `phase-3a-exit-report.md` and its machine-readable companion include:
 
 1. repository commits/trees/dirty digests and CodeGraph status/version/index digests;
 2. wrapper/platform/release URLs, metadata, archive/tree/entrypoint digests, signature status, and
@@ -839,9 +998,25 @@ tool X in surfaces Y”; it cannot support “does not exist.”
 14. confirmation of no production, real credential/upstream/canary, profile promotion, Phase 4
     wiring, or protected-file access.
 
+- **Done:** all 14 sections and digests validate, generated Markdown is deterministic, and every
+  usable conclusion is backed by its indexed artifacts.
+- **Stop/budget:** 4 hours and two deterministic render attempts; a leak/digest/orphan failure stops
+  publication.
+- **Parallel/dependency:** after 4.1-4.3 and all selected cells are terminal; report build is serial.
+- **Nearest deliverable:** validated machine-readable partial report with exact missing gates.
+
 ### P3A-4.5 Phase 3B/3.5 handoff bundle
 
-The handoff contains exactly:
+- **Inputs:** validated exit report, P2 bindings, usable conclusion rows, Unknown/negative-capability
+  ledger, and deterministic candidate-input schema.
+- **Files/symbols:** `build-exit.ts --phase3b-handoff`, handoff schema, and
+  `tests/oracle-phase3a-handoff.test.ts`.
+- **Command:** `npm exec tsx tests/oracle-phase3a-handoff.test.ts`, then
+  `build-exit.ts --phase3b-handoff --exit-report EXIT_JSON --out HANDOFF_JSON`; validate twice and
+  compare bytes.
+- **RED:** unknown, contradictory, expired, parser-disagreeing, perturbed, single-observation-only,
+  or over-authority row marked usable; raw material; generated profile/config; missing rollback.
+- **Output/schema:** a byte-deterministic `oracle-lab-phase3a-handoff.v1` bundle contains exactly:
 
 - exit report and machine-readable digest;
 - P2 bundle/predecessor digests and supported schema range;
@@ -859,8 +1034,12 @@ The handoff contains exactly:
 Phase 3B/3.5 must refuse a row that is Unknown, contradictory, expired, parser-disagreeing,
 perturbed, single-observation-only, or above the local evidence authority ceiling.
 
+- **Done:** two builds are byte-identical, all refs resolve, Phase 3B acceptance-case inputs are
+  present, and no executable profile/runtime authority exists.
 - **Stop/budget:** P3A-4 total 1 analyst-day; any leak, orphan digest, unresolved key contradiction,
   or non-reproducible capsule blocks exit but leaves the validated subset as the nearest deliverable.
+- **Parallel/dependency:** after 4.4; serial build only.
+- **Nearest deliverable:** schema-valid blocked handoff naming missing evidence/capability.
 - **Commit:** `docs(oracle): publish Phase 3A safe evidence and Phase 3B handoff`.
 
 ## 14. Error taxonomy and stop rules
