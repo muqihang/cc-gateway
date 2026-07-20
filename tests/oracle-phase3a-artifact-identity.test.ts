@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { buildArtifactIdentityGraph, discoverExecutionRunIds, rootExecutableDigest, verifyArtifactIdentityGraph } from '../tools/oracle-lab/phase3a/artifact-identity.js'
+import { expectedAuthoritativeC4RunIds } from '../tools/oracle-lab/phase3a/c4-evidence.js'
 import { canonicalJson, Phase3AError, sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-artifact-identity.test.ts')
@@ -36,14 +37,23 @@ assert.throws(
 
 const evidenceRoot = mkdtempSync(path.join(tmpdir(), 'phase3a-identity-'))
 const capsules = path.join(evidenceRoot, 'capsules/P3A-2')
-for (const runId of ['active-baseline-002', 'c4-tz-utc-shanghai-r00-control', 'c4-locale-c-en-r11-treatment', 'c4-locale-c-zh-r07-control', 'c3-tz-utc-shanghai-r00-control', 'c4-tz-utc-shanghai-r12-control']) {
+for (const runId of ['active-baseline-002', 'c4-tz-utc-shanghai-r00-control', 'c4-locale-c-en-r11-treatment', 'c4-locale-c-zh-r07-control', 'c3-tz-utc-shanghai-r00-control']) {
   mkdirSync(path.join(capsules, runId), { recursive: true })
 }
-assert.deepEqual(discoverExecutionRunIds(evidenceRoot), ['active-baseline-002', 'c4-locale-c-en-r11-treatment', 'c4-locale-c-zh-r07-control', 'c4-tz-utc-shanghai-r00-control'])
+assert.throws(() => discoverExecutionRunIds(evidenceRoot), (error: unknown) => error instanceof Phase3AError && error.code === 'c4_evidence_incomplete')
+for (const runId of expectedAuthoritativeC4RunIds()) mkdirSync(path.join(capsules, runId), { recursive: true })
+assert.equal(discoverExecutionRunIds(evidenceRoot).length, 73)
+const unexpectedRoot = mkdtempSync(path.join(tmpdir(), 'phase3a-identity-unexpected-'))
+mkdirSync(path.join(unexpectedRoot, 'capsules/P3A-2/c4-tz-utc-shanghai-r12-control'), { recursive: true })
+assert.throws(() => discoverExecutionRunIds(unexpectedRoot), (error: unknown) => error instanceof Phase3AError && error.code === 'c4_evidence_incomplete')
 assert.equal(rootExecutableDigest({ process_samples: [{ executable_class: 'root', executable_sha256: h('f') }, { executable_class: 'root', executable_sha256: null }] }, 'run-with-exit-race'), h('f'))
 assert.throws(
   () => rootExecutableDigest({ process_samples: [{ executable_class: 'root', executable_sha256: h('f') }, { executable_class: 'root', executable_sha256: h('e') }] }, 'run-with-drift'),
   (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_identity_graph_invalid',
 )
+assert.throws(
+  () => rootExecutableDigest({ process_samples: [{ executable_class: 'root', executable_sha256: h('f') }, { executable_class: 'root', executable_sha256: 'malformed' }] }, 'run-with-malformed-digest'),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_identity_graph_invalid',
+)
 
-console.log(JSON.stringify({ ok: true, nodes: first.nodes.length, edges: first.edges.length, execution_discovery: 4, root_identity_cases: 2 }))
+console.log(JSON.stringify({ ok: true, nodes: first.nodes.length, edges: first.edges.length, execution_discovery: 73, root_identity_cases: 3 }))

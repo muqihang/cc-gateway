@@ -3,11 +3,11 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { buildArtifactIndex, type ArtifactIndexInput, writeArtifactIndex } from './artifact-index.js'
+import { validateAuthoritativeC4RunIds } from './c4-evidence.js'
 import { canonicalJson, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
 
 const TOOLCHAIN = '6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
-const C4_RUN = /^c4-(?:tz-utc-shanghai|locale-c-en|locale-c-zh)-r(?:0[0-9]|1[01])-(?:control|treatment)$/
 
 function safeId(value: string): string { return value.replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 120) }
 
@@ -46,9 +46,9 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
     add(`p3a2-${id}-summary`, `capsules/P3A-2/${id}/summary.json`, 'P3A-2', 'retain', [`p3a2-${id}-result`])
   }
   const capsuleRoot = path.join(root, 'capsules/P3A-2')
-  const c4RunIds = existsSync(capsuleRoot)
-    ? readdirSync(capsuleRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && C4_RUN.test(entry.name)).map((entry) => entry.name).sort()
-    : []
+  const c4RunIds = validateAuthoritativeC4RunIds(existsSync(capsuleRoot)
+    ? readdirSync(capsuleRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith('c4-')).map((entry) => entry.name)
+    : [])
   for (const id of c4RunIds) {
     add(`p3a2-${id}-manifest`, `capsules/P3A-2/${id}/manifest.json`, 'P3A-2', 'retain', ['p3a0-artifact-index'])
     add(`p3a2-${id}-guard`, `capsules/P3A-2/${id}/guard.json`, 'P3A-2', 'retain', [`p3a2-${id}-manifest`])

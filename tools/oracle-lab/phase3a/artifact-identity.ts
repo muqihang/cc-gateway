@@ -3,10 +3,10 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { canonicalJson, isSha256, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
+import { validateAuthoritativeC4RunIds } from './c4-evidence.js'
 import { scanSafePersisted } from './schemas.js'
 
 type JsonObject = Record<string, any>
-const C4_RUN = /^c4-(?:tz-utc-shanghai|locale-c-en|locale-c-zh)-r(?:0[0-9]|1[01])-(?:control|treatment)$/
 export type IdentityNode = { id: string; kind: string; sha256: string; status: string }
 export type IdentityEdge = { from: string; to: string; relation: string; status: string }
 export type ArtifactIdentityGraph = {
@@ -100,16 +100,19 @@ export function verifyArtifactIdentityGraph(graph: ArtifactIdentityGraph): void 
 export function discoverExecutionRunIds(evidenceRoot: string): string[] {
   const capsulesRoot = path.join(evidenceRoot, 'capsules/P3A-2')
   if (!existsSync(capsulesRoot)) return []
-  return readdirSync(capsulesRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && (/^active-baseline-00[2-7]$/.test(entry.name) || C4_RUN.test(entry.name)))
-    .map((entry) => entry.name)
-    .sort()
+  const directories = readdirSync(capsulesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  const c4RunIds = validateAuthoritativeC4RunIds(directories.filter((runId) => runId.startsWith('c4-')))
+  return [...directories.filter((runId) => /^active-baseline-00[2-7]$/.test(runId)), ...c4RunIds].sort()
 }
 
 export function rootExecutableDigest(result: JsonObject, runId: string): string {
+  const rootSamples = (Array.isArray(result.process_samples) ? result.process_samples : []).filter((sample: JsonObject) => sample.executable_class === 'root')
+  if (rootSamples.some((sample: JsonObject) => sample.executable_sha256 !== null && !isSha256(sample.executable_sha256))) {
+    throw new Phase3AError('artifact_identity_graph_invalid', `execution identity contains an invalid digest: ${runId}`)
+  }
   const executableDigests = [...new Set(
-    (Array.isArray(result.process_samples) ? result.process_samples : [])
-      .filter((sample: JsonObject) => sample.executable_class === 'root' && isSha256(sample.executable_sha256))
+    rootSamples
+      .filter((sample: JsonObject) => isSha256(sample.executable_sha256))
       .map((sample: JsonObject) => sample.executable_sha256 as string),
   )]
   if (executableDigests.length !== 1) throw new Phase3AError('artifact_identity_graph_invalid', `execution identity is ambiguous: ${runId}`)

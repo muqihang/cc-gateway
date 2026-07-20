@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import { artifactRow, buildArtifactIndex, verifyArtifactIndex } from '../tools/oracle-lab/phase3a/artifact-index.js'
 import { artifactSetDigest, terminalArtifactInputs } from '../tools/oracle-lab/phase3a/build-terminal-index.js'
+import { expectedAuthoritativeC4RunIds } from '../tools/oracle-lab/phase3a/c4-evidence.js'
 import { Phase3AError } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-evidence-root.test.ts')
@@ -45,10 +46,12 @@ writeFileSync(path.join(root, 'normalized/P3A-2', `${c4Run}.json`), '{}\n')
 mkdirSync(path.join(root, 'campaign/P3A-2/c4-tz-utc-shanghai'), { recursive: true })
 writeFileSync(path.join(root, 'campaign/P3A-2/c4-tz-utc-shanghai/input.json'), '{}\n')
 writeFileSync(path.join(root, 'campaign/P3A-2/c4-tz-utc-shanghai/result.json'), '{}\n')
+assert.throws(() => terminalArtifactInputs(root), (error: unknown) => error instanceof Phase3AError && error.code === 'c4_evidence_incomplete')
+for (const runId of expectedAuthoritativeC4RunIds()) mkdirSync(path.join(root, 'capsules/P3A-2', runId), { recursive: true })
 const terminalIds = terminalArtifactInputs(root).map((row) => row.artifact_id)
 assert.ok(terminalIds.includes(`p3a2-${c4Run}-manifest`))
 assert.ok(terminalIds.includes(`p3a2-${c4Run}-normalized`))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-input'))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-result'))
 
-console.log(JSON.stringify({ ok: true, cases: 13 }))
+console.log(JSON.stringify({ ok: true, cases: 14 }))
