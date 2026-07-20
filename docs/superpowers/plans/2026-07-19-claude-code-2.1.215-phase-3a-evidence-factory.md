@@ -419,7 +419,7 @@ process writes an artifact index generation.
 
 - **Inputs:** exact registry and release URLs from Section 2.3; no npm configured registry is trusted.
 - **Files:** future `intake.ts`, `tree-digest.ts`; external `intake/` only.
-- **Command template:** 
+- **Command template:**
 
 ```bash
 curl --fail --location --proto '=https' --tlsv1.2 \
