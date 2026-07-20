@@ -11,7 +11,7 @@ import { assertControlForInstrumentation, buildIsolatedEnvironment, type LaunchM
 import { startConnectProxy } from '../tools/oracle-lab/phase3a/observers/connect-proxy.js'
 import { startFakeUpstream } from '../tools/oracle-lab/phase3a/observers/fake-upstream.js'
 import { descendants, enforceProcessLimits } from '../tools/oracle-lab/phase3a/process-sampler.js'
-import { assertGuardAuthority, buildCellSandboxProfile, evaluateCellCounters, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
+import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
 
 console.log('\ntests/oracle-phase3a-observer.test.ts')
 
@@ -96,6 +96,8 @@ assert.equal(evaluateCellCounters({ output_bytes: 65_537, processes: 1, retries:
 assert.equal(evaluateCellCounters({ output_bytes: 1, processes: 3, retries: 0, sockets: 1 }, manifest.limits), 'process_limit')
 assert.equal(evaluateCellCounters({ output_bytes: 1, processes: 1, retries: 1, sockets: 1 }, manifest.limits), 'retry_limit')
 assert.equal(evaluateCellCounters({ output_bytes: 1, processes: 1, retries: 0, sockets: 3 }, manifest.limits), 'socket_limit')
+assert.deepEqual(classifySafeErrorText('invalid API key; connection denied'), ['authentication', 'permission', 'request-shape', 'transport'])
+assert.deepEqual(classifySafeErrorText('unrecognized failure text'), ['unknown'])
 
 const hookOutput = path.join(evidenceRoot, 'hook.jsonl')
 const preload = path.resolve('tools/oracle-lab/phase3a/hooks/preload.cjs')

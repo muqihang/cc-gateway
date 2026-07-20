@@ -44,6 +44,7 @@ export type CellResult = {
   max_sockets: number | null
   retry_events: number
   hook_event_count: number
+  safe_error_categories: string[]
   raw_output_persisted: false
 }
 
@@ -64,6 +65,19 @@ export function evaluateCellCounters(counters: { output_bytes: number; processes
   if (counters.retries > limits.retries) return 'retry_limit'
   if (counters.sockets > limits.sockets) return 'socket_limit'
   return null
+}
+
+export function classifySafeErrorText(value: string): string[] {
+  const categories = new Set<string>()
+  if (/api[- ]?key|auth(?:entication|orization)?|credential|oauth|token/i.test(value)) categories.add('authentication')
+  if (/base[- ]?url|config(?:uration)?|setting|environment/i.test(value)) categories.add('configuration')
+  if (/connect|network|socket|dns|tls|certificate|proxy|fetch/i.test(value)) categories.add('transport')
+  if (/invalid|parse|json|request|response|protocol/i.test(value)) categories.add('request-shape')
+  if (/permission|denied|forbidden/i.test(value)) categories.add('permission')
+  if (/model/i.test(value)) categories.add('model')
+  if (/capacity|overload|rate.?limit|quota/i.test(value)) categories.add('capacity')
+  if (categories.size === 0 && value.length > 0) categories.add('unknown')
+  return [...categories].sort()
 }
 
 function profileEscape(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"') }
@@ -234,15 +248,22 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   child.stdin.end(stdin); stdin.fill(0)
   const started = process.hrtime.bigint()
   const stdoutHash = createHash('sha256'); const stderrHash = createHash('sha256')
+  const safeErrorChunks: Buffer[] = []
+  let safeErrorBytes = 0
   let stdoutBytes = 0; let stderrBytes = 0; let exceeded = false; let terminationReason: string | null = null
-  const collect = (hash: ReturnType<typeof createHash>, stream: NodeJS.ReadableStream, update: (bytes: number) => void): void => {
+  const collect = (hash: ReturnType<typeof createHash>, stream: NodeJS.ReadableStream, update: (bytes: number) => void, classify = false): void => {
     stream.on('data', (chunk: Buffer) => {
-      const data = Buffer.from(chunk); hash.update(data); update(data.length); data.fill(0)
+      const data = Buffer.from(chunk); hash.update(data); update(data.length)
+      if (classify && safeErrorBytes < 16 * 1024) {
+        const retained = Buffer.from(data.subarray(0, Math.min(data.length, 16 * 1024 - safeErrorBytes)))
+        safeErrorChunks.push(retained); safeErrorBytes += retained.length
+      }
+      data.fill(0)
       if (evaluateCellCounters({ output_bytes: stdoutBytes + stderrBytes, processes: 0, retries: 0, sockets: 0 }, manifest.limits) === 'output_limit' && !exceeded) { exceeded = true; terminationReason ??= 'output_limit'; killTree(child) }
     })
   }
   collect(stdoutHash, child.stdout!, (size) => { stdoutBytes += size })
-  collect(stderrHash, child.stderr!, (size) => { stderrBytes += size })
+  collect(stderrHash, child.stderr!, (size) => { stderrBytes += size }, true)
   const samples: ProcessSample[] = []
   let maxProcesses = 0
   let maxSockets: number | null = 0
@@ -279,13 +300,16 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   const hooks = hookSummary(hookOutput)
   if (evaluateCellCounters({ output_bytes: stdoutBytes + stderrBytes, processes: maxProcesses, retries: hooks.retries, sockets: maxSockets ?? 0 }, manifest.limits) === 'retry_limit') terminationReason ??= 'retry_limit'
   const status: CellResult['status'] = closed.spawnError ? 'spawn-error' : terminationReason === 'wall_timeout' ? 'timeout' : terminationReason ? 'resource-limit' : closed.code === 0 ? 'complete' : 'failed'
+  const safeErrorText = Buffer.concat(safeErrorChunks).toString('utf8')
+  const safeErrorCategories = classifySafeErrorText(safeErrorText)
+  for (const chunk of safeErrorChunks) chunk.fill(0)
   return {
     schema_version: 'oracle-lab-phase3a-cell-result.v1', run_id: manifest.run_id, status,
     exit_code: closed.code, signal: closed.signal, duration_ms: Number((process.hrtime.bigint() - started) / 1_000_000n), termination_reason: terminationReason,
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },
     process_samples: samples, max_processes: maxProcesses, max_sockets: maxSockets,
-    retry_events: hooks.retries, hook_event_count: hooks.count, raw_output_persisted: false,
+    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, raw_output_persisted: false,
   }
 }
 
