@@ -2,11 +2,18 @@ import assert from 'node:assert/strict'
 
 import { buildBlockedDeliverables, buildExitReport, assertExitReport, type CuratedExitInput } from '../tools/oracle-lab/phase3a/build-exit.js'
 import { canonicalJson } from '../tools/oracle-lab/phase3a/core.js'
+import { sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-exit.test.ts')
 
 const a = 'a'.repeat(64)
 const b = 'b'.repeat(64)
+function repository(repository: 'cc-gateway' | 'sub2api'): any {
+  const codegraphUnsigned = { version: '1.1.6', built_with_version: '1.1.6', extraction_version: 24, file_count: 1, node_count: 1, edge_count: 0, up_to_date: true as const }
+  const codegraph = { ...codegraphUnsigned, binding_sha256: sha256Bytes(canonicalJson(codegraphUnsigned)) }
+  const unsigned = { repository, base: 'c'.repeat(40), tool_review_freeze_head: 'd'.repeat(40), head: 'd'.repeat(40), tree: 'e'.repeat(40), dirty_path_count: 0 as const, dirty_state_sha256: sha256Bytes('[]'), codegraph }
+  return { ...unsigned, repository_binding_sha256: sha256Bytes(canonicalJson(unsigned)) }
+}
 const unknown = {
   schema_version: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: 'CL-ACTIVE-BASELINE-BLOCKED', level: 'Unknown',
   scope: 'claude-code-2.1.215 darwin-arm64 loopback baseline', statement: 'The bounded cell failed before messages coverage was obtained.',
@@ -20,7 +27,7 @@ function fixture(): CuratedExitInput {
   return {
     generated_at: '2026-07-20T12:00:00.000Z', exit_report_path: 'docs/superpowers/evidence/phase3a/phase-3a-exit-report.json', artifact_index_sha256: a,
     p2: { bundle_sha256: a, predecessor_sha256: b, schema_range: '1:0-0' },
-    repositories: [{ repository: 'cc-gateway', head: 'c'.repeat(40), tree: 'd'.repeat(40), codegraph: 'current' }],
+    repositories: [repository('cc-gateway'), repository('sub2api')],
     artifacts: [{ artifact_id: 'claude-code-2.1.215', entrypoint_sha256: a, signature_status: 'valid' }],
     toolchain_capabilities: { codegraph: 'available', os_trace: 'degraded' },
     static_analysis: { inventory: 'partial', ast: 'blocked' },

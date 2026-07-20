@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict'
+
+import { buildArtifactIdentityGraph, verifyArtifactIdentityGraph } from '../tools/oracle-lab/phase3a/artifact-identity.js'
+import { canonicalJson, Phase3AError, sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
+
+console.log('\ntests/oracle-phase3a-artifact-identity.test.ts')
+
+const h = (character: string): string => character.repeat(64)
+const intake = {
+  schema_version: 'oracle-lab-phase3a-intake.v1',
+  artifacts: [
+    { artifact_id: 'claude-code-2.1.215-wrapper', kind: 'npm-wrapper', version: '2.1.215', source_url: 'https://registry.npmjs.org/wrapper.tgz', archive_sha256: h('a'), tree_sha256: h('b'), verification: { npm_integrity_match: true, lifecycle_scripts_executed: false, metadata_sha256: h('c'), independent_unpack_roots: 2, independent_inventory_match: true } },
+    { artifact_id: 'claude-code-2.1.215-platform', kind: 'npm-platform', version: '2.1.215', source_url: 'https://registry.npmjs.org/platform.tgz', archive_sha256: h('d'), tree_sha256: h('e'), entrypoint_sha256: h('f'), verification: { npm_integrity_match: true, lifecycle_scripts_executed: false, metadata_sha256: h('1') } },
+    { artifact_id: 'claude-code-2.1.215-github-release-darwin-arm64', kind: 'github-release', version: '2.1.215', source_url: 'https://github.com/anthropics/claude-code/releases/download/v2.1.215/claude.tar.gz', archive_sha256: h('2'), tree_sha256: h('3'), entrypoint_sha256: h('f'), verification: { shasums_match: true, lifecycle_scripts_executed: false, release_metadata_sha256: h('4'), shasums_sha256: h('5'), signature_sha256: h('6'), signature_verification: 'Unknown' } },
+  ],
+}
+const staticSummary = { artifact_sha256: h('f'), signature: { verification_status: 'valid', authority: 'Developer ID Application: Anthropic PBC', identifier: 'com.anthropic.claude-code', team_identifier: 'TEAM', verify_command_sha256: h('7'), detail_command_sha256: h('8'), raw_command_output_persisted: false } }
+const executions = [{ run_id: 'run-1', result_sha256: h('9'), executable_sha256: h('f'), external_socket_budget: 0, status: 'failed' }]
+
+const first = buildArtifactIdentityGraph(intake, staticSummary, executions)
+const second = buildArtifactIdentityGraph(intake, staticSummary, executions)
+verifyArtifactIdentityGraph(first)
+assert.equal(canonicalJson(first), canonicalJson(second))
+assert.equal(first.aggregate_sha256, sha256Bytes(canonicalJson({ nodes: first.nodes, edges: first.edges })))
+assert.equal(first.signature.release_detached_signature, 'Unknown')
+assert.equal(first.signature.macos_code_signature, 'valid')
+assert.ok(first.edges.some((edge) => edge.relation === 'executed-as'))
+
+assert.throws(
+  () => buildArtifactIdentityGraph({ ...intake, artifacts: intake.artifacts.map((artifact) => artifact.kind === 'npm-platform' ? { ...artifact, verification: { ...artifact.verification, npm_integrity_match: false } } : artifact) }, staticSummary, executions),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_identity_graph_invalid',
+)
+
+console.log(JSON.stringify({ ok: true, nodes: first.nodes.length, edges: first.edges.length }))

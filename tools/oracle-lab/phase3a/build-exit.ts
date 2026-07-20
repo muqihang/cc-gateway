@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import Ajv2020, { type ErrorObject } from 'ajv/dist/2020.js'
 
 import { canonicalJson, Phase3AError, sha256Bytes, sha256File } from './core.js'
+import { captureRepositoryBinding, validateRepositoryBinding, type RepositoryBinding } from './repository-binding.js'
 import { assertPhase3A, scanSafePersisted } from './schemas.js'
 
 type JsonObject = Record<string, any>
@@ -24,7 +25,8 @@ export type CuratedExitInput = {
   exit_report_path: string
   artifact_index_sha256: string
   p2: { bundle_sha256: string; predecessor_sha256: string; schema_range: '1:0-0' }
-  repositories: unknown[]
+  repositories: RepositoryBinding[]
+  repository_capture_required?: boolean
   artifacts: unknown[]
   toolchain_capabilities: JsonObject | unknown[]
   static_analysis: JsonObject | unknown[]
@@ -109,6 +111,7 @@ function boundedConclusions(input: CuratedExitInput): { conclusions: JsonObject[
 }
 
 function assertCuratedInput(input: CuratedExitInput): void {
+  if (input.repository_capture_required) throw new Phase3AError('repository_capture_required', 'repository bindings must be captured from the frozen worktrees')
   if (!Number.isFinite(Date.parse(input.generated_at))) throw new Phase3AError('exit_input_invalid', 'generated_at must be an ISO timestamp')
   if (!/^[a-f0-9]{64}$/.test(input.artifact_index_sha256)) throw new Phase3AError('exit_input_invalid', 'artifact index digest is invalid')
   if (input.missing_gates.length === 0) throw new Phase3AError('exit_missing_gate_required', 'blocked exit must name at least one missing gate')
@@ -116,6 +119,9 @@ function assertCuratedInput(input: CuratedExitInput): void {
   if (input.safety_confirmation.runtime_enforcement_implemented !== false || Object.entries(input.safety_confirmation).some(([key, value]) => key !== 'runtime_enforcement_implemented' && value !== true)) {
     throw new Phase3AError('exit_safety_invalid', 'all safety boundaries must be affirmed and runtime enforcement must remain false')
   }
+  const repositoryNames = input.repositories.map((repository) => repository.repository).sort()
+  if (canonicalJson(repositoryNames) !== canonicalJson(['cc-gateway', 'sub2api'])) throw new Phase3AError('repository_binding_invalid', 'exit report must bind exactly cc-gateway and sub2api')
+  input.repositories.forEach(validateRepositoryBinding)
   const unsafe = scanSafePersisted(input)
   if (unsafe.length > 0) throw new Phase3AError('exit_unsafe_material', canonicalJson(unsafe))
   const forbiddenKey = (value: unknown): boolean => {
@@ -212,6 +218,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const inputFile = argument('--input')
   if (!inputFile) throw new Phase3AError('usage', 'usage: build-exit.ts --input CURATED.json [--handoff|--markdown]')
   const input = JSON.parse(readFileSync(inputFile, 'utf8')) as CuratedExitInput
+  if (input.repository_capture_required) {
+    const ccRoot = argument('--cc-root'); const sub2apiRoot = argument('--sub2api-root')
+    const ccBase = argument('--cc-base'); const sub2apiBase = argument('--sub2api-base')
+    const ccFreeze = argument('--cc-freeze-head'); const sub2apiFreeze = argument('--sub2api-freeze-head')
+    if (!ccRoot || !sub2apiRoot || !ccBase || !sub2apiBase || !ccFreeze || !sub2apiFreeze) throw new Phase3AError('repository_binding_invalid', 'repository capture roots, bases, and freeze heads are required')
+    input.repositories = [
+      captureRepositoryBinding(ccRoot, { repository: 'cc-gateway', base: ccBase, freezeHead: ccFreeze }),
+      captureRepositoryBinding(sub2apiRoot, { repository: 'sub2api', base: sub2apiBase, freezeHead: sub2apiFreeze }),
+    ]
+    input.repository_capture_required = false
+  }
   const built = buildBlockedDeliverables(input)
   const outputs = [
     [argument('--out-exit'), `${canonicalJson(built.exit)}\n`],

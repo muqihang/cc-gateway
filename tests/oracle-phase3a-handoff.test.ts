@@ -8,6 +8,12 @@ console.log('\ntests/oracle-phase3a-handoff.test.ts')
 
 const a = 'a'.repeat(64)
 const b = 'b'.repeat(64)
+function repository(repositoryName: 'cc-gateway' | 'sub2api'): any {
+  const codegraphUnsigned = { version: '1.1.6', built_with_version: '1.1.6', extraction_version: 24, file_count: 1, node_count: 1, edge_count: 0, up_to_date: true as const }
+  const codegraph = { ...codegraphUnsigned, binding_sha256: sha256Bytes(canonicalJson(codegraphUnsigned)) }
+  const unsigned = { repository: repositoryName, base: 'c'.repeat(40), tool_review_freeze_head: 'd'.repeat(40), head: 'd'.repeat(40), tree: 'e'.repeat(40), dirty_path_count: 0 as const, dirty_state_sha256: sha256Bytes('[]'), codegraph }
+  return { ...unsigned, repository_binding_sha256: sha256Bytes(canonicalJson(unsigned)) }
+}
 const baseConclusion = {
   schema_version: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: 'CL-ROW', level: 'Observed', scope: 'darwin-arm64 loopback',
   statement: 'A bounded local observation was captured.', supporting_artifact_ids: ['artifact-1'], contradicting_artifact_ids: [],
@@ -27,7 +33,7 @@ function fixture(): CuratedExitInput {
   ]
   return {
     generated_at: '2026-07-20T12:00:00.000Z', exit_report_path: 'docs/superpowers/evidence/phase3a/exit.json', artifact_index_sha256: a,
-    p2: { bundle_sha256: a, predecessor_sha256: b, schema_range: '1:0-0' }, repositories: [], artifacts: [], toolchain_capabilities: {}, static_analysis: {},
+    p2: { bundle_sha256: a, predecessor_sha256: b, schema_range: '1:0-0' }, repositories: [repository('cc-gateway'), repository('sub2api')], artifacts: [], toolchain_capabilities: {}, static_analysis: {},
     coverage: { active: [], change_points: [], omitted: [{ cell: 'all-positive', reason: 'blocked' }] }, protocol_runtime_summaries: [], perturbation_source_agreement: {},
     evidence_health: { contradictions: [{ contradiction_id: 'CX-1' }], expired: ['CL-EXPIRED'], errors: [], unknowns: ['positive-profile'] }, conclusions: rows,
     p2_mapping: {}, evidence_hygiene: { leak_scan: 'PASS' }, reproduction: { deterministic: true },

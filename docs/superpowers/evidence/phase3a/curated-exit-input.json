@@ -1,7 +1,8 @@
 {
   "generated_at": "2026-07-20T12:00:00.000Z",
   "exit_report_path": "docs/superpowers/evidence/phase3a/phase-3a-exit-report.json",
-  "artifact_index_sha256": "88cf8b6a5ad08f42ac27ee4e10d5e1f46a03a304d6ebbfdc1dd774811d635043",
+  "artifact_index_sha256": "ff0597e052a8e28082df312ffc10d3d545b0f698a967e005feed67b40d97c24d",
+  "repository_capture_required": true,
   "p2": {
     "bundle_sha256": "2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce",
     "predecessor_sha256": "70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1",
@@ -12,9 +13,10 @@
     {"repository": "sub2api", "base": "cea7de895b8b523f3a6bb46be77ba09bc31a11bc", "head": "8c107d84fee391ce5030d19725a705d4d77973a3", "tree": "eeb8654eddf7a4c38364202f5024161e65d2a6d1", "codegraph": "current"}
   ],
   "artifacts": [
-    {"artifact_id": "claude-code-2.1.215-wrapper", "archive_sha256": "1a5cf8e491689154264c0b2f28371bf645cdee2903b45c497915868308502d7b", "tree_sha256": "024fa410b532ced37cd9e45a95aae6f9eb22e9ce8491e1fad843f24d958f4a88"},
-    {"artifact_id": "claude-code-2.1.215-platform", "archive_sha256": "b5dd6a135c96957dae232218c4ae5b04328a788f8c509202c92a2fec550601b2", "tree_sha256": "864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58"},
-    {"artifact_id": "claude-code-2.1.215-release", "archive_sha256": "599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600", "tree_sha256": "f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58", "signature_status": "valid"}
+    {"artifact_id": "claude-code-2.1.215-wrapper", "source_class": "official-npm", "archive_sha256": "1a5cf8e491689154264c0b2f28371bf645cdee2903b45c497915868308502d7b", "tree_sha256": "024fa410b532ced37cd9e45a95aae6f9eb22e9ce8491e1fad843f24d958f4a88", "npm_integrity": "verified", "independent_unpack_roots": 2, "inventory_agreement": true, "lifecycle_scripts_executed": false},
+    {"artifact_id": "claude-code-2.1.215-platform", "source_class": "official-npm-platform", "archive_sha256": "b5dd6a135c96957dae232218c4ae5b04328a788f8c509202c92a2fec550601b2", "tree_sha256": "864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58", "npm_integrity": "verified", "lifecycle_scripts_executed": false},
+    {"artifact_id": "claude-code-2.1.215-release", "source_class": "official-github-release", "archive_sha256": "599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600", "tree_sha256": "f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58", "release_shasums": "verified", "release_detached_signature": "Unknown", "macos_code_signature": "valid", "lifecycle_scripts_executed": false},
+    {"artifact_id": "official-source-integrity-signature-execution-graph", "schema_version": "oracle-lab-phase3a-artifact-identity-graph.v1", "nodes": 18, "edges": 16, "aggregate_sha256": "4ce1e08ae3b410f95dd58add5f26ca4a0a580d652eb423ca09078bb7f79547f3", "file_sha256": "22138b54249f759fd19e86eaee5fbaaa755b49af0a145f2a9f946293ab67803f", "execution_runs": 6, "external_socket_budget": 0, "status": "verified-with-explicit-signature-unknown"}
   ],
   "toolchain_capabilities": {
     "toolchain_digest": "6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d",
@@ -132,15 +134,16 @@
     {"gate": "failure-semantics", "status": "Observed-only", "bundle_unchanged": true}
   ],
   "evidence_hygiene": {
-    "terminal_index_sha256": "88cf8b6a5ad08f42ac27ee4e10d5e1f46a03a304d6ebbfdc1dd774811d635043",
+    "terminal_index_sha256": "ff0597e052a8e28082df312ffc10d3d545b0f698a967e005feed67b40d97c24d",
     "leak_scan": "PASS",
     "leak_findings": 0,
-    "scanned_bytes": 1559719,
+    "scanned_bytes": 1565849,
     "quarantine_count": 3,
-    "all_evidence_digest": "cbe7c5cf17c57d659fa12505036844f0e2e16f518e8eb71a891ae6e7d5d45632",
-    "raw_quarantine_digest": "f2955e261f0f65840f6cd381991ebbfa96adc6df35b0b297685e43ff0c2a9e28",
-    "normalized_safe_digest": "fae6f6c809b46b4bcaeb5790079d2c2ee0f843250004572640b960e4fc9151f7",
-    "indexed_bytes": 21916715,
+    "aggregate_algorithm": "canonical-artifact-set-v1",
+    "all_evidence_digest": "a39af6602992bca615ad048983994113cb45b556057f48b9beb23cdc943e2eb0",
+    "raw_quarantine_digest": "428d7f9ff5636f5915c1035e2c7f54fab6b6ce72cd7786df56fcfbc336279c28",
+    "normalized_safe_digest": "92d07197ddf5850f80b85f831f092e23b8c0870b6810092e755bac67a2d58d3b",
+    "indexed_bytes": 21922845,
     "evidence_root_kib": 660680,
     "free_disk_kib": 27064440,
     "retention": "retained",
@@ -152,9 +155,15 @@
       "npm exec tsx tests/oracle-phase3a-static.test.ts",
       "npm exec tsx tests/oracle-phase3a-observer.test.ts",
       "npm exec tsx tests/oracle-phase3a-safe-error.test.ts",
+      "npm exec tsx tests/oracle-phase3a-artifact-identity.test.ts",
+      "npm exec tsx tests/oracle-phase3a-repository-binding.test.ts",
+      "npm exec tsx tests/oracle-phase3a-evidence-root.test.ts",
       "npm exec tsx tests/oracle-phase3a-exit.test.ts",
       "npm exec tsx tests/oracle-phase3a-handoff.test.ts",
-      "npm exec tsx tools/oracle-contract/check-cross-repo.ts -- --check"
+      "npm exec tsx tools/oracle-contract/check-cross-repo.ts -- --check",
+      "npm exec tsx tools/oracle-lab/phase3a/artifact-identity.ts -- --evidence-root \"$P3A_EVIDENCE_ROOT\" --out \"$P3A_EVIDENCE_ROOT/normalized/P3A-4/artifact-identity-graph.json\" --replace-generated",
+      "npm exec tsx tools/oracle-lab/phase3a/build-terminal-index.ts -- --evidence-root \"$P3A_EVIDENCE_ROOT\" --out \"$P3A_EVIDENCE_ROOT/capsules/P3A-4/artifact-index-next.json\"",
+      "codegraph sync && codegraph status --json"
     ],
     "unavailable_tools": ["elevated macOS OS tracing", "isolated Linux worker", "isolated Windows worker"]
   },

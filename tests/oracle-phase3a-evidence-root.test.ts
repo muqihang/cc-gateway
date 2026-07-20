@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { artifactRow, buildArtifactIndex, verifyArtifactIndex } from '../tools/oracle-lab/phase3a/artifact-index.js'
+import { artifactSetDigest } from '../tools/oracle-lab/phase3a/build-terminal-index.js'
 import { Phase3AError } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-evidence-root.test.ts')
@@ -20,4 +21,19 @@ verifyArtifactIndex(index, root)
 writeFileSync(path.join(root, 'safe', 'artifact.json'), '{"changed":true}\n')
 assert.throws(() => verifyArtifactIndex(index, root), (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_hash_mismatch')
 
-console.log(JSON.stringify({ ok: true, cases: 4 }))
+const parent = { ...base, artifact_id: 'parent' }
+const child = { ...base, artifact_id: 'child', parent_artifact_ids: ['parent'] }
+assert.equal((buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: [child, parent] }) as any).artifacts.length, 2)
+assert.throws(
+  () => buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: [{ ...parent, parent_artifact_ids: ['child'] }, child] }),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_parent_cycle',
+)
+assert.throws(
+  () => buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: [{ ...parent, parent_artifact_ids: ['parent'] }] }),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_parent_cycle',
+)
+const aggregateRows = [{ artifact_id: 'b', sha256: 'b'.repeat(64), byte_size: 2, parent_artifact_ids: ['a'], sensitivity: 'normalized-safe' }, { artifact_id: 'a', sha256: 'a'.repeat(64), byte_size: 1, parent_artifact_ids: [], sensitivity: 'normalized-safe' }]
+assert.equal(artifactSetDigest(aggregateRows), artifactSetDigest([...aggregateRows].reverse()))
+assert.notEqual(artifactSetDigest(aggregateRows), artifactSetDigest([{ ...aggregateRows[0], byte_size: 3 }, aggregateRows[1]]))
+
+console.log(JSON.stringify({ ok: true, cases: 9 }))

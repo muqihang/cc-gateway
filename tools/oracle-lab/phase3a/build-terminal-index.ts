@@ -3,7 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { buildArtifactIndex, type ArtifactIndexInput, writeArtifactIndex } from './artifact-index.js'
-import { canonicalJson, Phase3AError, sha256File, stableError } from './core.js'
+import { canonicalJson, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
 
 const TOOLCHAIN = '6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
@@ -12,35 +12,41 @@ function safeId(value: string): string { return value.replace(/[^A-Za-z0-9._:-]+
 
 export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   const rows: ArtifactIndexInput[] = []
-  const add = (artifactId: string, relativePath: string, scope: string, disposition: ArtifactIndexInput['disposition'] = 'retain'): void => {
+  const add = (artifactId: string, relativePath: string, scope: string, disposition: ArtifactIndexInput['disposition'] = 'retain', parents: string[] = []): void => {
     if (!existsSync(path.join(root, relativePath))) return
     rows.push({
       artifact_id: safeId(artifactId), relative_path: relativePath, media_type: 'application/json', source_url: null, scope,
       requirement_ids: ['HA-P1-001'], sensitivity: 'normalized-safe', redaction_transform: 'phase3a-safe-summary-v1',
       retention_class: 'normalized-until-phase3b', expiry: EXPIRY, disposition,
-      parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'agreed', parent_artifact_ids: [],
+      parser_name: 'phase3a-terminal-index', parser_version: '2', parser_agreement: 'agreed', parent_artifact_ids: parents,
     })
   }
   add('p3a0-artifact-index', 'capsules/P3A-0/artifact-index.json', 'P3A-0')
-  add('p3a1-static-summary', 'capsules/P3A-1/static-summary.json', 'P3A-1')
+  add('p3a1-static-summary', 'capsules/P3A-1/static-summary.json', 'P3A-1', 'retain', ['p3a1-inventory', 'p3a1-extraction-a', 'p3a1-extraction-b'])
   const staticRoot = 'static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58'
-  add('p3a1-inventory', `${staticRoot}/inventory-v2.json`, 'P3A-1')
-  add('p3a1-extraction-a', `${staticRoot}/bun-extract-a/extraction-index.json`, 'P3A-1')
-  add('p3a1-extraction-b', `${staticRoot}/bun-extract-b/extraction-index.json`, 'P3A-1')
+  add('p3a1-inventory', `${staticRoot}/inventory-v2.json`, 'P3A-1', 'retain', ['p3a0-artifact-index'])
+  add('p3a1-extraction-a', `${staticRoot}/bun-extract-a/extraction-index.json`, 'P3A-1', 'retain', ['p3a1-inventory'])
+  add('p3a1-extraction-b', `${staticRoot}/bun-extract-b/extraction-index.json`, 'P3A-1', 'retain', ['p3a1-inventory'])
   for (const lane of ['ast-small-a', 'ast-small-b']) {
     const directory = path.join(root, staticRoot, lane)
     if (!existsSync(directory)) continue
     for (const name of readdirSync(directory).filter((entry) => entry.endsWith('.json')).sort()) {
-      add(`p3a1-${lane}-${name.replace(/\.json$/, '')}`, `${staticRoot}/${lane}/${name}`, 'P3A-1')
+      add(`p3a1-${lane}-${name.replace(/\.json$/, '')}`, `${staticRoot}/${lane}/${name}`, 'P3A-1', 'retain', [lane.endsWith('-a') ? 'p3a1-extraction-a' : 'p3a1-extraction-b'])
     }
   }
   const invalidAst = `${staticRoot}/ast-a/module-0.json`
-  if (existsSync(path.join(root, invalidAst))) rows.push({ artifact_id: 'p3a1-invalid-ast-superseded', relative_path: invalidAst, media_type: 'application/json', source_url: null, scope: 'P3A-1-invalid', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-superseded', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'superseded-non-reproducible', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'disagreed', negative_result: 'canonical AST traversal short-circuited and is invalid', parent_artifact_ids: [] })
+  if (existsSync(path.join(root, invalidAst))) rows.push({ artifact_id: 'p3a1-invalid-ast-superseded', relative_path: invalidAst, media_type: 'application/json', source_url: null, scope: 'P3A-1-invalid', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-superseded', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'superseded-non-reproducible', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'disagreed', negative_result: 'canonical AST traversal short-circuited and is invalid', parent_artifact_ids: ['p3a1-extraction-a'] })
   for (let run = 2; run <= 7; run += 1) {
     const id = `active-baseline-${String(run).padStart(3, '0')}`
-    for (const name of ['manifest', 'guard', 'observer', 'result', 'summary']) add(`p3a2-${id}-${name}`, `capsules/P3A-2/${id}/${name}.json`, 'P3A-2')
+    add(`p3a2-${id}-manifest`, `capsules/P3A-2/${id}/manifest.json`, 'P3A-2', 'retain', ['p3a0-artifact-index'])
+    add(`p3a2-${id}-guard`, `capsules/P3A-2/${id}/guard.json`, 'P3A-2', 'retain', [`p3a2-${id}-manifest`])
+    add(`p3a2-${id}-observer`, `capsules/P3A-2/${id}/observer.json`, 'P3A-2', 'retain', [`p3a2-${id}-manifest`])
+    add(`p3a2-${id}-result`, `capsules/P3A-2/${id}/result.json`, 'P3A-2', 'retain', [`p3a2-${id}-guard`, `p3a2-${id}-observer`])
+    add(`p3a2-${id}-summary`, `capsules/P3A-2/${id}/summary.json`, 'P3A-2', 'retain', [`p3a2-${id}-result`])
   }
-  add('p3a4-normalized-observations', 'capsules/P3A-4/normalized-observations.json', 'P3A-4')
+  const dynamicParents = Array.from({ length: 6 }, (_, index) => `p3a2-active-baseline-${String(index + 2).padStart(3, '0')}-summary`)
+  add('p3a4-normalized-observations', 'capsules/P3A-4/normalized-observations.json', 'P3A-4', 'retain', dynamicParents)
+  add('p3a4-artifact-identity-graph', 'normalized/P3A-4/artifact-identity-graph.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...dynamicParents])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
     { artifact_id: 'raw-release-intake-record-quarantine', relative_path: 'intake/release/2.1.215/artifact.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
@@ -50,6 +56,14 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
 
 function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : undefined }
 
+export function artifactSetDigest(rows: Array<Record<string, any>>, sensitivity?: string): string {
+  const selected = rows
+    .filter((row) => sensitivity === undefined || row.sensitivity === sensitivity)
+    .map((row) => ({ artifact_id: row.artifact_id, sha256: row.sha256, byte_size: row.byte_size, parent_artifact_ids: row.parent_artifact_ids }))
+    .sort((left, right) => left.artifact_id.localeCompare(right.artifact_id))
+  return sha256Bytes(canonicalJson(selected))
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const root = argument('--evidence-root'); const out = argument('--out')
@@ -58,6 +72,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const index = buildArtifactIndex({ evidenceRoot: root, evidenceRootId: path.basename(root), generatedAt: '2026-07-20T12:00:00.000Z', previousIndexSha256: sha256File(previous), toolchainDigest: TOOLCHAIN, artifacts: terminalArtifactInputs(root) })
     mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })
     const digest = writeArtifactIndex(index, out)
-    process.stdout.write(`${canonicalJson({ artifacts: index.artifacts.length, sha256: digest })}\n`)
+    const artifacts = index.artifacts as Array<Record<string, any>>
+    process.stdout.write(`${canonicalJson({
+      artifacts: artifacts.length, sha256: digest, indexed_bytes: artifacts.reduce((total, row) => total + Number(row.byte_size), 0),
+      all_evidence_digest: artifactSetDigest(artifacts), normalized_safe_digest: artifactSetDigest(artifacts, 'normalized-safe'), raw_quarantine_digest: artifactSetDigest(artifacts, 'quarantine'),
+      aggregate_algorithm: 'canonical-artifact-set-v1',
+    })}\n`)
   } catch (error) { process.stderr.write(`${canonicalJson(stableError(error))}\n`); process.exitCode = 1 }
 }

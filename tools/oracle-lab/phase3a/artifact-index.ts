@@ -23,6 +23,28 @@ export type ArtifactIndexInput = {
   parent_artifact_ids?: string[]
 }
 
+function assertParentGraph(rows: Array<Record<string, unknown>>): void {
+  const byId = new Map(rows.map((row) => [String(row.artifact_id), row]))
+  if (byId.size !== rows.length) throw new Phase3AError('duplicate_artifact_id', 'artifact index contains duplicate ids')
+  for (const row of rows) {
+    for (const parent of row.parent_artifact_ids as string[]) {
+      if (!byId.has(parent)) throw new Phase3AError('orphan_artifact', `missing parent artifact: ${parent}`)
+    }
+  }
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (artifactId: string): void => {
+    if (visiting.has(artifactId)) throw new Phase3AError('artifact_parent_cycle', `artifact parent cycle includes: ${artifactId}`)
+    if (visited.has(artifactId)) return
+    visiting.add(artifactId)
+    const row = byId.get(artifactId)!
+    for (const parent of row.parent_artifact_ids as string[]) visit(parent)
+    visiting.delete(artifactId)
+    visited.add(artifactId)
+  }
+  for (const artifactId of [...byId.keys()].sort()) visit(artifactId)
+}
+
 function absoluteArtifact(evidenceRootInput: string, relative: string): string {
   const evidenceRoot = realpathSync(evidenceRootInput)
   if (!relative || path.isAbsolute(relative) || path.posix.normalize(relative) !== relative || relative.split('/').includes('..')) {
@@ -64,9 +86,7 @@ export function buildArtifactIndex(input: { evidenceRoot: string; evidenceRootId
     ids.add(artifact.artifact_id)
     return artifactRow(artifact, { evidenceRoot: input.evidenceRoot, toolchainDigest: input.toolchainDigest, commandDigest, verificationDigest })
   })
-  for (const row of rows) {
-    for (const parent of row.parent_artifact_ids as string[]) if (!ids.has(parent)) throw new Phase3AError('orphan_artifact', `missing parent artifact: ${parent}`)
-  }
+  assertParentGraph(rows)
   const index = { schema_version: 'oracle-lab-phase3a-artifact-index.v1', generated_at: input.generatedAt, evidence_root_id: input.evidenceRootId, previous_index_sha256: input.previousIndexSha256, artifacts: rows }
   assertPhase3A('artifact-index', index)
   return index
@@ -74,6 +94,7 @@ export function buildArtifactIndex(input: { evidenceRoot: string; evidenceRootId
 
 export function verifyArtifactIndex(index: any, evidenceRoot: string): void {
   assertPhase3A('artifact-index', index)
+  assertParentGraph(index.artifacts)
   for (const row of index.artifacts) {
     const absolute = absoluteArtifact(evidenceRoot, row.relative_path)
     if (statSync(absolute).size !== row.byte_size || sha256File(absolute) !== row.sha256) {
