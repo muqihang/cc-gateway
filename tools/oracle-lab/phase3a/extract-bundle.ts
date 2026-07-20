@@ -10,7 +10,7 @@ const MAX_CANDIDATES = 100_000
 export type ExtractedCandidate = {
   candidate_id: string
   parent_artifact_sha256: string
-  source: 'whole-file' | 'mach-o-section'
+  source: 'whole-file' | 'mach-o-section' | 'bun-standalone-module'
   segment: string | null
   section: string | null
   location: StaticLocation
@@ -20,6 +20,16 @@ export type ExtractedCandidate = {
   encoding: 'utf8' | 'binary'
   classification: 'plain' | 'minified' | 'bundled' | 'packed' | 'obfuscated' | 'opaque'
   classification_evidence: string[]
+  container: null | {
+    format: 'bun-standalone-graph-v1'
+    module_index: number
+    module_name_sha256: string
+    module_name_byte_length: number
+    encoding: number
+    loader: number
+    module_format: number
+    side: number
+  }
   persisted_payload: false
 }
 
@@ -87,6 +97,7 @@ function candidate(
   offset: number,
   segment: string | null,
   section: string | null,
+  container: ExtractedCandidate['container'] = null,
 ): ExtractedCandidate {
   const digest = sha256Bytes(bytes)
   const classification = classify(bytes)
@@ -101,8 +112,90 @@ function candidate(
     sha256: digest,
     entropy_bits_per_byte: entropy(bytes),
     ...classification,
+    container,
     persisted_payload: false,
   }
+}
+
+const BUN_STANDALONE_TRAILER = Buffer.from('\n---- Bun! ----\n', 'ascii')
+const BUN_STANDALONE_OFFSETS_BYTES = 32
+const BUN_STANDALONE_MODULE_BYTES = 52
+
+type StringPointer = { offset: number; length: number }
+
+function stringPointer(bytes: Buffer, offset: number): StringPointer {
+  return { offset: bytes.readUInt32LE(offset), length: bytes.readUInt32LE(offset + 4) }
+}
+
+function boundedPointer(pointer: StringPointer, byteCount: number, label: string, nulTerminated: boolean): void {
+  const end = pointer.offset + pointer.length
+  if (!Number.isSafeInteger(end) || pointer.offset < 0 || pointer.length < 0 || end > byteCount) {
+    fail('static_bun_graph_invalid', `${label} pointer is outside the standalone graph`)
+  }
+  if (nulTerminated && pointer.length > 0 && end >= byteCount) {
+    fail('static_bun_graph_invalid', `${label} pointer lacks space for its terminator`)
+  }
+}
+
+function bunStandaloneCandidates(sectionBytes: Buffer, sectionOffset: number, artifactDigest: string): ExtractedCandidate[] {
+  if (sectionBytes.length < 8 + BUN_STANDALONE_OFFSETS_BYTES + BUN_STANDALONE_TRAILER.length) return []
+  const payloadLength = sectionBytes.readBigUInt64LE(0)
+  if (payloadLength > BigInt(Number.MAX_SAFE_INTEGER)) fail('static_bun_graph_invalid', 'standalone graph length exceeds the safe integer range')
+  const payloadBytes = Number(payloadLength)
+  const trailerStart = sectionBytes.length - BUN_STANDALONE_TRAILER.length
+  const hasTrailer = sectionBytes.subarray(trailerStart).equals(BUN_STANDALONE_TRAILER)
+  if (!hasTrailer) return []
+  if (payloadBytes !== sectionBytes.length - 8) fail('static_bun_graph_invalid', 'standalone graph section length header disagrees with the Mach-O section')
+
+  const payload = sectionBytes.subarray(8)
+  const offsetsStart = payload.length - BUN_STANDALONE_TRAILER.length - BUN_STANDALONE_OFFSETS_BYTES
+  const byteCountValue = payload.readBigUInt64LE(offsetsStart)
+  if (byteCountValue > BigInt(Number.MAX_SAFE_INTEGER)) fail('static_bun_graph_invalid', 'standalone graph byte count exceeds the safe integer range')
+  const byteCount = Number(byteCountValue)
+  if (byteCount !== offsetsStart) fail('static_bun_graph_invalid', 'standalone graph byte count does not terminate at its footer')
+  const modules = stringPointer(payload, offsetsStart + 8)
+  const entryPointId = payload.readUInt32LE(offsetsStart + 16)
+  const compileArgv = stringPointer(payload, offsetsStart + 20)
+  boundedPointer(modules, byteCount, 'module table', false)
+  boundedPointer(compileArgv, byteCount, 'compile argv', true)
+  if (modules.length === 0 || modules.length % BUN_STANDALONE_MODULE_BYTES !== 0) {
+    fail('static_bun_graph_invalid', 'standalone graph module table has an invalid byte length')
+  }
+  const moduleCount = modules.length / BUN_STANDALONE_MODULE_BYTES
+  if (moduleCount > MAX_CANDIDATES || entryPointId >= moduleCount) fail('static_bun_graph_invalid', 'standalone graph module count or entry point is invalid')
+
+  const output: ExtractedCandidate[] = []
+  for (let moduleIndex = 0; moduleIndex < moduleCount; moduleIndex += 1) {
+    const recordOffset = modules.offset + moduleIndex * BUN_STANDALONE_MODULE_BYTES
+    const name = stringPointer(payload, recordOffset)
+    const contents = stringPointer(payload, recordOffset + 8)
+    const sourcemap = stringPointer(payload, recordOffset + 16)
+    const bytecode = stringPointer(payload, recordOffset + 24)
+    const moduleInfo = stringPointer(payload, recordOffset + 32)
+    const bytecodeOrigin = stringPointer(payload, recordOffset + 40)
+    boundedPointer(name, byteCount, `module ${moduleIndex} name`, true)
+    boundedPointer(contents, byteCount, `module ${moduleIndex} contents`, true)
+    boundedPointer(sourcemap, byteCount, `module ${moduleIndex} sourcemap`, false)
+    boundedPointer(bytecode, byteCount, `module ${moduleIndex} bytecode`, false)
+    boundedPointer(moduleInfo, byteCount, `module ${moduleIndex} module info`, false)
+    boundedPointer(bytecodeOrigin, byteCount, `module ${moduleIndex} bytecode origin`, true)
+    if (name.length === 0 || contents.length === 0 || payload[name.offset + name.length] !== 0 || payload[contents.offset + contents.length] !== 0) {
+      fail('static_bun_graph_invalid', `module ${moduleIndex} name or contents is not NUL terminated`)
+    }
+    const nameBytes = payload.subarray(name.offset, name.offset + name.length)
+    const contentBytes = payload.subarray(contents.offset, contents.offset + contents.length)
+    output.push(candidate(contentBytes, artifactDigest, 'bun-standalone-module', sectionOffset + 8 + contents.offset, '__BUN', '__bun', {
+      format: 'bun-standalone-graph-v1',
+      module_index: moduleIndex,
+      module_name_sha256: sha256Bytes(nameBytes),
+      module_name_byte_length: name.length,
+      encoding: payload[recordOffset + 48],
+      loader: payload[recordOffset + 49],
+      module_format: payload[recordOffset + 50],
+      side: payload[recordOffset + 51],
+    }))
+  }
+  return output
 }
 
 function validateInventory(inventory: StaticInventory, bytes: Buffer): void {
@@ -137,7 +230,11 @@ export function extractBundleBytes(bytes: Buffer, inventory: StaticInventory): E
     for (const slice of inventory.slices) {
       for (const section of slice.sections) {
         if (!section.file_backed || section.length === 0) continue
-        candidates.push(candidate(bytes.subarray(section.offset, section.offset + section.length), artifactDigest, 'mach-o-section', section.offset, section.segment, section.section))
+        const sectionBytes = bytes.subarray(section.offset, section.offset + section.length)
+        candidates.push(candidate(sectionBytes, artifactDigest, 'mach-o-section', section.offset, section.segment, section.section))
+        if (section.segment === '__BUN' && section.section === '__bun') {
+          candidates.push(...bunStandaloneCandidates(sectionBytes, section.offset, artifactDigest))
+        }
       }
     }
   } else {

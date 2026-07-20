@@ -11,6 +11,7 @@ import type { StaticLocation } from './static-inventory.js'
 const MAX_SOURCE_BYTES = 256 * 1024 * 1024
 const MAX_AST_NODES = 2_000_000
 const MAX_GRAPH_EDGES = 500_000
+const MAX_DURABLE_RECORDS = 10_000
 
 export const REQUIRED_STATIC_ROOTS = [
   'env-config-system', 'home-xdg-tmp-tz-lang-locale-host-platform-arch', 'config-precedence',
@@ -53,6 +54,7 @@ export type AstRecovery = {
     reparsed_canonical_ast_sha256: string
     parser_agreement: 'agreed'
     persisted_raw_source: false
+    output_truncations: string[]
   }
   modules: Array<{
     module_id: string
@@ -138,7 +140,9 @@ function canonicalAst(node: ts.Node, state: { count: number }): { hash: string; 
   state.count += 1
   if (state.count > MAX_AST_NODES) fail('static_budget_exceeded', 'AST node count exceeds recovery budget')
   const childHashes: string[] = []
-  node.forEachChild((child) => childHashes.push(canonicalAst(child, state).hash))
+  node.forEachChild((child) => {
+    childHashes.push(canonicalAst(child, state).hash)
+  })
   const encoded = canonicalJson({ ...nodeScalar(node), children: childHashes })
   return { hash: sha256Bytes(encoded), encoded }
 }
@@ -159,6 +163,31 @@ function parseSource(sourceBytes: Buffer, label: string): ts.SourceFile {
 function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
   visit(node)
   node.forEachChild((child) => walk(child, visit))
+}
+
+function capRecords<T>(records: T[], surface: string, truncations: string[]): void {
+  if (records.length <= MAX_DURABLE_RECORDS) return
+  records.splice(MAX_DURABLE_RECORDS)
+  truncations.push(surface)
+}
+
+function capNestedRecords<T extends { edges?: unknown[]; transitions?: unknown[] }>(records: T[], surface: string, truncations: string[]): void {
+  let remaining = MAX_DURABLE_RECORDS
+  let truncated = false
+  for (let index = 0; index < records.length; index += 1) {
+    if (remaining === 0) {
+      records.splice(index)
+      truncated = true
+      break
+    }
+    const nested = records[index].edges ?? records[index].transitions ?? []
+    if (nested.length > remaining) {
+      nested.splice(remaining)
+      truncated = true
+    }
+    remaining -= nested.length
+  }
+  if (truncated) truncations.push(surface)
 }
 
 function literalClass(node: ts.Node): { text: string; class: 'string' | 'template' | 'property' } | null {
@@ -414,9 +443,13 @@ function buildRecovery(sourceBytes: Buffer, candidate: Pick<ExtractedCandidate, 
   const beforeState = { count: 0 }
   const before = canonicalAst(source, beforeState)
   const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true })
-  const printed = printer.printFile(source)
-  const reparsed = parseSource(Buffer.from(printed, 'utf8'), 'canonical-reprint.js')
-  const after = canonicalAst(reparsed, { count: 0 })
+  let printed: string | null = printer.printFile(source)
+  const printedSha256 = sha256Bytes(printed)
+  const after = (() => {
+    const reparsed = parseSource(Buffer.from(printed!, 'utf8'), 'canonical-reprint.js')
+    return canonicalAst(reparsed, { count: 0 })
+  })()
+  printed = null
   if (before.hash !== after.hash) fail('static_ast_drift', 'TypeScript print and reparse changed canonical AST')
 
   const literalXrefs: AstRecovery['literal_xrefs'] = []
@@ -441,6 +474,19 @@ function buildRecovery(sourceBytes: Buffer, candidate: Pick<ExtractedCandidate, 
   }
   literalXrefs.sort((left, right) => left.location.offset - right.location.offset || left.root.localeCompare(right.root))
   const callgraph = recoverCallgraph(source, artifactDigest, candidate.location.offset)
+  const modules = recoverModules(source, artifactDigest, candidate.location.offset)
+  const cfg = recoverCfg(source, artifactDigest, candidate.location.offset, callgraph)
+  const stateMachines = recoverStateMachines(source, artifactDigest, candidate.location.offset)
+  const truncations: string[] = []
+  capRecords(modules, 'modules', truncations)
+  capRecords(literalXrefs, 'literal-xrefs', truncations)
+  capRecords(decoded.summaries, 'decoded-constants', truncations)
+  capRecords(callgraph.nodes, 'callgraph-nodes', truncations)
+  capRecords(callgraph.edges, 'callgraph-edges', truncations)
+  capRecords(callgraph.unresolved, 'callgraph-unresolved', truncations)
+  capNestedRecords(cfg, 'cfg-edges-or-functions', truncations)
+  capNestedRecords(stateMachines, 'state-machine-transitions-or-machines', truncations)
+  truncations.sort()
   const base: Omit<AstRecovery, 'deterministic_digest'> = {
     schema_version: 'oracle-lab-phase3a-ast-recovery.v1',
     binding: {
@@ -457,25 +503,26 @@ function buildRecovery(sourceBytes: Buffer, candidate: Pick<ExtractedCandidate, 
       parse_coverage_percent: 100,
       syntax_kind: 'JavaScript',
       source_sha256: candidate.sha256,
-      printed_sha256: sha256Bytes(printed),
+      printed_sha256: printedSha256,
       canonical_ast_sha256: before.hash,
       reparsed_canonical_ast_sha256: after.hash,
       parser_agreement: 'agreed',
       persisted_raw_source: false,
+      output_truncations: truncations,
     },
-    modules: recoverModules(source, artifactDigest, candidate.location.offset),
+    modules,
     literal_xrefs: literalXrefs,
     decoded_constants: decoded.summaries,
     callgraph,
-    cfg: recoverCfg(source, artifactDigest, candidate.location.offset, callgraph),
-    state_machines: recoverStateMachines(source, artifactDigest, candidate.location.offset),
+    cfg,
+    state_machines: stateMachines,
     root_coverage: REQUIRED_STATIC_ROOTS.map((root) => {
       const evidence = rootLocations.get(root) ?? []
       return {
         root,
         status: evidence.length > 0 ? 'observed' : 'unknown',
         evidence_locations: evidence,
-        searched_surfaces: ['typescript-ast-literals', 'property-access', 'call-expressions', 'switch-state-tables'],
+        searched_surfaces: ['typescript-ast-literals', 'property-access', 'call-expressions', 'switch-state-tables', ...truncations.map((surface) => `bounded-output:${surface}`)],
         next_minimal_action: evidence.length > 0 ? null : 'inspect bounded callgraph neighborhood or obtain a dynamically observed hook anchor',
       }
     }),

@@ -48,6 +48,59 @@ function machoFixture(): Buffer {
   return bytes
 }
 
+function bunStandaloneMachoFixture(): Buffer {
+  const name = Buffer.from('/$bunfs/root/index.js', 'utf8')
+  const contents = Buffer.from('const BUN_GRAPH_VENDOR_SENTINEL = "safe-fixture";', 'utf8')
+  const byteCount = name.length + 1 + contents.length + 1 + 52
+  const payload = Buffer.alloc(byteCount + 32 + 16)
+  name.copy(payload, 0)
+  const contentsOffset = name.length + 1
+  contents.copy(payload, contentsOffset)
+  const modulesOffset = contentsOffset + contents.length + 1
+  payload.writeUInt32LE(0, modulesOffset)
+  payload.writeUInt32LE(name.length, modulesOffset + 4)
+  payload.writeUInt32LE(contentsOffset, modulesOffset + 8)
+  payload.writeUInt32LE(contents.length, modulesOffset + 12)
+  payload[modulesOffset + 48] = 1
+  payload[modulesOffset + 49] = 1
+  payload[modulesOffset + 50] = 1
+  payload.writeBigUInt64LE(BigInt(byteCount), byteCount)
+  payload.writeUInt32LE(modulesOffset, byteCount + 8)
+  payload.writeUInt32LE(52, byteCount + 12)
+  payload.writeUInt32LE(0, byteCount + 16)
+  payload.writeUInt32LE(byteCount, byteCount + 20)
+  payload.writeUInt32LE(0, byteCount + 24)
+  payload.writeUInt32LE(15, byteCount + 28)
+  Buffer.from('\n---- Bun! ----\n', 'ascii').copy(payload, byteCount + 32)
+  const section = Buffer.alloc(payload.length + 8)
+  section.writeBigUInt64LE(BigInt(payload.length), 0)
+  payload.copy(section, 8)
+
+  const commandSize = 72 + 80
+  const dataOffset = 32 + commandSize
+  const bytes = Buffer.alloc(dataOffset + section.length)
+  bytes.writeUInt32LE(0xfeedfacf, 0)
+  bytes.writeUInt32LE(0x0100000c, 4)
+  bytes.writeUInt32LE(2, 12)
+  bytes.writeUInt32LE(1, 16)
+  bytes.writeUInt32LE(commandSize, 20)
+  const command = 32
+  bytes.writeUInt32LE(0x19, command)
+  bytes.writeUInt32LE(commandSize, command + 4)
+  fixed(bytes, command + 8, '__BUN')
+  bytes.writeBigUInt64LE(BigInt(section.length), command + 32)
+  bytes.writeBigUInt64LE(BigInt(dataOffset), command + 40)
+  bytes.writeBigUInt64LE(BigInt(section.length), command + 48)
+  bytes.writeUInt32LE(1, command + 64)
+  const table = command + 72
+  fixed(bytes, table, '__bun')
+  fixed(bytes, table + 16, '__BUN')
+  bytes.writeBigUInt64LE(BigInt(section.length), table + 40)
+  bytes.writeUInt32LE(dataOffset, table + 48)
+  section.copy(bytes, dataOffset)
+  return bytes
+}
+
 const macho = machoFixture()
 const machoDigest = sha256Bytes(macho)
 const inventory = inventoryBytes(macho, machoDigest)
@@ -94,6 +147,22 @@ assert.throws(
   (error: unknown) => error instanceof Phase3AError && error.code === 'static_recursive_archive',
 )
 
+const bunMacho = bunStandaloneMachoFixture()
+const bunExtraction = extractBundleBytes(bunMacho, inventoryBytes(bunMacho))
+const bunModules = bunExtraction.candidates.filter((entry) => entry.source === 'bun-standalone-module')
+assert.equal(bunModules.length, 1)
+assert.equal(bunModules[0].container?.module_index, 0)
+assert.equal(bunModules[0].container?.module_name_byte_length, 21)
+assert.equal(bunModules[0].byte_length, 49)
+assert.ok(!canonicalJson(bunExtraction).includes('BUN_GRAPH_VENDOR_SENTINEL'))
+const corruptBunMacho = Buffer.from(bunMacho)
+const bunSection = inventoryBytes(corruptBunMacho).slices[0].sections[0]
+corruptBunMacho.writeUInt32LE(51, bunSection.offset + bunSection.length - 16 - 32 + 12)
+assert.throws(
+  () => extractBundleBytes(corruptBunMacho, inventoryBytes(corruptBunMacho)),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'static_bun_graph_invalid',
+)
+
 function recover(source: string): AstRecovery {
   const bytes = Buffer.from(source, 'utf8')
   const digest = sha256Bytes(bytes)
@@ -122,6 +191,7 @@ const recovered = recover(source)
 const recoveredAgain = recover(source)
 assert.equal(recovered.deterministic_digest, recoveredAgain.deterministic_digest)
 assert.equal(recovered.parse.canonical_ast_sha256, recovered.parse.reparsed_canonical_ast_sha256)
+assert.ok(recovered.parse.node_count > 20)
 assert.equal(recovered.parse.parser_agreement, 'agreed')
 assert.equal(recovered.parse.persisted_raw_source, false)
 assert.ok(recovered.callgraph.edges.some((edge) => edge.kind === 'alias'))
@@ -135,10 +205,15 @@ assert.ok(recovered.literal_xrefs.some((entry) => entry.literal_class === 'decod
 assert.ok(!canonicalJson(recovered).includes('do-not-persist-this-vendor-source'))
 assert.ok(!canonicalJson(recovered).includes('RAW_VENDOR_SENTINEL'))
 assert.ok(recovered.literal_xrefs.every((xref) => xref.location.artifact_sha256 === recovered.binding.artifact_sha256))
+assert.deepEqual(recovered.parse.output_truncations, [])
 assert.throws(
   () => recover('function broken( {'),
   (error: unknown) => error instanceof Phase3AError && error.code === 'static_syntax_invalid',
 )
+
+const boundedCalls = recover(`function bounded(){${'external();'.repeat(10_050)}}`)
+assert.ok(boundedCalls.parse.output_truncations.includes('callgraph-unresolved'))
+assert.equal(boundedCalls.callgraph.unresolved.length, 10_000)
 
 function snapshot(version: string, recovery: AstRecovery): StaticSnapshot {
   return { version, recoveries: [recovery] }
