@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import Ajv2020 from 'ajv/dist/2020.js'
 
 import {
   CHECKPOINT_DOMAIN,
@@ -26,14 +27,24 @@ import {
   type TrustState,
 } from '../src/oracle-contract/manifest-authority.js'
 
-type Corpus = { cases: Array<{ id: string; expected_code: string }>; limits: { maximum_clock_rollback_ms: number }; expected_next_state_digests: Record<string, string> }
+type Corpus = {
+  cases: Array<{ id: string; expected_code: string }>
+  limits: { maximum_clock_rollback_ms: number }
+  manifest_authority_fixture: AuthorityManifest
+  expected_next_state_digests: Record<string, string>
+}
 const corpus = JSON.parse(readFileSync(path.resolve('contracts/oracle-lab/v1/authority-corpus.json'), 'utf8')) as Corpus
 
 type RuntimeKey = TrustKey & { privateKey: KeyObject }
 
 function runtimeKey(keyId: string, role: TrustKey['role'], epoch: number): RuntimeKey {
-  const pair = generateKeyPairSync('ed25519')
-  return { keyId, role, epoch, revoked: false, publicKey: pair.publicKey, privateKey: pair.privateKey }
+  const seed = createHash('sha256').update(keyId).digest()
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]),
+    format: 'der',
+    type: 'pkcs8',
+  })
+  return { keyId, role, epoch, revoked: false, publicKey: createPublicKey(privateKey), privateKey }
 }
 
 function signature(key: RuntimeKey, domain: Uint8Array, signed: unknown): AuthoritySignature {
@@ -64,17 +75,19 @@ function fixture(): {
     rollbackFloor: 10,
     revocationVersion: 1,
     manifestDigest: 'a'.repeat(64),
+    manifestPayloadDigest: 'd'.repeat(64),
     checkpointVersion: 5,
     checkpointDigest: 'b'.repeat(64),
     replicaGeneration: 7,
     lastWallClockMs: 1_799_999_999_000,
     keys,
     thresholds: { root: 2, manifest: 2, checkpoint: 1, revocation: 1 },
+    rollbackTargets: {},
   }
   const manifest: AuthorityManifest = {
     schemaId: 'oracle.compatibility', schemaMajor: 1, schemaRevision: 0, kind: 'manifest_authority',
     manifestId: 'manifest:fixture:11', policyVersion: 11, parentDigest: state.manifestDigest,
-    rollbackDigest: state.manifestDigest, contractDigest: '1'.repeat(64), issuedAtMs: 1_799_999_999_500,
+    rollbackDigest: state.manifestDigest, contractDigest: '1'.repeat(64), manifestPayloadDigest: '4'.repeat(64), issuedAtMs: 1_799_999_999_500,
     expiresAtMs: 1_800_003_600_000, sourcePackageDigests: ['2'.repeat(64)], promotionRefs: [],
     witnessCheckpointDigest: 'c'.repeat(64), invalidatingDependencyDigests: ['3'.repeat(64)],
   }
@@ -105,6 +118,29 @@ function signedUpdate(f: ReturnType<typeof fixture>, manifestSigners = ['manifes
     checkpointSignatures: checkpointSigners.map((id) => signature(f.keys[id], CHECKPOINT_DOMAIN, f.checkpoint)),
   }
 }
+
+test('manifest authority fixture is symmetric with the runtime type and top-level contract schema', () => {
+  assert.deepEqual(fixture().manifest, corpus.manifest_authority_fixture)
+  const schema = JSON.parse(readFileSync(path.resolve('contracts/oracle-lab/v1/contract.schema.json'), 'utf8'))
+  const validate = new Ajv2020({ allErrors: true, strict: false }).compile(schema)
+  assert.equal(validate(corpus.manifest_authority_fixture), true, JSON.stringify(validate.errors))
+  const missing = structuredClone(corpus.manifest_authority_fixture) as Partial<AuthorityManifest>
+  delete missing.manifestPayloadDigest
+  assert.equal(validate(missing), false)
+})
+
+test('manifest threshold rejects a mixed epoch zero then epoch one signer set', () => {
+  const f = fixture()
+  const epochZero = runtimeKey('manifest-zero', 'manifest', 0)
+  const epochOne = runtimeKey('manifest-one', 'manifest', 1)
+  f.keys[epochZero.keyId] = epochZero
+  f.keys[epochOne.keyId] = epochOne
+  f.state.keys[epochZero.keyId] = epochZero
+  f.state.keys[epochOne.keyId] = epochOne
+  const update = signedUpdate(f)
+  update.manifestSignatures = [signature(epochZero, MANIFEST_DOMAIN, f.manifest), signature(epochOne, MANIFEST_DOMAIN, f.manifest)]
+  assert.equal(verifyManifestAuthorityUpdate(f.state, update, f.context).code, 'authority_wrong_role')
+})
 
 function rootRotation(f: ReturnType<typeof fixture>): { rotation: RootRotation; oldSignatures: AuthoritySignature[]; newSignatures: AuthoritySignature[]; newKeys: RuntimeKey[] } {
   const newKeys = [runtimeKey('root-new-1', 'root', 2), runtimeKey('root-new-2', 'root', 2), runtimeKey('root-new-3', 'root', 2)]
@@ -194,3 +230,43 @@ for (const testcase of corpus.cases) {
     }
   })
 }
+
+test('trust-state digest binds public-key bytes', () => {
+  const f = fixture()
+  const replaced = { ...f.state, keys: { ...f.state.keys } }
+  replaced.keys['manifest-1'] = { ...replaced.keys['manifest-1'], publicKey: generateKeyPairSync('ed25519').publicKey }
+  assert.notEqual(trustStateDigest(replaced), trustStateDigest(f.state))
+})
+
+test('zero authority thresholds never admit unsigned objects', () => {
+  const f = fixture()
+  f.state.thresholds.manifest = 0
+  f.state.thresholds.checkpoint = 0
+  assert.equal(verifyManifestAuthorityUpdate(f.state, signedUpdate(f, [], []), f.context).code, 'authority_threshold_insufficient')
+})
+
+test('root rotation preserves explicitly retained online-role key epochs', () => {
+  const f = fixture()
+  const candidate = rootRotation(f)
+  const rotated = verifyRootRotation(f.state, candidate.rotation, candidate.oldSignatures, candidate.newSignatures)
+  assert.equal(rotated.allowed, true)
+  f.context.expectedReplicaGeneration = 8
+  const decision = verifyManifestAuthorityUpdate(rotated.nextState as TrustState, signedUpdate(f), f.context)
+  assert.equal(decision.code, 'authority_allow')
+})
+
+test('an explicit non-revoked rollback target above the floor is admitted', () => {
+  const f = fixture()
+  const rollbackDigest = '9'.repeat(64)
+  ;(f.state as TrustState & { rollbackTargets: Record<string, { policyVersion: number; revoked: boolean }> }).rollbackTargets = {
+    [rollbackDigest]: { policyVersion: 9, revoked: false },
+  }
+  f.state.rollbackFloor = 9
+  f.manifest.policyVersion = 9
+  f.manifest.rollbackDigest = rollbackDigest
+  f.checkpoint.manifestDigest = authorityObjectDigest(MANIFEST_DOMAIN, f.manifest)
+  assert.equal(verifyManifestAuthorityUpdate(f.state, signedUpdate(f), f.context).code, 'authority_allow')
+
+  ;(f.state as TrustState & { rollbackTargets: Record<string, { policyVersion: number; revoked: boolean }> }).rollbackTargets[rollbackDigest].revoked = true
+  assert.equal(verifyManifestAuthorityUpdate(f.state, signedUpdate(f), f.context).code, 'authority_policy_rollback')
+})

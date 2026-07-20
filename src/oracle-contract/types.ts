@@ -91,6 +91,7 @@ export type NegativeCapabilities = {
 export type AdmissionExpectedTuple = {
   contract_digest: string
   manifest_digest: string
+  manifest_payload_digest: string
   package_artifact_sha256: string
   package_version: string
   proxy_generation: number

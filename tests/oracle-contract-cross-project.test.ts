@@ -85,3 +85,37 @@ for (const fixture of corpus.cases) {
     if (stateDigest && process.env.ORACLE_PHASE2_DEBUG_DIGESTS === '1') console.log(`interface-digest ${fixture.id} ${stateDigest}`)
   })
 }
+
+test('cross-project decisions reject unknown schema identity, overlapping ranges, and unknown lifecycle operations', () => {
+  const expected = structuredClone(corpus.fixtures.readiness_expected)
+  const wrongSchema = structuredClone(corpus.fixtures.readiness) as ReadinessHandshake & { schema_id: string }
+  wrongSchema.schema_id = 'oracle.attacker'
+  assert.equal(decideReadiness(wrongSchema as ReadinessHandshake, expected).code, 'interface_schema_unsupported')
+
+  const overlapping = structuredClone(corpus.fixtures.readiness)
+  overlapping.supported_contracts = [
+    { schema_major: 1, minimum_revision: 0, maximum_revision: 2 },
+    { schema_major: 1, minimum_revision: 2, maximum_revision: 3 },
+  ]
+  assert.equal(decideReadiness(overlapping, expected).code, 'interface_schema_unsupported')
+
+  const operation = structuredClone(corpus.fixtures.lifecycle_operation) as LifecycleOperation & { operation: string; schema_id: string }
+  operation.operation = 'attacker_operation'
+  assert.equal(transitionLifecycle(corpus.fixtures.lifecycle_state, operation as LifecycleOperation).code, 'interface_schema_unsupported')
+  operation.operation = 'replace'
+  operation.schema_id = 'oracle.attacker'
+  assert.equal(transitionLifecycle(corpus.fixtures.lifecycle_state, operation as LifecycleOperation).code, 'interface_schema_unsupported')
+
+  const emptyIdempotency = structuredClone(corpus.fixtures.lifecycle_operation)
+  emptyIdempotency.idempotency_key = ''
+  assert.equal(transitionLifecycle(corpus.fixtures.lifecycle_state, emptyIdempotency).code, 'interface_schema_unsupported')
+
+  const emptyAttempt = structuredClone(corpus.fixtures.outcome_rate_limit)
+  emptyAttempt.attempt_id = ''
+  assert.equal(decideOutcome(emptyAttempt).code, 'interface_schema_unsupported')
+
+  const badDigests = structuredClone(corpus.fixtures.outcome_rate_limit)
+  badDigests.final_headers_sha256 = 'x'
+  badDigests.final_body_sha256 = 'x'
+  assert.equal(decideOutcome(badDigests).code, 'interface_schema_unsupported')
+})

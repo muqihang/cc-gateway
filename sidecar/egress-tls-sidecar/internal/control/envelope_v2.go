@@ -255,6 +255,83 @@ type OracleSidecarCapability struct {
 	Signature                       []byte `json:"signature" cbor:"signature"`
 }
 
+type oracleSidecarCapabilityUnsignedWire struct {
+	SchemaID                    string                     `cbor:"schema_id"`
+	SchemaMajor                 int                        `cbor:"schema_major"`
+	SchemaRevision              int                        `cbor:"schema_revision"`
+	KeyEpoch                    int64                      `cbor:"key_epoch"`
+	CapabilityID                string                     `cbor:"capability_id"`
+	AttemptID                   string                     `cbor:"attempt_id"`
+	Nonce                       string                     `cbor:"nonce"`
+	IssuedAtMS                  int64                      `cbor:"issued_at_ms"`
+	DeadlineMS                  int64                      `cbor:"deadline_ms"`
+	Method                      string                     `cbor:"method"`
+	Authority                   string                     `cbor:"authority"`
+	NormalizedPathQuery         string                     `cbor:"normalized_path_query"`
+	OrderedHeadersSHA256        []byte                     `cbor:"ordered_headers_sha256"`
+	BodySHA256                  []byte                     `cbor:"body_sha256"`
+	ContentLength               int64                      `cbor:"content_length"`
+	ContentEncoding             string                     `cbor:"content_encoding"`
+	ProfileGeneration           int64                      `cbor:"profile_generation"`
+	ProxyGeneration             int64                      `cbor:"proxy_generation"`
+	CredentialGeneration        int64                      `cbor:"credential_generation"`
+	TransportCellGeneration     int64                      `cbor:"transport_cell_generation"`
+	ContractDigest              []byte                     `cbor:"contract_digest"`
+	ManifestDigest              []byte                     `cbor:"manifest_digest"`
+	DestinationPolicyGeneration int64                      `cbor:"destination_policy_generation"`
+	DestinationClass            string                     `cbor:"destination_class"`
+	AllowedDestinations         []OracleSidecarDestination `cbor:"allowed_destinations"`
+	ResponsePolicyRef           string                     `cbor:"response_policy_ref"`
+	RetryOwner                  string                     `cbor:"retry_owner"`
+	KeyID                       string                     `cbor:"key_id"`
+	KeyRole                     string                     `cbor:"key_role"`
+}
+
+type oracleSidecarCapabilityWire struct {
+	oracleSidecarCapabilityUnsignedWire `cbor:",inline"`
+	Signature                           []byte `cbor:"signature"`
+}
+
+func oracleSidecarUnsignedToWire(value OracleSidecarCapabilityUnsigned) (oracleSidecarCapabilityUnsignedWire, error) {
+	orderedHeaders, err := hex.DecodeString(value.OrderedHeadersSHA256)
+	if err != nil || len(orderedHeaders) != 32 {
+		return oracleSidecarCapabilityUnsignedWire{}, oracleCBORError("sidecar_capability_schema_invalid", "invalid ordered headers digest")
+	}
+	body, err := hex.DecodeString(value.BodySHA256)
+	if err != nil || len(body) != 32 {
+		return oracleSidecarCapabilityUnsignedWire{}, oracleCBORError("sidecar_capability_schema_invalid", "invalid body digest")
+	}
+	contract, err := hex.DecodeString(value.ContractDigest)
+	if err != nil || len(contract) != 32 {
+		return oracleSidecarCapabilityUnsignedWire{}, oracleCBORError("sidecar_capability_schema_invalid", "invalid contract digest")
+	}
+	manifest, err := hex.DecodeString(value.ManifestDigest)
+	if err != nil || len(manifest) != 32 {
+		return oracleSidecarCapabilityUnsignedWire{}, oracleCBORError("sidecar_capability_schema_invalid", "invalid manifest digest")
+	}
+	return oracleSidecarCapabilityUnsignedWire{
+		value.SchemaID, value.SchemaMajor, value.SchemaRevision, value.KeyEpoch, value.CapabilityID, value.AttemptID, value.Nonce,
+		value.IssuedAtMS, value.DeadlineMS, value.Method, value.Authority, value.NormalizedPathQuery, orderedHeaders, body,
+		value.ContentLength, value.ContentEncoding, value.ProfileGeneration, value.ProxyGeneration, value.CredentialGeneration,
+		value.TransportCellGeneration, contract, manifest, value.DestinationPolicyGeneration, value.DestinationClass,
+		value.AllowedDestinations, value.ResponsePolicyRef, value.RetryOwner, value.KeyID, value.KeyRole,
+	}, nil
+}
+
+func oracleSidecarWireToUnsigned(value oracleSidecarCapabilityUnsignedWire) (OracleSidecarCapabilityUnsigned, error) {
+	if len(value.OrderedHeadersSHA256) != 32 || len(value.BodySHA256) != 32 || len(value.ContractDigest) != 32 || len(value.ManifestDigest) != 32 {
+		return OracleSidecarCapabilityUnsigned{}, oracleCBORError("sidecar_capability_schema_invalid", "wire digests must be 32-byte byte strings")
+	}
+	return OracleSidecarCapabilityUnsigned{
+		value.SchemaID, value.SchemaMajor, value.SchemaRevision, value.KeyEpoch, value.CapabilityID, value.AttemptID, value.Nonce,
+		value.IssuedAtMS, value.DeadlineMS, value.Method, value.Authority, value.NormalizedPathQuery,
+		hex.EncodeToString(value.OrderedHeadersSHA256), hex.EncodeToString(value.BodySHA256), value.ContentLength, value.ContentEncoding,
+		value.ProfileGeneration, value.ProxyGeneration, value.CredentialGeneration, value.TransportCellGeneration,
+		hex.EncodeToString(value.ContractDigest), hex.EncodeToString(value.ManifestDigest), value.DestinationPolicyGeneration,
+		value.DestinationClass, value.AllowedDestinations, value.ResponsePolicyRef, value.RetryOwner, value.KeyID, value.KeyRole,
+	}, nil
+}
+
 type OracleSidecarCapabilityKey struct {
 	KeyID     string
 	Role      string
@@ -313,7 +390,11 @@ func OracleSidecarCapabilitySigningBytes(unsigned OracleSidecarCapabilityUnsigne
 	if err := validateOracleSidecarUnsigned(unsigned); err != nil {
 		return nil, err
 	}
-	encoded, err := EncodeOracleDeterministicCBOR(unsigned)
+	wire, err := oracleSidecarUnsignedToWire(unsigned)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := EncodeOracleDeterministicCBOR(wire)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +416,11 @@ func SignOracleSidecarCapability(unsigned OracleSidecarCapabilityUnsigned, keyID
 }
 
 func EncodeOracleSidecarCapability(value OracleSidecarCapability) ([]byte, error) {
-	encoded, err := EncodeOracleDeterministicCBOR(value)
+	unsigned, err := oracleSidecarUnsignedToWire(value.OracleSidecarCapabilityUnsigned)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := EncodeOracleDeterministicCBOR(oracleSidecarCapabilityWire{unsigned, value.Signature})
 	if err != nil {
 		return nil, err
 	}
@@ -351,10 +436,15 @@ func VerifyOracleSidecarCapability(frame []byte, context OracleSidecarVerifyCont
 	if err != nil {
 		return oracleSidecarFailure(OracleCBORCode(err))
 	}
-	var envelope OracleSidecarCapability
-	if err := DecodeOracleDeterministicCBOR(payload, &envelope); err != nil {
+	var wire oracleSidecarCapabilityWire
+	if err := DecodeOracleDeterministicCBOR(payload, &wire); err != nil {
 		return oracleSidecarFailure(OracleCBORCode(err))
 	}
+	unsigned, err := oracleSidecarWireToUnsigned(wire.oracleSidecarCapabilityUnsignedWire)
+	if err != nil {
+		return oracleSidecarFailure(OracleCBORCode(err))
+	}
+	envelope := OracleSidecarCapability{OracleSidecarCapabilityUnsigned: unsigned, Signature: wire.Signature}
 	if err := validateOracleSidecarUnsigned(envelope.OracleSidecarCapabilityUnsigned); err != nil || len(envelope.Signature) != ed25519.SignatureSize {
 		return oracleSidecarFailure("sidecar_capability_schema_invalid")
 	}

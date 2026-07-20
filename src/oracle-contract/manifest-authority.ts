@@ -25,13 +25,17 @@ export type TrustState = {
   rollbackFloor: number
   revocationVersion: number
   manifestDigest: string
+  manifestPayloadDigest: string
   checkpointVersion: number
   checkpointDigest: string
   replicaGeneration: number
   lastWallClockMs: number
   keys: Record<string, TrustKey>
   thresholds: AuthorityThresholds
+  rollbackTargets: Record<string, RollbackTarget>
 }
+
+export type RollbackTarget = { policyVersion: number; revoked: boolean }
 
 export type AuthorityManifest = {
   schemaId: 'oracle.compatibility'
@@ -43,6 +47,7 @@ export type AuthorityManifest = {
   parentDigest: string
   rollbackDigest: string
   contractDigest: string
+  manifestPayloadDigest: string
   issuedAtMs: number
   expiresAtMs: number
   sourcePackageDigests: string[]
@@ -139,9 +144,15 @@ export function authorityObjectDigest(domain: Uint8Array, value: unknown): strin
   return sha256Hex(domainSeparatedJcs(domain, value))
 }
 
-function keyMetadata(state: TrustState): Array<{ keyId: string; role: AuthorityRole; epoch: number; revoked: boolean }> {
+function keyMetadata(state: TrustState): Array<{ keyId: string; role: AuthorityRole; epoch: number; revoked: boolean; publicKeySpkiBase64url: string }> {
   return Object.values(state.keys)
-    .map(({ keyId, role, epoch, revoked }) => ({ keyId, role, epoch, revoked }))
+    .map(({ keyId, role, epoch, revoked, publicKey }) => ({
+      keyId,
+      role,
+      epoch,
+      revoked,
+      publicKeySpkiBase64url: publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'),
+    }))
     .sort((left, right) => Buffer.compare(Buffer.from(left.keyId), Buffer.from(right.keyId)))
 }
 
@@ -152,11 +163,13 @@ export function trustStateDigest(state: TrustState): string {
     keyMetadata: keyMetadata(state),
     lastWallClockMs: state.lastWallClockMs,
     manifestDigest: state.manifestDigest,
+    manifestPayloadDigest: state.manifestPayloadDigest,
     policyVersion: state.policyVersion,
     replicaGeneration: state.replicaGeneration,
     revocationVersion: state.revocationVersion,
     rollbackFloor: state.rollbackFloor,
     rootEpoch: state.rootEpoch,
+    rollbackTargets: state.rollbackTargets,
     thresholds: state.thresholds,
   }))
 }
@@ -165,20 +178,25 @@ function verifyThreshold(
   signed: unknown,
   signatures: AuthoritySignature[],
   role: keyof AuthorityThresholds,
-  epoch: number,
+  epoch: number | undefined,
   keys: Record<string, TrustKey>,
   threshold: number,
   domain: Uint8Array,
 ): string | undefined {
   if (signatures.length > 64 || Object.keys(keys).length > 64) return 'authority_resource_limit'
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > 64) return 'authority_threshold_insufficient'
   const seen = new Set<string>()
   let valid = 0
+  let observedEpoch: number | undefined
   const bytes = domainSeparatedJcs(domain, signed)
   for (const signature of signatures) {
     if (seen.has(signature.keyId)) return 'authority_duplicate_signer'
     seen.add(signature.keyId)
     const key = keys[signature.keyId]
-    if (!key || key.role !== role || signature.role !== role || key.epoch !== epoch || signature.keyEpoch !== epoch) return 'authority_wrong_role'
+    if (!key || key.role !== role || signature.role !== role || key.epoch !== signature.keyEpoch) return 'authority_wrong_role'
+    if (epoch !== undefined && signature.keyEpoch !== epoch) return 'authority_wrong_role'
+    if (observedEpoch !== undefined && signature.keyEpoch !== observedEpoch) return 'authority_wrong_role'
+    observedEpoch = signature.keyEpoch
     if (key.revoked) return 'authority_key_revoked'
     let raw: Buffer
     try {
@@ -201,14 +219,20 @@ export function verifyManifestAuthorityUpdate(state: TrustState, update: Manifes
   if (context.expectedReplicaGeneration !== state.replicaGeneration) return deny('authority_replica_conflict')
   const manifestBytes = canonicalizeJsonValue(update.manifest)
   if (manifestBytes.length > 1_048_576) return deny('authority_resource_limit')
-  const manifestSignatures = verifyThreshold(update.manifest, update.manifestSignatures, 'manifest', state.rootEpoch, state.keys, state.thresholds.manifest, MANIFEST_DOMAIN)
+  const manifestSignatures = verifyThreshold(update.manifest, update.manifestSignatures, 'manifest', undefined, state.keys, state.thresholds.manifest, MANIFEST_DOMAIN)
   if (manifestSignatures) return deny(manifestSignatures)
   if (update.manifest.expiresAtMs < context.nowWallClockMs) return deny('authority_expired')
-  if (update.manifest.parentDigest !== state.manifestDigest || update.manifest.rollbackDigest !== state.manifestDigest) return deny('authority_parent_mismatch')
-  if (update.manifest.policyVersion <= state.policyVersion || update.manifest.policyVersion < state.rollbackFloor) return deny('authority_policy_rollback')
+  if (update.manifest.parentDigest !== state.manifestDigest) return deny('authority_parent_mismatch')
+  const isForward = update.manifest.policyVersion > state.policyVersion
+  if (isForward) {
+    if (update.manifest.rollbackDigest !== state.manifestDigest) return deny('authority_parent_mismatch')
+  } else {
+    const target = state.rollbackTargets[update.manifest.rollbackDigest]
+    if (update.manifest.policyVersion === state.policyVersion || update.manifest.policyVersion < state.rollbackFloor || !target || target.revoked || target.policyVersion !== update.manifest.policyVersion) return deny('authority_policy_rollback')
+  }
   if (update.manifest.invalidatingDependencyDigests.some((digest) => context.invalidatedDependencyDigests.includes(digest))) return deny('authority_dependency_invalidated')
   const manifestDigest = authorityObjectDigest(MANIFEST_DOMAIN, update.manifest)
-  const checkpointSignatures = verifyThreshold(update.checkpoint, update.checkpointSignatures, 'checkpoint', state.rootEpoch, state.keys, state.thresholds.checkpoint, CHECKPOINT_DOMAIN)
+  const checkpointSignatures = verifyThreshold(update.checkpoint, update.checkpointSignatures, 'checkpoint', undefined, state.keys, state.thresholds.checkpoint, CHECKPOINT_DOMAIN)
   if (checkpointSignatures) return deny(checkpointSignatures)
   if (update.checkpoint.version <= state.checkpointVersion || update.checkpoint.previousCheckpointDigest !== state.checkpointDigest) return deny('authority_checkpoint_stale')
   if (context.nowWallClockMs - update.checkpoint.issuedAtMs > context.maximumCheckpointAgeMs || update.checkpoint.expiresAtMs < context.nowWallClockMs) return deny('authority_freeze')
@@ -221,12 +245,14 @@ export function verifyManifestAuthorityUpdate(state: TrustState, update: Manifes
     ...state,
     policyVersion: update.manifest.policyVersion,
     manifestDigest,
+    manifestPayloadDigest: update.manifest.manifestPayloadDigest,
     checkpointVersion: update.checkpoint.version,
     checkpointDigest: nextCheckpointDigest,
     replicaGeneration: state.replicaGeneration + 1,
     lastWallClockMs: context.nowWallClockMs,
     keys: { ...state.keys },
     thresholds: { ...state.thresholds },
+    rollbackTargets: { ...state.rollbackTargets, [state.manifestDigest]: { policyVersion: state.policyVersion, revoked: false } },
   }
   return { allowed: true, code: 'authority_allow', nextState, nextStateDigest: trustStateDigest(nextState) }
 }
@@ -271,9 +297,9 @@ export function verifyRootRotation(state: TrustState, rotation: RootRotation, ol
 }
 
 export function verifyEmergencyRevocation(state: TrustState, revocation: AuthorityRevocation, signatures: AuthoritySignature[], nowWallClockMs: number): AuthorityDecision {
-  const signatureError = verifyThreshold(revocation, signatures, 'revocation', state.rootEpoch, state.keys, state.thresholds.revocation, REVOCATION_DOMAIN)
+  const signatureError = verifyThreshold(revocation, signatures, 'revocation', revocation.keyEpoch, state.keys, state.thresholds.revocation, REVOCATION_DOMAIN)
   if (signatureError) return deny(signatureError)
-  if (revocation.keyEpoch !== state.rootEpoch || revocation.version <= state.revocationVersion || revocation.expiresAtMs < nowWallClockMs) return deny('authority_revocation_stale')
+  if (revocation.version <= state.revocationVersion || revocation.expiresAtMs < nowWallClockMs) return deny('authority_revocation_stale')
   if (revocation.revokedKeyIds.length === 0 || revocation.revokedKeyIds.length > 64 || new Set(revocation.revokedKeyIds).size !== revocation.revokedKeyIds.length) return deny('authority_revocation_invalid')
   const keys = { ...state.keys }
   for (const keyId of revocation.revokedKeyIds) {

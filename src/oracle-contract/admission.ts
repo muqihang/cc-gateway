@@ -1,4 +1,5 @@
 import { validateBehaviorCoherenceCertificate } from './schema.js'
+import { canonicalizeJsonValue, sha256Hex } from './canonical.js'
 import type {
   AdmissionContext,
   AdmissionDecision,
@@ -23,6 +24,18 @@ const LOCAL_SCOPES = new Set(['package', 'local_fixture', 'local_wire', 'gateway
 
 function deny(code: string, action: 'disable' | 'rollback' = 'disable', extra: Partial<AdmissionDecision> = {}): AdmissionDecision {
   return { allowed: false, code, action, ...extra }
+}
+
+export function admissionPayloadDigest(
+  certificate: unknown,
+  signals: readonly AuthoritySignal[],
+  negativeCapabilities: AdmissionContext['negativeCapabilities'],
+): string {
+  return sha256Hex(canonicalizeJsonValue({
+    certificate,
+    negative_capabilities: negativeCapabilities,
+    signals,
+  }))
 }
 
 function tupleDecision(certificate: BehaviorCoherenceCertificate, context: AdmissionContext): AdmissionDecision | undefined {
@@ -92,6 +105,9 @@ export function decideBehaviorAdmission(
   const schema = validateBehaviorCoherenceCertificate(candidate)
   if (!schema.valid) return deny('admission_schema_invalid', 'disable', { detail: schema.errors[0]?.instancePath || schema.errors[0]?.keyword })
   const certificate = candidate as BehaviorCoherenceCertificate
+  if (admissionPayloadDigest(certificate, context.signals, context.negativeCapabilities) !== context.expected.manifest_payload_digest) {
+    return deny('admission_manifest_payload_mismatch')
+  }
   const tuple = tupleDecision(certificate, context)
   if (tuple) return tuple
   const negative = negativeDecision(certificate, context)

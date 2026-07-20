@@ -16,6 +16,7 @@ import {
   type SidecarCapabilityKey,
   type SidecarCapabilityUnsigned,
 } from '../src/oracle-contract/sidecar-envelope.js'
+import { decodeDeterministicCbor } from '../src/oracle-contract/cbor-envelope.js'
 import { CHECKPOINT_DOMAIN, MANIFEST_DOMAIN, REVOCATION_DOMAIN } from '../src/oracle-contract/manifest-authority.js'
 
 type Corpus = { sidecar_unsigned_envelope: SidecarCapabilityUnsigned }
@@ -45,6 +46,11 @@ test('sidecar capability has exact deterministic CBOR and verifies only in its d
 
   const unsignedHex = sidecarCapabilitySigningBytes(corpus.sidecar_unsigned_envelope).subarray(SIDECAR_CAPABILITY_DOMAIN.length).toString('hex')
   assert.equal(unsignedHex, expected.canonical_results.sidecar_unsigned_envelope.canonical_hex)
+  const wire = decodeDeterministicCbor(Buffer.from(unsignedHex, 'hex')) as Record<string, unknown>
+  for (const field of ['ordered_headers_sha256', 'body_sha256', 'contract_digest', 'manifest_digest']) {
+    assert.equal(wire[field] instanceof Uint8Array, true, `${field} must be a 32-byte CBOR bstr`)
+    assert.equal((wire[field] as Uint8Array).length, 32)
+  }
 
   for (const domain of [MANIFEST_DOMAIN, CHECKPOINT_DOMAIN, REVOCATION_DOMAIN]) {
     const wrongDomain = { ...signed, signature: sign(null, Buffer.concat([domain, Buffer.from(unsignedHex, 'hex')]), capabilityKey.privateKey) }

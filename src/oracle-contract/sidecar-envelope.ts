@@ -62,6 +62,8 @@ const UNSIGNED_FIELDS = [
   'retry_owner', 'key_id', 'key_role',
 ] as const satisfies ReadonlyArray<keyof SidecarCapabilityUnsigned>
 
+const DIGEST_FIELDS = ['ordered_headers_sha256', 'body_sha256', 'contract_digest', 'manifest_digest'] as const
+
 function failure(code: string): SidecarVerifyDecision {
   return { allowed: false, code }
 }
@@ -88,9 +90,28 @@ function strictUnsigned(value: unknown): SidecarCapabilityUnsigned | undefined {
   return value as SidecarCapabilityUnsigned
 }
 
+function toWireUnsigned(value: SidecarCapabilityUnsigned): Record<string, unknown> {
+  const wire: Record<string, unknown> = { ...value }
+  for (const field of DIGEST_FIELDS) {
+    if (/^[0-9a-f]{64}$/.test(value[field])) wire[field] = Buffer.from(value[field], 'hex')
+  }
+  return wire
+}
+
+function strictWireUnsigned(value: unknown): SidecarCapabilityUnsigned | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const application: Record<string, unknown> = { ...(value as Record<string, unknown>) }
+  for (const field of DIGEST_FIELDS) {
+    const digest = application[field]
+    if (!(digest instanceof Uint8Array) || digest.length !== 32) return undefined
+    application[field] = Buffer.from(digest).toString('hex')
+  }
+  return strictUnsigned(application)
+}
+
 export function sidecarCapabilitySigningBytes(unsigned: SidecarCapabilityUnsigned): Buffer {
   if (!strictUnsigned(unsigned)) throw new OracleContractError('sidecar_capability_schema_invalid', 'unsigned sidecar capability is invalid')
-  return Buffer.concat([SIDECAR_CAPABILITY_DOMAIN, encodeDeterministicCbor(unsigned)])
+  return Buffer.concat([SIDECAR_CAPABILITY_DOMAIN, encodeDeterministicCbor(toWireUnsigned(unsigned))])
 }
 
 export function signSidecarCapability(unsigned: SidecarCapabilityUnsigned, keyId: string, keyEpoch: number, privateKey: KeyObject): SignedSidecarCapability {
@@ -101,7 +122,8 @@ export function signSidecarCapability(unsigned: SidecarCapabilityUnsigned, keyId
 }
 
 export function encodeSidecarCapability(envelope: SignedSidecarCapability): Buffer {
-  return frameCbor(encodeDeterministicCbor(envelope))
+  const { signature, ...unsigned } = envelope
+  return frameCbor(encodeDeterministicCbor({ ...toWireUnsigned(unsigned), signature }))
 }
 
 function publicKeyFingerprint(key: KeyObject): string {
@@ -120,7 +142,7 @@ export function verifySidecarCapability(frame: Uint8Array, context: SidecarVerif
   const signature = record.signature
   const unsignedRecord = { ...record }
   delete unsignedRecord.signature
-  const unsigned = strictUnsigned(unsignedRecord)
+  const unsigned = strictWireUnsigned(unsignedRecord)
   if (!unsigned || !(signature instanceof Uint8Array) || signature.length !== 64) return failure('sidecar_capability_schema_invalid')
   if (unsigned.issued_at_ms > context.nowMs || unsigned.deadline_ms < context.nowMs || unsigned.deadline_ms < unsigned.issued_at_ms) return failure('sidecar_capability_expired')
   const key = context.keys[unsigned.key_id]

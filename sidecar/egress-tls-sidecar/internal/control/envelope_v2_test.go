@@ -126,6 +126,16 @@ func TestEnvelopeV2SignedCapabilityAndReplay(t *testing.T) {
 	if hex.EncodeToString(unsignedBytes[len(OracleSidecarCapabilityDomain):]) != expected.CanonicalResults.SidecarUnsignedEnvelope.CanonicalHex {
 		t.Fatalf("unsigned capability bytes differ")
 	}
+	var wire map[string]any
+	if err := DecodeOracleDeterministicCBOR(unsignedBytes[len(OracleSidecarCapabilityDomain):], &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"ordered_headers_sha256", "body_sha256", "contract_digest", "manifest_digest"} {
+		value, ok := wire[field].([]byte)
+		if !ok || len(value) != 32 {
+			t.Fatalf("%s must be a 32-byte CBOR byte string, got %T", field, wire[field])
+		}
+	}
 	if os.Getenv("ORACLE_PHASE2_DEBUG_DIGESTS") == "1" {
 		t.Logf("sidecar-unsigned-hex %x", unsignedBytes[len(OracleSidecarCapabilityDomain):])
 	}
