@@ -77,11 +77,14 @@ export function classifySafeErrorText(value: string): string[] {
   if (/permission|denied|forbidden/i.test(value)) categories.add('permission')
   if (/model/i.test(value)) categories.add('model')
   if (/capacity|overload|rate.?limit|quota/i.test(value)) categories.add('capacity')
+  if (/country|region|supported location/i.test(value)) categories.add('region-policy')
+  if (/platform|architecture|operating system/i.test(value)) categories.add('platform')
+  if (/terminal|tty|interactive/i.test(value)) categories.add('terminal')
   if (categories.size === 0 && value.length > 0) categories.add('unknown')
   return [...categories].sort()
 }
 
-const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'error', 'input', 'invalid', 'key', 'permission', 'print', 'prompt', 'require', 'response', 'session', 'stdin', 'token', 'unsupported', 'uuid'] as const
+const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'country', 'error', 'input', 'interactive', 'invalid', 'key', 'location', 'permission', 'platform', 'print', 'prompt', 'region', 'require', 'response', 'session', 'stdin', 'supported', 'terminal', 'token', 'tty', 'unsupported', 'uuid'] as const
 
 export function extractSafeErrorTerms(value: string): string[] {
   return SAFE_ERROR_TERMS.filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(value))
