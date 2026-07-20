@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-phase3a-handoff.schema.json",
+  "title": "Oracle Lab Phase 3A to Phase 3B/3.5 handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "exit_report_path", "exit_report_sha256", "p2", "artifact_index_sha256", "usable_conclusion_ids", "unknown_conclusion_ids", "contradiction_ids", "negative_capabilities", "candidate_input_schema", "candidate_input_rows", "platform_coverage", "change_point_coverage", "omitted_cells", "runtime_enforcement_implemented"],
+  "properties": {
+    "schema_version": {"const": "oracle-lab-phase3a-handoff.v1"}, "status": {"enum": ["READY", "BLOCKED"]},
+    "exit_report_path": {"$ref": "#/$defs/path"}, "exit_report_sha256": {"$ref": "#/$defs/sha256"},
+    "p2": {"type": "object", "additionalProperties": false, "required": ["bundle_sha256", "predecessor_sha256", "schema_range"], "properties": {"bundle_sha256": {"$ref": "#/$defs/sha256"}, "predecessor_sha256": {"$ref": "#/$defs/sha256"}, "schema_range": {"const": "1:0-0"}}},
+    "artifact_index_sha256": {"$ref": "#/$defs/sha256"}, "usable_conclusion_ids": {"$ref": "#/$defs/ids"}, "unknown_conclusion_ids": {"$ref": "#/$defs/ids"}, "contradiction_ids": {"$ref": "#/$defs/ids"},
+    "negative_capabilities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}, "candidate_input_schema": {"type": "object"},
+    "candidate_input_rows": {"type": "array", "items": {"type": "object", "required": ["conclusion_id", "phase3b_usable"], "properties": {"conclusion_id": {"$ref": "#/$defs/id"}, "phase3b_usable": {"const": true}}, "additionalProperties": true}},
+    "platform_coverage": {"type": "array", "items": {"type": "object"}}, "change_point_coverage": {"type": "array", "items": {"type": "object"}}, "omitted_cells": {"type": "array", "items": {"type": "object"}},
+    "runtime_enforcement_implemented": {"const": false}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}, "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"}}
+}

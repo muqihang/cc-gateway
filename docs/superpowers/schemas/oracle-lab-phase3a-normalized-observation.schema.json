@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-phase3a-normalized-observation.schema.json",
+  "title": "Oracle Lab Phase 3A normalized observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "observation_id", "run_id", "pair_id", "artifact_digest", "request", "response", "control_plane", "runtime", "perturbation", "source_agreement", "limitations"],
+  "properties": {
+    "schema_version": {"const": "oracle-lab-phase3a-normalized-observation.v1"},
+    "observation_id": {"$ref": "#/$defs/id"}, "run_id": {"$ref": "#/$defs/id"}, "pair_id": {"$ref": "#/$defs/id"}, "artifact_digest": {"$ref": "#/$defs/sha256"},
+    "request": {
+      "type": "object", "additionalProperties": false, "required": ["endpoint_class", "header_names", "header_value_classes", "body_ast_topology", "cch_class", "system_summary", "serialized_bytes_sha256"],
+      "properties": {
+        "endpoint_class": {"type": "string"}, "header_names": {"$ref": "#/$defs/strings"}, "header_value_classes": {"type": "object", "additionalProperties": {"type": "string"}},
+        "body_ast_topology": {"type": "object"}, "cch_class": {"type": "string"}, "serialized_bytes_sha256": {"$ref": "#/$defs/sha256"},
+        "system_summary": {
+          "type": "object", "additionalProperties": false, "required": ["byte_length", "sha256", "stable_spans", "ast_topology"],
+          "properties": {"byte_length": {"type": "integer", "minimum": 0}, "sha256": {"$ref": "#/$defs/sha256"}, "stable_spans": {"type": "array", "items": {"type": "object"}}, "ast_topology": {"type": "object"}}
+        }
+      }
+    },
+    "response": {
+      "type": "object", "additionalProperties": false, "required": ["http_sse_ast", "event_order", "partial_output_topology", "compact_fields", "prompt_cache_fields", "terminal_state", "retry_eligibility"],
+      "properties": {"http_sse_ast": {"type": "object"}, "event_order": {"$ref": "#/$defs/strings"}, "partial_output_topology": {"type": "object"}, "compact_fields": {"type": "object"}, "prompt_cache_fields": {"type": "object"}, "terminal_state": {"type": "string"}, "retry_eligibility": {"type": "boolean"}}
+    },
+    "control_plane": {
+      "type": "object", "additionalProperties": false, "required": ["destination_classes", "event_schemas", "timing_buckets"],
+      "properties": {"destination_classes": {"$ref": "#/$defs/strings"}, "event_schemas": {"type": "array", "items": {"type": "object"}}, "timing_buckets": {"$ref": "#/$defs/strings"}}
+    },
+    "runtime": {
+      "type": "object", "additionalProperties": false, "required": ["process_lineage", "exec_digests", "environment_access", "filesystem_events", "dns_events", "socket_events", "tls_events", "http_events", "timers", "retries"],
+      "properties": {"process_lineage": {"type": "array", "items": {"type": "object"}}, "exec_digests": {"$ref": "#/$defs/strings"}, "environment_access": {"$ref": "#/$defs/strings"}, "filesystem_events": {"type": "array", "items": {"type": "object"}}, "dns_events": {"type": "array", "items": {"type": "object"}}, "socket_events": {"type": "array", "items": {"type": "object"}}, "tls_events": {"type": "array", "items": {"type": "object"}}, "http_events": {"type": "array", "items": {"type": "object"}}, "timers": {"type": "array", "items": {"type": "object"}}, "retries": {"type": "array", "items": {"type": "object"}}}
+    },
+    "perturbation": {
+      "type": "object", "additionalProperties": false, "required": ["instrumented", "control_run_id", "differences", "missing_sources", "profile_usable"],
+      "properties": {"instrumented": {"type": "boolean"}, "control_run_id": {"$ref": "#/$defs/id"}, "differences": {"$ref": "#/$defs/strings"}, "missing_sources": {"$ref": "#/$defs/strings"}, "profile_usable": {"type": "boolean"}}
+    },
+    "source_agreement": {"enum": ["single-source", "two-source", "three-source", "contradicted"]},
+    "limitations": {"$ref": "#/$defs/strings"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "strings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 512}}
+  }
+}
