@@ -64,5 +64,13 @@ assert.throws(() => assertExitReport(extra), (error: any) => error.code === 'exi
 const unsafe = fixture() as any
 unsafe.protocol_runtime_summaries[0].raw_prompt = 'synthetic'
 assert.throws(() => buildExitReport(unsafe), (error: any) => error.code === 'exit_unsafe_material' || error.code === 'exit_forbidden_material')
+const unavailableCodeGraph = fixture() as any
+unavailableCodeGraph.repositories[0].codegraph = { status: 'unavailable', reason: 'external-worktree-cleanup', up_to_date: false, last_observed: { version: '1.1.6', head: 'd'.repeat(40), file_count: 1, node_count: 1, edge_count: 0 } }
+unavailableCodeGraph.repositories[0].codegraph.binding_sha256 = sha256Bytes(canonicalJson({ ...unavailableCodeGraph.repositories[0].codegraph }))
+const { repository_binding_sha256: _oldBinding, ...unsignedUnavailable } = unavailableCodeGraph.repositories[0]
+unavailableCodeGraph.repositories[0].repository_binding_sha256 = sha256Bytes(canonicalJson(unsignedUnavailable))
+assert.throws(() => buildExitReport(unavailableCodeGraph), (error: any) => error.code === 'codegraph_unavailable_unacknowledged')
+unavailableCodeGraph.missing_gates.push('codegraph-current')
+assert.equal(buildExitReport(unavailableCodeGraph).status, 'BLOCKED')
 
 console.log(JSON.stringify({ ok: true, sections: 14, deterministic: true }))

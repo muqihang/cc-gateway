@@ -13,7 +13,7 @@ export type RepositoryBinding = {
   tree: string
   dirty_path_count: 0
   dirty_state_sha256: string
-  codegraph: {
+  codegraph: ({
     version: string
     built_with_version: string
     extraction_version: number
@@ -21,6 +21,12 @@ export type RepositoryBinding = {
     node_count: number
     edge_count: number
     up_to_date: true
+  } | {
+    status: 'unavailable'
+    reason: 'external-worktree-cleanup'
+    up_to_date: false
+    last_observed: { version: string; head: string; file_count: number; node_count: number; edge_count: number }
+  }) & {
     binding_sha256: string
   }
   repository_binding_sha256: string
@@ -52,7 +58,7 @@ function normalizeCodeGraph(status: JsonObject): Omit<RepositoryBinding['codegra
   }
 }
 
-export function captureRepositoryBinding(root: string, input: { repository: string; base: string; freezeHead: string; codegraphStatus?: JsonObject }): RepositoryBinding {
+export function captureRepositoryBinding(root: string, input: { repository: string; base: string; freezeHead: string; codegraphStatus?: JsonObject; codegraphUnavailable?: { reason: 'external-worktree-cleanup'; last_observed: { version: string; head: string; file_count: number; node_count: number; edge_count: number } } }): RepositoryBinding {
   const head = git(root, ['rev-parse', 'HEAD'])
   const tree = git(root, ['rev-parse', 'HEAD^{tree}'])
   if (head !== input.freezeHead) throw new Phase3AError('repository_freeze_mismatch', `${input.repository} head does not match tool/review freeze`)
@@ -60,8 +66,9 @@ export function captureRepositoryBinding(root: string, input: { repository: stri
   const dirty = dirtySnapshot(root)
   if (dirty.length !== 0) throw new Phase3AError('repository_dirty', `${input.repository} has ${dirty.length} dirty paths`)
   const dirtyStateSha256 = sha256Bytes(canonicalJson(dirty))
-  const rawCodeGraph = input.codegraphStatus ?? JSON.parse(execFileSync('codegraph', ['status', '--json'], { cwd: root, encoding: 'utf8' }))
-  const normalizedCodeGraph = normalizeCodeGraph(rawCodeGraph)
+  const normalizedCodeGraph = input.codegraphUnavailable
+    ? { status: 'unavailable' as const, reason: input.codegraphUnavailable.reason, up_to_date: false as const, last_observed: input.codegraphUnavailable.last_observed }
+    : normalizeCodeGraph(input.codegraphStatus ?? JSON.parse(execFileSync('codegraph', ['status', '--json'], { cwd: root, encoding: 'utf8' })))
   const codegraph = { ...normalizedCodeGraph, binding_sha256: sha256Bytes(canonicalJson(normalizedCodeGraph)) }
   const unsigned = { repository: input.repository, base: input.base, tool_review_freeze_head: input.freezeHead, head, tree, dirty_path_count: 0 as const, dirty_state_sha256: dirtyStateSha256, codegraph }
   return { ...unsigned, repository_binding_sha256: sha256Bytes(canonicalJson(unsigned)) }
@@ -69,7 +76,13 @@ export function captureRepositoryBinding(root: string, input: { repository: stri
 
 export function validateRepositoryBinding(binding: RepositoryBinding): void {
   if (!/^[a-f0-9]{40}$/.test(binding.base) || !/^[a-f0-9]{40}$/.test(binding.head) || !/^[a-f0-9]{40}$/.test(binding.tree) || binding.head !== binding.tool_review_freeze_head) throw new Phase3AError('repository_binding_invalid', 'repository git binding is invalid')
-  if (binding.dirty_path_count !== 0 || binding.codegraph.up_to_date !== true) throw new Phase3AError('repository_binding_invalid', 'repository freeze is dirty or CodeGraph is stale')
+  if (binding.dirty_path_count !== 0) throw new Phase3AError('repository_binding_invalid', 'repository freeze is dirty')
+  if (binding.codegraph.up_to_date === false) {
+    const observed = binding.codegraph.last_observed
+    if (binding.codegraph.status !== 'unavailable' || binding.codegraph.reason !== 'external-worktree-cleanup' || !/^[a-f0-9]{40}$/.test(observed.head) || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(observed.version) || [observed.file_count, observed.node_count, observed.edge_count].some((value) => !Number.isInteger(value) || value < 0)) {
+      throw new Phase3AError('repository_binding_invalid', 'unavailable CodeGraph binding is invalid')
+    }
+  }
   const { repository_binding_sha256: observed, ...unsigned } = binding
   if (observed !== sha256Bytes(canonicalJson(unsigned))) throw new Phase3AError('repository_binding_invalid', 'repository aggregate digest mismatch')
   const { binding_sha256: codegraphDigest, ...codegraphUnsigned } = binding.codegraph

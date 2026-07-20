@@ -122,6 +122,9 @@ function assertCuratedInput(input: CuratedExitInput): void {
   const repositoryNames = input.repositories.map((repository) => repository.repository).sort()
   if (canonicalJson(repositoryNames) !== canonicalJson(['cc-gateway', 'sub2api'])) throw new Phase3AError('repository_binding_invalid', 'exit report must bind exactly cc-gateway and sub2api')
   input.repositories.forEach(validateRepositoryBinding)
+  if (input.repositories.some((repository) => repository.codegraph.up_to_date === false) && !input.missing_gates.includes('codegraph-current')) {
+    throw new Phase3AError('codegraph_unavailable_unacknowledged', 'unavailable CodeGraph must remain an explicit missing gate')
+  }
   const unsafe = scanSafePersisted(input)
   if (unsafe.length > 0) throw new Phase3AError('exit_unsafe_material', canonicalJson(unsafe))
   const forbiddenKey = (value: unknown): boolean => {

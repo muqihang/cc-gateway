@@ -27,10 +27,18 @@ assert.match(binding.dirty_state_sha256, /^[a-f0-9]{64}$/)
 assert.match(binding.codegraph.binding_sha256, /^[a-f0-9]{64}$/)
 assert.match(binding.repository_binding_sha256, /^[a-f0-9]{64}$/)
 
+const unavailable = captureRepositoryBinding(root, {
+  repository: 'fixture', base: head, freezeHead: head,
+  codegraphUnavailable: { reason: 'external-worktree-cleanup', last_observed: { version: '1.1.6', head, file_count: 1, node_count: 1, edge_count: 0 } },
+})
+validateRepositoryBinding(unavailable)
+assert.equal(unavailable.codegraph.status, 'unavailable')
+assert.equal(unavailable.codegraph.last_observed.head, head)
+
 writeFileSync(path.join(root, 'untracked.txt'), 'dirty\n')
 assert.throws(
   () => captureRepositoryBinding(root, { repository: 'fixture', base: head, freezeHead: head, codegraphStatus: codegraph }),
   (error: unknown) => error instanceof Phase3AError && error.code === 'repository_dirty',
 )
 
-console.log(JSON.stringify({ ok: true, repository: binding.repository }))
+console.log(JSON.stringify({ ok: true, repository: binding.repository, unavailable_binding: true }))
