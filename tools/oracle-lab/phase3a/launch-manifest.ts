@@ -202,6 +202,7 @@ export function buildIsolatedEnvironment(manifestInput: LaunchManifest, evidence
     TMPDIR: directories.tmp,
     TMP: directories.tmp,
     TEMP: directories.tmp,
+    CLAUDE_CODE_TMPDIR: directories.tmp,
     TZ: manifest.environment.tz,
     LANG: manifest.environment.lang,
     LC_ALL: manifest.environment.lc_all,

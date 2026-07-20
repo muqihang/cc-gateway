@@ -86,6 +86,9 @@ assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, manifes
 
 const evidenceRoot = mkdtempSync(path.join(os.tmpdir(), 'phase3a-observer-test-'))
 const isolated = buildIsolatedEnvironment(manifest, evidenceRoot)
+assert.equal(isolated.env.CLAUDE_CODE_TMPDIR, isolated.directories.tmp)
+assert.ok(classifySafeErrorText("EPERM: operation not permitted, mkdir '/tmp/claude-501'").includes('filesystem'))
+assert.deepEqual(extractSafeErrorTerms("EPERM: operation not permitted, mkdir '/tmp/claude-501'"), ['eperm', 'mkdir', 'permitted'])
 assert.equal(isolated.env.HOME, isolated.directories.home)
 assert.equal(path.isAbsolute(isolated.directories.cwd), true)
 assert.equal(isolated.env.ANTHROPIC_API_KEY, undefined)
