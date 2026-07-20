@@ -42,7 +42,7 @@ const ARTIFACT = {
 
 const P2_BUNDLE = '2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce'
 const PREDECESSOR = '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
-const PROMPT = Buffer.from('Phase 3A synthetic loopback baseline. Reply exactly OK.', 'utf8')
+export const BASELINE_PROMPT = Buffer.from('Phase 3A synthetic loopback baseline. Reply exactly OK.', 'utf8')
 
 export function baselineEnvironmentSelection(input: { tz?: string; lang?: string; lc_all?: string }): { tz: string; lang: string; lc_all: string } {
   const selected = { tz: input.tz ?? 'UTC', lang: input.lang ?? 'C', lc_all: input.lc_all ?? input.lang ?? 'C' }
@@ -77,7 +77,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
     command: {
       executable_sha256: ARTIFACT.entrypoint_sha256,
       argv,
-      cwd: `runs/${options.run_id}/cwd`, stdin_sha256: sha256Bytes(PROMPT), timeout_ms: 120_000,
+      cwd: `runs/${options.run_id}/cwd`, stdin_sha256: sha256Bytes(BASELINE_PROMPT), timeout_ms: 120_000,
     },
     environment: {
       allowlist: {
@@ -92,7 +92,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
       tz: locale.tz, lang: locale.lang, lc_all: locale.lc_all, base_urls: [baseUrl],
     },
     network: { policy: 'declared_loopback_only', loopback_ports: [port], proxy_mode: 'none', ca_sha256: null, external_socket_budget: 0 },
-    matrix: { changed_variable: options.changed_variable ?? 'command-profile', control_value: options.control_value ?? 'minimal', treatment_value: options.treatment_value ?? profile, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(PROMPT), nonessential_traffic: false } },
+    matrix: { changed_variable: options.changed_variable ?? 'command-profile', control_value: options.control_value ?? 'minimal', treatment_value: options.treatment_value ?? profile, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(BASELINE_PROMPT), nonessential_traffic: false } },
     limits: { wall_ms: 120_000, cpu_ms: 120_000, rss_bytes: 4 * 1024 * 1024 * 1024, output_bytes: 8 * 1024 * 1024, processes: 32, retries: 8, sockets: 16, files: 4096 },
     capture: { hook: false, inspector: false, process: true, fs: true, network: true, tls: false, http: true, pcap: false, stdout: true, stderr: true },
     redaction_policy: 'oracle-lab-phase3a-redaction.v1', retention_class: 'synthetic-raw-14d', expiry: '2026-08-03T00:00:00.000Z', previous_manifest_sha256: null,
@@ -111,7 +111,7 @@ export async function runBaselineCell(options: BaselineOptions): Promise<Record<
     const guard = await runCellGuardSelfTest(manifest, root)
     writeJson(path.join(output, 'manifest.json'), manifest)
     writeJson(path.join(output, 'guard.json'), guard)
-    const result = await runCell({ manifest, evidence_root: root, executable: options.entrypoint, instrumentation: 'none', guard, stdin: PROMPT })
+    const result = await runCell({ manifest, evidence_root: root, executable: options.entrypoint, instrumentation: 'none', guard, stdin: BASELINE_PROMPT })
     const observer = { schema_version: 'oracle-lab-phase3a-safe-observer.v1', raw_material_persisted: false, events: upstream.events }
     writeJson(path.join(output, 'observer.json'), observer)
     writeJson(path.join(output, 'result.json'), result)
