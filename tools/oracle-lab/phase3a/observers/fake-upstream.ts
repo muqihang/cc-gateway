@@ -21,7 +21,7 @@ export type SafeUpstreamEvent = {
   body_topology: unknown
   response_class: string
   request_class: 'root' | 'messages' | 'count-tokens' | 'other'
-  system_summary: { status: 'observed' | 'absent'; byte_length: number; sha256: string; ast_topology: unknown }
+  system_summary: { status: 'observed' | 'absent'; byte_length: number; sha256: string; ast_topology: unknown; span_hashes: Array<{ path_sha256: string; ordinal: number; byte_length: number; sha256: string }> }
   cch_class: 'body-cache-control' | 'header-only' | 'not-observed'
 }
 
@@ -75,6 +75,19 @@ function hasKey(value: unknown, target: string, depth = 0): boolean {
   return Object.entries(value as Record<string, unknown>).some(([key, child]) => key === target || hasKey(child, target, depth + 1))
 }
 
+function stringSpanHashes(value: unknown): SafeUpstreamEvent['system_summary']['span_hashes'] {
+  const spans: SafeUpstreamEvent['system_summary']['span_hashes'] = []
+  const visit = (current: unknown, pathValue: string, depth: number): void => {
+    if (depth > 16 || spans.length >= 8192) return
+    if (typeof current === 'string') {
+      current.split('\n').forEach((line, ordinal) => spans.push({ path_sha256: sha256Bytes(pathValue), ordinal, byte_length: Buffer.byteLength(line), sha256: sha256Bytes(line) }))
+    } else if (Array.isArray(current)) current.forEach((child, index) => visit(child, `${pathValue}[${index}]`, depth + 1))
+    else if (current !== null && typeof current === 'object') for (const key of Object.keys(current as Record<string, unknown>).sort()) visit((current as Record<string, unknown>)[key], `${pathValue}.${sha256Bytes(key)}`, depth + 1)
+  }
+  visit(value, '$', 0)
+  return spans
+}
+
 function requestFacts(request: IncomingMessage, parsed: unknown): Pick<SafeUpstreamEvent, 'request_class' | 'system_summary' | 'cch_class'> {
   const pathname = new URL(request.url ?? '/', 'http://loopback.invalid').pathname
   const requestClass = pathname.endsWith('/count_tokens') ? 'count-tokens' : pathname.endsWith('/messages') ? 'messages' : pathname === '/' ? 'root' : 'other'
@@ -82,8 +95,8 @@ function requestFacts(request: IncomingMessage, parsed: unknown): Pick<SafeUpstr
   const system = Object.hasOwn(body, 'system') ? body.system : undefined
   const encoded = system === undefined ? '' : canonicalJson(system)
   const systemSummary = system === undefined
-    ? { status: 'absent' as const, byte_length: 0, sha256: sha256Bytes(''), ast_topology: { coverage: 'absent' } }
-    : { status: 'observed' as const, byte_length: Buffer.byteLength(encoded), sha256: sha256Bytes(encoded), ast_topology: jsonTopology(system) }
+    ? { status: 'absent' as const, byte_length: 0, sha256: sha256Bytes(''), ast_topology: { coverage: 'absent' }, span_hashes: [] }
+    : { status: 'observed' as const, byte_length: Buffer.byteLength(encoded), sha256: sha256Bytes(encoded), ast_topology: jsonTopology(system), span_hashes: stringSpanHashes(system) }
   const cchClass = hasKey(body, 'cache_control') ? 'body-cache-control' : request.headers['anthropic-beta'] ? 'header-only' : 'not-observed'
   return { request_class: requestClass, system_summary: systemSummary, cch_class: cchClass }
 }

@@ -107,7 +107,9 @@ export function normalizeCapsule(directoryInput: string): NormalizedObservation 
       header_value_classes: headerClasses,
       body_ast_topology: primary.body_topology ?? { coverage: 'not-observed' },
       cch_class: primary.cch_class ?? 'not-observed',
-      system_summary: primary.system_summary ?? { status: 'absent', byte_length: 0, sha256: emptySha, ast_topology: { coverage: 'not-observed' } },
+      system_summary: primary.system_summary
+        ? { byte_length: primary.system_summary.byte_length, sha256: primary.system_summary.sha256, stable_spans: primary.system_summary.span_hashes ?? [], ast_topology: primary.system_summary.ast_topology }
+        : { byte_length: 0, sha256: emptySha, stable_spans: [], ast_topology: { coverage: 'not-observed' } },
       serialized_bytes_sha256: typeof primary.body_sha256 === 'string' ? primary.body_sha256 : emptySha,
     },
     response: {

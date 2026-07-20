@@ -135,6 +135,7 @@ try {
   assert.equal(anthropic.events[0].response_class, 'anthropic:sse')
   assert.equal(anthropic.events[0].request_class, 'messages')
   assert.equal(anthropic.events[0].system_summary.status, 'observed')
+  assert.ok(anthropic.events[0].system_summary.span_hashes.length >= 2)
   assert.equal(anthropic.events[0].cch_class, 'body-cache-control')
   assert.doesNotMatch(canonicalJson(anthropic.events), /synthetic-model/)
   assert.doesNotMatch(canonicalJson(anthropic.events), /synthetic system|ephemeral/)
