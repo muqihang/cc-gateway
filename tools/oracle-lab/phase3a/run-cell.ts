@@ -80,11 +80,14 @@ export function classifySafeErrorText(value: string): string[] {
   if (/country|region|supported location/i.test(value)) categories.add('region-policy')
   if (/platform|architecture|operating system/i.test(value)) categories.add('platform')
   if (/terminal|tty|interactive/i.test(value)) categories.add('terminal')
+  if (/sandbox|exec(?:vp)?|spawn|launch|process/i.test(value)) categories.add('process-launch')
+  if (/file|directory|read|write|open/i.test(value)) categories.add('filesystem')
+  if (/update|version|server|endpoint|url/i.test(value)) categories.add('runtime-service')
   if (categories.size === 0 && value.length > 0) categories.add('unknown')
   return [...categories].sort()
 }
 
-const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'country', 'error', 'input', 'interactive', 'invalid', 'key', 'location', 'permission', 'platform', 'print', 'prompt', 'region', 'require', 'response', 'session', 'stdin', 'supported', 'terminal', 'token', 'tty', 'unsupported', 'uuid'] as const
+const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'country', 'directory', 'endpoint', 'error', 'exec', 'failed', 'file', 'input', 'interactive', 'invalid', 'key', 'launch', 'location', 'open', 'permission', 'platform', 'print', 'process', 'prompt', 'read', 'region', 'require', 'response', 'sandbox', 'server', 'session', 'spawn', 'stdin', 'supported', 'terminal', 'token', 'tty', 'unsupported', 'update', 'url', 'uuid', 'version', 'write'] as const
 
 export function extractSafeErrorTerms(value: string): string[] {
   return SAFE_ERROR_TERMS.filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(value))
