@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 
 import { buildBlockedDeliverables, type CuratedExitInput } from '../tools/oracle-lab/phase3a/build-exit.js'
-import { canonicalJson } from '../tools/oracle-lab/phase3a/core.js'
+import { canonicalJson, sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
 import { validatePhase3A } from '../tools/oracle-lab/phase3a/schemas.js'
 
 console.log('\ntests/oracle-phase3a-handoff.test.ts')
@@ -39,6 +39,7 @@ function fixture(): CuratedExitInput {
 
 const first = buildBlockedDeliverables(fixture()).handoff
 const second = buildBlockedDeliverables(fixture()).handoff
+assert.equal(first.exit_report_sha256, sha256Bytes(`${canonicalJson(buildBlockedDeliverables(fixture()).exit)}\n`))
 assert.deepEqual(validatePhase3A('handoff', first), [])
 assert.equal(canonicalJson(first), canonicalJson(second))
 assert.equal(first.status, 'BLOCKED')

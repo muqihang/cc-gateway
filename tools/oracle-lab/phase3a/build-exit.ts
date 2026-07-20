@@ -179,7 +179,7 @@ export function renderExitMarkdown(reportInput: ExitReport): string {
     lines.push(`## ${index + 1}. ${title}`, '', `Status: ${value.status}`, '', '```json', canonicalJson(value.details), '```', '')
   })
   lines.push('## Missing Gates', '', ...reportInput.missing_gates.map((gate) => `- ${gate}`), '')
-  return `${lines.join('\n')}\n`
+  return `${lines.join('\n').replace(/\n+$/, '')}\n`
 }
 
 export function buildBlockedHandoff(input: CuratedExitInput, reportInput?: ExitReport): JsonObject {
@@ -189,7 +189,7 @@ export function buildBlockedHandoff(input: CuratedExitInput, reportInput?: ExitR
   const usableRows = conclusions.filter((row) => row.phase3b_usable === true).map((row) => ({ conclusion_id: row.conclusion_id, phase3b_usable: true }))
   const handoff = {
     schema_version: 'oracle-lab-phase3a-handoff.v1', status: 'BLOCKED', exit_report_path: input.exit_report_path,
-    exit_report_sha256: sha256Bytes(canonicalJson(report)), p2: input.p2, artifact_index_sha256: input.artifact_index_sha256,
+    exit_report_sha256: sha256Bytes(`${canonicalJson(report)}\n`), p2: input.p2, artifact_index_sha256: input.artifact_index_sha256,
     usable_conclusion_ids: usableRows.map((row) => row.conclusion_id),
     unknown_conclusion_ids: conclusions.filter((row) => row.level === 'Unknown').map((row) => row.conclusion_id),
     contradiction_ids: [...new Set(input.evidence_health.contradictions.map((row: any) => String(row.contradiction_id ?? row.id ?? row)))].sort(),
@@ -220,9 +220,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   ] as const
   const requested = outputs.filter((row): row is readonly [string, string] => typeof row[0] === 'string')
   if (requested.length > 0) {
+    const flags = process.argv.includes('--replace-generated') ? 'w' : 'wx'
     for (const [file, bytes] of requested) {
       mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-      writeFileSync(file, bytes, { flag: 'wx', mode: 0o600 })
+      writeFileSync(file, bytes, { flag: flags, mode: 0o600 })
     }
     process.stdout.write(`${canonicalJson({ outputs: requested.map(([file]) => ({ file, sha256: sha256File(file) })) })}\n`)
   } else process.stdout.write(process.argv.includes('--handoff') ? `${canonicalJson(built.handoff)}\n` : process.argv.includes('--markdown') ? built.markdown : `${canonicalJson(built.exit)}\n`)

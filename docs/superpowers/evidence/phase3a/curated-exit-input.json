@@ -1,0 +1,178 @@
+{
+  "generated_at": "2026-07-20T12:00:00.000Z",
+  "exit_report_path": "docs/superpowers/evidence/phase3a/phase-3a-exit-report.json",
+  "artifact_index_sha256": "88cf8b6a5ad08f42ac27ee4e10d5e1f46a03a304d6ebbfdc1dd774811d635043",
+  "p2": {
+    "bundle_sha256": "2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce",
+    "predecessor_sha256": "70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1",
+    "schema_range": "1:0-0"
+  },
+  "repositories": [
+    {"repository": "cc-gateway", "base": "d02b7b3e8e746167a67d39c82792565be05fb3de", "head": "f5f037463ec585e3c72a0a46984071c2d0d3e521", "tree": "032532e2ee1c6285bb5e378ffb820879d6860672", "codegraph": "current"},
+    {"repository": "sub2api", "base": "cea7de895b8b523f3a6bb46be77ba09bc31a11bc", "head": "8c107d84fee391ce5030d19725a705d4d77973a3", "tree": "eeb8654eddf7a4c38364202f5024161e65d2a6d1", "codegraph": "current"}
+  ],
+  "artifacts": [
+    {"artifact_id": "claude-code-2.1.215-wrapper", "archive_sha256": "1a5cf8e491689154264c0b2f28371bf645cdee2903b45c497915868308502d7b", "tree_sha256": "024fa410b532ced37cd9e45a95aae6f9eb22e9ce8491e1fad843f24d958f4a88"},
+    {"artifact_id": "claude-code-2.1.215-platform", "archive_sha256": "b5dd6a135c96957dae232218c4ae5b04328a788f8c509202c92a2fec550601b2", "tree_sha256": "864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58"},
+    {"artifact_id": "claude-code-2.1.215-release", "archive_sha256": "599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600", "tree_sha256": "f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe", "entrypoint_sha256": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58", "signature_status": "valid"}
+  ],
+  "toolchain_capabilities": {
+    "toolchain_digest": "6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d",
+    "codegraph": "available-current",
+    "sandbox_exec": "same-scope-exact-profile-green",
+    "codesign": "available-valid",
+    "os_trace": "degraded-no-elevation",
+    "external_socket_budget": 0
+  },
+  "static_analysis": {
+    "summary_sha256": "0e4e0ca6767fecc8613006798c7c910558fe1f26b7a934589b2eab8d76c3cc6e",
+    "extraction_digest": "0415b2a41c7be93ef2ece741a32b4fa8dcb204a9755fea4fdb3135e6598c350b",
+    "bun_modules": 14,
+    "small_module_ast_reproductions": 5,
+    "entry_module_ast": "Unknown-node-budget",
+    "invalid_ast_disposition": "quarantined-superseded"
+  },
+  "coverage": {
+    "active": [{"version": "2.1.215", "platform": "darwin-arm64", "status": "BLOCKED", "observed": "HEAD-root-only", "messages_request": "Unknown"}],
+    "change_points": [
+      {"version": "2.1.214", "tier": "A", "status": "Unknown-unrun"},
+      {"version": "2.1.212", "tier": "A", "status": "Unknown-unrun"},
+      {"version": "2.1.211", "tier": "A", "status": "Unknown-unrun"},
+      {"version": "2.1.208", "tier": "A", "status": "Unknown-unrun"},
+      {"version": "2.1.207", "tier": "A", "status": "Unknown-unrun"}
+    ],
+    "omitted": [
+      {"cell": "active-messages-baseline", "reason": "six safe repetitions reached stable HEAD-only failure before messages coverage"},
+      {"cell": "environment-system-prompt-matrix", "reason": "active messages baseline not reproducible"},
+      {"cell": "telemetry-lifecycle-stream-compact", "reason": "active messages baseline not reproducible"},
+      {"cell": "tier-a-change-points", "reason": "P3A-3 waits for reproducible active baseline"},
+      {"cell": "tier-b-change-points", "reason": "Tier B yields to unresolved active and Tier A gates"},
+      {"cell": "windows-linux", "reason": "no isolated worker available"}
+    ]
+  },
+  "protocol_runtime_summaries": [
+    {"runs": ["active-baseline-002", "active-baseline-003", "active-baseline-004", "active-baseline-005", "active-baseline-006", "active-baseline-007"], "normalized_sha256": "8efd29330d08850e015f0fd590b337de82e466dc43fce92fc334e5e77cad4198", "request": "HEAD-root-only", "messages": "Unknown", "system_prompt_status": "Unknown", "cch": "Unknown", "telemetry": "Unknown", "tls": "not-exercised", "sse": "Unknown", "compact": "Unknown", "terminal_state": "failed", "stderr_sha256": "95d184c527424ea77100afcd245bdce94b0118dc3a56abafc4dbc785a5c9da4b"}
+  ],
+  "perturbation_source_agreement": {"instrumented_cells": 0, "uninstrumented_controls": 6, "source_agreement": "single-source", "profile_usable": false},
+  "evidence_health": {
+    "contradictions": [],
+    "expired": [],
+    "errors": [
+      {"code": "static_budget_exceeded", "scope": "entry-module-ast", "disposition": "Unknown"},
+      {"code": "stable-unclassified-exit", "stderr_sha256": "95d184c527424ea77100afcd245bdce94b0118dc3a56abafc4dbc785a5c9da4b", "disposition": "Unknown"}
+    ],
+    "unknowns": ["system-prompt", "messages-request", "cch", "telemetry", "tls", "sse", "compact", "lifecycle", "change-points"]
+  },
+  "conclusions": [
+    {
+      "conclusion": {
+        "schema_version": "oracle-lab-phase3a-conclusion.v1",
+        "conclusion_id": "CL-P3A-STATIC-ENTRY-UNKNOWN",
+        "level": "Unknown",
+        "scope": "Claude Code 2.1.215 Darwin arm64 entry module static recovery",
+        "statement": "The Bun standalone graph and fourteen module ranges were reproduced, but the 20 MiB entry module exceeded the bounded AST node budget and cannot support a complete root map.",
+        "supporting_artifact_ids": ["p3a1-static-summary", "p3a1-extraction-a", "p3a1-extraction-b"],
+        "contradicting_artifact_ids": [],
+        "static_anchor": {"artifact_digest": "90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58", "location": "__BUN,__bun module 0 offset 217140984 length 20163513", "reproduction_command_digest": "0415b2a41c7be93ef2ece741a32b4fa8dcb204a9755fea4fdb3135e6598c350b"},
+        "dynamic_reproduction": null,
+        "single_source_reason": "No successful messages dynamic path was available for static-root corroboration.",
+        "platform_limits": ["Darwin arm64 only", "entry AST node budget exceeded"],
+        "expiry": "2026-08-03T00:00:00.000Z",
+        "negative_capabilities": ["complete-entry-callgraph-unavailable", "root-map-incomplete"],
+        "phase3b_usable": false,
+        "prohibited_claims": ["CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED", "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED"]
+      },
+      "authority_ceiling": "Unknown", "observation_count": 2, "parser_agreement": "agreed", "perturbed": false
+    },
+    {
+      "conclusion": {
+        "schema_version": "oracle-lab-phase3a-conclusion.v1",
+        "conclusion_id": "CL-P3A-ACTIVE-BASELINE-UNKNOWN",
+        "level": "Unknown",
+        "scope": "Claude Code 2.1.215 Darwin arm64 exact-profile loopback baseline",
+        "statement": "Six bounded runs reproduced a HEAD request to the declared loopback root followed by the same failed terminal state, but no messages request or safe error category was observed.",
+        "supporting_artifact_ids": ["p3a2-active-baseline-002-summary", "p3a2-active-baseline-003-summary", "p3a2-active-baseline-004-summary", "p3a2-active-baseline-005-summary", "p3a2-active-baseline-006-summary", "p3a2-active-baseline-007-summary", "p3a4-normalized-observations"],
+        "contradicting_artifact_ids": [],
+        "static_anchor": null,
+        "dynamic_reproduction": null,
+        "single_source_reason": "The observer and process sampler did not provide two-source messages semantics, and the terminal error remained safely unclassified.",
+        "platform_limits": ["Darwin arm64 only", "no elevated OS trace", "no messages request"],
+        "expiry": "2026-08-03T00:00:00.000Z",
+        "negative_capabilities": ["messages-request-unobserved", "system-prompt-unobserved", "dual-source-unavailable"],
+        "phase3b_usable": false,
+        "prohibited_claims": ["CL-PINNED-OBS-001", "CL-CCH-SERVER-ACCEPTANCE-PROHIBITED", "CL-TLS-WIRE-EQUIVALENCE-PROHIBITED", "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED"]
+      },
+      "authority_ceiling": "Unknown", "observation_count": 6, "parser_agreement": "not-applicable", "perturbed": false
+    },
+    {
+      "conclusion": {
+        "schema_version": "oracle-lab-phase3a-conclusion.v1",
+        "conclusion_id": "CL-P3A-CHANGE-POINTS-UNKNOWN",
+        "level": "Unknown",
+        "scope": "Selected Phase 3A change-point versions",
+        "statement": "No change-point control was admitted because the active-target baseline did not reach the messages path required by the Phase 3A DAG.",
+        "supporting_artifact_ids": ["p3a4-normalized-observations"],
+        "contradicting_artifact_ids": [],
+        "static_anchor": null,
+        "dynamic_reproduction": null,
+        "single_source_reason": "Control intake and comparisons were intentionally not started before active baseline convergence.",
+        "platform_limits": ["control campaign not admitted"],
+        "expiry": "2026-08-03T00:00:00.000Z",
+        "negative_capabilities": ["change-point-matrix-unavailable"],
+        "phase3b_usable": false,
+        "prohibited_claims": ["CL-CHANGELOG-RISK-RULES-PROHIBITED", "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED"]
+      },
+      "authority_ceiling": "Unknown", "observation_count": 0, "parser_agreement": "not-applicable", "perturbed": false
+    }
+  ],
+  "p2_mapping": [
+    {"gate": "wire", "status": "Unknown", "bundle_unchanged": true},
+    {"gate": "semantic", "status": "Unknown", "bundle_unchanged": true},
+    {"gate": "state-sequence", "status": "Unknown", "bundle_unchanged": true},
+    {"gate": "failure-semantics", "status": "Observed-only", "bundle_unchanged": true}
+  ],
+  "evidence_hygiene": {
+    "terminal_index_sha256": "88cf8b6a5ad08f42ac27ee4e10d5e1f46a03a304d6ebbfdc1dd774811d635043",
+    "leak_scan": "PASS",
+    "leak_findings": 0,
+    "scanned_bytes": 1559719,
+    "quarantine_count": 3,
+    "all_evidence_digest": "cbe7c5cf17c57d659fa12505036844f0e2e16f518e8eb71a891ae6e7d5d45632",
+    "raw_quarantine_digest": "f2955e261f0f65840f6cd381991ebbfa96adc6df35b0b297685e43ff0c2a9e28",
+    "normalized_safe_digest": "fae6f6c809b46b4bcaeb5790079d2c2ee0f843250004572640b960e4fc9151f7",
+    "indexed_bytes": 21916715,
+    "evidence_root_kib": 660680,
+    "free_disk_kib": 27064440,
+    "retention": "retained",
+    "no_deletion": true,
+    "cleanup_candidates": ["capsules/P3A-2/active-baseline-001", "static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58/ast-a", "static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58/ast-b", "static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58/ast-c", "phase3a-observer-test temporary directories"]
+  },
+  "reproduction": {
+    "commands": [
+      "npm exec tsx tests/oracle-phase3a-static.test.ts",
+      "npm exec tsx tests/oracle-phase3a-observer.test.ts",
+      "npm exec tsx tests/oracle-phase3a-safe-error.test.ts",
+      "npm exec tsx tests/oracle-phase3a-exit.test.ts",
+      "npm exec tsx tests/oracle-phase3a-handoff.test.ts",
+      "npm exec tsx tools/oracle-contract/check-cross-repo.ts -- --check"
+    ],
+    "unavailable_tools": ["elevated macOS OS tracing", "isolated Linux worker", "isolated Windows worker"]
+  },
+  "phase3b": {
+    "negative_capabilities": ["no-messages-request", "no-system-prompt", "no-cch", "no-tls", "no-sse", "no-compact", "no-dual-source", "no-change-points", "no-usable-conclusions"],
+    "candidate_input_schema": {"type": "object", "additionalProperties": false, "required": ["conclusion_id", "phase3b_usable"], "properties": {"conclusion_id": {"type": "string"}, "phase3b_usable": {"const": true}}},
+    "acceptance_cases": ["new-streaming-session", "resumed-streaming-session", "bounded-failure-recovery", "deterministic-regeneration", "ts-go-fixture-agreement"],
+    "rollback_reference": {"p2_bundle_sha256": "2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce", "predecessor_sha256": "70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1"}
+  },
+  "safety_confirmation": {
+    "no_production": true,
+    "no_real_credentials": true,
+    "no_real_upstream": true,
+    "no_real_canary": true,
+    "no_profile_promotion": true,
+    "no_phase4_wiring": true,
+    "no_protected_file_access": true,
+    "runtime_enforcement_implemented": false
+  },
+  "missing_gates": ["active-messages-request-coverage", "complete-entry-root-map", "dual-source-agreement", "system-prompt-capture", "cch-coverage", "tls-sse-compact-coverage", "change-point-coverage"]
+}
