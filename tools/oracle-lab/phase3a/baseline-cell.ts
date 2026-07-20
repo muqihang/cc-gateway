@@ -43,7 +43,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
   return validateLaunchManifest({
     schema_version: 'oracle-lab-phase3a-launch-manifest.v1', run_id: options.run_id, parent_run_id: null,
     pair_id: 'active-2.1.215-loopback-baseline', sequence_index: 0, randomization_seed: 215,
-    phase: '3A', requirement_ids: ['HA-P1-001', 'HA-P1-002', 'CL-PINNED-OBS-001'],
+    phase: '3A', requirement_ids: ['HA-P1-001', 'HA-P1-002'],
     hypothesis_id: 'active-baseline-loopback-json', evidence_level_ceiling: 'Observed',
     repositories: {
       cc_gateway: { commit: options.cc_commit, tree: options.cc_tree, dirty_digest: sha256Bytes('') },
@@ -65,7 +65,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', NO_PROXY: '127.0.0.1,localhost,::1', no_proxy: '127.0.0.1,localhost,::1',
       },
       explicit_empty: [],
-      unset: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR', 'AWS_BEARER_TOKEN_BEDROCK', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'SSH_AUTH_SOCK'],
+      unset: ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR', 'AWS_BEARER_TOKEN_BEDROCK', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'SSH_AUTH_SOCK'],
       home: `runs/${options.run_id}/home`, xdg: `runs/${options.run_id}/xdg`, tmp: `runs/${options.run_id}/tmp`,
       tz: 'UTC', lang: 'C', lc_all: 'C', base_urls: [baseUrl],
     },
