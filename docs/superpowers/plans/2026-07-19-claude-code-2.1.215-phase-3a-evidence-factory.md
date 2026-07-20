@@ -48,14 +48,15 @@ Phase 3A does **not**:
 
 | Repository | Remote | Frozen commit | Frozen tree | Planning root |
 | --- | --- | --- | --- | --- |
-| CC Gateway | `https://github.com/muqihang/cc-gateway.git` | `5520e96b0c577eb4f061013b5bcc9973c7f38c3f` | `48e84a70238f68c24637c61783fb75c3cea5b919` | `${CC_GATEWAY_ROOT}` |
+| CC Gateway | `https://github.com/muqihang/cc-gateway.git` | `d02b7b3e8e746167a67d39c82792565be05fb3de` | `a2a2e50d461000cde20b998a553ee789a54fca67` | `${CC_GATEWAY_ROOT}` |
 | Sub2API | `https://github.com/muqihang/sub2api.git` | `cea7de895b8b523f3a6bb46be77ba09bc31a11bc` | `52efacd397bd0f15861cca4b6a1921a049e5ea28` | `${SUB2API_ROOT}` |
 
 Planning used the Codex-created CC worktree and a new clean sibling Sub2API clone. The operator's
 existing Sub2API checkout is not an input. Both remotes matched the expected commits after
-`git fetch muqihang main`. The CC movement from the handoff's integrated product commit to the
-frozen commit is only the Phase 2 handoff addition (PR #35), so it does not alter the tested Phase 2
-product tree or contract anchor.
+`git fetch muqihang main`. Formal execution re-froze CC at `d02b7b3`, whose movement from the
+planning commit is only the Phase 3A plan merge (PR #36); it does not alter the tested Phase 2
+product tree or contract anchor. This re-freeze and the tiered intake/tree-digest correction below
+were explicitly operator-approved after the first formal wrapper intake failed closed.
 
 Formal execution begins with:
 
@@ -63,13 +64,13 @@ Formal execution begins with:
 git -C "$CC_GATEWAY_ROOT" fetch muqihang main
 git -C "$SUB2API_ROOT" fetch muqihang main
 test "$(git -C "$CC_GATEWAY_ROOT" rev-parse muqihang/main)" = \
-  5520e96b0c577eb4f061013b5bcc9973c7f38c3f
+  d02b7b3e8e746167a67d39c82792565be05fb3de
 test "$(git -C "$SUB2API_ROOT" rev-parse muqihang/main)" = \
   cea7de895b8b523f3a6bb46be77ba09bc31a11bc
 test -z "$(git -C "$CC_GATEWAY_ROOT" status --porcelain)"
 test -z "$(git -C "$SUB2API_ROOT" status --porcelain)"
 test "$(git -C "$CC_GATEWAY_ROOT" rev-parse HEAD^{tree})" = \
-  48e84a70238f68c24637c61783fb75c3cea5b919
+  a2a2e50d461000cde20b998a553ee789a54fca67
 test "$(git -C "$SUB2API_ROOT" rev-parse HEAD^{tree})" = \
   52efacd397bd0f15861cca4b6a1921a049e5ea28
 codegraph sync "$CC_GATEWAY_ROOT" && codegraph status "$CC_GATEWAY_ROOT"
@@ -114,12 +115,13 @@ execution authority.
 | npm SHA-1 | `c349d13afa43e6cf6f147f36bec121dc9824ed89` |
 | npm integrity | `sha512-lsWBvyMyBqg/rOZ06o/HEhlpOzHsH8IBf9RH4u5gzizQ1LWS/oXAh5nqWNUu3hn2d8QkyYg0aseNzMDlGD+3qg==` |
 | wrapper archive SHA-256 | `1a5cf8e491689154264c0b2f28371bf645cdee2903b45c497915868308502d7b` |
-| wrapper unpacked-tree SHA-256 | `9cec9c9ad4edea1c4f64cf515033fcf3ecac347231e20f6e7f63f54b0ad87b04` |
+| wrapper unpacked-tree SHA-256 | `024fa410b532ced37cd9e45a95aae6f9eb22e9ce8491e1fad843f24d958f4a88` under `oracle-lab-phase3a-tree-digest-v1`; independently reproduced in two fresh roots |
 | platform metadata URL | `https://registry.npmjs.org/@anthropic-ai%2fclaude-code-darwin-arm64/2.1.215` |
 | platform npm tarball SHA-256 | `b5dd6a135c96957dae232218c4ae5b04328a788f8c509202c92a2fec550601b2` |
-| platform unpacked-tree SHA-256 | `68157adfdf2666cc5afcbab8834405691faf8b8ad22e03a507fce845b2e71c6b` |
+| platform unpacked-tree SHA-256 | `864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6` under `oracle-lab-phase3a-tree-digest-v1` |
 | official release page | `https://github.com/anthropics/claude-code/releases/tag/v2.1.215` |
 | release arm64 archive SHA-256 | `599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600` |
+| release arm64 unpacked-tree SHA-256 | `f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe` under `oracle-lab-phase3a-tree-digest-v1` |
 | release `SHASUMS256.txt` SHA-256 | `ff3d5757a0dbbfa75b43d03e9e4b360dcfad021520b34e0b40e65a1a1cbe110f` |
 | release signature bytes SHA-256 | `d32aa006a5157c28d0d5ed41847ded7a95bae75de2177754b0320ba866d66cb5` |
 | executed Mach-O SHA-256 | `90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58` |
@@ -134,14 +136,23 @@ thin PIE Mach-O with a `__BUN,__bun` section. Minimal marker inventory found sou
 resource, chunk, Bun, and Node-builtin strings; it did **not** establish that usable source maps or
 recoverable module boundaries exist. Symbols are present but insufficiently characterized.
 
-The unpacked-tree digest algorithm is:
+The formal unpacked-tree digest algorithm is the executable reference implementation
+`tools/oracle-lab/phase3a/tree-digest.ts`, identified as
+`oracle-lab-phase3a-tree-digest-v1`:
 
 ```text
-sha256(canonical JSON of path-sorted entries)
-file    -> {path,type:"file",mode,size,sha256}
-symlink -> {path,type:"symlink",mode,target}
-dir     -> {path,type:"dir",mode}
+sha256(domain || u32(record_count) || records)
+record -> u32(path_byte_length) || normalized POSIX UTF-8 path bytes ||
+          u8(normalized executable bit) || u64(file size) || raw 32-byte file SHA-256
+records are sorted by original normalized UTF-8 path bytes; only regular files are admitted
 ```
+
+Directories, mtime, uid, gid, and host absolute paths do not enter the digest. Symlinks, hardlinks,
+special files, invalid/non-normalized UTF-8 paths, traversal, and Unicode/case collisions are
+rejected before digesting. The planning-only wrapper digest
+`9cec9c9ad4edea1c4f64cf515033fcf3ecac347231e20f6e7f63f54b0ad87b04` and platform digest
+`68157adfdf2666cc5afcbab8834405691faf8b8ad22e03a507fce845b2e71c6b` had no executable,
+independently reproducible encoding and are superseded/non-reproducible, not execution evidence.
 
 Planning tool versions were CodeGraph `1.1.6`, Node `v24.7.0`, npm `11.5.1`, curl `8.6.0`,
 jq `1.8.1`, Apple `codesign`/`otool` from the active Xcode command-line tools, and the system tar
@@ -440,7 +451,14 @@ npm exec tsx tools/oracle-lab/phase3a/intake.ts -- \
   identity must be recorded or the signature result is `Unknown`.
 - **Done:** wrapper, selected platform package, release asset, and executed binary agree by digest;
   postinstall mapping is recorded without running postinstall.
-- **Stop/budget:** 90 minutes; 1 GiB download/unpack hard cap, 4x expansion cap per archive.
+- **Stop/budget:** 90 minutes. For the pinned wrapper after source, npm integrity, and exact archive
+  SHA-256 match: 1 MiB archive, 16 MiB total regular bytes, 4,096 regular files, 8 MiB per regular
+  file, depth 32, and 1,024 UTF-8 path bytes. For pinned platform/release artifacts: retain the
+  1 GiB per-artifact download/unpack cap and enforce streaming total bytes, 65,536 regular files,
+  768 MiB per file, depth 32, 1,024 path bytes, and 131,072 total archive entries. Expansion ratio
+  is evidence and warning only for these pinned artifacts. Any archive whose source, integrity, or
+  digest is not fixed retains the 4x expansion hard cap. All limits are enforced while parsing and
+  before writing each file; path/type/collision violations remain fail-closed.
 - **Parallel/dependency:** after 0.1; wrapper and platform downloads may be parallel.
 - **Nearest deliverable:** metadata plus archive digest and an explicit unpack failure class.
 
