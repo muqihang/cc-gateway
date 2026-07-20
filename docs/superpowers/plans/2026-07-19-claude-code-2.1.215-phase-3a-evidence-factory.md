@@ -688,7 +688,11 @@ Required dimensions:
   config, IDE config, system proxy, shell startup, credential helpers, inherited descriptors and
   local agents; each source is introduced alone before pairwise conflicts;
 - authentication lifecycle using placeholder-only API-key, setup-token, OAuth-shaped, helper,
-  expired/refresh-failed, refreshed, restart and resumed-session fixtures; no real keychain/login;
+  expired/refresh-failed and refreshed fixtures, including concurrent refresh attempts, credential
+  revocation, reauthorization invalidating an older refresh credential, credential rotation during
+  a stream, process restart after rotation, resumed sessions, and IDE/CLI credential-state sharing
+  versus isolation; no real keychain/login. Every outcome separately records request retry,
+  credential state, session state, account state, proxy state, and transport-cell consequences;
 - System Prompt bytes summarized by length, SHA-256, first difference, stable/variable span hashes,
   and canonical AST topology; request endpoint, headers, body AST, serialized-byte digest, CCH/cache
   class, and telemetry events.
@@ -919,13 +923,19 @@ Explicit exclusions unless P3A-1 finds a relevant unresolved structural change:
 - **Command:** run the safe-error mutation/fuzz corpus, then
   `safe-error-classifier.ts --artifact-index INDEX --in-memory-only --emit-safe SAFE_ERRORS` and
   `build-exit.ts --classify-conclusions`. The classifier has an exact allowlist of safe error
-  codes/categories, bounded lengths, and leak canaries for credentials, URLs/domains, prompts,
-  bodies, CCH, IDs, paths, control characters, Unicode confusables, and nested exception causes.
-  Raw error strings are classified in memory and discarded.
+  codes/categories and may emit only protocol status, safe error category, syntactically
+  allowlisted provider error type, retryability, a bounded retry-after bucket, authentication /
+  entitlement / capacity / model / request-shape / proxy / transport categories, whether
+  reauthorization is indicated, whether account / credential / session / budget / cooldown /
+  quarantine state changed, and a scoped request-correlation hash when available. Outputs have
+  bounded lengths and leak canaries for credentials, URLs/domains, prompts, bodies, CCH, raw IDs,
+  paths, control characters, Unicode confusables, and nested exception causes. Unknown fields and
+  free-form text are discarded; raw error strings are classified in memory and discarded.
 - **RED:** unknown error class, canary leakage, truncated multibyte text, raw nested cause, missing
   contradiction edge, expired evidence treated as current, or one run upgraded to Reproduced.
-- **Output/schema:** safe error taxonomy/leak report plus conclusion rows with the required level,
-  scope, supporting/contradicting artifacts, expiry and authority ceiling.
+- **Output/schema:** safe error taxonomy/leak report with exactly the allowlisted fields above plus
+  conclusion rows with the required level, scope, supporting/contradicting artifacts, expiry and
+  authority ceiling.
 
 Levels are:
 
