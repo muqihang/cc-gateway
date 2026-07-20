@@ -11,9 +11,17 @@ import { assertControlForInstrumentation, buildIsolatedEnvironment, type LaunchM
 import { startConnectProxy } from '../tools/oracle-lab/phase3a/observers/connect-proxy.js'
 import { startFakeUpstream } from '../tools/oracle-lab/phase3a/observers/fake-upstream.js'
 import { descendants, enforceProcessLimits } from '../tools/oracle-lab/phase3a/process-sampler.js'
-import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, extractSafeErrorTerms, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
+import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, extractSafeErrorTerms, fingerprintSafeErrorText, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
 
 console.log('\ntests/oracle-phase3a-observer.test.ts')
+
+const diagnosticMarker = 'synthetic-private-diagnostic-marker'
+const diagnostic = fingerprintSafeErrorText(Buffer.from(`Error: ${diagnosticMarker}\n`, 'utf8'))
+assert.equal(diagnostic.utf8_valid, true)
+assert.equal(diagnostic.line_count, 2)
+assert.equal(diagnostic.tokens.length, 5)
+assert.ok(diagnostic.tokens.every((token) => /^[a-f0-9]{64}$/.test(token.sha256)))
+assert.equal(JSON.stringify(diagnostic).includes(diagnosticMarker), false)
 
 const sha = 'a'.repeat(64)
 const commit = 'b'.repeat(40)

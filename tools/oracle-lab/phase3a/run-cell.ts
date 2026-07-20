@@ -46,7 +46,22 @@ export type CellResult = {
   hook_event_count: number
   safe_error_categories: string[]
   safe_error_terms: string[]
+  stderr_fingerprint: SafeTextFingerprint
   raw_output_persisted: false
+}
+
+export type SafeTextFingerprint = {
+  byte_length: number
+  utf8_valid: boolean
+  line_count: number
+  ascii_printable_bytes: number
+  whitespace_bytes: number
+  control_bytes: number
+  non_ascii_bytes: number
+  ansi_sequence_count: number
+  normalized_sha256: string
+  tokens: Array<{ byte_length: number; sha256: string }>
+  truncated: boolean
 }
 
 export type RunCellOptions = {
@@ -91,6 +106,31 @@ const SAFE_ERROR_TERMS = ['api', 'bare', 'cannot', 'country', 'directory', 'endp
 
 export function extractSafeErrorTerms(value: string): string[] {
   return SAFE_ERROR_TERMS.filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(value))
+}
+
+export function fingerprintSafeErrorText(bytesInput: Uint8Array): SafeTextFingerprint {
+  const bytes = Buffer.from(bytesInput)
+  let utf8Valid = true
+  let text: string
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { utf8Valid = false; text = new TextDecoder('utf-8').decode(bytes) }
+  const ansiSequenceCount = text.match(/\x1b\[[0-?]*[ -/]*[@-~]/g)?.length ?? 0
+  const normalized = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').normalize('NFKC').toLowerCase()
+  const tokenValues = normalized.match(/[\p{L}\p{N}]+/gu) ?? []
+  let asciiPrintableBytes = 0; let whitespaceBytes = 0; let controlBytes = 0; let nonAsciiBytes = 0
+  for (const byte of bytes) {
+    if (byte >= 0x20 && byte <= 0x7e) asciiPrintableBytes += 1
+    else if (byte === 0x09 || byte === 0x0a || byte === 0x0d || byte === 0x20) whitespaceBytes += 1
+    else if (byte < 0x20 || byte === 0x7f) controlBytes += 1
+    else nonAsciiBytes += 1
+  }
+  const tokens = tokenValues.slice(0, 64).map((token) => ({ byte_length: Buffer.byteLength(token), sha256: sha256Bytes(token) }))
+  const result = {
+    byte_length: bytes.length, utf8_valid: utf8Valid, line_count: text.split('\n').length,
+    ascii_printable_bytes: asciiPrintableBytes, whitespace_bytes: whitespaceBytes, control_bytes: controlBytes, non_ascii_bytes: nonAsciiBytes,
+    ansi_sequence_count: ansiSequenceCount, normalized_sha256: sha256Bytes(normalized), tokens, truncated: tokenValues.length > tokens.length,
+  }
+  bytes.fill(0)
+  return result
 }
 
 function profileEscape(value: string): string { return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"') }
@@ -316,6 +356,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   const safeErrorText = Buffer.concat(safeErrorChunks).toString('utf8')
   const safeErrorCategories = classifySafeErrorText(safeErrorText)
   const safeErrorTerms = extractSafeErrorTerms(safeErrorText)
+  const stderrFingerprint = fingerprintSafeErrorText(Buffer.concat(safeErrorChunks))
   for (const chunk of safeErrorChunks) chunk.fill(0)
   return {
     schema_version: 'oracle-lab-phase3a-cell-result.v1', run_id: manifest.run_id, status,
@@ -323,7 +364,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },
     process_samples: samples, max_processes: maxProcesses, max_sockets: maxSockets,
-    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, raw_output_persisted: false,
+    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, stderr_fingerprint: stderrFingerprint, raw_output_persisted: false,
   }
 }
 
