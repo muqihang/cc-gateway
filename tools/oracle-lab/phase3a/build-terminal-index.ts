@@ -7,6 +7,7 @@ import { canonicalJson, Phase3AError, sha256Bytes, sha256File, stableError } fro
 
 const TOOLCHAIN = '6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
+const C4_RUN = /^c4-(?:tz-utc-shanghai|locale-c-en|locale-c-zh)-r(?:0[0-9]|1[01])-(?:control|treatment)$/
 
 function safeId(value: string): string { return value.replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 120) }
 
@@ -16,7 +17,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
     if (!existsSync(path.join(root, relativePath))) return
     rows.push({
       artifact_id: safeId(artifactId), relative_path: relativePath, media_type: 'application/json', source_url: null, scope,
-      requirement_ids: ['HA-P1-001'], sensitivity: 'normalized-safe', redaction_transform: 'phase3a-safe-summary-v1',
+      requirement_ids: scope === 'P3A-2' ? ['HA-P1-001', 'HA-P1-002'] : ['HA-P1-001'], sensitivity: 'normalized-safe', redaction_transform: 'phase3a-safe-summary-v1',
       retention_class: 'normalized-until-phase3b', expiry: EXPIRY, disposition,
       parser_name: 'phase3a-terminal-index', parser_version: '2', parser_agreement: 'agreed', parent_artifact_ids: parents,
     })
@@ -44,9 +45,29 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
     add(`p3a2-${id}-result`, `capsules/P3A-2/${id}/result.json`, 'P3A-2', 'retain', [`p3a2-${id}-guard`, `p3a2-${id}-observer`])
     add(`p3a2-${id}-summary`, `capsules/P3A-2/${id}/summary.json`, 'P3A-2', 'retain', [`p3a2-${id}-result`])
   }
+  const capsuleRoot = path.join(root, 'capsules/P3A-2')
+  const c4RunIds = existsSync(capsuleRoot)
+    ? readdirSync(capsuleRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory() && C4_RUN.test(entry.name)).map((entry) => entry.name).sort()
+    : []
+  for (const id of c4RunIds) {
+    add(`p3a2-${id}-manifest`, `capsules/P3A-2/${id}/manifest.json`, 'P3A-2', 'retain', ['p3a0-artifact-index'])
+    add(`p3a2-${id}-guard`, `capsules/P3A-2/${id}/guard.json`, 'P3A-2', 'retain', [`p3a2-${id}-manifest`])
+    add(`p3a2-${id}-observer`, `capsules/P3A-2/${id}/observer.json`, 'P3A-2', 'retain', [`p3a2-${id}-manifest`])
+    add(`p3a2-${id}-result`, `capsules/P3A-2/${id}/result.json`, 'P3A-2', 'retain', [`p3a2-${id}-guard`, `p3a2-${id}-observer`])
+    add(`p3a2-${id}-summary`, `capsules/P3A-2/${id}/summary.json`, 'P3A-2', 'retain', [`p3a2-${id}-result`])
+    add(`p3a2-${id}-normalized`, `normalized/P3A-2/${id}.json`, 'P3A-2', 'retain', [`p3a2-${id}-summary`])
+  }
+  const c4PairIds = [...new Set(c4RunIds.map((id) => id.replace(/-r\d{2}-(?:control|treatment)$/, '')))].sort()
+  for (const pairId of c4PairIds) {
+    const pairRuns = c4RunIds.filter((id) => id.startsWith(`${pairId}-r`))
+    const inputId = `p3a2-${pairId}-campaign-input`
+    add(inputId, `campaign/P3A-2/${pairId}/input.json`, 'P3A-2', 'retain', pairRuns.map((id) => `p3a2-${id}-manifest`))
+    add(`p3a2-${pairId}-campaign-result`, `campaign/P3A-2/${pairId}/result.json`, 'P3A-2', 'retain', [inputId, ...pairRuns.map((id) => `p3a2-${id}-normalized`)])
+  }
   const dynamicParents = Array.from({ length: 6 }, (_, index) => `p3a2-active-baseline-${String(index + 2).padStart(3, '0')}-summary`)
   add('p3a4-normalized-observations', 'capsules/P3A-4/normalized-observations.json', 'P3A-4', 'retain', dynamicParents)
   add('p3a4-artifact-identity-graph', 'normalized/P3A-4/artifact-identity-graph.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...dynamicParents])
+  add('p3a4-artifact-identity-graph-c4', 'normalized/P3A-4/artifact-identity-graph-c4.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...c4RunIds.map((id) => `p3a2-${id}-summary`)])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
     { artifact_id: 'raw-release-intake-record-quarantine', relative_path: 'intake/release/2.1.215/artifact.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },

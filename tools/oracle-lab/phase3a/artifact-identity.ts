@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -6,6 +6,7 @@ import { canonicalJson, isSha256, Phase3AError, sha256Bytes, sha256File, stableE
 import { scanSafePersisted } from './schemas.js'
 
 type JsonObject = Record<string, any>
+const C4_RUN = /^c4-(?:tz-utc-shanghai|locale-c-en|locale-c-zh)-r(?:0[0-9]|1[01])-(?:control|treatment)$/
 export type IdentityNode = { id: string; kind: string; sha256: string; status: string }
 export type IdentityEdge = { from: string; to: string; relation: string; status: string }
 export type ArtifactIdentityGraph = {
@@ -96,6 +97,25 @@ export function verifyArtifactIdentityGraph(graph: ArtifactIdentityGraph): void 
   if (scanSafePersisted(graph).length > 0) throw new Phase3AError('artifact_identity_graph_invalid', 'graph contains unsafe persisted material')
 }
 
+export function discoverExecutionRunIds(evidenceRoot: string): string[] {
+  const capsulesRoot = path.join(evidenceRoot, 'capsules/P3A-2')
+  if (!existsSync(capsulesRoot)) return []
+  return readdirSync(capsulesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && (/^active-baseline-00[2-7]$/.test(entry.name) || C4_RUN.test(entry.name)))
+    .map((entry) => entry.name)
+    .sort()
+}
+
+export function rootExecutableDigest(result: JsonObject, runId: string): string {
+  const executableDigests = [...new Set(
+    (Array.isArray(result.process_samples) ? result.process_samples : [])
+      .filter((sample: JsonObject) => sample.executable_class === 'root' && isSha256(sample.executable_sha256))
+      .map((sample: JsonObject) => sample.executable_sha256 as string),
+  )]
+  if (executableDigests.length !== 1) throw new Phase3AError('artifact_identity_graph_invalid', `execution identity is ambiguous: ${runId}`)
+  return executableDigests[0]
+}
+
 function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1] }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
@@ -104,15 +124,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const intake = JSON.parse(readFileSync(path.join(evidenceRoot, 'normalized/P3A-0/intake-summary.json'), 'utf8'))
     const staticSummary = JSON.parse(readFileSync(path.join(evidenceRoot, 'capsules/P3A-1/static-summary.json'), 'utf8'))
     const executions = []
-    for (let run = 2; run <= 7; run += 1) {
-      const runId = `active-baseline-${String(run).padStart(3, '0')}`
+    for (const runId of discoverExecutionRunIds(evidenceRoot)) {
       const summary = JSON.parse(readFileSync(path.join(evidenceRoot, `capsules/P3A-2/${runId}/summary.json`), 'utf8'))
       const resultPath = path.join(evidenceRoot, `capsules/P3A-2/${runId}/result.json`)
       const result = JSON.parse(readFileSync(resultPath, 'utf8'))
       if (summary.result_sha256 !== sha256File(resultPath)) throw new Phase3AError('artifact_identity_graph_invalid', `result digest mismatch: ${runId}`)
-      const executableDigests = [...new Set(result.process_samples.filter((sample: JsonObject) => sample.executable_class === 'root').map((sample: JsonObject) => sample.executable_sha256))]
-      if (executableDigests.length !== 1) throw new Phase3AError('artifact_identity_graph_invalid', `execution identity is ambiguous: ${runId}`)
-      executions.push({ run_id: runId, result_sha256: summary.result_sha256, executable_sha256: executableDigests[0], external_socket_budget: summary.external_socket_budget, status: summary.status })
+      executions.push({ run_id: runId, result_sha256: summary.result_sha256, executable_sha256: rootExecutableDigest(result, runId), external_socket_budget: summary.external_socket_budget, status: summary.status })
     }
     const graph = buildArtifactIdentityGraph(intake, staticSummary, executions)
     mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })

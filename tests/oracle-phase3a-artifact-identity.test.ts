@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
-import { buildArtifactIdentityGraph, verifyArtifactIdentityGraph } from '../tools/oracle-lab/phase3a/artifact-identity.js'
+import { buildArtifactIdentityGraph, discoverExecutionRunIds, rootExecutableDigest, verifyArtifactIdentityGraph } from '../tools/oracle-lab/phase3a/artifact-identity.js'
 import { canonicalJson, Phase3AError, sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-artifact-identity.test.ts')
@@ -31,4 +34,16 @@ assert.throws(
   (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_identity_graph_invalid',
 )
 
-console.log(JSON.stringify({ ok: true, nodes: first.nodes.length, edges: first.edges.length }))
+const evidenceRoot = mkdtempSync(path.join(tmpdir(), 'phase3a-identity-'))
+const capsules = path.join(evidenceRoot, 'capsules/P3A-2')
+for (const runId of ['active-baseline-002', 'c4-tz-utc-shanghai-r00-control', 'c4-locale-c-en-r11-treatment', 'c4-locale-c-zh-r07-control', 'c3-tz-utc-shanghai-r00-control', 'c4-tz-utc-shanghai-r12-control']) {
+  mkdirSync(path.join(capsules, runId), { recursive: true })
+}
+assert.deepEqual(discoverExecutionRunIds(evidenceRoot), ['active-baseline-002', 'c4-locale-c-en-r11-treatment', 'c4-locale-c-zh-r07-control', 'c4-tz-utc-shanghai-r00-control'])
+assert.equal(rootExecutableDigest({ process_samples: [{ executable_class: 'root', executable_sha256: h('f') }, { executable_class: 'root', executable_sha256: null }] }, 'run-with-exit-race'), h('f'))
+assert.throws(
+  () => rootExecutableDigest({ process_samples: [{ executable_class: 'root', executable_sha256: h('f') }, { executable_class: 'root', executable_sha256: h('e') }] }, 'run-with-drift'),
+  (error: unknown) => error instanceof Phase3AError && error.code === 'artifact_identity_graph_invalid',
+)
+
+console.log(JSON.stringify({ ok: true, nodes: first.nodes.length, edges: first.edges.length, execution_discovery: 4, root_identity_cases: 2 }))
