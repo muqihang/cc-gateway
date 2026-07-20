@@ -48,9 +48,9 @@ function realFileBelow(evidenceRoot: string, candidate: string): string {
   return absolute
 }
 
-export function writeLeakScan(evidenceRoot: string, indexPath: string): LeakScanResult {
+export function writeLeakScan(evidenceRoot: string, indexPath: string, outputPath?: string): LeakScanResult {
   const result = scanArtifactIndex(evidenceRoot, indexPath)
-  const output = assertEvidencePath(evidenceRoot, path.join(evidenceRoot, 'guards', 'leak-scan.json'))
+  const output = assertEvidencePath(evidenceRoot, outputPath ?? path.join(evidenceRoot, 'guards', 'leak-scan.json'))
   mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 })
   writeFileSync(output, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 })
   return result
@@ -59,8 +59,8 @@ export function writeLeakScan(evidenceRoot: string, indexPath: string): LeakScan
 function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index === -1 ? undefined : process.argv[index + 1] }
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   try {
-    const root = argument('--evidence-root'); const index = argument('--artifact-index')
+    const root = argument('--evidence-root'); const index = argument('--artifact-index'); const out = argument('--out')
     if (!root || !index) throw new Phase3AError('leak_guard_usage', '--evidence-root and --artifact-index are required')
-    console.log(canonicalJson(writeLeakScan(root, index)))
+    console.log(canonicalJson(writeLeakScan(root, index, out)))
   } catch (error) { console.error(canonicalJson(stableError(error))); process.exitCode = 1 }
 }
