@@ -19,6 +19,7 @@ type BaselineOptions = {
   sub2api_tree: string
   plan_sha256: string
   toolchain_digest: string
+  command_profile?: 'full' | 'minimal'
 }
 
 const ARTIFACT = {
@@ -40,11 +41,15 @@ function writeJson(file: string, value: unknown): void {
 export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: string, port: number): LaunchManifest {
   if (sha256File(options.entrypoint) !== ARTIFACT.entrypoint_sha256) throw new Phase3AError('executable_digest_mismatch', 'baseline entrypoint differs from the frozen artifact')
   const baseUrl = upstreamUrl.replace(/\/$/, '')
+  const profile = options.command_profile ?? 'full'
+  const argv = profile === 'minimal'
+    ? ['--print', '--output-format', 'json', '--model', 'claude-sonnet-4-6']
+    : ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', '00000000-0000-4000-8000-000000000215', '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions']
   return validateLaunchManifest({
     schema_version: 'oracle-lab-phase3a-launch-manifest.v1', run_id: options.run_id, parent_run_id: null,
-    pair_id: 'active-2.1.215-loopback-baseline', sequence_index: 0, randomization_seed: 215,
+    pair_id: `active-2.1.215-loopback-baseline-${profile}`, sequence_index: 0, randomization_seed: 215,
     phase: '3A', requirement_ids: ['HA-P1-001', 'HA-P1-002'],
-    hypothesis_id: 'active-baseline-loopback-json', evidence_level_ceiling: 'Observed',
+    hypothesis_id: `active-baseline-loopback-json-${profile}`, evidence_level_ceiling: 'Observed',
     repositories: {
       cc_gateway: { commit: options.cc_commit, tree: options.cc_tree, dirty_digest: sha256Bytes('') },
       sub2api: { commit: options.sub2api_commit, tree: options.sub2api_tree, dirty_digest: sha256Bytes('') },
@@ -54,7 +59,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
     platform: { os: process.platform, release: os.release(), arch: process.arch, runtime: 'native', virtualization: 'host-sandbox-exec' },
     command: {
       executable_sha256: ARTIFACT.entrypoint_sha256,
-      argv: ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', '00000000-0000-4000-8000-000000000215', '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions'],
+      argv,
       cwd: `runs/${options.run_id}/cwd`, stdin_sha256: sha256Bytes(PROMPT), timeout_ms: 120_000,
     },
     environment: {
@@ -70,7 +75,7 @@ export function buildBaselineManifest(options: BaselineOptions, upstreamUrl: str
       tz: 'UTC', lang: 'C', lc_all: 'C', base_urls: [baseUrl],
     },
     network: { policy: 'declared_loopback_only', loopback_ports: [port], proxy_mode: 'none', ca_sha256: null, external_socket_budget: 0 },
-    matrix: { changed_variable: 'none-baseline', control_value: null, treatment_value: null, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(PROMPT), nonessential_traffic: false } },
+    matrix: { changed_variable: 'command-profile', control_value: 'minimal', treatment_value: profile, fixed_variables: { artifact: ARTIFACT.entrypoint_sha256, model: 'claude-sonnet-4-6', prompt_sha256: sha256Bytes(PROMPT), nonessential_traffic: false } },
     limits: { wall_ms: 120_000, cpu_ms: 120_000, rss_bytes: 4 * 1024 * 1024 * 1024, output_bytes: 8 * 1024 * 1024, processes: 32, retries: 8, sockets: 16, files: 4096 },
     capture: { hook: false, inspector: false, process: true, fs: true, network: true, tls: false, http: true, pcap: false, stdout: true, stderr: true },
     redaction_policy: 'oracle-lab-phase3a-redaction.v1', retention_class: 'synthetic-raw-14d', expiry: '2026-08-03T00:00:00.000Z', previous_manifest_sha256: null,
@@ -126,6 +131,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       evidence_root: values['evidence-root'], entrypoint: path.resolve(values.entrypoint), out_relative: values['out-relative'], run_id: values['run-id'],
       cc_commit: values['cc-commit'], cc_tree: values['cc-tree'], sub2api_commit: values['sub2api-commit'], sub2api_tree: values['sub2api-tree'],
       plan_sha256: values['plan-sha256'], toolchain_digest: values['toolchain-digest'],
+      command_profile: values['command-profile'] === 'minimal' ? 'minimal' : 'full',
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) {
