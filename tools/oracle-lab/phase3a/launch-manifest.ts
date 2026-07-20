@@ -52,7 +52,8 @@ const FORBIDDEN_INHERITED_ENV = new Set([
   'NODE_OPTIONS', 'BUN_OPTIONS', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD',
 ])
 
-const PLACEHOLDER_CREDENTIALS = new Set(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'])
+const PLACEHOLDER_CREDENTIALS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'])
+const FORBIDDEN_CREDENTIAL_CHANNELS = new Set(['CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR', 'AWS_BEARER_TOKEN_BEDROCK', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'])
 const PROXY_VARIABLES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'])
 
 function rejectUnsafeEnvironment(manifest: LaunchManifest): void {
@@ -66,6 +67,9 @@ function rejectUnsafeEnvironment(manifest: LaunchManifest): void {
     if (value !== undefined && value !== '' && !/^oracle-phase3a-placeholder:[A-Za-z0-9._:-]{1,128}$/.test(value)) {
       throw new Phase3AError('real_credential_forbidden', `${key} must use the explicit Phase 3A placeholder namespace`, `$.environment.allowlist.${key}`)
     }
+  }
+  for (const key of FORBIDDEN_CREDENTIAL_CHANNELS) {
+    if (Object.hasOwn(manifest.environment.allowlist, key)) throw new Phase3AError('real_credential_forbidden', `${key} is not admitted by the Phase 3A launcher`, `$.environment.allowlist.${key}`)
   }
   const declared = new Set(manifest.network.loopback_ports)
   for (const key of PROXY_VARIABLES) {

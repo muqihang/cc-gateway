@@ -6,6 +6,7 @@ import { canonicalJson, Phase3AError, sha256Bytes } from '../core.js'
 export type FakeScenario =
   | { kind: 'json'; status?: number; response?: unknown }
   | { kind: 'sse'; events: Array<{ event?: string; data: unknown }>; delay_ms?: number; close_after?: number }
+  | { kind: 'anthropic' }
   | { kind: 'reset' }
   | { kind: 'delayed'; delay_ms: number; status?: number }
 
@@ -41,7 +42,7 @@ export function jsonTopology(value: unknown, depth = 0): unknown {
   return { type: typeof value }
 }
 
-async function collectRequest(request: IncomingMessage, maxBytes: number): Promise<{ bytes: number; digest: string; topology: unknown }> {
+async function collectRequest(request: IncomingMessage, maxBytes: number): Promise<{ bytes: number; digest: string; topology: unknown; json: unknown }> {
   const hash = createHash('sha256')
   const chunks: Buffer[] = []
   let bytes = 0
@@ -53,15 +54,31 @@ async function collectRequest(request: IncomingMessage, maxBytes: number): Promi
     chunks.push(chunk)
   }
   let topology: unknown = { type: 'opaque', bytes }
+  let json: unknown = null
   const contentType = String(request.headers['content-type'] ?? '')
   if (bytes > 0 && contentType.toLowerCase().includes('json')) {
-    try { topology = jsonTopology(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { topology = { type: 'invalid-json', bytes } }
+    try {
+      json = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      topology = jsonTopology(json)
+    } catch { topology = { type: 'invalid-json', bytes } }
   }
   chunks.fill(Buffer.alloc(0))
-  return { bytes, digest: hash.digest('hex'), topology }
+  return { bytes, digest: hash.digest('hex'), topology, json }
 }
 
-function respond(response: ServerResponse, scenario: FakeScenario): string {
+function writeAnthropicSse(response: ServerResponse, model: string): void {
+  const event = (name: string, data: unknown): void => response.write(`event: ${name}\ndata: ${canonicalJson(data)}\n\n`)
+  response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'request-id': 'req_phase3a_synthetic' })
+  event('message_start', { type: 'message_start', message: { id: 'msg_phase3a_synthetic', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })
+  event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+  event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } })
+  event('content_block_stop', { type: 'content_block_stop', index: 0 })
+  event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } })
+  event('message_stop', { type: 'message_stop' })
+  response.end()
+}
+
+function respond(request: IncomingMessage, response: ServerResponse, scenario: FakeScenario, parsed: unknown): string {
   if (scenario.kind === 'reset') { response.socket?.destroy(); return 'reset' }
   if (scenario.kind === 'delayed') {
     setTimeout(() => { if (!response.destroyed) { response.writeHead(scenario.status ?? 200); response.end() } }, scenario.delay_ms)
@@ -81,6 +98,25 @@ function respond(response: ServerResponse, scenario: FakeScenario): string {
     send()
     return `sse:${events.length}`
   }
+  if (scenario.kind === 'anthropic') {
+    const path = new URL(request.url ?? '/', 'http://loopback.invalid').pathname
+    if (path.endsWith('/count_tokens')) {
+      const body = canonicalJson({ input_tokens: 1 })
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'request-id': 'req_phase3a_synthetic' })
+      response.end(body)
+      return 'anthropic:count-tokens'
+    }
+    const bodyObject = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+    const model = typeof bodyObject.model === 'string' ? bodyObject.model : 'claude-sonnet-4-6'
+    if (bodyObject.stream === true) {
+      writeAnthropicSse(response, model)
+      return 'anthropic:sse'
+    }
+    const body = canonicalJson({ id: 'msg_phase3a_synthetic', type: 'message', role: 'assistant', model, content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
+    response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'request-id': 'req_phase3a_synthetic' })
+    response.end(body)
+    return 'anthropic:json'
+  }
   const body = canonicalJson(scenario.response ?? { type: 'message', synthetic: true })
   response.writeHead(scenario.status ?? 200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
   response.end(body)
@@ -99,7 +135,7 @@ export async function startFakeUpstream(options: { scenario: FakeScenario; max_b
       const collected = await collectRequest(request, maxBody)
       const names = Object.keys(request.headers).map((name) => name.toLowerCase()).sort()
       const classes = Object.fromEntries(names.map((name) => [name, valueClass(name, request.headers[name])]))
-      const responseClass = respond(response, options.scenario)
+      const responseClass = respond(request, response, options.scenario, collected.json)
       events.push({
         sequence: events.length,
         method: request.method ?? 'UNKNOWN',

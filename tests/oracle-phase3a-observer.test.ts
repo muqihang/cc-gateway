@@ -69,6 +69,8 @@ const manifest = validateLaunchManifest(fixture('control', 19001))
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, base_urls: ['https://example.com/'] } }), /phase3a_schema_invalid/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', NODE_OPTIONS: '--require=x' } } }), /cannot be inherited/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'not-a-placeholder' } } }), /placeholder namespace/)
+assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_AUTH_TOKEN: 'not-a-placeholder' } } }), /placeholder namespace/)
+assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: '3' } } }), /not admitted/)
 validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'oracle-phase3a-placeholder:api-key', HTTPS_PROXY: 'http://127.0.0.1:19001/' } } })
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', HTTPS_PROXY: 'http://192.0.2.1:19001/' } } }), /declared loopback port/)
 assert.throws(() => assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, null, 'preload'), /requires an uninstrumented control/)
@@ -106,6 +108,19 @@ assert.match(hookText, /hook.ready/)
 assert.match(hookText, /fs.readFileSync/)
 assert.doesNotMatch(hookText, /data:text|synthetic/)
 assert.equal(sha256File(preload).length, 64)
+
+const anthropic = await startFakeUpstream({ scenario: { kind: 'anthropic' } })
+try {
+  const response = await new Promise<string>((resolve, reject) => {
+    const req = request(`${anthropic.url}v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
+      let body = ''; res.on('data', (chunk) => { body += chunk.toString('utf8') }); res.on('end', () => resolve(body))
+    })
+    req.on('error', reject); req.end(JSON.stringify({ model: 'synthetic-model', stream: true, messages: [] }))
+  })
+  assert.match(response, /message_start/)
+  assert.equal(anthropic.events[0].response_class, 'anthropic:sse')
+  assert.doesNotMatch(canonicalJson(anthropic.events), /synthetic-model/)
+} finally { await anthropic.close() }
 
 if (process.platform === 'darwin') {
   const guardedUpstream = await startFakeUpstream({ scenario: { kind: 'json', response: { synthetic: true } } })
