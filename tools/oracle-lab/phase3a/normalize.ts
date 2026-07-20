@@ -69,6 +69,7 @@ export function normalizeCapsule(directoryInput: string): NormalizedObservation 
 
   const events = Array.isArray(observer.events) ? observer.events as JsonObject[] : []
   const first = events[0] ?? {}
+  const primary = events.find((event) => event.request_class === 'messages' || (event.method === 'POST' && String(event.path_class).endsWith('/messages'))) ?? first
   const headerNames = unique(events.flatMap((event) => Array.isArray(event.header_names) ? event.header_names : []))
   const headerClasses: Record<string, string> = {}
   for (const name of headerNames) {
@@ -88,7 +89,9 @@ export function normalizeCapsule(directoryInput: string): NormalizedObservation 
     `cell-status:${String(result.status)}`,
     'single-observation-only',
     ...missingSources.map((source) => `source-unavailable:${source}`),
-    'system-prompt-not-observed', 'cch-not-observed', 'sse-not-observed', 'compact-not-observed',
+    primary.system_summary?.status === 'observed' ? null : 'system-prompt-not-observed',
+    primary.cch_class && primary.cch_class !== 'not-observed' ? null : 'cch-not-observed',
+    events.some((event) => String(event.response_class).includes('sse')) ? null : 'sse-not-observed', 'compact-not-observed',
   ])
   const instrumented = manifest.capture.hook === true || manifest.capture.inspector === true
   const emptySha = sha256Bytes('')
@@ -102,10 +105,10 @@ export function normalizeCapsule(directoryInput: string): NormalizedObservation 
       endpoint_class: events.length === 0 ? 'not-observed' : unique(events.map((event) => `${event.method}:${event.path_class}`)).join(','),
       header_names: headerNames,
       header_value_classes: headerClasses,
-      body_ast_topology: first.body_topology ?? { coverage: 'not-observed' },
-      cch_class: 'not-observed',
-      system_summary: { byte_length: 0, sha256: emptySha, stable_spans: [], ast_topology: { coverage: 'not-observed' } },
-      serialized_bytes_sha256: typeof first.body_sha256 === 'string' ? first.body_sha256 : emptySha,
+      body_ast_topology: primary.body_topology ?? { coverage: 'not-observed' },
+      cch_class: primary.cch_class ?? 'not-observed',
+      system_summary: primary.system_summary ?? { status: 'absent', byte_length: 0, sha256: emptySha, ast_topology: { coverage: 'not-observed' } },
+      serialized_bytes_sha256: typeof primary.body_sha256 === 'string' ? primary.body_sha256 : emptySha,
     },
     response: {
       http_sse_ast: { response_classes: unique(events.map((event) => event.response_class)) },

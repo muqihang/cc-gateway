@@ -20,6 +20,9 @@ export type SafeUpstreamEvent = {
   body_sha256: string
   body_topology: unknown
   response_class: string
+  request_class: 'root' | 'messages' | 'count-tokens' | 'other'
+  system_summary: { status: 'observed' | 'absent'; byte_length: number; sha256: string; ast_topology: unknown }
+  cch_class: 'body-cache-control' | 'header-only' | 'not-observed'
 }
 
 export type FakeUpstream = { url: string; port: number; events: SafeUpstreamEvent[]; close(): Promise<void> }
@@ -64,6 +67,25 @@ async function collectRequest(request: IncomingMessage, maxBytes: number): Promi
   }
   chunks.fill(Buffer.alloc(0))
   return { bytes, digest: hash.digest('hex'), topology, json }
+}
+
+function hasKey(value: unknown, target: string, depth = 0): boolean {
+  if (depth > 16 || value === null || typeof value !== 'object') return false
+  if (Array.isArray(value)) return value.some((entry) => hasKey(entry, target, depth + 1))
+  return Object.entries(value as Record<string, unknown>).some(([key, child]) => key === target || hasKey(child, target, depth + 1))
+}
+
+function requestFacts(request: IncomingMessage, parsed: unknown): Pick<SafeUpstreamEvent, 'request_class' | 'system_summary' | 'cch_class'> {
+  const pathname = new URL(request.url ?? '/', 'http://loopback.invalid').pathname
+  const requestClass = pathname.endsWith('/count_tokens') ? 'count-tokens' : pathname.endsWith('/messages') ? 'messages' : pathname === '/' ? 'root' : 'other'
+  const body = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  const system = Object.hasOwn(body, 'system') ? body.system : undefined
+  const encoded = system === undefined ? '' : canonicalJson(system)
+  const systemSummary = system === undefined
+    ? { status: 'absent' as const, byte_length: 0, sha256: sha256Bytes(''), ast_topology: { coverage: 'absent' } }
+    : { status: 'observed' as const, byte_length: Buffer.byteLength(encoded), sha256: sha256Bytes(encoded), ast_topology: jsonTopology(system) }
+  const cchClass = hasKey(body, 'cache_control') ? 'body-cache-control' : request.headers['anthropic-beta'] ? 'header-only' : 'not-observed'
+  return { request_class: requestClass, system_summary: systemSummary, cch_class: cchClass }
 }
 
 function writeAnthropicSse(response: ServerResponse, model: string): void {
@@ -136,6 +158,7 @@ export async function startFakeUpstream(options: { scenario: FakeScenario; max_b
       const names = Object.keys(request.headers).map((name) => name.toLowerCase()).sort()
       const classes = Object.fromEntries(names.map((name) => [name, valueClass(name, request.headers[name])]))
       const responseClass = respond(request, response, options.scenario, collected.json)
+      const facts = requestFacts(request, collected.json)
       events.push({
         sequence: events.length,
         method: request.method ?? 'UNKNOWN',
@@ -146,6 +169,7 @@ export async function startFakeUpstream(options: { scenario: FakeScenario; max_b
         body_sha256: collected.digest,
         body_topology: collected.topology,
         response_class: responseClass,
+        ...facts,
       })
     } catch (error) {
       response.writeHead(error instanceof Phase3AError && error.code === 'observer_body_overflow' ? 413 : 400)

@@ -129,11 +129,15 @@ try {
     const req = request(`${anthropic.url}v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
       let body = ''; res.on('data', (chunk) => { body += chunk.toString('utf8') }); res.on('end', () => resolve(body))
     })
-    req.on('error', reject); req.end(JSON.stringify({ model: 'synthetic-model', stream: true, messages: [] }))
+    req.on('error', reject); req.end(JSON.stringify({ model: 'synthetic-model', stream: true, system: [{ type: 'text', text: 'synthetic system', cache_control: { type: 'ephemeral' } }], messages: [] }))
   })
   assert.match(response, /message_start/)
   assert.equal(anthropic.events[0].response_class, 'anthropic:sse')
+  assert.equal(anthropic.events[0].request_class, 'messages')
+  assert.equal(anthropic.events[0].system_summary.status, 'observed')
+  assert.equal(anthropic.events[0].cch_class, 'body-cache-control')
   assert.doesNotMatch(canonicalJson(anthropic.events), /synthetic-model/)
+  assert.doesNotMatch(canonicalJson(anthropic.events), /synthetic system|ephemeral/)
 } finally { await anthropic.close() }
 
 if (process.platform === 'darwin') {
