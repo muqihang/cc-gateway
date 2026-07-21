@@ -6,6 +6,7 @@ import {
   validateScenarioRepetitions,
   type ScenarioRunRecord,
 } from '../tools/oracle-lab/phase3a/scenario-campaign.js'
+import { normalizedEventOrder } from '../tools/oracle-lab/phase3a/normalize.js'
 
 console.log('\ntests/oracle-phase3a-scenario-campaign.test.ts')
 
@@ -61,5 +62,6 @@ for (const invalid of [4, 13, 5.5, Number.NaN]) {
   assert.throws(() => validateScenarioRepetitions(invalid), (error: unknown) =>
     error instanceof Error && 'code' in error && error.code === 'invalid_repetitions')
 }
+assert.deepEqual(normalizedEventOrder([{ response_class: 'anthropic:json' }, { response_class: 'anthropic:json' }, { response_class: 'anthropic:sse' }]), ['anthropic:json', 'anthropic:sse'])
 
-console.log(JSON.stringify({ ok: true, cases: 22 }))
+console.log(JSON.stringify({ ok: true, cases: 23 }))
