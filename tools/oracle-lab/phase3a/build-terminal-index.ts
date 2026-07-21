@@ -68,6 +68,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a4-normalized-observations', 'capsules/P3A-4/normalized-observations.json', 'P3A-4', 'retain', dynamicParents)
   add('p3a4-artifact-identity-graph', 'normalized/P3A-4/artifact-identity-graph.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...dynamicParents])
   add('p3a4-artifact-identity-graph-c4', 'normalized/P3A-4/artifact-identity-graph-c4.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...c4RunIds.map((id) => `p3a2-${id}-summary`)])
+  add('p3a4-artifact-identity-graph-closure', 'normalized/P3A-4/artifact-identity-graph-closure-v1.json', 'P3A-4', 'retain', ['p3a0-artifact-index', 'p3a1-static-summary', ...c4RunIds.map((id) => `p3a2-${id}-summary`)])
   add('p3a2-closure-probe', 'capsules/P3A-2/closure-r2-capability-probe-copy-v7/summary.json', 'P3A-2', 'retain', ['p3a1-static-summary'])
   add('p3a2-closure-environment', 'capsules/P3A-2/closure-r2-environment-matrix-closure-v1.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
   add('p3a2-closure-saturation', 'capsules/P3A-2/closure-r2-saturation-v1.json', 'P3A-2', 'retain', ['p3a2-closure-environment'])
@@ -79,6 +80,12 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a3-closure-tier-a', 'capsules/P3A-3/closure-r3-tier-a-v1.json', 'P3A-3', 'retain', ['p3a2-closure-coverage'])
   add('p3a4-closure-exit', 'capsules/P3A-4/phase-3a-exit-report-v1.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
   add('p3a4-closure-handoff', 'capsules/P3A-4/phase-3b-3.5-handoff-v1.json', 'P3A-4', 'retain', ['p3a4-closure-exit'])
+  add('p3a4-closure-curated-input-v1', 'capsules/P3A-4/closure-curated-input-v1.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
+  add('p3a4-closure-leak-scan-v7', 'capsules/P3A-4/leak-scan-v7.json', 'P3A-4', 'retain', ['p3a2-closure-coverage'])
+  add('p3a4-closure-exit-v2', 'capsules/P3A-4/phase-3a-exit-report-v2.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
+  add('p3a4-closure-handoff-v2', 'capsules/P3A-4/phase-3b-3.5-handoff-v2.json', 'P3A-4', 'retain', ['p3a4-closure-exit-v2'])
+  add('p3a4-closure-curated-input-v2', 'capsules/P3A-4/closure-curated-input-v2.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
+  add('p3a4-closure-leak-scan-v8', 'capsules/P3A-4/leak-scan-v8.json', 'P3A-4', 'retain', ['p3a2-closure-coverage'])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
     { artifact_id: 'raw-release-intake-record-quarantine', relative_path: 'intake/release/2.1.215/artifact.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
