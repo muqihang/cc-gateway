@@ -27,12 +27,32 @@ export type SafeUpstreamEvent = {
 }
 
 export type ObserverStringReplacement = { value: string; replacement: '<HOME>' | '<XDG>' | '<TMP>' | '<CWD>' }
+export type ObserverHeaderMarker = { header_name: string; value: string; value_class: string }
 export type ObserverNormalization = {
   schema_version: 'oracle-lab-phase3a-observer-normalization.v1'
   status: 'none' | 'declared-path-replacement'
   replacements: Array<{ value_sha256: string; replacement: ObserverStringReplacement['replacement'] }>
 }
 export type FakeUpstream = { url: string; port: number; events: SafeUpstreamEvent[]; normalization: ObserverNormalization; close(): Promise<void> }
+
+function prepareHeaderMarkers(input: ObserverHeaderMarker[]): Map<string, Map<string, string>> {
+  if (input.length > 64) throw new Phase3AError('observer_header_marker_invalid', 'observer accepts at most 64 header markers')
+  const markers = new Map<string, Map<string, string>>()
+  for (const entry of input) {
+    const name = entry.header_name.toLowerCase()
+    const syntheticValue = name === 'authorization'
+      ? /^Bearer oracle-phase3a-placeholder:[A-Za-z0-9._:-]{1,128}$/.test(entry.value)
+      : /^oracle-phase3a-placeholder:[A-Za-z0-9._:-]{1,128}$/.test(entry.value)
+    if (!/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(entry.header_name) || name !== entry.header_name || !syntheticValue || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(entry.value_class)) {
+      throw new Phase3AError('observer_header_marker_invalid', 'header markers require a canonical name, synthetic placeholder value, and safe class')
+    }
+    const byValue = markers.get(name) ?? new Map<string, string>()
+    if (byValue.has(entry.value)) throw new Phase3AError('observer_header_marker_invalid', 'header marker values must be unique per header')
+    byValue.set(entry.value, entry.value_class)
+    markers.set(name, byValue)
+  }
+  return markers
+}
 
 function prepareStringReplacements(input: ObserverStringReplacement[]): { values: ObserverStringReplacement[]; record: ObserverNormalization } {
   if (input.length > 32) throw new Phase3AError('observer_normalization_invalid', 'observer accepts at most 32 string replacements')
@@ -71,9 +91,11 @@ function normalizeJsonStrings(value: unknown, replacements: ObserverStringReplac
   return value
 }
 
-function valueClass(name: string, value: string | string[] | undefined): string {
+function valueClass(name: string, value: string | string[] | undefined, markers: Map<string, Map<string, string>>): string {
   if (value === undefined) return 'absent'
   const joined = Array.isArray(value) ? value.join(',') : value
+  const marker = markers.get(name)?.get(joined)
+  if (marker) return marker
   if (name === 'authorization' || name === 'cookie' || name === 'x-api-key') return 'present-redacted'
   if (name === 'content-type') return joined.toLowerCase().includes('json') ? 'json' : 'other'
   if (name === 'content-length') return /^\d+$/.test(joined) ? 'numeric' : 'invalid'
@@ -150,7 +172,7 @@ function requestFacts(request: IncomingMessage, parsed: unknown, replacements: O
 }
 
 function writeAnthropicSse(response: ServerResponse, model: string): void {
-  const event = (name: string, data: unknown): void => response.write(`event: ${name}\ndata: ${canonicalJson(data)}\n\n`)
+  const event = (name: string, data: unknown): void => { response.write(`event: ${name}\ndata: ${canonicalJson(data)}\n\n`) }
   response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'request-id': 'req_phase3a_synthetic' })
   event('message_start', { type: 'message_start', message: { id: 'msg_phase3a_synthetic', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } })
   event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
@@ -206,10 +228,11 @@ function respond(request: IncomingMessage, response: ServerResponse, scenario: F
   return `json:${scenario.status ?? 200}`
 }
 
-export async function startFakeUpstream(options: { scenario: FakeScenario; max_body_bytes?: number; max_events?: number; host?: '127.0.0.1' | '::1'; string_replacements?: ObserverStringReplacement[] }): Promise<FakeUpstream> {
+export async function startFakeUpstream(options: { scenario: FakeScenario; max_body_bytes?: number; max_events?: number; host?: '127.0.0.1' | '::1'; string_replacements?: ObserverStringReplacement[]; header_markers?: ObserverHeaderMarker[] }): Promise<FakeUpstream> {
   const maxBody = options.max_body_bytes ?? 1024 * 1024
   const maxEvents = options.max_events ?? 10_000
   const normalization = prepareStringReplacements(options.string_replacements ?? [])
+  const headerMarkers = prepareHeaderMarkers(options.header_markers ?? [])
   const events: SafeUpstreamEvent[] = []
   const server: Server = createServer(async (request, response) => {
     const remote = request.socket.remoteAddress
@@ -218,7 +241,7 @@ export async function startFakeUpstream(options: { scenario: FakeScenario; max_b
     try {
       const collected = await collectRequest(request, maxBody, normalization.values)
       const names = Object.keys(request.headers).map((name) => name.toLowerCase()).sort()
-      const classes = Object.fromEntries(names.map((name) => [name, valueClass(name, request.headers[name])]))
+      const classes = Object.fromEntries(names.map((name) => [name, valueClass(name, request.headers[name], headerMarkers)]))
       const responseClass = respond(request, response, options.scenario, collected.json)
       const facts = requestFacts(request, collected.json, normalization.values)
       events.push({

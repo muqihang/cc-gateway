@@ -66,6 +66,37 @@ try {
   assert.equal(upstream.events[0].path_class, '/v1/messages')
 } finally { await upstream.close() }
 
+const markedApiKey = 'oracle-phase3a-placeholder:observer-api-key-a'
+const markedAuthToken = 'oracle-phase3a-placeholder:observer-auth-token-a'
+const marked = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  header_markers: [
+    { header_name: 'x-api-key', value: markedApiKey, value_class: 'api-key-a' },
+    { header_name: 'authorization', value: `Bearer ${markedAuthToken}`, value_class: 'auth-token-a' },
+  ],
+})
+try {
+  await new Promise<void>((resolve, reject) => {
+    const req = request(`${marked.url}v1/messages`, { headers: { 'x-api-key': markedApiKey, authorization: `Bearer ${markedAuthToken}` } }, (res) => {
+      res.resume(); res.on('end', resolve)
+    })
+    req.on('error', reject); req.end()
+  })
+  assert.equal(marked.events[0].header_value_classes['x-api-key'], 'api-key-a')
+  assert.equal(marked.events[0].header_value_classes.authorization, 'auth-token-a')
+  const persistedMarkerShape = canonicalJson(marked.events)
+  for (const value of [markedApiKey, markedAuthToken, `Bearer ${markedAuthToken}`]) {
+    assert.equal(persistedMarkerShape.includes(value), false)
+    assert.equal(persistedMarkerShape.includes(sha256Bytes(value)), false)
+  }
+  assert.deepEqual(Object.keys(marked.events[0].header_value_classes).filter((name) => ['authorization', 'x-api-key'].includes(name)).sort(), ['authorization', 'x-api-key'])
+} finally { await marked.close() }
+
+await assert.rejects(() => startFakeUpstream({
+  scenario: { kind: 'json' },
+  header_markers: [{ header_name: 'x-api-key', value: 'not-synthetic', value_class: 'unsafe' }],
+}), (error: unknown) => error instanceof Error && 'code' in error && error.code === 'observer_header_marker_invalid')
+
 const normalizedControl = await startFakeUpstream({
   scenario: { kind: 'json' },
   string_replacements: [{ value: '/tmp/phase3a-control-root', replacement: '<CWD>' }],
@@ -213,4 +244,4 @@ if (process.platform === 'darwin') {
   } finally { await guardedUpstream.close() }
 }
 
-console.log(JSON.stringify({ ok: true, observer_events: 3, raw_material_persisted: false }))
+console.log(JSON.stringify({ ok: true, observer_events: 4, raw_material_persisted: false }))
