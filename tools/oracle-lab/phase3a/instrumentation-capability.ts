@@ -110,9 +110,13 @@ function semanticEvents(events: SafeUpstreamEvent[]): unknown {
   }))
 }
 
+export function instrumentationSemanticDigest(events: SafeUpstreamEvent[]): string {
+  return sha256Bytes(canonicalJson(semanticEvents(events)))
+}
+
 export function classifyInstrumentationPair(input: PairInput): InstrumentationClassification {
-  const controlDigest = sha256Bytes(canonicalJson(semanticEvents(input.control_events)))
-  const treatmentDigest = sha256Bytes(canonicalJson(semanticEvents(input.treatment_events)))
+  const controlDigest = instrumentationSemanticDigest(input.control_events)
+  const treatmentDigest = instrumentationSemanticDigest(input.treatment_events)
   const controlRunIdentityDigest = runIdentityDigest(input.control_events)
   const treatmentRunIdentityDigest = runIdentityDigest(input.treatment_events)
   const hookReachable = input.treatment_hook_events > 0
