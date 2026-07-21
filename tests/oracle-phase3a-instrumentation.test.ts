@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSy
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildProbePairManifests, classifyInstrumentationPair } from '../tools/oracle-lab/phase3a/instrumentation-capability.js'
+import { buildProbeObserverReplacements, buildProbePairManifests, classifyInstrumentationPair } from '../tools/oracle-lab/phase3a/instrumentation-capability.js'
 import { assessProbeSigning, buildProbePayload, patchProbeCopy } from '../tools/oracle-lab/phase3a/probe-copy.js'
 import { sha256Bytes, sha256File } from '../tools/oracle-lab/phase3a/core.js'
 import type { LaunchManifest } from '../tools/oracle-lab/phase3a/launch-manifest.js'
@@ -134,6 +134,11 @@ assert.equal(probePair.control.capture.hook, false)
 assert.equal(probePair.treatment.capture.hook, true)
 assert.notEqual(probePair.control.environment.tmp, probePair.treatment.environment.tmp)
 assert.equal(probePair.treatment.matrix.fixed_variables.probe_recipe_sha256, 'c'.repeat(64))
+const observerReplacements = buildProbeObserverReplacements('/tmp/phase3a-evidence', 'closure-probe-copy-v1')
+assert.equal(observerReplacements.length, 8)
+assert.deepEqual([...new Set(observerReplacements.map((entry) => entry.replacement))].sort(), ['<CWD>', '<HOME>', '<TMP>', '<XDG>'])
+assert.ok(observerReplacements.some((entry) => entry.value.endsWith('/runs/closure-probe-copy-v1-control/cwd')))
+assert.ok(observerReplacements.some((entry) => entry.value.endsWith('/runs/closure-probe-copy-v1-treatment/tmp')))
 
 assert.deepEqual(assessProbeSigning({
   sign_exit_code: 0, verify_exit_code: 0, parent_size: 100, post_sign_size: 120,
@@ -144,4 +149,4 @@ assert.equal(assessProbeSigning({
   expected_module_sha256: originalDigest, module_after_sign_sha256: patchedDigest,
 }).status, 'FAIL')
 
-console.log(JSON.stringify({ ok: true, cases: 48 }))
+console.log(JSON.stringify({ ok: true, cases: 52 }))

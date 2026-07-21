@@ -65,6 +65,32 @@ try {
   assert.equal(upstream.events[0].path_class, '/v1/messages')
 } finally { await upstream.close() }
 
+const normalizedControl = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  string_replacements: [{ value: '/tmp/phase3a-control-root', replacement: '<CWD>' }],
+})
+const normalizedTreatment = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  string_replacements: [{ value: '/tmp/phase3a-treatment-root', replacement: '<CWD>' }],
+})
+try {
+  const postSystem = (url: string, cwd: string) => new Promise<void>((resolve, reject) => {
+    const req = request(`${url}v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
+      res.resume(); res.on('end', resolve)
+    })
+    req.on('error', reject)
+    req.end(JSON.stringify({ system: [{ type: 'text', text: `Working directory: ${cwd}` }], messages: [] }))
+  })
+  await postSystem(normalizedControl.url, '/tmp/phase3a-control-root')
+  await postSystem(normalizedTreatment.url, '/tmp/phase3a-treatment-root')
+  assert.deepEqual(normalizedControl.events[0].body_topology, normalizedTreatment.events[0].body_topology)
+  assert.deepEqual(normalizedControl.events[0].system_summary, normalizedTreatment.events[0].system_summary)
+  assert.deepEqual(normalizedControl.normalization.replacements[0].replacement, '<CWD>')
+  assert.doesNotMatch(canonicalJson(normalizedControl.normalization), /phase3a-control-root/)
+} finally {
+  await Promise.all([normalizedControl.close(), normalizedTreatment.close()])
+}
+
 const proxy = await startConnectProxy({ allowed_targets: [{ host: 'api.synthetic.test', port: 443 }] })
 try {
   const exchange = (authority: string) => new Promise<string>((resolve, reject) => {

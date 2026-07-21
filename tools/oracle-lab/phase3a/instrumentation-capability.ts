@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { BASELINE_PROMPT, buildBaselineManifest } from './baseline-cell.js'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
 import type { LaunchManifest } from './launch-manifest.js'
-import { startFakeUpstream, type SafeUpstreamEvent } from './observers/fake-upstream.js'
+import { startFakeUpstream, type ObserverStringReplacement, type SafeUpstreamEvent } from './observers/fake-upstream.js'
 import { buildProbePayload, patchProbeCopy, signProbeCopy } from './probe-copy.js'
 import { runCell, runCellGuardSelfTest, type CellResult } from './run-cell.js'
 
@@ -141,6 +141,21 @@ export function buildProbePairManifests(
   }
 }
 
+export function buildProbeObserverReplacements(evidenceRoot: string, capabilityId: string): ObserverStringReplacement[] {
+  if (!path.isAbsolute(evidenceRoot)) fail('invalid_evidence_root', 'probe observer replacement root must be absolute')
+  const replacements: ObserverStringReplacement[] = []
+  for (const arm of ['control', 'treatment'] as const) {
+    const runRoot = path.join(evidenceRoot, 'runs', `${capabilityId}-${arm}`)
+    replacements.push(
+      { value: path.join(runRoot, 'home'), replacement: '<HOME>' },
+      { value: path.join(runRoot, 'xdg'), replacement: '<XDG>' },
+      { value: path.join(runRoot, 'tmp'), replacement: '<TMP>' },
+      { value: path.join(runRoot, 'cwd'), replacement: '<CWD>' },
+    )
+  }
+  return replacements
+}
+
 export async function runInstrumentationCapability(options: CapabilityOptions): Promise<Record<string, unknown>> {
   if (!/^[a-z0-9][a-z0-9-]{7,95}$/.test(options.capability_id)) fail('invalid_capability_id', 'capability id must be a bounded lowercase slug')
   for (const [label, digest] of [['plan', options.plan_sha256], ['toolchain', options.toolchain_digest], ['static inventory', options.static_inventory_sha256]]) {
@@ -239,7 +254,10 @@ export async function runProbeCopyCapability(options: ProbeCopyCapabilityOptions
   writeJson(path.join(output, 'signing.json'), signing)
   if (signing.status !== 'PASS') fail('probe_sign_failed', 'ad-hoc signing or post-sign verification failed')
 
-  const upstream = await startFakeUpstream({ scenario: { kind: 'anthropic' }, max_body_bytes: 8 * 1024 * 1024 })
+  const upstream = await startFakeUpstream({
+    scenario: { kind: 'anthropic' }, max_body_bytes: 8 * 1024 * 1024,
+    string_replacements: buildProbeObserverReplacements(root, options.capability_id),
+  })
   try {
     const base = buildBaselineManifest({
       evidence_root: root, entrypoint: options.entrypoint, out_relative: options.out_relative,
@@ -259,7 +277,7 @@ export async function runProbeCopyCapability(options: ProbeCopyCapabilityOptions
     const controlStart = upstream.events.length
     const controlResult = await runCell({ manifest: control, evidence_root: root, executable: options.entrypoint, instrumentation: 'none', guard: controlGuard, stdin: BASELINE_PROMPT })
     const controlEvents = upstream.events.slice(controlStart)
-    writeJson(path.join(controlDir, 'observer.json'), { schema_version: 'oracle-lab-phase3a-safe-observer.v1', raw_material_persisted: false, events: controlEvents })
+    writeJson(path.join(controlDir, 'observer.json'), { schema_version: 'oracle-lab-phase3a-safe-observer.v1', normalization: upstream.normalization, raw_material_persisted: false, events: controlEvents })
     writeJson(path.join(controlDir, 'result.json'), controlResult)
 
     const treatmentGuard = await runCellGuardSelfTest(treatment, root)
@@ -268,7 +286,7 @@ export async function runProbeCopyCapability(options: ProbeCopyCapabilityOptions
     const treatmentStart = upstream.events.length
     const treatmentResult = await runCell({ manifest: treatment, evidence_root: root, executable: copy, instrumentation: 'none', guard: treatmentGuard, stdin: BASELINE_PROMPT })
     const treatmentEvents = upstream.events.slice(treatmentStart)
-    writeJson(path.join(treatmentDir, 'observer.json'), { schema_version: 'oracle-lab-phase3a-safe-observer.v1', raw_material_persisted: false, events: treatmentEvents })
+    writeJson(path.join(treatmentDir, 'observer.json'), { schema_version: 'oracle-lab-phase3a-safe-observer.v1', normalization: upstream.normalization, raw_material_persisted: false, events: treatmentEvents })
     writeJson(path.join(treatmentDir, 'result.json'), treatmentResult)
 
     const classified = classifyInstrumentationPair({
@@ -307,6 +325,7 @@ export async function runProbeCopyCapability(options: ProbeCopyCapabilityOptions
         process: controlResult.process_samples.length > 0 && treatmentResult.process_samples.length > 0,
         filesystem_hook_jsonl: treatmentResult.hook_event_count > 0,
       },
+      observer_normalization_sha256: sha256Bytes(canonicalJson(upstream.normalization)),
       external_socket_budget: 0, raw_material_persisted: false,
     }
     writeJson(path.join(output, 'summary.json'), summary)
