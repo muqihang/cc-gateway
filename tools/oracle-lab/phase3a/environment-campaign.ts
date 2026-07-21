@@ -30,6 +30,7 @@ type CampaignOptions = {
   plan_sha256: string
   toolchain_digest: string
   pair_family?: EnvironmentMatrixPair['family']
+  pair_index?: number
 }
 
 type RunRecord = {
@@ -227,6 +228,7 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
   if (!/^[a-z0-9][a-z0-9-]{7,63}$/.test(options.campaign_id)) fail('invalid_campaign_id', 'campaign ID must be a bounded lowercase slug')
   if (!Number.isInteger(options.repetitions) || options.repetitions < 5 || options.repetitions > 12) fail('invalid_repetitions', 'campaign repetitions must be between 5 and 12')
   if (options.pair_family && !new Set(['base-url-state', 'provider-token', 'region', 'hostname', 'placeholder-auth', 'telemetry']).has(options.pair_family)) fail('invalid_pair_family', 'campaign pair family is not recognized')
+  if (options.pair_index !== undefined && (!Number.isInteger(options.pair_index) || options.pair_index < 0 || options.pair_index >= 60)) fail('invalid_pair_index', 'campaign pair index must be between 0 and 59')
   for (const [label, digest] of [['probe', options.expected_probe_sha256], ['recipe', options.probe_recipe_sha256], ['plan', options.plan_sha256], ['toolchain', options.toolchain_digest]]) {
     if (!/^[a-f0-9]{64}$/.test(digest)) fail('invalid_digest', `${label} digest must be SHA-256`)
   }
@@ -243,6 +245,7 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
   for (let pairIndex = 0; pairIndex < matrix.pairs.length; pairIndex += 1) {
     const pair = validateMatrixPair(matrix.pairs[pairIndex])
     if (options.pair_family && pair.family !== options.pair_family) continue
+    if (options.pair_index !== undefined && pairIndex !== options.pair_index) continue
     const pairOutput = path.join(output, 'pairs', String(pairIndex).padStart(2, '0'))
     mkdirSync(pairOutput, { recursive: true, mode: 0o700 })
     const seed = Number.parseInt(sha256Bytes(pair.pair_id).slice(0, 8), 16)
@@ -304,7 +307,7 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
   const summary = {
     schema_version: 'oracle-lab-phase3a-environment-campaign.v1', campaign_id: options.campaign_id,
     matrix_sha256: sha256File(options.matrix_file), probe_artifact_sha256: options.expected_probe_sha256, probe_recipe_sha256: options.probe_recipe_sha256,
-    matrix_pair_count: matrix.pair_count, pair_count: pairSummaries.length, pair_family: options.pair_family ?? 'all', executed_cells: executedCells, repetitions: options.repetitions, statuses,
+    matrix_pair_count: matrix.pair_count, pair_count: pairSummaries.length, pair_family: options.pair_family ?? 'all', pair_index: options.pair_index ?? null, executed_cells: executedCells, repetitions: options.repetitions, statuses,
     pairs: pairSummaries.map((pair, index) => ({ index, pair_id: pair.pair_id, family: pair.family, status: pair.status, effect: pair.effect })),
     external_socket_budget: 0, raw_material_persisted: false,
   }
@@ -338,6 +341,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       cc_commit: values['cc-commit'], cc_tree: values['cc-tree'], sub2api_commit: values['sub2api-commit'], sub2api_tree: values['sub2api-tree'],
       plan_sha256: values['plan-sha256'], toolchain_digest: values['toolchain-digest'],
       pair_family: values.family as EnvironmentMatrixPair['family'] | undefined,
+      pair_index: values['pair-index'] === undefined ? undefined : Number(values['pair-index']),
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) { process.stderr.write(`${canonicalJson(stableError(error))}\n`); process.exitCode = 1 }

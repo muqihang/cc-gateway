@@ -115,7 +115,7 @@ export function buildEnvironmentMatrix(census: Census): EnvironmentMatrix {
     ['volcengine', 'volcengine.phase3a.test'], ['moonshot', 'moonshot.phase3a.test'], ['zhipu', 'zhipu.phase3a.test'],
     ['china', 'china.phase3a.test'], ['dot-cn', 'provider.phase3a.cn.test'], ['lab', 'lab.phase3a.test'],
     ['anthropic', 'anthropic.phase3a.test'], ['unrelated-control', 'neutral.phase3a.test'], ['alivun', 'alivun.phase3a.test'],
-    ['chinax', 'chinax.phase3a.test'], ['labyrinth', 'labyrinth.phase3a.test'], ['punctuation-control', 'a-b_c.phase3a.test'],
+    ['chinax', 'chinax.phase3a.test'], ['labyrinth', 'labyrinth.phase3a.test'], ['punctuation-control', 'a-b-c.phase3a.test'],
   ]
   for (const [valueClass, hostname] of tokens) {
     const variable = 'ANTHROPIC_BASE_URL'

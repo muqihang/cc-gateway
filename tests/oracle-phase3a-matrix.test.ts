@@ -34,7 +34,8 @@ assert.deepEqual(
   [...new Set(matrix.pairs.filter((pair) => pair.family === 'provider-token').map((pair) => pair.treatment.value_class))].sort(),
   ['alivun', 'aliyun', 'anthropic', 'china', 'chinax', 'deepseek', 'dot-cn', 'lab', 'labyrinth', 'moonshot', 'punctuation-control', 'qwen', 'unrelated-control', 'volcengine', 'zhipu'],
 )
+assert.ok(matrix.pairs.filter((pair) => pair.family === 'provider-token').every((pair) => !new URL(pair.treatment.value_template!.replace('LOOPBACK_PROXY_PORT', '19000')).hostname.includes('_')))
 assert.match(matrix.deterministic_digest, /^[a-f0-9]{64}$/)
 assert.throws(() => validateMatrixPair({ ...matrix.pairs[0], treatment: { ...matrix.pairs[0].treatment, variable: 'OTHER' } }), /exactly one declared variable/)
 
-console.log(JSON.stringify({ ok: true, pairs: matrix.pair_count }))
+console.log(JSON.stringify({ ok: true, pairs: matrix.pair_count, cases: 12 }))
