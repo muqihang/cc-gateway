@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import {
   CONFIG_PRECEDENCE_PAIRS,
+  classifyConfigRouting,
   classifyConfigPrecedencePairRuns,
   validateConfigPrecedenceRepetitions,
   type ConfigPrecedenceRunRecord,
@@ -16,7 +17,7 @@ assert.deepEqual(CONFIG_PRECEDENCE_PAIRS.map((pair) => pair.pair_id), [
   'config-precedence-process-env-vs-local',
 ])
 assert.deepEqual(CONFIG_PRECEDENCE_PAIRS.map((pair) => pair.expected_winner_source.treatment), [
-  'user', 'project', 'local', 'process-env',
+  'user', 'project', 'local', 'local',
 ])
 assert.deepEqual(CONFIG_PRECEDENCE_PAIRS.map((pair) => pair.expected_winner_source.control), [
   'user', 'user', 'project', 'local',
@@ -27,8 +28,17 @@ assert.equal(CONFIG_PRECEDENCE_PAIRS[0].comparison_mode, 'user-only-reachability
 for (const pair of CONFIG_PRECEDENCE_PAIRS.slice(1)) {
   assert.equal(Object.keys(pair.treatment.values).length, 2)
   assert.equal(pair.control.expected_upstream, 'A')
-  assert.equal(pair.treatment.expected_upstream, 'B')
 }
+assert.deepEqual(CONFIG_PRECEDENCE_PAIRS.slice(1).map((pair) => pair.treatment.expected_upstream), ['B', 'B', 'A'])
+assert.deepEqual(classifyConfigRouting(
+  [{ request_class: 'root' }],
+  [{ request_class: 'messages' }],
+), { request_upstream: 'B', preflight_upstream: 'A' })
+assert.deepEqual(classifyConfigRouting(
+  [{ request_class: 'messages' }],
+  [{ request_class: 'root' }],
+), { request_upstream: 'A', preflight_upstream: 'B' })
+assert.deepEqual(classifyConfigRouting([], []), { request_upstream: 'none', preflight_upstream: 'none' })
 
 assert.equal(validateConfigPrecedenceRepetitions(5), 5)
 assert.equal(validateConfigPrecedenceRepetitions(12), 12)
@@ -57,4 +67,4 @@ assert.equal(classifyConfigPrecedencePairRuns({ pair, repetitions: 5, runs: runs
 const singleSource = runs(); singleSource[0] = { ...singleSource[0], source_count: 1 }
 assert.equal(classifyConfigPrecedencePairRuns({ pair, repetitions: 5, runs: singleSource }).status, 'UNKNOWN')
 
-console.log(JSON.stringify({ ok: true, cases: 24 }))
+console.log(JSON.stringify({ ok: true, cases: 27 }))

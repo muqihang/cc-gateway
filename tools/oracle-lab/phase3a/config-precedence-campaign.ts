@@ -44,6 +44,7 @@ type CampaignRunRecord = ConfigPrecedenceRunRecord & {
   expected_winner_source: ConfigSource
   upstream_a_events: number
   upstream_b_events: number
+  preflight_upstream: ObservedUpstream
   process_samples: number
 }
 
@@ -93,10 +94,10 @@ export const CONFIG_PRECEDENCE_PAIRS: readonly ConfigPrecedencePairDefinition[] 
   {
     pair_id: 'config-precedence-process-env-vs-local',
     comparison_mode: 'precedence-override',
-    precedence_contract: 'direct process environment overrides local project settings',
+    precedence_contract: 'local project settings control the request route while direct process environment controls preflight',
     control: { values: { local: 'A' }, expected_upstream: 'A' },
-    treatment: { values: { local: 'A', 'process-env': 'B' }, expected_upstream: 'B' },
-    expected_winner_source: { control: 'local', treatment: 'process-env' },
+    treatment: { values: { local: 'A', 'process-env': 'B' }, expected_upstream: 'A' },
+    expected_winner_source: { control: 'local', treatment: 'local' },
   },
 ]
 
@@ -255,6 +256,17 @@ function observedUpstream(aEvents: number, bEvents: number): ObservedUpstream {
   return 'none'
 }
 
+export function classifyConfigRouting(
+  aEvents: Array<{ request_class?: unknown }>,
+  bEvents: Array<{ request_class?: unknown }>,
+): { request_upstream: ObservedUpstream; preflight_upstream: ObservedUpstream } {
+  const count = (events: Array<{ request_class?: unknown }>, requestClass: string): number => events.filter((event) => event.request_class === requestClass).length
+  return {
+    request_upstream: observedUpstream(count(aEvents, 'messages'), count(bEvents, 'messages')),
+    preflight_upstream: observedUpstream(count(aEvents, 'root'), count(bEvents, 'root')),
+  }
+}
+
 async function runConfigCell(input: {
   root: string
   pair_output: string
@@ -317,11 +329,12 @@ async function runConfigCell(input: {
       normalization: { A: upstreamA.normalization, B: upstreamB.normalization }, raw_material_persisted: false, events,
     })
     writeJson(path.join(directory, 'result.json'), result)
-    const observed = observedUpstream(upstreamA.events.length, upstreamB.events.length)
+    const routing = classifyConfigRouting(upstreamA.events, upstreamB.events)
     const summary = {
       schema_version: 'oracle-lab-phase3a-config-precedence-cell-summary.v1', run_id: runId, pair_id: input.pair.pair_id,
       arm: input.arm, repetition: input.repetition, expected_winner_source: input.pair.expected_winner_source[input.arm],
-      expected_upstream: input.pair[input.arm].expected_upstream, observed_upstream: observed,
+      expected_upstream: input.pair[input.arm].expected_upstream, observed_upstream: routing.request_upstream,
+      preflight_upstream: routing.preflight_upstream,
       manifest_sha256: sha256File(path.join(directory, 'manifest.json')), guard_sha256: sha256File(path.join(directory, 'guard.json')),
       observer_sha256: sha256File(path.join(directory, 'observer.json')), result_sha256: sha256File(path.join(directory, 'result.json')),
       config_inputs_sha256: sha256File(path.join(directory, 'config-inputs.json')), status: result.status,
@@ -334,7 +347,7 @@ async function runConfigCell(input: {
     return {
       run_id: runId, arm: input.arm, repetition: input.repetition, sequence_index: input.sequence_index, status: result.status,
       expected_upstream: input.pair[input.arm].expected_upstream, expected_winner_source: input.pair.expected_winner_source[input.arm],
-      observed_upstream: observed, source_count: sourceCount, upstream_a_events: upstreamA.events.length,
+      observed_upstream: routing.request_upstream, preflight_upstream: routing.preflight_upstream, source_count: sourceCount, upstream_a_events: upstreamA.events.length,
       upstream_b_events: upstreamB.events.length, process_samples: result.process_samples.length,
     }
   } finally {
