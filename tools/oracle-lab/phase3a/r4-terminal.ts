@@ -17,9 +17,12 @@ export function buildR4TerminalManifest(input: Input): Record<string, any> {
   if (input.exit.artifact_index_sha256 !== input.index_sha256 || input.handoff.artifact_index_sha256 !== input.index_sha256) fail('r4_terminal_index_mismatch', 'exit and handoff must bind the pre-exit index')
   if (input.handoff.exit_report_sha256 !== input.exit_sha256) fail('r4_terminal_exit_mismatch', 'handoff must bind the exit report')
   if (input.leak.status !== 'PASS' || input.leak.index_sha256 !== input.index_sha256 || !Array.isArray(input.leak.findings) || input.leak.findings.length !== 0) fail('r4_terminal_leak_mismatch', 'leak scan must pass against the pre-exit index')
+  const green = input.exit.status === 'GREEN' && input.handoff.status === 'READY'
+  const blocked = input.exit.status === 'BLOCKED' && input.handoff.status === 'BLOCKED'
+  if (!green && !blocked) fail('r4_terminal_status_mismatch', 'exit and handoff terminal statuses are inconsistent')
   const bindings = { index_sha256: input.index_sha256, leak_scan_sha256: input.leak_scan_sha256, exit_sha256: input.exit_sha256, handoff_sha256: input.handoff_sha256, identity_graph_sha256: input.identity_graph_sha256, r2_sha256: input.r2_sha256, r3_sha256: input.r3_sha256 }
   const repositories = { cc_gateway: { commit: input.cc_commit, tree: input.cc_tree }, sub2api: { commit: input.sub2api_commit, tree: input.sub2api_tree } }
-  const base = { schema_version: 'oracle-lab-phase3a-r4-terminal.v1', status: 'BLOCKED_WITH_VALIDATED_SUBSET', index_role: 'pre-exit-evidence-index', bindings, repositories, codegraph_current: true, external_socket_budget: 0, raw_material_persisted: false }
+  const base = { schema_version: 'oracle-lab-phase3a-r4-terminal.v1', status: green ? 'GREEN' : 'BLOCKED_WITH_VALIDATED_SUBSET', index_role: 'pre-exit-evidence-index', bindings, repositories, codegraph_current: true, external_socket_budget: 0, raw_material_persisted: false }
   return { ...base, deterministic_digest: sha256Bytes(canonicalJson(base)) }
 }
 

@@ -46,6 +46,8 @@ export function closureConclusions(): any[] {
     unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified.', 'compact-cache-lifecycle-untriggered'),
     unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified.', 'positive-nonessential-traffic-untriggered'),
     unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified.', 'resume-restart-lineage-untriggered'),
+    unknown('CL-P3A-TLS-RUNTIME-UNKNOWN', 'Positive TLS runtime behavior remains unclassified.', 'tls-positive-runtime-unavailable'),
+    unknown('CL-P3A-CROSS-PLATFORM-UNKNOWN', 'Behavior outside darwin-arm64 remains unclassified.', 'cross-platform-corroboration-unavailable'),
   ]
 }
 
@@ -63,6 +65,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const conclusions = closureConclusions()
   const indexedIds = new Set(artifactIndex.artifacts.map((row) => row.artifact_id))
   for (const row of conclusions) for (const id of row.conclusion.supporting_artifact_ids) if (!indexedIds.has(id)) fail('r4_support_unresolved', `conclusion support is not indexed: ${id}`)
+  const terminalUnknowns = [
+    ...r2.coverage.filter((row: any) => row.evidence_level === 'Unknown').map((row: any) => ({ concern: row.hypothesis, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false })),
+    { concern: 'tls-positive-runtime-coverage', reason: 'TLS capture capability was unavailable for the bounded active campaign.', next_minimal_action: 'Replay one complete SSE cell through the loopback CONNECT observer and local CA.', phase3b_usable: false },
+    { concern: 'cross-platform-corroboration', reason: 'The active artifact is darwin-arm64 and no second-platform runner was in scope.', next_minimal_action: 'Replay the frozen manifest and normalized observers on a digest-bound second-platform artifact.', phase3b_usable: false },
+  ]
   const input: CuratedExitInput = {
     ...template, generated_at: '2026-07-21T12:00:00.000Z', exit_report_path: evidenceRelativePath(evidenceRoot, values['out-exit']!), artifact_index_sha256: indexSha,
     repositories: [
@@ -72,20 +79,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     coverage: {
       active: [{ platform: 'darwin-arm64', status: 'partial', environment_pairs: 60, environment_reproduced_pairs: r2.inputs.environment.statuses?.REPRODUCED ?? 60, environment_unknown_pairs: r2.inputs.environment.statuses?.UNKNOWN ?? 0, scenario_pairs: 9, config_pairs: 4, auth_pairs: 4, reproduced_hypotheses: r2.coverage_counts.Reproduced }],
       change_points: [{ target: 'sub2api-adapter', status: 'PASS', tier_a_tests: r3.tier_a.total_tests, tier_b: r3.tier_b.status }],
-      omitted: r2.coverage.filter((row: any) => row.evidence_level === 'Unknown').map((row: any) => ({ cell: row.hypothesis, reason: row.reason })),
+      omitted: terminalUnknowns.map((row) => ({ cell: row.concern, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false })),
     },
     protocol_runtime_summaries: [
       { closure: 'R2', sha256: r2Sha, status: r2.status, reproduced: r2.coverage_counts.Reproduced, unknown: r2.coverage_counts.Unknown },
       { closure: 'R3', sha256: r3Sha, status: r3.status, tier_a_tests: r3.tier_a.total_tests, tier_b: r3.tier_b.status },
     ],
     perturbation_source_agreement: { instrumentation: 'instrumentation-equivalent', saturation: 'SATURATED', source_count: 3, external_socket_budget: 0 },
-    evidence_health: { contradictions: [], expired: [], errors: [{ category: 'append-only-superseded-campaigns-retained' }], unknowns: r2.coverage.filter((row: any) => row.evidence_level === 'Unknown').map((row: any) => row.hypothesis) },
+    evidence_health: { contradictions: [], expired: [], errors: [{ category: 'append-only-superseded-campaigns-retained' }], unknowns: terminalUnknowns },
     conclusions,
     p2_mapping: { wire: 'Reproduced-local-loopback', semantic: 'Reproduced-local-loopback', state_sequence: 'Unknown-resume-untriggered', failure_semantics: 'Reproduced-local-loopback', bundle_unchanged: true },
     evidence_hygiene: { leak_scan: 'PASS', leak_scan_sha256: leakSha, artifact_index_sha256: indexSha, retention: 'retained', no_deletion: true, append_only: true },
     reproduction: { commands: ['npm exec tsx tests/oracle-phase3a-exit.test.ts', 'npm exec tsx tests/oracle-phase3a-handoff.test.ts', 'npm exec tsx tests/oracle-phase3a-r2-closure.test.ts', 'npm exec tsx tests/oracle-phase3a-r3-closure.test.ts'], unavailable_tools: ['positive-compact-trigger', 'positive-resume-trigger'] },
     phase3b: { ...template.phase3b, negative_capabilities: ['compact-cache-lifecycle-untriggered', 'positive-nonessential-traffic-untriggered', 'resume-restart-lineage-untriggered', 'tls-positive-runtime-unavailable', 'cross-platform-corroboration-unavailable'], rollback_reference: template.p2 },
-    missing_gates: ['compact-cache-lifecycle', 'positive-nonessential-traffic', 'restart-resume-child-lineage', 'tls-positive-runtime-coverage', 'cross-platform-corroboration'],
+    missing_gates: [],
   }
   const first = buildBlockedDeliverables(input); const second = buildBlockedDeliverables(input)
   if (canonicalJson(first) !== canonicalJson(second)) fail('r4_nondeterministic', 'R4 deliverables are not byte deterministic')

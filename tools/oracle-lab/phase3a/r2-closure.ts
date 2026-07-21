@@ -20,15 +20,15 @@ export function buildR2CoverageClosure(inputs: Inputs): Record<string, any> {
     { hypothesis: 'instrumentation-equivalence', evidence_level: 'Reproduced', source: 'probe' },
     inputs.environment.status === 'PASS'
       ? { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Reproduced', source: 'environment+saturation' }
-      : { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Unknown', reason: `${String(inputs.environment.statuses?.UNKNOWN ?? 0)} matrix pairs lacked complete protocol observation` },
+      : { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Unknown', reason: `${String(inputs.environment.statuses?.UNKNOWN ?? 0)} matrix pairs lacked complete protocol observation`, next_minimal_action: 'Route default API and empty socket arms through a loopback protocol observer, then rerun only the three unresolved pairs.' },
     { hypothesis: 'config-precedence-and-phase-split', evidence_level: 'Reproduced', source: 'config' },
     { hypothesis: 'placeholder-auth-initialization-rotation-coexistence-and-missing', evidence_level: 'Reproduced', source: 'auth' },
     { hypothesis: 'http-failure-reset-and-terminal-outcomes', evidence_level: 'Reproduced', source: 'scenario' },
     { hypothesis: 'partial-and-complete-sse-topology', evidence_level: 'Reproduced', source: 'scenario' },
     { hypothesis: 'request-cache-control-surface', evidence_level: 'Reproduced', source: 'environment+observer' },
-    { hypothesis: 'compact-and-prompt-cache-lifecycle', evidence_level: 'Unknown', reason: 'bounded prompts did not trigger a positive compact/cache lifecycle' },
-    { hypothesis: 'telemetry-diagnostic-update-error-traffic', evidence_level: 'Unknown', reason: 'nonessential traffic was negative under the hermetic command profile; positive branches were not triggered' },
-    { hypothesis: 'restart-resume-and-child-process-lineage', evidence_level: 'Unknown', reason: 'fresh-process isolation observed launch lineage but did not trigger a resume/restart workflow' },
+    { hypothesis: 'compact-and-prompt-cache-lifecycle', evidence_level: 'Unknown', reason: 'bounded prompts did not trigger a positive compact/cache lifecycle', next_minimal_action: 'Run a bounded multi-turn long-context session against the fake upstream and stop after the first compact or cache transition.' },
+    { hypothesis: 'telemetry-diagnostic-update-error-traffic', evidence_level: 'Unknown', reason: 'nonessential traffic was negative under the hermetic command profile; positive branches were not triggered', next_minimal_action: 'Invoke one bounded diagnostic or update command with nonessential traffic enabled and all destinations mapped to loopback.' },
+    { hypothesis: 'restart-resume-and-child-process-lineage', evidence_level: 'Unknown', reason: 'fresh-process isolation observed launch lineage but did not trigger a resume/restart workflow', next_minimal_action: 'Create one synthetic session, restart in a fresh process, resume by safe session reference, and compare process lineage.' },
   ]
   const coverageCounts = coverage.reduce<Record<string, number>>((counts, row) => { counts[row.evidence_level] = (counts[row.evidence_level] ?? 0) + 1; return counts }, {})
   const base = { schema_version: 'oracle-lab-phase3a-r2-closure.v1', status: 'CLOSED_WITH_UNKNOWN', inputs, coverage_counts: coverageCounts, coverage, external_socket_budget: 0, raw_material_persisted: false }
