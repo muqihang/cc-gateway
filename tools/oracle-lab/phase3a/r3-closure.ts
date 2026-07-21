@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -54,5 +54,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const targetTests = testCount(['tools.tests.test_oracle_phase3a_adapter'], root)
   const boundaryTests = testCount(['tools.tests.test_claude_code_real_oracle_loopback', 'tools.tests.test_claude_code_tls_oracle', 'tools.tests.test_claude_code_local_env_attribution_oracle'], root)
   const result = evaluateR3Closure({ commit, tree, base_commit: baseCommit, worktree_clean: clean, changed_files: changedFiles, target_tests: targetTests, boundary_tests: boundaryTests })
+  mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })
   writeFileSync(out, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 }); process.stdout.write(`${canonicalJson(result)}\n`)
 }
