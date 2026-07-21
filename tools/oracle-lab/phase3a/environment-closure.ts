@@ -3,6 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { canonicalJson, Phase3AError, sha256Bytes, sha256File } from './core.js'
+import { reclassifyMatrixPairSummary } from './environment-campaign.js'
 import type { EnvironmentMatrix } from './environment-matrix.js'
 
 type ClosureRow = { pair_id: string; status: string; effect: string; source: string; source_sha256: string }
@@ -43,8 +44,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const relative = path.join('pairs', String(index).padStart(2, '0'), 'summary.json')
     const candidate = existsSync(path.join(providerDirectory, relative)) ? path.join(providerDirectory, relative) : path.join(supplementDirectory, relative)
     if (!existsSync(candidate)) fail('matrix_closure_coverage', `no provider summary for ${pair.pair_id}`)
-    const row = JSON.parse(readFileSync(candidate, 'utf8')) as Record<string, any>
-    return { pair_id: row.pair_id, status: row.status, effect: row.effect, source: candidate.startsWith(path.resolve(providerDirectory)) ? 'provider-campaign' : 'provider-supplement', source_sha256: sha256File(candidate) }
+    const row = reclassifyMatrixPairSummary(JSON.parse(readFileSync(candidate, 'utf8')) as Record<string, any>)
+    return { pair_id: String(row.pair_id), status: String(row.status), effect: String(row.effect), source: candidate.startsWith(path.resolve(providerDirectory)) ? 'provider-campaign' : 'provider-supplement', source_sha256: sha256File(candidate) }
   })
   const result = closeEnvironmentMatrix({ matrix_sha256: sha256File(matrixFile), expected: matrix.pairs.map((pair) => ({ pair_id: pair.pair_id, family: pair.family })), rows })
   writeFileSync(out, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 })
