@@ -10,7 +10,7 @@ function fail(code: string, message: string): never { throw new Phase3AError(cod
 
 export function buildR2CoverageClosure(inputs: Inputs): Record<string, any> {
   if (inputs.probe.status !== 'PASS') fail('r2_probe_incomplete', 'instrumentation probe is not PASS')
-  if (inputs.environment.status !== 'PASS' || inputs.environment.pair_count !== 60) fail('r2_environment_incomplete', 'environment closure must contain 60 PASS pairs')
+  if (!['PASS', 'CLOSED_WITH_UNKNOWN'].includes(inputs.environment.status) || inputs.environment.pair_count !== 60) fail('r2_environment_incomplete', 'environment closure must contain 60 classified pairs')
   if (inputs.saturation.status !== 'SATURATED' || inputs.saturation.consecutive_no_new_batches !== 3) fail('r2_saturation_incomplete', 'saturation closure must contain three no-new batches')
   if (inputs.scenario.status !== 'PASS' || inputs.scenario.pair_count !== 9) fail('r2_scenario_incomplete', 'scenario closure must contain nine PASS pairs')
   if (inputs.config.statuses?.REPRODUCED !== 4) fail('r2_config_incomplete', 'config precedence must contain four reproduced pairs')
@@ -18,7 +18,9 @@ export function buildR2CoverageClosure(inputs: Inputs): Record<string, any> {
   for (const bound of Object.values(inputs)) if (!/^[a-f0-9]{64}$/.test(bound.sha256)) fail('r2_binding_invalid', 'R2 input binding must be SHA-256')
   const coverage = [
     { hypothesis: 'instrumentation-equivalence', evidence_level: 'Reproduced', source: 'probe' },
-    { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Reproduced', source: 'environment+saturation' },
+    inputs.environment.status === 'PASS'
+      ? { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Reproduced', source: 'environment+saturation' }
+      : { hypothesis: 'environment-routing-and-provider-selection', evidence_level: 'Unknown', reason: `${String(inputs.environment.statuses?.UNKNOWN ?? 0)} matrix pairs lacked complete protocol observation` },
     { hypothesis: 'config-precedence-and-phase-split', evidence_level: 'Reproduced', source: 'config' },
     { hypothesis: 'placeholder-auth-initialization-rotation-coexistence-and-missing', evidence_level: 'Reproduced', source: 'auth' },
     { hypothesis: 'http-failure-reset-and-terminal-outcomes', evidence_level: 'Reproduced', source: 'scenario' },

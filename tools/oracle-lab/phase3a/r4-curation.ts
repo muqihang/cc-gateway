@@ -40,8 +40,9 @@ export function closureConclusions(): any[] {
     }, authority_ceiling: 'Unknown', observation_count: 0, parser_agreement: 'not-applicable', perturbed: false,
   })
   return [
-    reproduced('CL-P3A-R2-ROUTING-CONFIG-AUTH', 'Routing, config precedence, and placeholder credential lifecycle were stable in the bounded local campaign.', ['p3a2-closure-coverage-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'], ['closure-r2-config-v2', 'closure-r2-auth-v1', 'closure-r2-auth-co-v2'], ['closure-r2-config-v2-control']),
+    reproduced('CL-P3A-R2-CONFIG-AUTH', 'Config precedence and placeholder credential lifecycle were stable in the bounded local campaign.', ['p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'], ['closure-r2-config-v2', 'closure-r2-auth-v1', 'closure-r2-auth-co-v2'], ['closure-r2-config-v2-control']),
     reproduced('CL-P3A-R2-FAILURE-STREAM', 'HTTP failure, reset, partial stream, and complete stream terminal classes were stable in the bounded local campaign.', ['p3a2-closure-scenarios-v2', 'p3a2-closure-coverage-v2'], ['closure-r2-scenario-v2', 'closure-r2-partial-v6', 'closure-r2-complete-v7'], ['closure-r2-scenario-v2-control']),
+    unknown('CL-P3A-ROUTING-ENVIRONMENT-UNKNOWN', 'Full environment routing and provider-selection coverage remains unclassified.', 'environment-routing-protocol-coverage-incomplete'),
     unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified.', 'compact-cache-lifecycle-untriggered'),
     unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified.', 'positive-nonessential-traffic-untriggered'),
     unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified.', 'resume-restart-lineage-untriggered'),
@@ -69,7 +70,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       captureRepositoryBinding(values['sub2api-root']!, { repository: 'sub2api', base: values['sub2api-base']!, freezeHead: values['sub2api-freeze']! }),
     ], repository_capture_required: false,
     coverage: {
-      active: [{ platform: 'darwin-arm64', status: 'partial', environment_pairs: 60, scenario_pairs: 9, config_pairs: 4, auth_pairs: 4, reproduced_hypotheses: r2.coverage_counts.Reproduced }],
+      active: [{ platform: 'darwin-arm64', status: 'partial', environment_pairs: 60, environment_reproduced_pairs: r2.inputs.environment.statuses?.REPRODUCED ?? 60, environment_unknown_pairs: r2.inputs.environment.statuses?.UNKNOWN ?? 0, scenario_pairs: 9, config_pairs: 4, auth_pairs: 4, reproduced_hypotheses: r2.coverage_counts.Reproduced }],
       change_points: [{ target: 'sub2api-adapter', status: 'PASS', tier_a_tests: r3.tier_a.total_tests, tier_b: r3.tier_b.status }],
       omitted: r2.coverage.filter((row: any) => row.evidence_level === 'Unknown').map((row: any) => ({ cell: row.hypothesis, reason: row.reason })),
     },
