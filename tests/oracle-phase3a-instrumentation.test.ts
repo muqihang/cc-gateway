@@ -133,7 +133,7 @@ assert.equal(probePair.treatment.matrix.treatment_value, 'probe-copy')
 assert.equal(probePair.control.capture.hook, false)
 assert.equal(probePair.treatment.capture.hook, true)
 assert.notEqual(probePair.control.environment.tmp, probePair.treatment.environment.tmp)
-assert.equal(probePair.treatment.preflight.probe_recipe_sha256, 'c'.repeat(64))
+assert.equal(probePair.treatment.matrix.fixed_variables.probe_recipe_sha256, 'c'.repeat(64))
 
 assert.deepEqual(assessProbeSigning({
   sign_exit_code: 0, verify_exit_code: 0, parent_size: 100, post_sign_size: 120,

@@ -133,7 +133,6 @@ export function buildProbePairManifests(
         fixed_variables: { ...base.matrix.fixed_variables, parent_artifact_sha256: base.command.executable_sha256, probe_recipe_sha256: probeRecipeSha256 },
       },
       capture: { ...base.capture, hook, process: true, fs: true, network: true, http: true },
-      preflight: { ...base.preflight, probe_recipe_sha256: probeRecipeSha256 },
     }
   }
   return {
