@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { applyEnvironmentSetting, classifyMatrixPairRuns } from '../tools/oracle-lab/phase3a/environment-campaign.js'
+import { applyEnvironmentSetting, classifyMatrixPairRuns, reclassifyMatrixPairSummary } from '../tools/oracle-lab/phase3a/environment-campaign.js'
 import type { MatrixSetting } from '../tools/oracle-lab/phase3a/environment-matrix.js'
 import type { LaunchManifest } from '../tools/oracle-lab/phase3a/launch-manifest.js'
 
@@ -25,8 +25,17 @@ assert.equal(neutral.allowlist.ANTHROPIC_BASE_URL, 'http://127.0.0.1:19002')
 assert.deepEqual(neutral.base_urls, ['http://127.0.0.1:19002'])
 assert.equal(environment.allowlist.ANTHROPIC_BASE_URL, 'http://127.0.0.1:19001')
 
-assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], complete_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'no-observed-effect', stable: true })
-assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['b'], complete_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'semantic-change', stable: true })
-assert.equal(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a', 'b'], treatment_semantic_digests: ['b'], complete_cells: 10, dual_source_cells: 10 }).status, 'UNKNOWN')
+assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'no-observed-effect', stable: true })
+assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['b'], terminal_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'semantic-change', stable: true })
+assert.equal(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a', 'b'], treatment_semantic_digests: ['b'], terminal_cells: 10, dual_source_cells: 10 }).status, 'UNKNOWN')
+assert.equal(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 9, dual_source_cells: 10 }).status, 'UNKNOWN')
+const timeoutRuns = Array.from({ length: 10 }, (_, index) => ({
+  arm: index % 2 === 0 ? 'control' : 'treatment', status: 'timeout', semantic_sha256: index % 2 === 0 ? 'a' : 'b',
+  hook_event_count: 1, observer_event_count: 0, process_samples: 2, dual_source: false,
+}))
+assert.deepEqual(reclassifyMatrixPairSummary({ pair_id: 'timeout-pair', status: 'UNKNOWN', repetitions: 5, runs: timeoutRuns }), {
+  pair_id: 'timeout-pair', original_status: 'UNKNOWN', status: 'REPRODUCED', effect: 'semantic-change', stable: true,
+  repetitions: 5, terminal_cells: 10, dual_source_cells: 10,
+})
 
-console.log(JSON.stringify({ ok: true, cases: 15 }))
+console.log(JSON.stringify({ ok: true, cases: 17 }))

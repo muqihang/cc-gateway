@@ -40,6 +40,7 @@ type RunRecord = {
   hook_event_count: number
   observer_event_count: number
   process_samples: number
+  source_count: number
   dual_source: boolean
 }
 
@@ -80,18 +81,57 @@ export function classifyMatrixPairRuns(input: {
   repetitions: number
   control_semantic_digests: string[]
   treatment_semantic_digests: string[]
-  complete_cells: number
+  terminal_cells: number
   dual_source_cells: number
 }): { status: 'REPRODUCED' | 'UNKNOWN'; effect: 'no-observed-effect' | 'semantic-change' | 'unresolved'; stable: boolean } {
   const control = new Set(input.control_semantic_digests)
   const treatment = new Set(input.treatment_semantic_digests)
   const stable = control.size === 1 && treatment.size === 1
-  const complete = input.complete_cells === input.repetitions * 2 && input.dual_source_cells === input.repetitions * 2
+  const complete = input.terminal_cells === input.repetitions * 2 && input.dual_source_cells === input.repetitions * 2
   return {
     status: stable && complete && input.repetitions >= 5 ? 'REPRODUCED' : 'UNKNOWN',
     effect: !stable ? 'unresolved' : [...control][0] === [...treatment][0] ? 'no-observed-effect' : 'semantic-change',
     stable,
   }
+}
+
+export function reclassifyMatrixPairSummary(summary: Record<string, any>): Record<string, unknown> {
+  const runs = Array.isArray(summary.runs) ? summary.runs as Array<Record<string, any>> : []
+  if (runs.length === 0) return {
+    pair_id: summary.pair_id, original_status: summary.status, status: summary.status,
+    effect: summary.effect, stable: false, repetitions: Number(summary.repetitions ?? 0), terminal_cells: 0, dual_source_cells: 0,
+  }
+  const terminal = new Set(['complete', 'failed', 'timeout', 'resource-limit'])
+  const sourceCount = (run: Record<string, any>): number => Number(run.hook_event_count > 0) + Number(run.observer_event_count > 0) + Number(run.process_samples > 0)
+  const classified = classifyMatrixPairRuns({
+    repetitions: Number(summary.repetitions),
+    control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => String(run.semantic_sha256)),
+    treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => String(run.semantic_sha256)),
+    terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
+    dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
+  })
+  return {
+    pair_id: summary.pair_id, original_status: summary.status, ...classified, repetitions: Number(summary.repetitions),
+    terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
+    dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
+  }
+}
+
+export function buildEnvironmentCampaignReclassification(sourceDirectoryInput: string): Record<string, unknown> {
+  const sourceDirectory = path.resolve(sourceDirectoryInput)
+  const sourceSummaryFile = path.join(sourceDirectory, 'summary.json')
+  const source = JSON.parse(readFileSync(sourceSummaryFile, 'utf8')) as Record<string, any>
+  const pairs = (source.pairs as Array<Record<string, any>>).map((row) => {
+    const pairFile = path.join(sourceDirectory, 'pairs', String(row.index).padStart(2, '0'), 'summary.json')
+    return reclassifyMatrixPairSummary(JSON.parse(readFileSync(pairFile, 'utf8')) as Record<string, any>)
+  })
+  const statuses = pairs.reduce<Record<string, number>>((counts, pair) => { const status = String(pair.status); counts[status] = (counts[status] ?? 0) + 1; return counts }, {})
+  const base = {
+    schema_version: 'oracle-lab-phase3a-environment-campaign-reclassification.v1',
+    source_campaign_summary_sha256: sha256File(sourceSummaryFile), source_campaign_id: source.campaign_id,
+    pair_count: pairs.length, statuses, pairs, external_socket_budget: 0, raw_material_persisted: false,
+  }
+  return { ...base, deterministic_digest: sha256Bytes(canonicalJson(base)) }
 }
 
 function observerReplacements(root: string, runIds: string[]): ObserverStringReplacement[] {
@@ -166,7 +206,8 @@ async function runMatrixCell(input: {
     run_id: input.manifest.run_id, arm: input.arm, repetition: input.repetition, sequence_index: input.manifest.sequence_index,
     status: result.status, semantic_sha256: instrumentationSemanticDigest(events), hook_event_count: result.hook_event_count,
     observer_event_count: events.length, process_samples: result.process_samples.length,
-    dual_source: result.hook_event_count > 0 && events.length > 0 && result.process_samples.length > 0,
+    source_count: Number(result.hook_event_count > 0) + Number(events.length > 0) + Number(result.process_samples.length > 0),
+    dual_source: Number(result.hook_event_count > 0) + Number(events.length > 0) + Number(result.process_samples.length > 0) >= 2,
   }
 }
 
@@ -226,13 +267,15 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
       repetitions: options.repetitions,
       control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => run.semantic_sha256),
       treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => run.semantic_sha256),
-      complete_cells: runs.filter((run) => run.status === 'complete').length,
+      terminal_cells: runs.filter((run) => new Set(['complete', 'failed', 'timeout', 'resource-limit']).has(run.status)).length,
       dual_source_cells: runs.filter((run) => run.dual_source).length,
     })
     const summary = {
       schema_version: 'oracle-lab-phase3a-matrix-pair-summary.v1', pair_id: pair.pair_id, family: pair.family,
       static_anchor: pair.static_anchor, ...classified, repetitions: options.repetitions, seed,
-      complete_cells: runs.filter((run) => run.status === 'complete').length, dual_source_cells: runs.filter((run) => run.dual_source).length,
+      complete_cells: runs.filter((run) => run.status === 'complete').length,
+      terminal_cells: runs.filter((run) => new Set(['complete', 'failed', 'timeout', 'resource-limit']).has(run.status)).length,
+      dual_source_cells: runs.filter((run) => run.dual_source).length,
       runs, external_socket_budget: 0,
     }
     writeJson(path.join(pairOutput, 'summary.json'), summary); pairSummaries.push(summary)
@@ -261,6 +304,11 @@ function args(argv: string[]): Record<string, string> {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const values = args(process.argv.slice(2))
+    if (values['reclassify-campaign']) {
+      if (!values.out) fail('invalid_arguments', '--out is required with --reclassify-campaign')
+      const result = buildEnvironmentCampaignReclassification(values['reclassify-campaign'])
+      writeJson(path.resolve(values.out), result); process.stdout.write(`${canonicalJson(result)}\n`); process.exit(0)
+    }
     const required = ['evidence-root', 'source-entrypoint', 'probe-entrypoint', 'expected-probe-sha256', 'probe-recipe-sha256', 'matrix', 'out-relative', 'campaign-id', 'cc-commit', 'cc-tree', 'sub2api-commit', 'sub2api-tree', 'plan-sha256', 'toolchain-digest']
     for (const key of required) if (!values[key]) fail('invalid_arguments', `--${key} is required`)
     const summary = await runEnvironmentCampaign({
