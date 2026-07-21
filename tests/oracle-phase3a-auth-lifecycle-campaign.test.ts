@@ -24,8 +24,8 @@ assert.deepEqual(AUTH_LIFECYCLE_PAIRS[0].control.credentials, { ANTHROPIC_API_KE
 assert.deepEqual(AUTH_LIFECYCLE_PAIRS[0].treatment.credentials, { ANTHROPIC_API_KEY: 'api-key-b' })
 assert.deepEqual(AUTH_LIFECYCLE_PAIRS[1].control.credentials, { ANTHROPIC_AUTH_TOKEN: 'auth-token-a' })
 assert.deepEqual(AUTH_LIFECYCLE_PAIRS[1].treatment.credentials, { ANTHROPIC_AUTH_TOKEN: 'auth-token-b' })
-assert.deepEqual(AUTH_LIFECYCLE_PAIRS[2].control.admissible_observations, ['authorization:auth-token-a', 'x-api-key:api-key-a'])
-assert.deepEqual(AUTH_LIFECYCLE_PAIRS[2].treatment.admissible_observations, ['authorization:auth-token-b', 'x-api-key:api-key-b'])
+assert.deepEqual(AUTH_LIFECYCLE_PAIRS[2].control.admissible_observations, ['authorization:auth-token-a+x-api-key:api-key-a'])
+assert.deepEqual(AUTH_LIFECYCLE_PAIRS[2].treatment.admissible_observations, ['authorization:auth-token-b+x-api-key:api-key-b'])
 assert.equal(AUTH_LIFECYCLE_PAIRS[2].control.expected_observation, null)
 assert.equal(AUTH_LIFECYCLE_PAIRS[2].treatment.expected_observation, null)
 assert.deepEqual(AUTH_LIFECYCLE_PAIRS[3].treatment.credentials, {})
@@ -40,7 +40,7 @@ for (const invalid of [4, 13, 5.5, Number.NaN]) {
 assert.equal(observeAuthCredential([{ header_value_classes: { 'x-api-key': 'api-key-a' } }]), 'x-api-key:api-key-a')
 assert.equal(observeAuthCredential([{ header_value_classes: { authorization: 'auth-token-b' } }]), 'authorization:auth-token-b')
 assert.equal(observeAuthCredential([{ header_value_classes: { authorization: 'present-redacted' } }]), 'none')
-assert.equal(observeAuthCredential([{ header_value_classes: { 'x-api-key': 'api-key-a', authorization: 'auth-token-a' } }]), 'ambiguous')
+assert.equal(observeAuthCredential([{ header_value_classes: { 'x-api-key': 'api-key-a', authorization: 'auth-token-a' } }]), 'authorization:auth-token-a+x-api-key:api-key-a')
 assert.equal(authSourceCount({ hook: 1, observer: 2, process: 3 }), 3)
 assert.equal(authSourceCount({ hook: 1, observer: 0, process: 3 }), 2)
 assert.equal(authSourceCount({ hook: 0, observer: 0, process: 3 }), 1)
@@ -63,13 +63,10 @@ assert.deepEqual(classifyAuthLifecyclePairRuns({ pair: AUTH_LIFECYCLE_PAIRS[0], 
 const tokenRotation = runs(1, 'authorization:auth-token-a', 'authorization:auth-token-b')
 assert.equal(classifyAuthLifecyclePairRuns({ pair: AUTH_LIFECYCLE_PAIRS[1], repetitions: 5, runs: tokenRotation }).status, 'REPRODUCED')
 
-const coexistenceWithApiKeyWinner = runs(2, 'x-api-key:api-key-a', 'x-api-key:api-key-b')
-const coexistenceWithTokenWinner = runs(2, 'authorization:auth-token-a', 'authorization:auth-token-b')
-for (const coexistenceRuns of [coexistenceWithApiKeyWinner, coexistenceWithTokenWinner]) {
-  const classified = classifyAuthLifecyclePairRuns({ pair: AUTH_LIFECYCLE_PAIRS[2], repetitions: 5, runs: coexistenceRuns })
-  assert.equal(classified.status, 'REPRODUCED')
-  assert.equal(classified.effect, 'stable-selection-observed')
-}
+const coexistence = runs(2, 'authorization:auth-token-a+x-api-key:api-key-a', 'authorization:auth-token-b+x-api-key:api-key-b')
+const coexistenceClassified = classifyAuthLifecyclePairRuns({ pair: AUTH_LIFECYCLE_PAIRS[2], repetitions: 5, runs: coexistence })
+assert.equal(coexistenceClassified.status, 'REPRODUCED')
+assert.equal(coexistenceClassified.effect, 'stable-selection-observed')
 const coexistenceNotDistinct = runs(2, 'x-api-key:api-key-a', 'x-api-key:api-key-a')
 assert.equal(classifyAuthLifecyclePairRuns({ pair: AUTH_LIFECYCLE_PAIRS[2], repetitions: 5, runs: coexistenceNotDistinct }).status, 'UNKNOWN')
 

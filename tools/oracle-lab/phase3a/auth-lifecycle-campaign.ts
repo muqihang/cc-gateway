@@ -82,14 +82,14 @@ export const AUTH_LIFECYCLE_PAIRS: readonly AuthLifecyclePairDefinition[] = [
   {
     pair_id: 'auth-credential-coexistence',
     comparison_mode: 'empirical-coexistence',
-    lifecycle_contract: 'coexisting API key and auth token select one stable distinguishable credential class without a predeclared winner',
+    lifecycle_contract: 'coexisting API key and auth token send both credential headers with stable distinguishable classes',
     control: {
       credentials: { ANTHROPIC_API_KEY: 'api-key-a', ANTHROPIC_AUTH_TOKEN: 'auth-token-a' }, expected_observation: null,
-      admissible_observations: ['authorization:auth-token-a', 'x-api-key:api-key-a'], expected_status: 'complete',
+      admissible_observations: ['authorization:auth-token-a+x-api-key:api-key-a'], expected_status: 'complete',
     },
     treatment: {
       credentials: { ANTHROPIC_API_KEY: 'api-key-b', ANTHROPIC_AUTH_TOKEN: 'auth-token-b' }, expected_observation: null,
-      admissible_observations: ['authorization:auth-token-b', 'x-api-key:api-key-b'], expected_status: 'complete',
+      admissible_observations: ['authorization:auth-token-b+x-api-key:api-key-b'], expected_status: 'complete',
     },
   },
   {
@@ -127,8 +127,7 @@ export function observeAuthCredential(events: Array<{ header_value_classes?: Rec
     }
   }
   if (observed.size === 0) return 'none'
-  if (observed.size > 1) return 'ambiguous'
-  return [...observed][0]
+  return [...observed].sort().join('+')
 }
 
 export function authSourceCount(input: { hook: number; observer: number; process: number }): number {
