@@ -78,9 +78,11 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a2-closure-auth-supplement', 'capsules/P3A-2/closure-r2-auth-coexistence-v2/summary.json', 'P3A-2', 'retain', ['p3a2-closure-auth-primary'])
   add('p3a2-closure-coverage', 'capsules/P3A-2/closure-r2-coverage-v1.json', 'P3A-2', 'retain', ['p3a2-closure-environment', 'p3a2-closure-saturation', 'p3a2-closure-scenarios', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
   add('p3a2-closure-environment-v2', 'capsules/P3A-2/closure-r2-environment-matrix-closure-v2.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
+  add('p3a2-closure-environment-v3', 'capsules/P3A-2/closure-r2-environment-matrix-closure-v3.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
   add('p3a2-closure-scenarios-v2', 'capsules/P3A-2/closure-r2-scenario-closure-v2.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
   add('p3a2-closure-coverage-v2', 'capsules/P3A-2/closure-r2-coverage-v2.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v2', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
   add('p3a2-closure-coverage-v3', 'capsules/P3A-2/closure-r2-coverage-v3.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v2', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
+  add('p3a2-closure-coverage-v4', 'capsules/P3A-2/closure-r2-coverage-v4.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
   add('p3a3-closure-tier-a', 'capsules/P3A-3/closure-r3-tier-a-v1.json', 'P3A-3', 'retain', ['p3a2-closure-coverage'])
   add('p3a3-closure-tier-a-v2', 'capsules/P3A-3/closure-r3-tier-a-v2.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v2'])
   rows.push(
