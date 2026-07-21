@@ -9,7 +9,7 @@ import {
 
 console.log('\ntests/oracle-phase3a-matrix.test.ts')
 
-const requiredKeys = [...BASE_URL_ENV_KEYS, ...REGION_ENV_KEYS, 'HOSTNAME', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']
+const requiredKeys = [...BASE_URL_ENV_KEYS, ...REGION_ENV_KEYS, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']
 const census = {
   binding: { artifact_sha256: 'a'.repeat(64) },
   env_reads: requiredKeys.map((key, index) => ({
@@ -25,10 +25,11 @@ assert.equal(matrix.pair_count, 60)
 assert.equal(matrix.pairs.length, 60)
 assert.equal(new Set(matrix.pairs.map((pair) => pair.pair_id)).size, 60)
 assert.ok(matrix.pairs.every((pair) => validateMatrixPair(pair) === pair))
-assert.ok(matrix.pairs.every((pair) => pair.static_anchor.locations.length > 0))
+assert.ok(matrix.pairs.filter((pair) => pair.changed_variable !== 'HOSTNAME').every((pair) => pair.static_anchor.status === 'observed' && pair.static_anchor.locations.length > 0))
 assert.ok(BASE_URL_ENV_KEYS.every((key) => matrix.pairs.filter((pair) => pair.changed_variable === key).length >= 2))
 assert.ok(REGION_ENV_KEYS.every((key) => matrix.pairs.filter((pair) => pair.changed_variable === key).length >= 2))
 assert.equal(matrix.pairs.filter((pair) => pair.changed_variable === 'HOSTNAME').length, 2)
+assert.ok(matrix.pairs.filter((pair) => pair.changed_variable === 'HOSTNAME').every((pair) => pair.static_anchor.status === 'not-observed-in-census' && pair.static_anchor.locations.length === 0))
 assert.deepEqual(
   [...new Set(matrix.pairs.filter((pair) => pair.family === 'provider-token').map((pair) => pair.treatment.value_class))].sort(),
   ['alivun', 'aliyun', 'anthropic', 'china', 'chinax', 'deepseek', 'dot-cn', 'lab', 'labyrinth', 'moonshot', 'punctuation-control', 'qwen', 'unrelated-control', 'volcengine', 'zhipu'],

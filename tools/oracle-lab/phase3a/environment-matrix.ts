@@ -48,7 +48,7 @@ export type EnvironmentMatrixPair = {
   control: MatrixSetting
   treatment: MatrixSetting
   fixed_variables_sha256: string
-  static_anchor: { key: string; match_count: number; module_count: number; locations: CensusLocation[] }
+  static_anchor: { status: 'observed' | 'not-observed-in-census'; key: string; match_count: number; module_count: number; locations: CensusLocation[]; census_keyset_sha256: string }
   execution: { lane: 'active-probe-copy'; status: 'selected'; external_socket_budget: 0; reserved_host_termination: 'loopback-proxy-or-explicit-unknown' }
 }
 
@@ -67,7 +67,11 @@ export function validateMatrixPair(pair: EnvironmentMatrixPair): EnvironmentMatr
     fail('matrix_multiple_variables', 'matrix pair must change exactly one declared variable')
   }
   if (canonicalJson(pair.control) === canonicalJson(pair.treatment)) fail('matrix_no_change', 'matrix pair control and treatment must differ')
-  if (pair.static_anchor.key !== pair.changed_variable || pair.static_anchor.locations.length < 1) fail('matrix_static_anchor_missing', 'matrix pair must bind its changed variable to static locations')
+  if (pair.static_anchor.key !== pair.changed_variable) fail('matrix_static_anchor_missing', 'matrix pair static anchor must bind its changed variable')
+  if (pair.static_anchor.status === 'observed' && pair.static_anchor.locations.length < 1) fail('matrix_static_anchor_missing', 'observed matrix anchor must contain static locations')
+  if (pair.static_anchor.status === 'not-observed-in-census' && (pair.changed_variable !== 'HOSTNAME' || pair.static_anchor.locations.length !== 0 || pair.static_anchor.match_count !== 0)) {
+    fail('matrix_static_anchor_missing', 'only HOSTNAME may use the explicit negative census anchor')
+  }
   if (!/^[a-z0-9][a-z0-9-]{7,127}$/.test(pair.pair_id)) fail('matrix_pair_id', 'matrix pair ID must be a bounded lowercase slug')
   return pair
 }
@@ -79,19 +83,22 @@ function setting(variable: string, state: MatrixSetting['state'], valueClass: st
 export function buildEnvironmentMatrix(census: Census): EnvironmentMatrix {
   if (!census || !Array.isArray(census.env_reads) || !census.binding || typeof census.binding !== 'object') fail('matrix_census_invalid', 'environment matrix requires a bound static census')
   const anchors = new Map(census.env_reads.map((row) => [row.key, row]))
+  const censusKeysetSha256 = sha256Bytes(canonicalJson([...anchors.keys()].sort()))
   const pairs: EnvironmentMatrixPair[] = []
   const add = (
     family: EnvironmentMatrixPair['family'], triggerFamily: EnvironmentMatrixPair['trigger_family'], variable: string,
     suffix: string, control: MatrixSetting, treatment: MatrixSetting,
   ): void => {
     const anchor = anchors.get(variable)
-    if (!anchor || !Array.isArray(anchor.locations) || anchor.locations.length === 0) fail('matrix_static_anchor_missing', `static census has no location for ${variable}`)
+    if ((!anchor || !Array.isArray(anchor.locations) || anchor.locations.length === 0) && variable !== 'HOSTNAME') fail('matrix_static_anchor_missing', `static census has no location for ${variable}`)
     const fixed = { artifact_binding: census.binding, command_profile: 'full', model: 'claude-sonnet-4-6', observer: 'loopback-fake-upstream', instrumentation: 'probe-copy' }
     pairs.push(validateMatrixPair({
       pair_id: `r2-${family}-${variable.toLowerCase().replaceAll('_', '-')}-${suffix}`,
       family, trigger_family: triggerFamily, changed_variable: variable, control, treatment,
       fixed_variables_sha256: sha256Bytes(canonicalJson(fixed)),
-      static_anchor: { key: variable, match_count: anchor.match_count, module_count: anchor.module_count, locations: anchor.locations },
+      static_anchor: anchor
+        ? { status: 'observed', key: variable, match_count: anchor.match_count, module_count: anchor.module_count, locations: anchor.locations, census_keyset_sha256: censusKeysetSha256 }
+        : { status: 'not-observed-in-census', key: variable, match_count: 0, module_count: 0, locations: [], census_keyset_sha256: censusKeysetSha256 },
       execution: { lane: 'active-probe-copy', status: 'selected', external_socket_budget: 0, reserved_host_termination: 'loopback-proxy-or-explicit-unknown' },
     }))
   }
