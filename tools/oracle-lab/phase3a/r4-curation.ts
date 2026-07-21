@@ -59,16 +59,50 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const evidenceRoot = ensureEvidenceRoot(values['evidence-root']!)
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
   const r2 = JSON.parse(readFileSync(values.r2!, 'utf8')) as Record<string, any>; const r3 = JSON.parse(readFileSync(values.r3!, 'utf8')) as Record<string, any>
-  if (r2.status !== 'CLOSED_WITH_UNKNOWN' || r3.status !== 'PASS') fail('r4_input_invalid', 'R2 and R3 closures are not terminal')
+  if (!['PASS', 'CLOSED_WITH_UNKNOWN'].includes(String(r2.status)) || !['PASS', 'CLOSED_WITH_UNKNOWN', 'INCOMPLETE'].includes(String(r3.status))) fail('r4_input_invalid', 'R2 and R3 closures are not terminal')
+  const r1Path = path.join(evidenceRoot, 'capsules/P3A-1/r1-static-closure-v1.json')
+  const censusPath = path.join(evidenceRoot, 'static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58/discovery-r1-census-v3.json')
+  if (!existsSync(r1Path) || !existsSync(censusPath)) fail('r4_static_unbound', 'R1 static-closure and census-v3 are required')
+  const r1 = JSON.parse(readFileSync(r1Path, 'utf8')) as Record<string, any>
+  const r1Sha = sha256File(r1Path); const censusSha = sha256File(censusPath)
+  const recoveredRoots = Array.isArray(r1.required_roots) ? r1.required_roots.filter((row: any) => row.disposition === 'static-path-recovered') : []
+  if (r1.status !== 'complete' || recoveredRoots.length !== 15) fail('r4_static_incomplete', 'R1 must recover all 15 required roots before R4 can claim complete static analysis')
   const r2Sha = sha256File(values.r2!); const r3Sha = sha256File(values.r3!); const indexSha = sha256File(values['artifact-index']!); const leakSha = sha256File(values['leak-scan']!)
   const artifactIndex = JSON.parse(readFileSync(values['artifact-index']!, 'utf8')) as { artifacts: Array<{ artifact_id: string }> }
   const conclusions = closureConclusions()
   const indexedIds = new Set(artifactIndex.artifacts.map((row) => row.artifact_id))
   for (const row of conclusions) for (const id of row.conclusion.supporting_artifact_ids) if (!indexedIds.has(id)) fail('r4_support_unresolved', `conclusion support is not indexed: ${id}`)
+  const envReproduced = Number(r2.inputs?.environment?.statuses?.REPRODUCED ?? r2.coverage_counts?.Reproduced ?? 0)
+  const envUnknown = Number(r2.inputs?.environment?.statuses?.UNKNOWN ?? 0)
+  const coverageComplete = envUnknown === 0 && Number(r2.coverage_counts?.Unknown ?? 0) === 0
+  const changePoints = Array.isArray(r3.tier_a?.lanes)
+    ? r3.tier_a.lanes
+    : Array.isArray(r3.lanes)
+      ? r3.lanes
+      : [{ target: 'sub2api-adapter', status: r3.status, tier_a_tests: r3.tier_a?.total_tests, tier_b: r3.tier_b?.status }]
+  const executableUnknowns = (r2.coverage ?? []).filter((row: any) => row.evidence_level === 'Unknown')
+  const missingGates = [
+    ...(coverageComplete ? [] : ['environment-routing-protocol-coverage']),
+    ...(executableUnknowns.map((row: any) => String(row.hypothesis))),
+    ...(Array.isArray(r3.tier_a?.lanes) && r3.tier_a.lanes.length === 5 ? [] : ['claude-code-tier-a-change-points']),
+    'tls-positive-runtime-coverage',
+    'cross-platform-corroboration',
+  ]
   const terminalUnknowns = [
-    ...r2.coverage.filter((row: any) => row.evidence_level === 'Unknown').map((row: any) => ({ concern: row.hypothesis, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false })),
-    { concern: 'tls-positive-runtime-coverage', reason: 'TLS capture capability was unavailable for the bounded active campaign.', next_minimal_action: 'Replay one complete SSE cell through the loopback CONNECT observer and local CA.', phase3b_usable: false },
-    { concern: 'cross-platform-corroboration', reason: 'The active artifact is darwin-arm64 and no second-platform runner was in scope.', next_minimal_action: 'Replay the frozen manifest and normalized observers on a digest-bound second-platform artifact.', phase3b_usable: false },
+    ...executableUnknowns.map((row: any) => ({
+      concern: row.hypothesis, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false,
+      capability_exhausted: false, capability_evidence: 'local-loopback-action-still-available', searched_surfaces: ['active-probe-copy', 'fake-upstream', 'loopback-proxy'],
+    })),
+    {
+      concern: 'tls-positive-runtime-coverage', reason: 'TLS capture has not been executed for the bounded active campaign.',
+      next_minimal_action: 'Replay one complete SSE cell through the loopback CONNECT observer and local CA.', phase3b_usable: false,
+      capability_exhausted: false, capability_evidence: 'connect-proxy-and-local-ca-available', searched_surfaces: ['connect-proxy', 'local-ca'],
+    },
+    {
+      concern: 'cross-platform-corroboration', reason: 'The active artifact is darwin-arm64 and no second-platform runner was in scope.',
+      next_minimal_action: 'Replay the frozen manifest and normalized observers on a digest-bound second-platform artifact.', phase3b_usable: false,
+      capability_exhausted: true, capability_evidence: 'no-second-platform-runner', searched_surfaces: ['darwin-arm64-active-target'],
+    },
   ]
   const input: CuratedExitInput = {
     ...template, generated_at: '2026-07-21T12:00:00.000Z', exit_report_path: evidenceRelativePath(evidenceRoot, values['out-exit']!), artifact_index_sha256: indexSha,
@@ -76,23 +110,33 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       captureRepositoryBinding(values['cc-root']!, { repository: 'cc-gateway', base: values['cc-base']!, freezeHead: values['cc-freeze']! }),
       captureRepositoryBinding(values['sub2api-root']!, { repository: 'sub2api', base: values['sub2api-base']!, freezeHead: values['sub2api-freeze']! }),
     ], repository_capture_required: false,
+    static_analysis: {
+      phase_status: 'COMPLETE', required_root_count: 15, required_root_unknown_count: 0,
+      entry_module_ast: 'recovered-module-slices', module_slice_count: r1.module_slices?.count ?? null,
+      r1_static_closure_sha256: r1Sha, census_sha256: censusSha, discovery_artifact_sha256: r1.discovery_artifact_sha256 ?? null,
+      recovered_roots: recoveredRoots.map((row: any) => row.root), limitations: r1.limitations ?? [],
+    },
     coverage: {
-      active: [{ platform: 'darwin-arm64', status: 'partial', environment_pairs: 60, environment_reproduced_pairs: r2.inputs.environment.statuses?.REPRODUCED ?? 60, environment_unknown_pairs: r2.inputs.environment.statuses?.UNKNOWN ?? 0, scenario_pairs: 9, config_pairs: 4, auth_pairs: 4, reproduced_hypotheses: r2.coverage_counts.Reproduced }],
-      change_points: [{ target: 'sub2api-adapter', status: 'PASS', tier_a_tests: r3.tier_a.total_tests, tier_b: r3.tier_b.status }],
+      active: [{
+        platform: 'darwin-arm64', status: coverageComplete ? 'complete' : 'partial',
+        environment_pairs: 60, environment_reproduced_pairs: envReproduced, environment_unknown_pairs: envUnknown,
+        scenario_pairs: 9, config_pairs: 4, auth_pairs: 4, reproduced_hypotheses: r2.coverage_counts?.Reproduced ?? 0,
+      }],
+      change_points: changePoints,
       omitted: terminalUnknowns.map((row) => ({ cell: row.concern, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false })),
     },
     protocol_runtime_summaries: [
-      { closure: 'R2', sha256: r2Sha, status: r2.status, reproduced: r2.coverage_counts.Reproduced, unknown: r2.coverage_counts.Unknown },
-      { closure: 'R3', sha256: r3Sha, status: r3.status, tier_a_tests: r3.tier_a.total_tests, tier_b: r3.tier_b.status },
+      { closure: 'R2', sha256: r2Sha, status: r2.status, reproduced: r2.coverage_counts?.Reproduced ?? 0, unknown: r2.coverage_counts?.Unknown ?? 0 },
+      { closure: 'R3', sha256: r3Sha, status: r3.status, tier_a: r3.tier_a ?? null, tier_b: r3.tier_b ?? null, lanes: changePoints },
     ],
     perturbation_source_agreement: { instrumentation: 'instrumentation-equivalent', saturation: 'SATURATED', source_count: 3, external_socket_budget: 0 },
     evidence_health: { contradictions: [], expired: [], errors: [{ category: 'append-only-superseded-campaigns-retained' }], unknowns: terminalUnknowns },
     conclusions,
     p2_mapping: { wire: 'Reproduced-local-loopback', semantic: 'Reproduced-local-loopback', state_sequence: 'Unknown-resume-untriggered', failure_semantics: 'Reproduced-local-loopback', bundle_unchanged: true },
     evidence_hygiene: { leak_scan: 'PASS', leak_scan_sha256: leakSha, artifact_index_sha256: indexSha, retention: 'retained', no_deletion: true, append_only: true },
-    reproduction: { commands: ['npm exec tsx tests/oracle-phase3a-exit.test.ts', 'npm exec tsx tests/oracle-phase3a-handoff.test.ts', 'npm exec tsx tests/oracle-phase3a-r2-closure.test.ts', 'npm exec tsx tests/oracle-phase3a-r3-closure.test.ts'], unavailable_tools: ['positive-compact-trigger', 'positive-resume-trigger'] },
-    phase3b: { ...template.phase3b, negative_capabilities: ['compact-cache-lifecycle-untriggered', 'positive-nonessential-traffic-untriggered', 'resume-restart-lineage-untriggered', 'tls-positive-runtime-unavailable', 'cross-platform-corroboration-unavailable'], rollback_reference: template.p2 },
-    missing_gates: [],
+    reproduction: { commands: ['npm exec tsx tests/oracle-phase3a-exit.test.ts', 'npm exec tsx tests/oracle-phase3a-handoff.test.ts', 'npm exec tsx tests/oracle-phase3a-r2-closure.test.ts', 'npm exec tsx tests/oracle-phase3a-r3-closure.test.ts'], unavailable_tools: ['second-platform-runner'] },
+    phase3b: { ...template.phase3b, negative_capabilities: [...new Set(terminalUnknowns.map((row) => String(row.concern)))], rollback_reference: template.p2 },
+    missing_gates: missingGates,
   }
   const first = buildBlockedDeliverables(input); const second = buildBlockedDeliverables(input)
   if (canonicalJson(first) !== canonicalJson(second)) fail('r4_nondeterministic', 'R4 deliverables are not byte deterministic')

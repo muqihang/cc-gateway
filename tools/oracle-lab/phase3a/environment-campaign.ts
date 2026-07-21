@@ -296,19 +296,27 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
         }
       } finally { await Promise.all([forwardProxy?.close(), upstream.close()]) }
     }
+    const terminal = new Set(['complete', 'failed', 'timeout', 'resource-limit'])
+    const completeSchedule = (['control', 'treatment'] as const).every((arm) => {
+      const rows = runs.filter((run) => run.arm === arm).sort((left, right) => left.repetition - right.repetition)
+      return rows.length === options.repetitions && rows.every((run, index) => run.repetition === index)
+    })
     const classified = classifyMatrixPairRuns({
       repetitions: options.repetitions,
       control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => run.semantic_sha256),
       treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => run.semantic_sha256),
-      terminal_cells: runs.filter((run) => new Set(['complete', 'failed', 'timeout', 'resource-limit']).has(run.status)).length,
+      terminal_cells: runs.filter((run) => terminal.has(run.status)).length,
       dual_source_cells: runs.filter((run) => run.dual_source).length,
+      protocol_cells: runs.filter((run) => run.observer_event_count > 0 || run.proxy_event_count > 0).length,
+      complete_schedule: completeSchedule,
     })
     const summary = {
       schema_version: 'oracle-lab-phase3a-matrix-pair-summary.v1', pair_id: pair.pair_id, family: pair.family,
-      static_anchor: pair.static_anchor, ...classified, repetitions: options.repetitions, seed,
+      static_anchor: pair.static_anchor, ...classified, repetitions: options.repetitions, seed, complete_schedule: completeSchedule,
       complete_cells: runs.filter((run) => run.status === 'complete').length,
-      terminal_cells: runs.filter((run) => new Set(['complete', 'failed', 'timeout', 'resource-limit']).has(run.status)).length,
+      terminal_cells: runs.filter((run) => terminal.has(run.status)).length,
       dual_source_cells: runs.filter((run) => run.dual_source).length,
+      protocol_cells: runs.filter((run) => run.observer_event_count > 0 || run.proxy_event_count > 0).length,
       proxy_event_count: runs.reduce((count, run) => count + run.proxy_event_count, 0),
       runs, external_socket_budget: 0,
     }

@@ -141,14 +141,50 @@ function assertGreenInput(input: CuratedExitInput, classified: { usable: JsonObj
   const terminalUnknown = (row: unknown): boolean => {
     if (!row || typeof row !== 'object') return false
     const value = row as JsonObject
-    return typeof value.concern === 'string' && typeof value.reason === 'string' && typeof value.next_minimal_action === 'string' && value.phase3b_usable === false
+    return typeof value.concern === 'string'
+      && typeof value.reason === 'string'
+      && typeof value.next_minimal_action === 'string'
+      && value.phase3b_usable === false
+      && value.capability_exhausted === true
+      && typeof value.capability_evidence === 'string'
+      && typeof value.searched_surfaces === 'object'
   }
   if (classified.usable.length === 0) throw new Phase3AError('exit_green_usable_required', 'GREEN exit requires at least one usable conclusion')
-  if (!input.evidence_health.unknowns.every(terminalUnknown)) throw new Phase3AError('exit_green_unknown_invalid', 'GREEN Unknown rows require concern, reason, next minimal action, and disabled Phase 3B use')
+  if (!input.evidence_health.unknowns.every(terminalUnknown)) throw new Phase3AError('exit_green_unknown_invalid', 'GREEN Unknown rows require capability-exhausted evidence and disabled Phase 3B use')
   if ((input.evidence_hygiene as JsonObject).leak_scan !== 'PASS' || (input.evidence_hygiene as JsonObject).append_only !== true || (input.evidence_hygiene as JsonObject).no_deletion !== true) throw new Phase3AError('exit_green_hygiene_invalid', 'GREEN exit requires leak, append-only, and no-deletion evidence')
   if ((input.p2_mapping as JsonObject).bundle_unchanged !== true) throw new Phase3AError('exit_green_p2_invalid', 'GREEN exit requires unchanged P2 bytes')
   if (canonicalJson([...input.phase3b.acceptance_cases].map(String).sort()) !== canonicalJson(ACCEPTANCE_CASES) || input.phase3b.rollback_reference === null) throw new Phase3AError('exit_green_phase3b_invalid', 'GREEN exit requires exact acceptance cases and rollback reference')
   if (input.artifacts.length === 0 || input.coverage.active.length === 0 || input.protocol_runtime_summaries.length === 0) throw new Phase3AError('exit_green_evidence_incomplete', 'GREEN exit requires artifact, active coverage, and runtime summaries')
+
+  const staticAnalysis = input.static_analysis as JsonObject
+  if (staticAnalysis.phase_status !== 'COMPLETE' || Number(staticAnalysis.required_root_unknown_count ?? 1) !== 0 || Number(staticAnalysis.required_root_count ?? 0) < 15) {
+    throw new Phase3AError('exit_green_static_partial', 'GREEN exit cannot bind stale PARTIAL static analysis')
+  }
+  if (typeof staticAnalysis.r1_static_closure_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(staticAnalysis.r1_static_closure_sha256)) {
+    throw new Phase3AError('exit_green_static_unbound', 'GREEN exit must bind r1-static-closure digest')
+  }
+  if (typeof staticAnalysis.entry_module_ast === 'string' && /unknown/i.test(staticAnalysis.entry_module_ast)) {
+    throw new Phase3AError('exit_green_static_partial', 'GREEN exit cannot leave entry_module_ast Unknown')
+  }
+
+  for (const row of input.coverage.active as JsonObject[]) {
+    if (String(row.status ?? '').toLowerCase() === 'partial' || String(row.status ?? '').toLowerCase() === 'unknown') {
+      throw new Phase3AError('exit_green_coverage_partial', 'GREEN exit cannot leave active coverage partial')
+    }
+  }
+
+  const changePoints = input.coverage.change_points as JsonObject[]
+  const tierAVersions = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
+  if (changePoints.length < tierAVersions.length) throw new Phase3AError('exit_green_r3_wrong_target', 'GREEN exit requires five Claude Code Tier A change-point lanes')
+  for (const version of tierAVersions) {
+    const row = changePoints.find((entry) => entry.version === version)
+    if (!row || row.role !== 'tier-a' || !['PASS', 'REPRODUCED', 'CLOSED_WITH_UNKNOWN'].includes(String(row.status))) {
+      throw new Phase3AError('exit_green_r3_wrong_target', `GREEN exit requires Tier A change-point lane for ${version}`)
+    }
+    if (row.target === 'sub2api-adapter' || row.tier_a_tests !== undefined) {
+      throw new Phase3AError('exit_green_r3_wrong_target', 'GREEN exit cannot treat Sub2API adapter regression as Claude Code Tier A')
+    }
+  }
 }
 
 export function buildExitReport(input: CuratedExitInput): ExitReport {

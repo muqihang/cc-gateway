@@ -75,7 +75,19 @@ assert.equal(buildExitReport(unavailableCodeGraph).status, 'BLOCKED')
 
 const green = fixture()
 green.missing_gates = []
-green.evidence_health.unknowns = [{ concern: 'bounded-platform-gap', reason: 'Only darwin-arm64 was tested.', next_minimal_action: 'Replay the same manifest on a second platform.', phase3b_usable: false }]
+green.static_analysis = {
+  phase_status: 'COMPLETE', required_root_count: 15, required_root_unknown_count: 0,
+  entry_module_ast: 'recovered-module-slices', r1_static_closure_sha256: a, census_sha256: b,
+}
+green.coverage = {
+  active: [{ platform: 'darwin-arm64', status: 'complete', environment_pairs: 60, environment_reproduced_pairs: 60, environment_unknown_pairs: 0 }],
+  change_points: ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207'].map((version) => ({ version, role: 'tier-a', status: 'PASS', intake: true, structural_diff: true, targeted_pair: true })),
+  omitted: [],
+}
+green.evidence_health.unknowns = [{
+  concern: 'bounded-platform-gap', reason: 'Only darwin-arm64 was tested.', next_minimal_action: 'Replay the same manifest on a second platform.',
+  phase3b_usable: false, capability_exhausted: true, capability_evidence: 'no-second-platform-runner', searched_surfaces: ['darwin-arm64-active-target'],
+}]
 green.evidence_hygiene = { ...green.evidence_hygiene, append_only: true }
 green.phase3b.rollback_reference = green.p2
 green.conclusions = [{
@@ -93,5 +105,14 @@ assert.deepEqual(greenDeliverables.handoff.usable_conclusion_ids, ['CL-GREEN'])
 const badGreen = structuredClone(green)
 delete (badGreen.evidence_health.unknowns[0] as any).next_minimal_action
 assert.throws(() => buildExitReport(badGreen), (error: any) => error.code === 'exit_green_unknown_invalid')
+const staleStatic = structuredClone(green)
+staleStatic.static_analysis = { phase_status: 'PARTIAL', required_root_count: 15, required_root_unknown_count: 15, entry_module_ast: 'Unknown-node-budget' }
+assert.throws(() => buildExitReport(staleStatic), (error: any) => error.code === 'exit_green_static_partial')
+const partialCoverage = structuredClone(green)
+partialCoverage.coverage.active = [{ platform: 'darwin-arm64', status: 'partial' }]
+assert.throws(() => buildExitReport(partialCoverage), (error: any) => error.code === 'exit_green_coverage_partial')
+const wrongR3 = structuredClone(green)
+wrongR3.coverage.change_points = [{ target: 'sub2api-adapter', status: 'PASS', tier_a_tests: 58 }]
+assert.throws(() => buildExitReport(wrongR3), (error: any) => error.code === 'exit_green_r3_wrong_target')
 
-console.log(JSON.stringify({ ok: true, sections: 14, deterministic: true, green: true }))
+console.log(JSON.stringify({ ok: true, sections: 14, deterministic: true, green: true, negative_gates: 4 }))
