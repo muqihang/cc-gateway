@@ -56,7 +56,7 @@ for (const [name, fixture] of [['launch-manifest', launch], ['artifact-index', a
 const mutations: Array<[string, any, string]> = [
   ['missing lineage', { ...launch, parent_run_id: undefined }, 'schema_invalid'],
   ['floating version', { ...launch, artifact: { ...launch.artifact, version: 'latest' } }, 'schema_invalid'],
-  ['external base URL', { ...launch, environment: { ...launch.environment, base_urls: ['https://api.example.test/'] } }, 'schema_invalid'],
+  ['external base URL', { ...launch, environment: { ...launch.environment, base_urls: ['https://api.example.com/'] } }, 'schema_invalid'],
   ['socket budget', { ...launch, network: { ...launch.network, external_socket_budget: 1 } }, 'schema_invalid'],
   ['unknown field', { ...launch, receipt: {} }, 'unknown_field'],
   ['raw prompt', { ...observation, request: { ...observation.request, raw_prompt: 'synthetic' } }, 'unknown_field'],

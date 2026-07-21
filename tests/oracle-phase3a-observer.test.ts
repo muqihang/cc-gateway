@@ -11,6 +11,7 @@ import { baselineEnvironmentSelection } from '../tools/oracle-lab/phase3a/baseli
 import { assertControlForInstrumentation, buildIsolatedEnvironment, type LaunchManifest, validateLaunchManifest } from '../tools/oracle-lab/phase3a/launch-manifest.js'
 import { startConnectProxy } from '../tools/oracle-lab/phase3a/observers/connect-proxy.js'
 import { startFakeUpstream } from '../tools/oracle-lab/phase3a/observers/fake-upstream.js'
+import { startHttpForwardProxy } from '../tools/oracle-lab/phase3a/observers/http-forward-proxy.js'
 import { descendants, enforceProcessLimits } from '../tools/oracle-lab/phase3a/process-sampler.js'
 import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, extractSafeErrorTerms, fingerprintSafeErrorText, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
 
@@ -104,6 +105,22 @@ try {
   assert.doesNotMatch(JSON.stringify(proxy.events), /api\.synthetic\.test|1\.1\.1\.1/)
 } finally { await proxy.close() }
 
+const proxyUpstream = await startFakeUpstream({ scenario: { kind: 'json', response: { proxied: true } } })
+const forwardProxy = await startHttpForwardProxy({ upstream_url: proxyUpstream.url })
+try {
+  const proxied = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: forwardProxy.port, method: 'POST', path: 'http://aliyun.phase3a.test:19000/v1/messages', headers: { 'content-type': 'application/json' } }, (res) => {
+      let body = ''; res.on('data', (chunk) => { body += chunk.toString('utf8') }); res.on('end', () => resolve({ status: res.statusCode, body }))
+    })
+    req.on('error', reject); req.end('{"synthetic":true}')
+  })
+  assert.equal(proxied.status, 200)
+  assert.match(proxied.body, /proxied/)
+  assert.equal(proxyUpstream.events.length, 1)
+  assert.equal(forwardProxy.events[0].decision, 'forwarded-loopback')
+  assert.doesNotMatch(canonicalJson(forwardProxy.events), /aliyun\.phase3a\.test/)
+} finally { await Promise.all([forwardProxy.close(), proxyUpstream.close()]) }
+
 const manifest = validateLaunchManifest(fixture('control', 19001))
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, base_urls: ['https://example.com/'] } }), /phase3a_schema_invalid/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', NODE_OPTIONS: '--require=x' } } }), /cannot be inherited/)
@@ -111,6 +128,12 @@ assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...mani
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_AUTH_TOKEN: 'not-a-placeholder' } } }), /placeholder namespace/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: '3' } } }), /not admitted/)
 validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'oracle-phase3a-placeholder:api-key', HTTPS_PROXY: 'http://127.0.0.1:19001/' } } })
+validateLaunchManifest({
+  ...manifest,
+  environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'oracle-phase3a-placeholder:api-key', HTTP_PROXY: 'http://127.0.0.1:19001/' }, base_urls: ['http://aliyun.phase3a.test:19000'] },
+  network: { ...manifest.network, proxy_mode: 'loopback-connect' },
+})
+assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, base_urls: ['http://aliyun.phase3a.test:19000'] } }), /loopback proxy/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', HTTPS_PROXY: 'http://192.0.2.1:19001/' } } }), /declared loopback port/)
 assert.throws(() => assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, null, 'preload'), /requires an uninstrumented control/)
 assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, manifest, 'preload')

@@ -23,6 +23,9 @@ assert.ok(!empty.unset.includes('ANTHROPIC_BASE_URL'))
 const neutral = apply({ variable: 'ANTHROPIC_BASE_URL', state: 'value', value_class: 'loopback-neutral', value_template: 'LOOPBACK_BASE' })
 assert.equal(neutral.allowlist.ANTHROPIC_BASE_URL, 'http://127.0.0.1:19002')
 assert.deepEqual(neutral.base_urls, ['http://127.0.0.1:19002'])
+const reserved = applyEnvironmentSetting(environment, { variable: 'ANTHROPIC_BASE_URL', state: 'value', value_class: 'aliyun', value_template: 'http://aliyun.phase3a.test:LOOPBACK_PROXY_PORT' }, { loopback_base: 'http://127.0.0.1:19002', loopback_proxy_port: 19003, evidence_root: '/tmp/phase3a-evidence' })
+assert.equal(reserved.allowlist.ANTHROPIC_BASE_URL, 'http://aliyun.phase3a.test:19003')
+assert.deepEqual(reserved.base_urls, ['http://aliyun.phase3a.test:19003'])
 assert.equal(environment.allowlist.ANTHROPIC_BASE_URL, 'http://127.0.0.1:19001')
 
 assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'no-observed-effect', stable: true })
@@ -38,4 +41,4 @@ assert.deepEqual(reclassifyMatrixPairSummary({ pair_id: 'timeout-pair', status: 
   repetitions: 5, terminal_cells: 10, dual_source_cells: 10,
 })
 
-console.log(JSON.stringify({ ok: true, cases: 17 }))
+console.log(JSON.stringify({ ok: true, cases: 19 }))

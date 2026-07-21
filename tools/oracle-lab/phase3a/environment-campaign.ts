@@ -10,6 +10,7 @@ import { instrumentationSemanticDigest } from './instrumentation-capability.js'
 import { type LaunchManifest, validateLaunchManifest } from './launch-manifest.js'
 import { normalizeCapsule } from './normalize.js'
 import { startFakeUpstream, type ObserverStringReplacement, type SafeUpstreamEvent } from './observers/fake-upstream.js'
+import { startHttpForwardProxy, type HttpForwardProxy } from './observers/http-forward-proxy.js'
 import { runCell, runCellGuardSelfTest, type CellResult } from './run-cell.js'
 
 type CampaignOptions = {
@@ -28,6 +29,7 @@ type CampaignOptions = {
   sub2api_tree: string
   plan_sha256: string
   toolchain_digest: string
+  pair_family?: EnvironmentMatrixPair['family']
 }
 
 type RunRecord = {
@@ -42,23 +44,27 @@ type RunRecord = {
   process_samples: number
   source_count: number
   dual_source: boolean
+  proxy_event_count: number
 }
 
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 function writeJson(file: string, value: unknown): void { writeFileSync(file, `${canonicalJson(value)}\n`, { flag: 'wx', mode: 0o600 }) }
 
-function resolvedSettingValue(setting: MatrixSetting, context: { loopback_base: string; evidence_root: string }): string {
+function resolvedSettingValue(setting: MatrixSetting, context: { loopback_base: string; loopback_proxy_port?: number; evidence_root: string }): string {
   if (setting.state !== 'value' || !setting.value_template) fail('matrix_value_missing', `value setting for ${setting.variable} has no template`)
   if (setting.value_template === 'LOOPBACK_BASE') return context.loopback_base.replace(/\/$/, '')
   if (setting.value_template.startsWith('EVIDENCE_ROOT/')) return path.join(context.evidence_root, setting.value_template.slice('EVIDENCE_ROOT/'.length))
-  if (setting.value_template.includes('LOOPBACK_PROXY_PORT')) fail('matrix_reserved_host_requires_proxy', 'reserved-host matrix rows require the loopback proxy adapter')
+  if (setting.value_template.includes('LOOPBACK_PROXY_PORT')) {
+    if (!context.loopback_proxy_port) fail('matrix_reserved_host_requires_proxy', 'reserved-host matrix rows require the loopback proxy adapter')
+    return setting.value_template.replace('LOOPBACK_PROXY_PORT', String(context.loopback_proxy_port))
+  }
   return setting.value_template
 }
 
 export function applyEnvironmentSetting(
   input: LaunchManifest['environment'],
   setting: MatrixSetting,
-  context: { loopback_base: string; evidence_root: string },
+  context: { loopback_base: string; loopback_proxy_port?: number; evidence_root: string },
 ): LaunchManifest['environment'] {
   const output = structuredClone(input)
   delete output.allowlist[setting.variable]
@@ -72,7 +78,7 @@ export function applyEnvironmentSetting(
   output.base_urls = [...new Set(BASE_URL_ENV_KEYS.filter((key) => key !== 'ANTHROPIC_UNIX_SOCKET').flatMap((key) => {
     const value = output.allowlist[key]
     if (!value) return []
-    try { const parsed = new URL(value); return loopbackHosts.has(parsed.hostname) ? [value] : [] } catch { return [] }
+    try { const parsed = new URL(value); return loopbackHosts.has(parsed.hostname) || parsed.hostname.endsWith('.test') ? [value] : [] } catch { return [] }
   }))].sort()
   return output
 }
@@ -157,9 +163,10 @@ function pairManifest(
   probeSha256: string,
   probeRecipeSha256: string,
   loopbackBase: string,
+  loopbackProxyPort: number | undefined,
   evidenceRoot: string,
 ): LaunchManifest {
-  const environment = applyEnvironmentSetting(base.environment, setting, { loopback_base: loopbackBase, evidence_root: evidenceRoot })
+  const environment = applyEnvironmentSetting(base.environment, setting, { loopback_base: loopbackBase, loopback_proxy_port: loopbackProxyPort, evidence_root: evidenceRoot })
   environment.home = `runs/${runId}/home`; environment.xdg = `runs/${runId}/xdg`; environment.tmp = `runs/${runId}/tmp`
   return validateLaunchManifest({
     ...structuredClone(base), run_id: runId, pair_id: pair.pair_id, sequence_index: sequenceIndex, randomization_seed: seed,
@@ -181,6 +188,8 @@ async function runMatrixCell(input: {
   manifest: LaunchManifest
   probeEntrypoint: string
   upstream: Awaited<ReturnType<typeof startFakeUpstream>>
+  forwardProxy: HttpForwardProxy | null
+  proxyStart: number
   arm: 'control' | 'treatment'
   repetition: number
 }): Promise<RunRecord> {
@@ -192,7 +201,9 @@ async function runMatrixCell(input: {
   const start = input.upstream.events.length
   const result = await runCell({ manifest: input.manifest, evidence_root: input.root, executable: input.probeEntrypoint, instrumentation: 'none', guard, stdin: BASELINE_PROMPT })
   const events = input.upstream.events.slice(start)
+  const proxyEvents = input.forwardProxy?.events.slice(input.proxyStart) ?? []
   writeJson(path.join(directory, 'observer.json'), { schema_version: 'oracle-lab-phase3a-safe-observer.v1', normalization: input.upstream.normalization, raw_material_persisted: false, events })
+  writeJson(path.join(directory, 'proxy.json'), { schema_version: 'oracle-lab-phase3a-safe-forward-proxy.v1', raw_material_persisted: false, events: proxyEvents })
   writeJson(path.join(directory, 'result.json'), result)
   const summary = {
     schema_version: 'oracle-lab-phase3a-matrix-cell-summary.v1', run_id: input.manifest.run_id,
@@ -208,12 +219,14 @@ async function runMatrixCell(input: {
     observer_event_count: events.length, process_samples: result.process_samples.length,
     source_count: Number(result.hook_event_count > 0) + Number(events.length > 0) + Number(result.process_samples.length > 0),
     dual_source: Number(result.hook_event_count > 0) + Number(events.length > 0) + Number(result.process_samples.length > 0) >= 2,
+    proxy_event_count: proxyEvents.length,
   }
 }
 
 export async function runEnvironmentCampaign(options: CampaignOptions): Promise<Record<string, unknown>> {
   if (!/^[a-z0-9][a-z0-9-]{7,63}$/.test(options.campaign_id)) fail('invalid_campaign_id', 'campaign ID must be a bounded lowercase slug')
   if (!Number.isInteger(options.repetitions) || options.repetitions < 5 || options.repetitions > 12) fail('invalid_repetitions', 'campaign repetitions must be between 5 and 12')
+  if (options.pair_family && !new Set(['base-url-state', 'provider-token', 'region', 'hostname', 'placeholder-auth', 'telemetry']).has(options.pair_family)) fail('invalid_pair_family', 'campaign pair family is not recognized')
   for (const [label, digest] of [['probe', options.expected_probe_sha256], ['recipe', options.probe_recipe_sha256], ['plan', options.plan_sha256], ['toolchain', options.toolchain_digest]]) {
     if (!/^[a-f0-9]{64}$/.test(digest)) fail('invalid_digest', `${label} digest must be SHA-256`)
   }
@@ -229,16 +242,9 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
 
   for (let pairIndex = 0; pairIndex < matrix.pairs.length; pairIndex += 1) {
     const pair = validateMatrixPair(matrix.pairs[pairIndex])
+    if (options.pair_family && pair.family !== options.pair_family) continue
     const pairOutput = path.join(output, 'pairs', String(pairIndex).padStart(2, '0'))
     mkdirSync(pairOutput, { recursive: true, mode: 0o700 })
-    if (pair.family === 'provider-token') {
-      const unknown = {
-        schema_version: 'oracle-lab-phase3a-matrix-pair-summary.v1', pair_id: pair.pair_id, family: pair.family,
-        static_anchor: pair.static_anchor, status: 'UNKNOWN', effect: 'unrun-reserved-host', repetitions: 0,
-        next_minimal_action: 'route the reserved .test hostname through a digest-bound loopback proxy adapter without DNS', external_socket_budget: 0,
-      }
-      writeJson(path.join(pairOutput, 'summary.json'), unknown); pairSummaries.push(unknown); continue
-    }
     const seed = Number.parseInt(sha256Bytes(pair.pair_id).slice(0, 8), 16)
     const order = balancedPairOrder(seed, options.repetitions)
     const runs: RunRecord[] = []
@@ -248,20 +254,33 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
         treatment: `${options.campaign_id}-p${String(pairIndex).padStart(2, '0')}-r${repetition}-treatment`,
       }
       const upstream = await startFakeUpstream({ scenario: { kind: 'anthropic' }, max_body_bytes: 8 * 1024 * 1024, string_replacements: observerReplacements(root, [ids.control, ids.treatment]) })
+      const forwardProxy = pair.family === 'provider-token' ? await startHttpForwardProxy({ upstream_url: upstream.url }) : null
       try {
-        const base = buildBaselineManifest({
+        let base = buildBaselineManifest({
           evidence_root: root, entrypoint: options.source_entrypoint, out_relative: options.out_relative, run_id: `${options.campaign_id}-base`,
           cc_commit: options.cc_commit, cc_tree: options.cc_tree, sub2api_commit: options.sub2api_commit, sub2api_tree: options.sub2api_tree,
           plan_sha256: options.plan_sha256, toolchain_digest: options.toolchain_digest, command_profile: 'full',
         }, upstream.url, upstream.port)
+        if (forwardProxy) {
+          base = validateLaunchManifest({
+            ...base,
+            environment: {
+              ...base.environment,
+              allowlist: { ...base.environment.allowlist, HTTP_PROXY: forwardProxy.url },
+              unset: base.environment.unset.filter((key) => key !== 'HTTP_PROXY'),
+            },
+            network: { ...base.network, loopback_ports: [...new Set([...base.network.loopback_ports, forwardProxy.port])].sort((a, b) => a - b), proxy_mode: 'loopback-connect' },
+          })
+        }
         for (let position = 0; position < 2; position += 1) {
           const arm = order[repetition][position]
           const setting = arm === 'control' ? pair.control : pair.treatment
-          const manifest = pairManifest(base, pair, setting, arm, ids[arm], repetition * 2 + position, seed, options.expected_probe_sha256, options.probe_recipe_sha256, upstream.url, root)
-          runs.push(await runMatrixCell({ root, output: pairOutput, manifest, probeEntrypoint: options.probe_entrypoint, upstream, arm, repetition }))
+          const proxyStart = forwardProxy?.events.length ?? 0
+          const manifest = pairManifest(base, pair, setting, arm, ids[arm], repetition * 2 + position, seed, options.expected_probe_sha256, options.probe_recipe_sha256, upstream.url, forwardProxy?.port, root)
+          runs.push(await runMatrixCell({ root, output: pairOutput, manifest, probeEntrypoint: options.probe_entrypoint, upstream, forwardProxy, proxyStart, arm, repetition }))
           executedCells += 1
         }
-      } finally { await upstream.close() }
+      } finally { await Promise.all([forwardProxy?.close(), upstream.close()]) }
     }
     const classified = classifyMatrixPairRuns({
       repetitions: options.repetitions,
@@ -276,6 +295,7 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
       complete_cells: runs.filter((run) => run.status === 'complete').length,
       terminal_cells: runs.filter((run) => new Set(['complete', 'failed', 'timeout', 'resource-limit']).has(run.status)).length,
       dual_source_cells: runs.filter((run) => run.dual_source).length,
+      proxy_event_count: runs.reduce((count, run) => count + run.proxy_event_count, 0),
       runs, external_socket_budget: 0,
     }
     writeJson(path.join(pairOutput, 'summary.json'), summary); pairSummaries.push(summary)
@@ -284,7 +304,7 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
   const summary = {
     schema_version: 'oracle-lab-phase3a-environment-campaign.v1', campaign_id: options.campaign_id,
     matrix_sha256: sha256File(options.matrix_file), probe_artifact_sha256: options.expected_probe_sha256, probe_recipe_sha256: options.probe_recipe_sha256,
-    pair_count: matrix.pair_count, executed_cells: executedCells, repetitions: options.repetitions, statuses,
+    matrix_pair_count: matrix.pair_count, pair_count: pairSummaries.length, pair_family: options.pair_family ?? 'all', executed_cells: executedCells, repetitions: options.repetitions, statuses,
     pairs: pairSummaries.map((pair, index) => ({ index, pair_id: pair.pair_id, family: pair.family, status: pair.status, effect: pair.effect })),
     external_socket_budget: 0, raw_material_persisted: false,
   }
@@ -317,6 +337,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       out_relative: values['out-relative'], campaign_id: values['campaign-id'], repetitions: Number(values.repetitions ?? 5),
       cc_commit: values['cc-commit'], cc_tree: values['cc-tree'], sub2api_commit: values['sub2api-commit'], sub2api_tree: values['sub2api-tree'],
       plan_sha256: values['plan-sha256'], toolchain_digest: values['toolchain-digest'],
+      pair_family: values.family as EnvironmentMatrixPair['family'] | undefined,
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) { process.stderr.write(`${canonicalJson(stableError(error))}\n`); process.exitCode = 1 }
