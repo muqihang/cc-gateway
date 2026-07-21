@@ -38,9 +38,12 @@ const timeoutRuns = Array.from({ length: 10 }, (_, index) => ({
   arm: index % 2 === 0 ? 'control' : 'treatment', repetition: Math.floor(index / 2), status: 'timeout', semantic_sha256: index % 2 === 0 ? 'a' : 'b',
   hook_event_count: 1, observer_event_count: 0, process_samples: 2, dual_source: false,
 }))
+// No-socket terminal under declared loopback is a negative protocol observation.
 assert.deepEqual(reclassifyMatrixPairSummary({ pair_id: 'timeout-pair', status: 'UNKNOWN', repetitions: 5, runs: timeoutRuns }), {
-  pair_id: 'timeout-pair', original_status: 'UNKNOWN', status: 'UNKNOWN', effect: 'semantic-change', stable: true,
-  repetitions: 5, terminal_cells: 10, dual_source_cells: 10, protocol_cells: 0, complete_schedule: true,
+  pair_id: 'timeout-pair', original_status: 'UNKNOWN', status: 'REPRODUCED', effect: 'semantic-change', stable: true,
+  repetitions: 5, terminal_cells: 10, dual_source_cells: 10, protocol_cells: 10, negative_protocol_cells: 10, complete_schedule: true,
 })
+const hangNoHooks = timeoutRuns.map((run) => ({ ...run, hook_event_count: 0, process_samples: 0 }))
+assert.equal(reclassifyMatrixPairSummary({ pair_id: 'hang-pair', status: 'UNKNOWN', repetitions: 5, runs: hangNoHooks }).status, 'UNKNOWN')
 
-console.log(JSON.stringify({ ok: true, cases: 20 }))
+console.log(JSON.stringify({ ok: true, cases: 21 }))

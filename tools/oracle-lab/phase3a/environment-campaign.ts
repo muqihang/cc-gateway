@@ -112,26 +112,34 @@ export function reclassifyMatrixPairSummary(summary: Record<string, any>): Recor
   }
   const terminal = new Set(['complete', 'failed', 'timeout', 'resource-limit'])
   const sourceCount = (run: Record<string, any>): number => Number(run.hook_event_count > 0) + Number(run.observer_event_count > 0) + Number(run.proxy_event_count > 0) + Number(run.process_samples > 0)
-  const protocol = (run: Record<string, any>): boolean => run.observer_event_count > 0 || run.proxy_event_count > 0
+  // Positive protocol: observer/proxy traffic. Negative protocol: process terminated under declared loopback with hooks but zero sockets/events.
+  const protocol = (run: Record<string, any>): boolean => {
+    if (Number(run.observer_event_count) > 0 || Number(run.proxy_event_count) > 0) return true
+    const noSocketTerminal = ['timeout', 'failed', 'resource-limit'].includes(String(run.status))
+    return noSocketTerminal && Number(run.observer_event_count || 0) === 0 && Number(run.hook_event_count || 0) > 0
+  }
   const repetitions = Number(summary.repetitions)
   const completeSchedule = (['control', 'treatment'] as const).every((arm) => {
     const rows = runs.filter((run) => run.arm === arm).sort((left, right) => Number(left.repetition) - Number(right.repetition))
     return rows.length === repetitions && rows.every((run, index) => Number(run.repetition) === index)
   })
+  const protocolCells = runs.filter(protocol)
   const classified = classifyMatrixPairRuns({
     repetitions,
     control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => String(run.semantic_sha256)),
     treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => String(run.semantic_sha256)),
     terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
     dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
-    protocol_cells: runs.filter(protocol).length,
+    protocol_cells: protocolCells.length,
     complete_schedule: completeSchedule,
   })
   return {
     pair_id: summary.pair_id, original_status: summary.status, ...classified, repetitions: Number(summary.repetitions),
     terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
     dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
-    protocol_cells: runs.filter(protocol).length, complete_schedule: completeSchedule,
+    protocol_cells: protocolCells.length,
+    negative_protocol_cells: protocolCells.filter((run) => Number(run.observer_event_count || 0) === 0 && Number(run.proxy_event_count || 0) === 0).length,
+    complete_schedule: completeSchedule,
   }
 }
 
@@ -296,27 +304,11 @@ export async function runEnvironmentCampaign(options: CampaignOptions): Promise<
         }
       } finally { await Promise.all([forwardProxy?.close(), upstream.close()]) }
     }
-    const terminal = new Set(['complete', 'failed', 'timeout', 'resource-limit'])
-    const completeSchedule = (['control', 'treatment'] as const).every((arm) => {
-      const rows = runs.filter((run) => run.arm === arm).sort((left, right) => left.repetition - right.repetition)
-      return rows.length === options.repetitions && rows.every((run, index) => run.repetition === index)
-    })
-    const classified = classifyMatrixPairRuns({
-      repetitions: options.repetitions,
-      control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => run.semantic_sha256),
-      treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => run.semantic_sha256),
-      terminal_cells: runs.filter((run) => terminal.has(run.status)).length,
-      dual_source_cells: runs.filter((run) => run.dual_source).length,
-      protocol_cells: runs.filter((run) => run.observer_event_count > 0 || run.proxy_event_count > 0).length,
-      complete_schedule: completeSchedule,
-    })
+    const reclassified = reclassifyMatrixPairSummary({ pair_id: pair.pair_id, status: 'UNKNOWN', repetitions: options.repetitions, runs })
     const summary = {
       schema_version: 'oracle-lab-phase3a-matrix-pair-summary.v1', pair_id: pair.pair_id, family: pair.family,
-      static_anchor: pair.static_anchor, ...classified, repetitions: options.repetitions, seed, complete_schedule: completeSchedule,
+      static_anchor: pair.static_anchor, ...reclassified, seed,
       complete_cells: runs.filter((run) => run.status === 'complete').length,
-      terminal_cells: runs.filter((run) => terminal.has(run.status)).length,
-      dual_source_cells: runs.filter((run) => run.dual_source).length,
-      protocol_cells: runs.filter((run) => run.observer_event_count > 0 || run.proxy_event_count > 0).length,
       proxy_event_count: runs.reduce((count, run) => count + run.proxy_event_count, 0),
       runs, external_socket_budget: 0,
     }
