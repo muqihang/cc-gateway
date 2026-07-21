@@ -27,6 +27,9 @@ export type InstrumentationClassification = {
   dual_source: boolean
   control_semantic_sha256: string
   treatment_semantic_sha256: string
+  run_identity_equal: boolean
+  control_run_identity_sha256: string
+  treatment_run_identity_sha256: string
 }
 
 type CapabilityOptions = {
@@ -55,13 +58,51 @@ type ProbeCopyCapabilityOptions = CapabilityOptions & {
 
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 
+const METADATA_KEY_SHA256 = '45447b7afbd5e544f7d0f1df0fccd26014d9850130abd3f020b89ff96b82079f'
+const USER_ID_KEY_SHA256 = 'f89d6b6960453241bc5b09b4d0d8ad86d53769e051473350c2bf94e39077967b'
+const RUN_IDENTITY_SHA256 = sha256Bytes('<RUN_IDENTITY>')
+
+function mapTopology(value: unknown, inMetadata = false): unknown {
+  if (Array.isArray(value)) return value.map((entry) => mapTopology(entry, inMetadata))
+  if (value === null || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  if (typeof record.key_sha256 === 'string' && Object.hasOwn(record, 'value')) {
+    const metadata = inMetadata || record.key_sha256 === METADATA_KEY_SHA256
+    if (metadata && record.key_sha256 === USER_ID_KEY_SHA256 && record.value && typeof record.value === 'object') {
+      return { ...record, value: { ...(record.value as Record<string, unknown>), sha256: RUN_IDENTITY_SHA256 } }
+    }
+    return { ...record, value: mapTopology(record.value, metadata) }
+  }
+  return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, mapTopology(child, inMetadata)]))
+}
+
+function runIdentityDigest(events: SafeUpstreamEvent[]): string {
+  const identities: Array<{ bytes: unknown; sha256: unknown }> = []
+  const visit = (value: unknown, inMetadata = false): void => {
+    if (Array.isArray(value)) { for (const entry of value) visit(entry, inMetadata); return }
+    if (value === null || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    if (typeof record.key_sha256 === 'string' && Object.hasOwn(record, 'value')) {
+      const metadata = inMetadata || record.key_sha256 === METADATA_KEY_SHA256
+      if (metadata && record.key_sha256 === USER_ID_KEY_SHA256 && record.value && typeof record.value === 'object') {
+        const identity = record.value as Record<string, unknown>
+        identities.push({ bytes: identity.bytes, sha256: identity.sha256 })
+      } else visit(record.value, metadata)
+      return
+    }
+    for (const child of Object.values(record)) visit(child, inMetadata)
+  }
+  for (const event of events) visit(event.body_topology)
+  return sha256Bytes(canonicalJson(identities))
+}
+
 function semanticEvents(events: SafeUpstreamEvent[]): unknown {
   return events.map((event) => ({
     method: event.method,
     path_class: event.path_class,
     header_names: event.header_names,
     header_value_classes: event.header_value_classes,
-    body_topology: event.body_topology,
+    body_topology: mapTopology(event.body_topology),
     response_class: event.response_class,
     request_class: event.request_class,
     system_summary: event.system_summary,
@@ -72,6 +113,8 @@ function semanticEvents(events: SafeUpstreamEvent[]): unknown {
 export function classifyInstrumentationPair(input: PairInput): InstrumentationClassification {
   const controlDigest = sha256Bytes(canonicalJson(semanticEvents(input.control_events)))
   const treatmentDigest = sha256Bytes(canonicalJson(semanticEvents(input.treatment_events)))
+  const controlRunIdentityDigest = runIdentityDigest(input.control_events)
+  const treatmentRunIdentityDigest = runIdentityDigest(input.treatment_events)
   const hookReachable = input.treatment_hook_events > 0
   const equal = input.control_status === input.treatment_status && controlDigest === treatmentDigest
   return {
@@ -83,6 +126,9 @@ export function classifyInstrumentationPair(input: PairInput): InstrumentationCl
       && input.control_process_samples > 0 && input.treatment_process_samples > 0,
     control_semantic_sha256: controlDigest,
     treatment_semantic_sha256: treatmentDigest,
+    run_identity_equal: controlRunIdentityDigest === treatmentRunIdentityDigest,
+    control_run_identity_sha256: controlRunIdentityDigest,
+    treatment_run_identity_sha256: treatmentRunIdentityDigest,
   }
 }
 
@@ -209,9 +255,9 @@ export async function runInstrumentationCapability(options: CapabilityOptions): 
       status: classified.classification === 'instrumentation-equivalent' && classified.dual_source ? 'PASS' : 'UNKNOWN',
       artifact_sha256: sha256File(options.entrypoint), static_inventory_sha256: options.static_inventory_sha256,
       instrumentation: 'bun', classification: classified.classification,
-      hook_reachable: classified.hook_reachable, semantic_behavior_equal: classified.semantic_behavior_equal, dual_source: classified.dual_source,
-      control: { run_id: control.run_id, status: controlResult.status, event_count: controlEvents.length, process_samples: controlResult.process_samples.length, max_sockets: controlResult.max_sockets, semantic_sha256: classified.control_semantic_sha256 },
-      treatment: { run_id: treatment.run_id, status: treatmentResult.status, event_count: treatmentEvents.length, process_samples: treatmentResult.process_samples.length, max_sockets: treatmentResult.max_sockets, hook_event_count: treatmentResult.hook_event_count, semantic_sha256: classified.treatment_semantic_sha256 },
+      hook_reachable: classified.hook_reachable, semantic_behavior_equal: classified.semantic_behavior_equal, dual_source: classified.dual_source, run_identity_equal: classified.run_identity_equal,
+      control: { run_id: control.run_id, status: controlResult.status, event_count: controlEvents.length, process_samples: controlResult.process_samples.length, max_sockets: controlResult.max_sockets, semantic_sha256: classified.control_semantic_sha256, run_identity_sha256: classified.control_run_identity_sha256 },
+      treatment: { run_id: treatment.run_id, status: treatmentResult.status, event_count: treatmentEvents.length, process_samples: treatmentResult.process_samples.length, max_sockets: treatmentResult.max_sockets, hook_event_count: treatmentResult.hook_event_count, semantic_sha256: classified.treatment_semantic_sha256, run_identity_sha256: classified.treatment_run_identity_sha256 },
       external_socket_budget: 0, raw_material_persisted: false,
     }
     writeJson(path.join(output, 'summary.json'), summary)
@@ -309,16 +355,16 @@ export async function runProbeCopyCapability(options: ProbeCopyCapabilityOptions
         module_after_sign_sha256: signing.module_after_sign_sha256, patch_recipe_sha256: recipe.patch.recipe_sha256,
       },
       signing_status: signing.status, classification: classified.classification,
-      hook_reachable: classified.hook_reachable, semantic_behavior_equal: classified.semantic_behavior_equal, dual_source: classified.dual_source,
+      hook_reachable: classified.hook_reachable, semantic_behavior_equal: classified.semantic_behavior_equal, dual_source: classified.dual_source, run_identity_equal: classified.run_identity_equal,
       control: {
         run_id: control.run_id, status: controlResult.status, event_count: controlEvents.length,
         process_samples: controlResult.process_samples.length, max_sockets: controlResult.max_sockets,
-        hook_event_count: controlResult.hook_event_count, semantic_sha256: classified.control_semantic_sha256,
+        hook_event_count: controlResult.hook_event_count, semantic_sha256: classified.control_semantic_sha256, run_identity_sha256: classified.control_run_identity_sha256,
       },
       treatment: {
         run_id: treatment.run_id, status: treatmentResult.status, event_count: treatmentEvents.length,
         process_samples: treatmentResult.process_samples.length, max_sockets: treatmentResult.max_sockets,
-        hook_event_count: treatmentResult.hook_event_count, semantic_sha256: classified.treatment_semantic_sha256,
+        hook_event_count: treatmentResult.hook_event_count, semantic_sha256: classified.treatment_semantic_sha256, run_identity_sha256: classified.treatment_run_identity_sha256,
       },
       source_agreement: {
         observer: controlEvents.length > 0 && treatmentEvents.length > 0,

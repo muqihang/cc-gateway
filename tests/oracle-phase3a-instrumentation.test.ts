@@ -35,6 +35,8 @@ assert.equal(equivalent.classification, 'instrumentation-equivalent')
 assert.equal(equivalent.hook_reachable, true)
 assert.equal(equivalent.semantic_behavior_equal, true)
 assert.equal(equivalent.dual_source, true)
+assert.equal(equivalent.run_identity_equal, true)
+assert.match(equivalent.control_run_identity_sha256, /^[a-f0-9]{64}$/)
 
 const unreachable = classifyInstrumentationPair({ ...equivalent.input, treatment_hook_events: 0 })
 assert.equal(unreachable.classification, 'hook-unavailable')
@@ -45,6 +47,22 @@ const changed = classifyInstrumentationPair({ ...equivalent.input, treatment_eve
 assert.equal(changed.classification, 'instrumentation-perturbed')
 assert.match(equivalent.control_semantic_sha256, /^[a-f0-9]{64}$/)
 assert.match(equivalent.treatment_semantic_sha256, /^[a-f0-9]{64}$/)
+
+const metadataKey = '45447b7afbd5e544f7d0f1df0fccd26014d9850130abd3f020b89ff96b82079f'
+const userIdKey = 'f89d6b6960453241bc5b09b4d0d8ad86d53769e051473350c2bf94e39077967b'
+const withRunIdentity = (digest: string): SafeUpstreamEvent => ({
+  ...event,
+  body_topology: { type: 'object', fields: [{ key_sha256: metadataKey, value: { type: 'object', fields: [{ key_sha256: userIdKey, value: { type: 'string', bytes: 150, sha256: digest } }] } }] },
+})
+const runIdentityOnly = classifyInstrumentationPair({
+  ...equivalent.input,
+  control_events: [withRunIdentity('d'.repeat(64))],
+  treatment_events: [withRunIdentity('e'.repeat(64))],
+})
+assert.equal(runIdentityOnly.classification, 'instrumentation-equivalent')
+assert.equal(runIdentityOnly.semantic_behavior_equal, true)
+assert.equal(runIdentityOnly.run_identity_equal, false)
+assert.notEqual(runIdentityOnly.control_run_identity_sha256, runIdentityOnly.treatment_run_identity_sha256)
 
 const runtimeRoot = mkdtempSync(path.join(os.tmpdir(), 'phase3a-bun-hook-'))
 const prepared = prepareHookFiles('bun', runtimeRoot)
@@ -149,4 +167,4 @@ assert.equal(assessProbeSigning({
   expected_module_sha256: originalDigest, module_after_sign_sha256: patchedDigest,
 }).status, 'FAIL')
 
-console.log(JSON.stringify({ ok: true, cases: 52 }))
+console.log(JSON.stringify({ ok: true, cases: 58 }))
