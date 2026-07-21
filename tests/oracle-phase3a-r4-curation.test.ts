@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { closureConclusions } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { closureConclusions, evidenceRelativePath } from '../tools/oracle-lab/phase3a/r4-curation.js'
 
 console.log('\ntests/oracle-phase3a-r4-curation.test.ts')
 
@@ -9,5 +9,6 @@ assert.equal(rows.length, 5)
 assert.equal(rows.filter((row: any) => row.conclusion.level === 'Reproduced').length, 2)
 assert.equal(rows.filter((row: any) => row.conclusion.level === 'Unknown').length, 3)
 assert.ok(rows.filter((row: any) => row.conclusion.level === 'Reproduced').every((row: any) => row.conclusion.phase3b_usable && row.conclusion.dynamic_reproduction.source_count === 3))
+assert.equal(evidenceRelativePath('/evidence/root/capsules/P3A-4/phase-3a-exit-report-v2.json'), 'capsules/P3A-4/phase-3a-exit-report-v2.json')
 
-console.log(JSON.stringify({ ok: true, cases: 4 }))
+console.log(JSON.stringify({ ok: true, cases: 5 }))

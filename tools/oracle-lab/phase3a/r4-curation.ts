@@ -11,6 +11,14 @@ const EXPIRY = '2026-08-03T00:00:00.000Z'
 const PROHIBITED = ['CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED']
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 
+export function evidenceRelativePath(file: string): string {
+  const normalized = path.resolve(file).split(path.sep).join('/')
+  const marker = '/capsules/'
+  const index = normalized.indexOf(marker)
+  if (index < 0) fail('r4_output_invalid', 'R4 output must be below the capsules directory')
+  return normalized.slice(index + 1)
+}
+
 export function closureConclusions(r2Sha256: string, r3Sha256: string): any[] {
   const reproduced = (id: string, statement: string, support: string[], runs: string[], controls: string[]) => ({
     conclusion: {
@@ -50,7 +58,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (r2.status !== 'CLOSED_WITH_UNKNOWN' || r3.status !== 'PASS') fail('r4_input_invalid', 'R2 and R3 closures are not terminal')
   const r2Sha = sha256File(values.r2!); const r3Sha = sha256File(values.r3!); const indexSha = sha256File(values['artifact-index']!); const leakSha = sha256File(values['leak-scan']!)
   const input: CuratedExitInput = {
-    ...template, generated_at: '2026-07-21T12:00:00.000Z', exit_report_path: 'capsules/P3A-4/phase-3a-exit-report-v1.json', artifact_index_sha256: indexSha,
+    ...template, generated_at: '2026-07-21T12:00:00.000Z', exit_report_path: evidenceRelativePath(values['out-exit']!), artifact_index_sha256: indexSha,
     repositories: [
       captureRepositoryBinding(values['cc-root']!, { repository: 'cc-gateway', base: values['cc-base']!, freezeHead: values['cc-freeze']! }),
       captureRepositoryBinding(values['sub2api-root']!, { repository: 'sub2api', base: values['sub2api-base']!, freezeHead: values['sub2api-freeze']! }),
