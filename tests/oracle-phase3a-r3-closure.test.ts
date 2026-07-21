@@ -12,6 +12,7 @@ const result = evaluateR3Closure({
 assert.equal(result.status, 'PASS')
 assert.equal(result.tier_b.status, 'SKIPPED_BY_RULE')
 assert.equal(result.boundary_pairs.length, 4)
+assert.equal(result.protected_file_access, 'Unknown')
 assert.throws(() => evaluateR3Closure({ ...result.intake, target_tests: 9 } as any), /target test count/)
 
 console.log(JSON.stringify({ ok: true, cases: 4 }))

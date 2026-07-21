@@ -3,7 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { canonicalJson, Phase3AError, sha256Bytes, sha256File } from './core.js'
-import { SCENARIO_PAIRS } from './scenario-campaign.js'
+import { classifyScenarioPairRuns, SCENARIO_PAIRS } from './scenario-campaign.js'
 
 type Row = { pair_id: string; status: string; effect: string; source_sha256: string }
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
@@ -32,7 +32,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     path.join(http500, 'pairs/04/summary.json'), path.join(http529, 'pairs/05/summary.json'), path.join(reset, 'pairs/06/summary.json'),
     path.join(partial, 'pairs/07/summary.json'), path.join(complete, 'pairs/08/summary.json'),
   ]
-  const rows = sources.map((file) => { const row = JSON.parse(readFileSync(file, 'utf8')) as Record<string, any>; return { pair_id: row.pair_id, status: row.status, effect: row.effect, source_sha256: sha256File(file) } })
+  const rows = sources.map((file) => {
+    const row = JSON.parse(readFileSync(file, 'utf8')) as Record<string, any>
+    const classified = classifyScenarioPairRuns({ repetitions: Number(row.repetitions), runs: row.runs })
+    return { pair_id: row.pair_id, status: classified.status, effect: classified.effect, source_sha256: sha256File(file) }
+  })
   const result = closeScenarioPairs(SCENARIO_PAIRS.map((pair) => pair.pair_id), rows)
   writeFileSync(out, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 }); process.stdout.write(`${canonicalJson(result)}\n`)
 }

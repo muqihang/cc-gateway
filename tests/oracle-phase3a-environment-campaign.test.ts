@@ -28,17 +28,19 @@ assert.equal(reserved.allowlist.ANTHROPIC_BASE_URL, 'http://aliyun.phase3a.test:
 assert.deepEqual(reserved.base_urls, ['http://aliyun.phase3a.test:19003'])
 assert.equal(environment.allowlist.ANTHROPIC_BASE_URL, 'http://127.0.0.1:19001')
 
-assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'no-observed-effect', stable: true })
-assert.deepEqual(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['b'], terminal_cells: 10, dual_source_cells: 10 }), { status: 'REPRODUCED', effect: 'semantic-change', stable: true })
-assert.equal(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a', 'b'], treatment_semantic_digests: ['b'], terminal_cells: 10, dual_source_cells: 10 }).status, 'UNKNOWN')
-assert.equal(classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 9, dual_source_cells: 10 }).status, 'UNKNOWN')
+const classified = (overrides: Record<string, unknown> = {}) => classifyMatrixPairRuns({ repetitions: 5, control_semantic_digests: ['a'], treatment_semantic_digests: ['a'], terminal_cells: 10, dual_source_cells: 10, protocol_cells: 10, complete_schedule: true, ...overrides })
+assert.deepEqual(classified(), { status: 'REPRODUCED', effect: 'no-observed-effect', stable: true })
+assert.deepEqual(classified({ treatment_semantic_digests: ['b'] }), { status: 'REPRODUCED', effect: 'semantic-change', stable: true })
+assert.equal(classified({ control_semantic_digests: ['a', 'b'], treatment_semantic_digests: ['b'] }).status, 'UNKNOWN')
+assert.equal(classified({ terminal_cells: 9 }).status, 'UNKNOWN')
+assert.equal(classified({ protocol_cells: 9 }).status, 'UNKNOWN')
 const timeoutRuns = Array.from({ length: 10 }, (_, index) => ({
-  arm: index % 2 === 0 ? 'control' : 'treatment', status: 'timeout', semantic_sha256: index % 2 === 0 ? 'a' : 'b',
+  arm: index % 2 === 0 ? 'control' : 'treatment', repetition: Math.floor(index / 2), status: 'timeout', semantic_sha256: index % 2 === 0 ? 'a' : 'b',
   hook_event_count: 1, observer_event_count: 0, process_samples: 2, dual_source: false,
 }))
 assert.deepEqual(reclassifyMatrixPairSummary({ pair_id: 'timeout-pair', status: 'UNKNOWN', repetitions: 5, runs: timeoutRuns }), {
-  pair_id: 'timeout-pair', original_status: 'UNKNOWN', status: 'REPRODUCED', effect: 'semantic-change', stable: true,
-  repetitions: 5, terminal_cells: 10, dual_source_cells: 10,
+  pair_id: 'timeout-pair', original_status: 'UNKNOWN', status: 'UNKNOWN', effect: 'semantic-change', stable: true,
+  repetitions: 5, terminal_cells: 10, dual_source_cells: 10, protocol_cells: 0, complete_schedule: true,
 })
 
-console.log(JSON.stringify({ ok: true, cases: 19 }))
+console.log(JSON.stringify({ ok: true, cases: 20 }))

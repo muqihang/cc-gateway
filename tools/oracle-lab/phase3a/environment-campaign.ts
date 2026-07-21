@@ -90,11 +90,13 @@ export function classifyMatrixPairRuns(input: {
   treatment_semantic_digests: string[]
   terminal_cells: number
   dual_source_cells: number
+  protocol_cells: number
+  complete_schedule: boolean
 }): { status: 'REPRODUCED' | 'UNKNOWN'; effect: 'no-observed-effect' | 'semantic-change' | 'unresolved'; stable: boolean } {
   const control = new Set(input.control_semantic_digests)
   const treatment = new Set(input.treatment_semantic_digests)
   const stable = control.size === 1 && treatment.size === 1
-  const complete = input.terminal_cells === input.repetitions * 2 && input.dual_source_cells === input.repetitions * 2
+  const complete = input.complete_schedule && input.terminal_cells === input.repetitions * 2 && input.dual_source_cells === input.repetitions * 2 && input.protocol_cells === input.repetitions * 2
   return {
     status: stable && complete && input.repetitions >= 5 ? 'REPRODUCED' : 'UNKNOWN',
     effect: !stable ? 'unresolved' : [...control][0] === [...treatment][0] ? 'no-observed-effect' : 'semantic-change',
@@ -109,18 +111,27 @@ export function reclassifyMatrixPairSummary(summary: Record<string, any>): Recor
     effect: summary.effect, stable: false, repetitions: Number(summary.repetitions ?? 0), terminal_cells: 0, dual_source_cells: 0,
   }
   const terminal = new Set(['complete', 'failed', 'timeout', 'resource-limit'])
-  const sourceCount = (run: Record<string, any>): number => Number(run.hook_event_count > 0) + Number(run.observer_event_count > 0) + Number(run.process_samples > 0)
+  const sourceCount = (run: Record<string, any>): number => Number(run.hook_event_count > 0) + Number(run.observer_event_count > 0) + Number(run.proxy_event_count > 0) + Number(run.process_samples > 0)
+  const protocol = (run: Record<string, any>): boolean => run.observer_event_count > 0 || run.proxy_event_count > 0
+  const repetitions = Number(summary.repetitions)
+  const completeSchedule = (['control', 'treatment'] as const).every((arm) => {
+    const rows = runs.filter((run) => run.arm === arm).sort((left, right) => Number(left.repetition) - Number(right.repetition))
+    return rows.length === repetitions && rows.every((run, index) => Number(run.repetition) === index)
+  })
   const classified = classifyMatrixPairRuns({
-    repetitions: Number(summary.repetitions),
+    repetitions,
     control_semantic_digests: runs.filter((run) => run.arm === 'control').map((run) => String(run.semantic_sha256)),
     treatment_semantic_digests: runs.filter((run) => run.arm === 'treatment').map((run) => String(run.semantic_sha256)),
     terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
     dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
+    protocol_cells: runs.filter(protocol).length,
+    complete_schedule: completeSchedule,
   })
   return {
     pair_id: summary.pair_id, original_status: summary.status, ...classified, repetitions: Number(summary.repetitions),
     terminal_cells: runs.filter((run) => terminal.has(String(run.status))).length,
     dual_source_cells: runs.filter((run) => sourceCount(run) >= 2).length,
+    protocol_cells: runs.filter(protocol).length, complete_schedule: completeSchedule,
   }
 }
 

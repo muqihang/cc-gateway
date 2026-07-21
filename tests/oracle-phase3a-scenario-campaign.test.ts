@@ -35,17 +35,17 @@ if (SCENARIO_PAIRS[8].treatment.kind === 'sse') assert.equal(SCENARIO_PAIRS[8].t
 
 const runs = (control: ScenarioRunRecord['status'], treatment: ScenarioRunRecord['status'], sourceCount = 2): ScenarioRunRecord[] =>
   Array.from({ length: 5 }, (_, repetition) => [
-    { arm: 'control' as const, repetition, status: control, source_count: sourceCount },
-    { arm: 'treatment' as const, repetition, status: treatment, source_count: sourceCount },
+    { arm: 'control' as const, repetition, status: control, source_count: sourceCount, observer_event_count: 1 },
+    { arm: 'treatment' as const, repetition, status: treatment, source_count: sourceCount, observer_event_count: 1 },
   ]).flat()
 
 assert.deepEqual(classifyScenarioPairRuns({ repetitions: 5, runs: runs('complete', 'failed') }), {
   status: 'REPRODUCED', effect: 'outcome-change', stable: true,
-  control_outcome: 'complete', treatment_outcome: 'failed', terminal_cells: 10, dual_source_cells: 10,
+  control_outcome: 'complete', treatment_outcome: 'failed', terminal_cells: 10, dual_source_cells: 10, protocol_cells: 10,
 })
 assert.deepEqual(classifyScenarioPairRuns({ repetitions: 5, runs: runs('timeout', 'resource-limit') }), {
   status: 'REPRODUCED', effect: 'outcome-change', stable: true,
-  control_outcome: 'timeout', treatment_outcome: 'resource-limit', terminal_cells: 10, dual_source_cells: 10,
+  control_outcome: 'timeout', treatment_outcome: 'resource-limit', terminal_cells: 10, dual_source_cells: 10, protocol_cells: 10,
 })
 assert.equal(classifyScenarioPairRuns({ repetitions: 5, runs: runs('complete', 'complete') }).effect, 'no-observed-effect')
 assert.equal(classifyScenarioPairRuns({ repetitions: 5, runs: runs('complete', 'failed', 1) }).status, 'UNKNOWN')
@@ -53,7 +53,7 @@ const unstable = runs('complete', 'failed')
 unstable[3] = { ...unstable[3], status: 'timeout' }
 assert.deepEqual(classifyScenarioPairRuns({ repetitions: 5, runs: unstable }), {
   status: 'UNKNOWN', effect: 'unresolved', stable: false,
-  control_outcome: 'complete', treatment_outcome: null, terminal_cells: 10, dual_source_cells: 10,
+  control_outcome: 'complete', treatment_outcome: null, terminal_cells: 10, dual_source_cells: 10, protocol_cells: 10,
 })
 
 assert.equal(validateScenarioRepetitions(5), 5)
@@ -62,6 +62,8 @@ for (const invalid of [4, 13, 5.5, Number.NaN]) {
   assert.throws(() => validateScenarioRepetitions(invalid), (error: unknown) =>
     error instanceof Error && 'code' in error && error.code === 'invalid_repetitions')
 }
+const noProtocol = runs('complete', 'failed').map((run) => ({ ...run, observer_event_count: 0 }))
+assert.equal(classifyScenarioPairRuns({ repetitions: 5, runs: noProtocol }).status, 'UNKNOWN')
 assert.deepEqual(normalizedEventOrder([{ response_class: 'anthropic:json' }, { response_class: 'anthropic:json' }, { response_class: 'anthropic:sse' }]), ['anthropic:json', 'anthropic:sse'])
 
-console.log(JSON.stringify({ ok: true, cases: 23 }))
+console.log(JSON.stringify({ ok: true, cases: 24 }))

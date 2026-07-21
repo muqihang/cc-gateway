@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -77,15 +77,11 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a2-closure-auth-primary', 'capsules/P3A-2/closure-r2-auth-lifecycle-v1/summary.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
   add('p3a2-closure-auth-supplement', 'capsules/P3A-2/closure-r2-auth-coexistence-v2/summary.json', 'P3A-2', 'retain', ['p3a2-closure-auth-primary'])
   add('p3a2-closure-coverage', 'capsules/P3A-2/closure-r2-coverage-v1.json', 'P3A-2', 'retain', ['p3a2-closure-environment', 'p3a2-closure-saturation', 'p3a2-closure-scenarios', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
+  add('p3a2-closure-environment-v2', 'capsules/P3A-2/closure-r2-environment-matrix-closure-v2.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
+  add('p3a2-closure-scenarios-v2', 'capsules/P3A-2/closure-r2-scenario-closure-v2.json', 'P3A-2', 'retain', ['p3a2-closure-probe'])
+  add('p3a2-closure-coverage-v2', 'capsules/P3A-2/closure-r2-coverage-v2.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v2', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'])
   add('p3a3-closure-tier-a', 'capsules/P3A-3/closure-r3-tier-a-v1.json', 'P3A-3', 'retain', ['p3a2-closure-coverage'])
-  add('p3a4-closure-exit', 'capsules/P3A-4/phase-3a-exit-report-v1.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
-  add('p3a4-closure-handoff', 'capsules/P3A-4/phase-3b-3.5-handoff-v1.json', 'P3A-4', 'retain', ['p3a4-closure-exit'])
-  add('p3a4-closure-curated-input-v1', 'capsules/P3A-4/closure-curated-input-v1.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
-  add('p3a4-closure-leak-scan-v7', 'capsules/P3A-4/leak-scan-v7.json', 'P3A-4', 'retain', ['p3a2-closure-coverage'])
-  add('p3a4-closure-exit-v2', 'capsules/P3A-4/phase-3a-exit-report-v2.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
-  add('p3a4-closure-handoff-v2', 'capsules/P3A-4/phase-3b-3.5-handoff-v2.json', 'P3A-4', 'retain', ['p3a4-closure-exit-v2'])
-  add('p3a4-closure-curated-input-v2', 'capsules/P3A-4/closure-curated-input-v2.json', 'P3A-4', 'retain', ['p3a2-closure-coverage', 'p3a3-closure-tier-a'])
-  add('p3a4-closure-leak-scan-v8', 'capsules/P3A-4/leak-scan-v8.json', 'P3A-4', 'retain', ['p3a2-closure-coverage'])
+  add('p3a3-closure-tier-a-v2', 'capsules/P3A-3/closure-r3-tier-a-v2.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v2'])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
     { artifact_id: 'raw-release-intake-record-quarantine', relative_path: 'intake/release/2.1.215/artifact.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
@@ -103,12 +99,25 @@ export function artifactSetDigest(rows: Array<Record<string, any>>, sensitivity?
   return sha256Bytes(canonicalJson(selected))
 }
 
+export function assertAppendOnlyArtifactRows(previous: Array<Record<string, any>>, current: Array<Record<string, any>>): void {
+  const byId = new Map(current.map((row) => [String(row.artifact_id), row]))
+  for (const old of previous) {
+    const row = byId.get(String(old.artifact_id))
+    if (!row || row.relative_path !== old.relative_path || row.sha256 !== old.sha256 || row.byte_size !== old.byte_size) throw new Phase3AError('artifact_index_not_append_only', `artifact row changed or disappeared: ${String(old.artifact_id)}`)
+  }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const root = argument('--evidence-root'); const out = argument('--out')
     if (!root || !out) throw new Phase3AError('invalid_arguments', '--evidence-root and --out are required')
-    const previous = path.join(root, 'capsules/P3A-0/artifact-index.json')
+    const previousArgument = argument('--previous-index')
+    const previous = previousArgument ?? path.join(root, 'capsules/P3A-0/artifact-index.json')
     const index = buildArtifactIndex({ evidenceRoot: root, evidenceRootId: path.basename(root), generatedAt: '2026-07-20T12:00:00.000Z', previousIndexSha256: sha256File(previous), toolchainDigest: TOOLCHAIN, artifacts: terminalArtifactInputs(root) })
+    if (previousArgument) {
+      const previousValue = JSON.parse(readFileSync(previous, 'utf8')) as { artifacts?: Array<Record<string, any>> }
+      if (Array.isArray(previousValue.artifacts)) assertAppendOnlyArtifactRows(previousValue.artifacts, index.artifacts as Array<Record<string, any>>)
+    }
     mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })
     const digest = writeArtifactIndex(index, out)
     const artifacts = index.artifacts as Array<Record<string, any>>

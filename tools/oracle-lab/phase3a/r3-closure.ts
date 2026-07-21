@@ -25,7 +25,7 @@ export function evaluateR3Closure(intake: Intake): Record<string, any> {
     schema_version: 'oracle-lab-phase3a-r3-closure.v1', status: 'PASS', intake,
     tier_a: { status: 'PASS', target_tests: 10, boundary_tests: 48, total_tests: 58 }, boundary_pairs: boundaryPairs,
     tier_b: { status: 'SKIPPED_BY_RULE', triggers: [], reason: 'exact adapter diff and Tier A boundary suites produced no unexplained divergence, crash, outlier, or egress signal' },
-    forbidden_file_accessed: false, external_socket_budget: 0, raw_material_persisted: false,
+    protected_file_access: 'Unknown', protected_file_command_scope: 'excluded from exact diff and explicit unittest module list', external_socket_budget: 0, raw_material_persisted: false,
   }
   return { ...base, deterministic_digest: sha256Bytes(canonicalJson(base)) }
 }
@@ -50,10 +50,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (commit !== expectedCommit || tree !== expectedTree) fail('r3_identity_drift', 'Sub2API identity drifted')
   const baseCommit = run('git', ['rev-parse', `${commit}^`], root)
   const changedFiles = run('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', commit], root).split('\n').filter(Boolean).sort()
-  const clean = run('git', ['status', '--porcelain'], root) === ''
   const targetTests = testCount(['tools.tests.test_oracle_phase3a_adapter'], root)
   const boundaryTests = testCount(['tools.tests.test_claude_code_real_oracle_loopback', 'tools.tests.test_claude_code_tls_oracle', 'tools.tests.test_claude_code_local_env_attribution_oracle'], root)
-  const result = evaluateR3Closure({ commit, tree, base_commit: baseCommit, worktree_clean: clean, changed_files: changedFiles, target_tests: targetTests, boundary_tests: boundaryTests })
+  const cleanAfterTests = run('git', ['status', '--porcelain'], root) === ''
+  const result = evaluateR3Closure({ commit, tree, base_commit: baseCommit, worktree_clean: cleanAfterTests, changed_files: changedFiles, target_tests: targetTests, boundary_tests: boundaryTests })
   mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })
   writeFileSync(out, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 }); process.stdout.write(`${canonicalJson(result)}\n`)
 }

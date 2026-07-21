@@ -25,6 +25,7 @@ export type ScenarioRunRecord = {
   repetition: number
   status: CellResult['status']
   source_count: number
+  observer_event_count: number
 }
 
 type CampaignRunRecord = ScenarioRunRecord & {
@@ -105,6 +106,7 @@ export function classifyScenarioPairRuns(input: { repetitions: number; runs: Sce
   treatment_outcome: StableOutcome | null
   terminal_cells: number
   dual_source_cells: number
+  protocol_cells: number
 } {
   const repetitions = validateScenarioRepetitions(input.repetitions)
   const byArm = (arm: Arm) => input.runs.filter((run) => run.arm === arm)
@@ -118,11 +120,12 @@ export function classifyScenarioPairRuns(input: { repetitions: number; runs: Sce
   const stable = controlOutcome !== null && treatmentOutcome !== null
   const terminalCells = input.runs.filter((run) => TERMINAL_OUTCOMES.has(run.status)).length
   const dualSourceCells = input.runs.filter((run) => Number.isInteger(run.source_count) && run.source_count >= 2).length
+  const protocolCells = input.runs.filter((run) => Number.isInteger(run.observer_event_count) && run.observer_event_count > 0).length
   const completeSchedule = input.runs.length === repetitions * 2 && (['control', 'treatment'] as const).every((arm) => {
     const rows = byArm(arm).sort((left, right) => left.repetition - right.repetition)
     return rows.length === repetitions && rows.every((run, index) => run.repetition === index)
   })
-  const reproduced = stable && completeSchedule && terminalCells === repetitions * 2 && dualSourceCells === repetitions * 2
+  const reproduced = stable && completeSchedule && terminalCells === repetitions * 2 && dualSourceCells === repetitions * 2 && protocolCells === repetitions * 2
   return {
     status: reproduced ? 'REPRODUCED' : 'UNKNOWN',
     effect: !stable ? 'unresolved' : controlOutcome === treatmentOutcome ? 'no-observed-effect' : 'outcome-change',
@@ -130,7 +133,7 @@ export function classifyScenarioPairRuns(input: { repetitions: number; runs: Sce
     control_outcome: controlOutcome,
     treatment_outcome: treatmentOutcome,
     terminal_cells: terminalCells,
-    dual_source_cells: dualSourceCells,
+    dual_source_cells: dualSourceCells, protocol_cells: protocolCells,
   }
 }
 
