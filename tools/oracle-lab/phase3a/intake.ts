@@ -17,6 +17,8 @@ import {
 import { extractTarGzSafely, type ArchiveLimits, type SafeTarResult } from './safe-tar.js'
 
 const ACTIVE_VERSION = '2.1.215'
+export const TIER_A_CONTROL_VERSIONS = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207'] as const
+export type IntakeVersion = typeof ACTIVE_VERSION | (typeof TIER_A_CONTROL_VERSIONS)[number]
 const MAX_ARCHIVE_BYTES = 1_073_741_824
 const ALLOWED_HOSTS = new Set([
   'registry.npmjs.org',
@@ -158,36 +160,47 @@ async function npmArtifact(input: {
   label: 'wrapper' | 'platform'
   packageName: string
   metadataUrl: string
+  version: string
+  dualUnpack?: boolean
 }): Promise<IntakeArtifact> {
-  const base = assertEvidencePath(input.evidenceRoot, path.join(input.evidenceRoot, 'intake', input.label, ACTIVE_VERSION))
+  const version = input.version
+  const base = assertEvidencePath(input.evidenceRoot, path.join(input.evidenceRoot, 'intake', input.label, version))
   mkdirSync(base, { recursive: true, mode: 0o700 })
   const metadataPath = path.join(base, 'registry.json')
   const metadataDownload = await downloadOrReuseExecutionBytes(input.metadataUrl, metadataPath, 8 * 1024 * 1024)
   const metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as NpmMetadata
-  if (metadata.name !== input.packageName || metadata.version !== ACTIVE_VERSION) {
-    throw new Phase3AError('version_drift', `registry metadata identity mismatch for ${input.packageName}`)
+  if (metadata.name !== input.packageName || metadata.version !== version) {
+    throw new Phase3AError('version_drift', `registry metadata identity mismatch for ${input.packageName}@${version}`)
   }
   safeUrl(metadata.dist.tarball)
   const archive = path.join(base, 'archive.tgz')
   const archiveDownload = await downloadOrReuseExecutionBytes(metadata.dist.tarball, archive, input.label === 'wrapper' ? WRAPPER_LIMITS.archiveBytes : MAX_ARCHIVE_BYTES)
   const verification = verifyNpmArchive(metadata, archive)
   const limits = input.label === 'wrapper' ? WRAPPER_LIMITS : PINNED_LARGE_LIMITS
-  const unpacked = await extractTarGzSafely(archive, path.join(base, input.label === 'wrapper' ? 'unpacked-a' : 'unpacked'), limits)
+  const dualUnpack = input.dualUnpack ?? input.label === 'wrapper'
+  const unpacked = await extractTarGzSafely(archive, path.join(base, dualUnpack ? 'unpacked-a' : 'unpacked'), limits)
   let duplicate: SafeTarResult | undefined
-  if (input.label === 'wrapper') {
+  if (dualUnpack) {
     duplicate = await extractTarGzSafely(archive, path.join(base, 'unpacked-b'), limits)
     if (unpacked.tree_sha256 !== duplicate.tree_sha256 || !sameInventory(unpacked, duplicate)) {
       throw new Phase3AError('parser_disagreement', 'independent wrapper unpack inventories or tree digests disagree')
     }
   }
+  let entrypointSha256: string | undefined
+  if (input.label === 'platform') {
+    const platformBinary = path.join(base, dualUnpack ? 'unpacked-a' : 'unpacked', 'package', 'claude')
+    if (!existsSync(platformBinary)) throw new Phase3AError('artifact_identity', `platform archive has no claude entrypoint for ${version}`)
+    entrypointSha256 = sha256File(platformBinary)
+  }
   const artifact: IntakeArtifact = {
-    artifact_id: `claude-code-${ACTIVE_VERSION}-${input.label}`,
+    artifact_id: `claude-code-${version}-${input.label}`,
     kind: input.label === 'wrapper' ? 'npm-wrapper' : 'npm-platform',
     package: input.packageName,
-    version: ACTIVE_VERSION,
+    version,
     source_url: durableSourceUrl(archiveDownload.finalUrl),
     archive_sha256: String(verification.sha256),
     tree_sha256: unpacked.tree_sha256,
+    entrypoint_sha256: entrypointSha256,
     bytes: archiveDownload.bytes,
     expanded_bytes: unpacked.regular_file_bytes,
     expansion_ratio: unpacked.expansion_ratio,
@@ -205,7 +218,20 @@ async function npmArtifact(input: {
     },
     warnings: unpacked.warnings,
   }
-  writeFileSync(path.join(base, 'artifact.json'), `${canonicalJson(artifact)}\n`, { flag: 'wx', mode: 0o600 })
+  const artifactPath = path.join(base, 'artifact.json')
+  if (existsSync(artifactPath)) {
+    const existing = JSON.parse(readFileSync(artifactPath, 'utf8')) as IntakeArtifact
+    if (existing.archive_sha256 !== artifact.archive_sha256 || existing.tree_sha256 !== artifact.tree_sha256) {
+      throw new Phase3AError('artifact_identity', `existing intake artifact disagrees for ${input.packageName}@${version}`)
+    }
+    if (!existing.entrypoint_sha256 && artifact.entrypoint_sha256) {
+      existing.entrypoint_sha256 = artifact.entrypoint_sha256
+      writeFileSync(artifactPath, `${canonicalJson(existing)}\n`, { mode: 0o600 })
+      return existing
+    }
+    return existing
+  }
+  writeFileSync(artifactPath, `${canonicalJson(artifact)}\n`, { flag: 'wx', mode: 0o600 })
   return artifact
 }
 
@@ -282,16 +308,19 @@ export async function intakeActiveArtifact(evidenceRootInput: string): Promise<{
     label: 'wrapper',
     packageName: '@anthropic-ai/claude-code',
     metadataUrl: `https://registry.npmjs.org/@anthropic-ai%2fclaude-code/${ACTIVE_VERSION}`,
+    version: ACTIVE_VERSION,
+    dualUnpack: true,
   })
   const platform = await npmArtifact({
     evidenceRoot,
     label: 'platform',
     packageName: '@anthropic-ai/claude-code-darwin-arm64',
     metadataUrl: `https://registry.npmjs.org/@anthropic-ai%2fclaude-code-darwin-arm64/${ACTIVE_VERSION}`,
+    version: ACTIVE_VERSION,
   })
   const release = await githubRelease(evidenceRoot)
   const platformBinary = path.join(evidenceRoot, 'intake', 'platform', ACTIVE_VERSION, 'unpacked', 'package', 'claude')
-  const platformEntrypointSha256 = sha256File(platformBinary)
+  const platformEntrypointSha256 = platform.entrypoint_sha256 ?? sha256File(platformBinary)
   if (release.artifacts[0].entrypoint_sha256 !== platformEntrypointSha256) {
     throw new Phase3AError('artifact_identity', 'npm platform and GitHub release entrypoint bytes disagree')
   }
@@ -307,8 +336,22 @@ export async function intakeActiveArtifact(evidenceRootInput: string): Promise<{
     artifacts: [wrapper, platform, ...release.artifacts],
   }
   const indexPath = path.join(evidenceRoot, 'intake', 'artifact-index.json')
-  writeFileSync(indexPath, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 })
+  if (!existsSync(indexPath)) writeFileSync(indexPath, `${canonicalJson(result)}\n`, { flag: 'wx', mode: 0o600 })
   return result
+}
+
+export async function intakeControlPlatform(evidenceRootInput: string, version: string): Promise<IntakeArtifact> {
+  if (!(TIER_A_CONTROL_VERSIONS as readonly string[]).includes(version)) {
+    throw new Phase3AError('version_drift', `control platform intake limited to Tier A versions; got ${version}`)
+  }
+  const evidenceRoot = ensureEvidenceRoot(evidenceRootInput)
+  return npmArtifact({
+    evidenceRoot,
+    label: 'platform',
+    packageName: '@anthropic-ai/claude-code-darwin-arm64',
+    metadataUrl: `https://registry.npmjs.org/@anthropic-ai%2fclaude-code-darwin-arm64/${version}`,
+    version,
+  })
 }
 
 function argument(name: string): string | undefined {
@@ -319,10 +362,18 @@ function argument(name: string): string | undefined {
 async function runCli(): Promise<void> {
   const evidenceRoot = argument('--evidence-root')
   const version = argument('--version')
-  if (!evidenceRoot || version !== ACTIVE_VERSION || !process.argv.includes('--no-scripts')) {
-    throw new Phase3AError('artifact_identity', `usage: intake.ts --version ${ACTIVE_VERSION} --no-scripts --evidence-root PATH`)
+  if (!evidenceRoot || !version || !process.argv.includes('--no-scripts')) {
+    throw new Phase3AError('artifact_identity', `usage: intake.ts --version ${ACTIVE_VERSION}|TierA --no-scripts --evidence-root PATH`)
   }
-  console.log(canonicalJson(await intakeActiveArtifact(evidenceRoot)))
+  if (version === ACTIVE_VERSION) {
+    console.log(canonicalJson(await intakeActiveArtifact(evidenceRoot)))
+    return
+  }
+  if ((TIER_A_CONTROL_VERSIONS as readonly string[]).includes(version)) {
+    console.log(canonicalJson(await intakeControlPlatform(evidenceRoot, version)))
+    return
+  }
+  throw new Phase3AError('version_drift', `unsupported intake version ${version}`)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {

@@ -1,18 +1,72 @@
 import assert from 'node:assert/strict'
 
-import { evaluateR3Closure } from '../tools/oracle-lab/phase3a/r3-closure.js'
+import { TIER_A_LANES, evaluateClaudeCodeR3Closure, evaluateR3Closure, type TierALaneInput } from '../tools/oracle-lab/phase3a/r3-closure.js'
 
 console.log('\ntests/oracle-phase3a-r3-closure.test.ts')
 
-const result = evaluateR3Closure({
+const digest = (seed: string): string => {
+  let value = Buffer.from(seed).toString('hex')
+  while (value.length < 64) value += value
+  return value.slice(0, 64)
+}
+
+const activeEntrypoint = digest('active-entrypoint')
+const activeTree = digest('active-tree')
+
+const lanes: TierALaneInput[] = TIER_A_LANES.map((expected, index) => ({
+  version: expected.version,
+  role: 'tier-a',
+  hypothesis_id: expected.hypothesis_id,
+  reason: expected.reason,
+  intake: {
+    package: '@anthropic-ai/claude-code-darwin-arm64',
+    version: expected.version,
+    source_url: `https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-${expected.version}.tgz`,
+    archive_sha256: digest(`archive-${index}`),
+    tree_sha256: digest(`tree-${index}`),
+    entrypoint_sha256: digest(`entry-${index}`),
+    artifact_path: `intake/platform/${expected.version}/artifact.json`,
+  },
+  structural: {
+    status: 'PASS',
+    method: 'platform-entrypoint-tree-digest-delta',
+    semantic_change: true,
+    active_entrypoint_sha256: activeEntrypoint,
+    control_entrypoint_sha256: digest(`entry-${index}`),
+    active_tree_sha256: activeTree,
+    control_tree_sha256: digest(`tree-${index}`),
+    digest: digest(`structural-${index}`),
+  },
+  dynamic: {
+    status: 'CLOSED_WITH_UNKNOWN',
+    pair_count: 0,
+    required_pairs: [...expected.required_pairs],
+    next_minimal_action: `run ${expected.version} pairs`,
+  },
+}))
+
+const result = evaluateClaudeCodeR3Closure({
+  active_version: '2.1.215',
+  active_entrypoint_sha256: activeEntrypoint,
+  active_tree_sha256: activeTree,
+  lanes,
+})
+assert.equal(result.status, 'CLOSED_WITH_UNKNOWN')
+assert.equal(result.target, 'claude-code-tier-a-change-points')
+assert.equal(result.tier_a.lane_count, 5)
+assert.equal(result.tier_a.lanes.length, 5)
+assert.ok(result.tier_a.lanes.every((lane: any) => lane.role === 'tier-a'))
+assert.ok(result.tier_a.lanes.every((lane: any) => lane.version !== '2.1.215'))
+assert.equal(result.tier_b.status, 'SKIPPED_BY_RULE')
+assert.throws(() => evaluateR3Closure({
   commit: 'a'.repeat(40), tree: 'b'.repeat(40), base_commit: 'c'.repeat(40), worktree_clean: true,
   changed_files: ['tools/oracle_phase3a_adapter.py', 'tools/tests/test_oracle_phase3a_adapter.py'],
   target_tests: 10, boundary_tests: 48,
-})
-assert.equal(result.status, 'PASS')
-assert.equal(result.tier_b.status, 'SKIPPED_BY_RULE')
-assert.equal(result.boundary_pairs.length, 4)
-assert.equal(result.protected_file_access, 'Unknown')
-assert.throws(() => evaluateR3Closure({ ...result.intake, target_tests: 9 } as any), /target test count/)
+}), /not Claude Code Tier A/)
+assert.throws(() => evaluateClaudeCodeR3Closure({
+  active_version: '2.1.215',
+  active_entrypoint_sha256: activeEntrypoint,
+  lanes: lanes.slice(0, 4),
+}), /exactly 5/)
 
-console.log(JSON.stringify({ ok: true, cases: 4 }))
+console.log(JSON.stringify({ ok: true, cases: 6 }))
