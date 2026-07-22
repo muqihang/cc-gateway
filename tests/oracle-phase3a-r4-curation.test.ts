@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { closureConclusions, crossPlatformTerminalUnknown, evidenceRelativePath, parseR4CurationArgs, r2TerminalUnknown, r2TerminalUnknownReason, tierATerminalUnknowns, tlsTerminalUnknown } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { closureConclusions, crossPlatformTerminalUnknown, evidenceRelativePath, parseR4CurationArgs, r2EnvironmentCoverage, r2TerminalUnknown, r2TerminalUnknownReason, tierATerminalUnknowns, tlsTerminalUnknown } from '../tools/oracle-lab/phase3a/r4-curation.js'
 import { canonicalJson } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-r4-curation.test.ts')
@@ -35,11 +35,12 @@ assert.throws(() => r2TerminalUnknownReason({ hypothesis: 'other', source: 'othe
 
 const r2Fixture = {
   inputs: {
-    base_closure: { inputs: { gap: { status: 'CLOSED_WITH_UNKNOWN', external_socket_budget: 0, raw_material_persisted: false, cases: [{ family: 'compact-and-prompt-cache-lifecycle', status: 'complete' }] } } },
+    base_closure: { inputs: { environment: { status: 'PASS', statuses: { REPRODUCED: 60 } }, gap: { status: 'CLOSED_WITH_UNKNOWN', external_socket_budget: 0, raw_material_persisted: false, cases: [{ family: 'compact-and-prompt-cache-lifecycle', status: 'complete' }] } } },
     resume_repair: { status: 'FOCUSED_REPAIR', external_socket_budget: 0, raw_material_persisted: false, cases: [{ case_id: 'restart-resume-init', status: 'complete' }, { case_id: 'restart-resume-resume', status: 'complete' }] },
     update_repair: { status: 'FOCUSED_REPAIR', external_socket_budget: 0, raw_material_persisted: false, cases: [{ case_id: 'telemetry-update', status: 'failed', update_fixture_outcome: 'no-platform' }] },
   },
 }
+assert.deepEqual(r2EnvironmentCoverage(r2Fixture), { reproduced: 60, unknown: 0, complete: true })
 assert.equal(r2TerminalUnknown({ hypothesis: 'compact-and-prompt-cache-lifecycle', source: 'gap', failure_classification: 'compact-or-cache-transition-not-observed', reason: 'x', next_minimal_action: 'y', searched_surfaces: ['z'] }, r2Fixture).capability_exhausted, true)
 assert.equal(r2TerminalUnknown({ ...r2V8UpdateUnknown, searched_surfaces: ['z'] }, r2Fixture).capability_evidence, 'r2-update-repair-v5-loopback-no-platform-boundary')
 assert.throws(() => r2TerminalUnknown({ ...r2V8UpdateUnknown, reason: r2V8UpdateReason, failure_classification: 'other', searched_surfaces: ['z'] }, r2Fixture), (error: any) => error.code === 'r4_terminal_unknown_unproven')

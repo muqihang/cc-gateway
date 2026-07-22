@@ -124,6 +124,13 @@ export function r2TerminalUnknown(row: Record<string, any>, r2: Record<string, a
   fail('r4_terminal_unknown_unproven', `R2 terminal Unknown is not backed by complete bounded evidence: ${String(row.hypothesis)}`)
 }
 
+export function r2EnvironmentCoverage(r2: Record<string, any>): { reproduced: number; unknown: number; complete: boolean } {
+  const environment = r2.inputs?.base_closure?.inputs?.environment
+  const reproduced = Number(environment?.statuses?.REPRODUCED ?? 0)
+  const unknown = Number(environment?.statuses?.UNKNOWN ?? 0)
+  return { reproduced, unknown, complete: environment?.status === 'PASS' && unknown === 0 }
+}
+
 export function tierATerminalUnknowns(lanes: Array<Record<string, any>>, rerun: Record<string, any>): { closed: TerminalUnknown[]; open: Array<Record<string, any>> } {
   const outcomes = new Map((Array.isArray(rerun.pair_outcomes) ? rerun.pair_outcomes : []).map((outcome: Record<string, any>) => [`${outcome.version}:${outcome.required_pair}`, outcome]))
   const closed: TerminalUnknown[] = []
@@ -307,9 +314,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   indexedArtifact(artifactById, CROSS_PLATFORM_ARTIFACT_ID, sha256File(crossPlatformPath), 'cross-platform summary')
   assertDeterministic(r2, 'R2')
   assertDeterministic(r3, 'R3')
-  const envReproduced = Number(r2.inputs?.environment?.statuses?.REPRODUCED ?? r2.coverage_counts?.Reproduced ?? 0)
-  const envUnknown = Number(r2.inputs?.environment?.statuses?.UNKNOWN ?? 0)
-  const coverageComplete = r2.inputs?.environment?.status === 'PASS' && envUnknown === 0
+  const environmentCoverage = r2EnvironmentCoverage(r2)
+  const envReproduced = environmentCoverage.reproduced
+  const envUnknown = environmentCoverage.unknown
+  const coverageComplete = environmentCoverage.complete
   const changePoints = Array.isArray(r3.tier_a?.lanes)
     ? r3.tier_a.lanes
     : Array.isArray(r3.lanes)
