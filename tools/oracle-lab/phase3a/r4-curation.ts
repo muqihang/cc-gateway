@@ -131,7 +131,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
   const r2Path = expectedEvidenceFile(evidenceRoot, values.r2!, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 closure')
   const r3Path = expectedEvidenceFile(evidenceRoot, values.r3!, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 closure')
-  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'guards/leak-scan-v19.json', 'leak scan')
+  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'capsules/P3A-4/leak-scan-v20.json', 'leak scan')
   const rerunPath = expectedEvidenceFile(evidenceRoot, values['tier-a-terminal-rerun']!, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
   const r2 = JSON.parse(readFileSync(r2Path, 'utf8')) as Record<string, any>; const r3 = JSON.parse(readFileSync(r3Path, 'utf8')) as Record<string, any>
   if (!['PASS', 'CLOSED_WITH_UNKNOWN'].includes(String(r2.status)) || !['PASS', 'CLOSED_WITH_UNKNOWN', 'INCOMPLETE'].includes(String(r3.status))) fail('r4_input_invalid', 'R2 and R3 closures are not terminal')
