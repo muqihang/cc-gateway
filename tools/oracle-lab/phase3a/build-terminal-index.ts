@@ -138,6 +138,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a2-closure-coverage-v6', 'capsules/P3A-2/closure-r2-coverage-v6.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-saturation', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', 'p3a2-gap-campaign-v1'])
   add('p3a2-closure-coverage-v7', 'capsules/P3A-2/closure-r2-coverage-v7.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-saturation', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', 'p3a2-gap-campaign-v2'])
   add('p3a1-r1-static-closure', 'capsules/P3A-1/r1-static-closure-v1.json', 'P3A-1', 'retain', ['p3a1-static-summary'])
+  add('p3a1-cross-platform-static-corroboration-v2', 'capsules/P3A-1/cross-platform-static-corroboration-v2.json', 'P3A-1', 'retain', ['p3a1-r1-static-closure'])
   const addFocusedRepair = (version: 'v1' | 'v5', cells: number, includeUpdateBoundaryFiles = false): void => {
     const repair = version === 'v1' ? 'closure-r2-gap-repair-v1' : 'closure-r2-gap-update-repair-v5'
     const prefix = version === 'v1' ? 'p3a2-gap-repair-v1' : 'p3a2-gap-update-repair-v5'
@@ -166,6 +167,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   addFocusedRepair('v1', 3)
   addFocusedRepair('v5', 1, true)
   add('p3a2-closure-coverage-v8', 'capsules/P3A-2/closure-r2-coverage-v8.json', 'P3A-2', 'retain', ['p3a2-closure-coverage-v7', 'p3a1-r1-static-closure', 'p3a2-gap-repair-v1', 'p3a2-gap-update-repair-v5'])
+  add('p3a2-local-tls-connect-v1', 'capsules/P3A-2/closure-r2-local-tls-connect-v1/summary.json', 'P3A-2', 'retain', ['p3a2-closure-coverage-v8'])
   add('p3a3-closure-tier-a', 'capsules/P3A-3/closure-r3-tier-a-v1.json', 'P3A-3', 'retain', ['p3a2-closure-coverage'])
   add('p3a3-closure-tier-a-v2', 'capsules/P3A-3/closure-r3-tier-a-v2.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v2'])
   add('p3a3-closure-tier-a-v3', 'capsules/P3A-3/closure-r3-tier-a-v3.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v4'])

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { closureConclusions, evidenceRelativePath, parseR4CurationArgs, r2TerminalUnknownReason } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { closureConclusions, crossPlatformTerminalUnknown, evidenceRelativePath, parseR4CurationArgs, r2TerminalUnknown, r2TerminalUnknownReason, tierATerminalUnknowns, tlsTerminalUnknown } from '../tools/oracle-lab/phase3a/r4-curation.js'
 import { canonicalJson } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-r4-curation.test.ts')
@@ -33,4 +33,29 @@ assert.equal(r2V8UpdateReason, 'The bounded update command reached the loopback 
 assert.doesNotThrow(() => canonicalJson({ ...r2V8UpdateUnknown, reason: r2V8UpdateReason }))
 assert.throws(() => r2TerminalUnknownReason({ hypothesis: 'other', source: 'other' }), (error: any) => error.code === 'r4_input_invalid')
 
-console.log(JSON.stringify({ ok: true, cases: 18 }))
+const r2Fixture = {
+  inputs: {
+    base_closure: { inputs: { gap: { status: 'CLOSED_WITH_UNKNOWN', external_socket_budget: 0, raw_material_persisted: false, cases: [{ family: 'compact-and-prompt-cache-lifecycle', status: 'complete' }] } } },
+    resume_repair: { status: 'FOCUSED_REPAIR', external_socket_budget: 0, raw_material_persisted: false, cases: [{ case_id: 'restart-resume-init', status: 'complete' }, { case_id: 'restart-resume-resume', status: 'complete' }] },
+    update_repair: { status: 'FOCUSED_REPAIR', external_socket_budget: 0, raw_material_persisted: false, cases: [{ case_id: 'telemetry-update', status: 'failed', update_fixture_outcome: 'no-platform' }] },
+  },
+}
+assert.equal(r2TerminalUnknown({ hypothesis: 'compact-and-prompt-cache-lifecycle', source: 'gap', failure_classification: 'compact-or-cache-transition-not-observed', reason: 'x', next_minimal_action: 'y', searched_surfaces: ['z'] }, r2Fixture).capability_exhausted, true)
+assert.equal(r2TerminalUnknown({ ...r2V8UpdateUnknown, searched_surfaces: ['z'] }, r2Fixture).capability_evidence, 'r2-update-repair-v5-loopback-no-platform-boundary')
+assert.throws(() => r2TerminalUnknown({ ...r2V8UpdateUnknown, reason: r2V8UpdateReason, failure_classification: 'other', searched_surfaces: ['z'] }, r2Fixture), (error: any) => error.code === 'r4_terminal_unknown_unproven')
+
+const tierTerminal = tierATerminalUnknowns([{ version: '2.1.214', status: 'CLOSED_WITH_UNKNOWN', dynamic: { next_minimal_action: 'next', admission: { convergence: { pairs: [{ required_pair: 'restart', run_coverage: 'BLOCKED' }] } } } }], {
+  pair_outcomes: [{ version: '2.1.214', required_pair: 'restart', classification: 'TERMINAL_UNKNOWN', phase3b_usable: false, searched_surfaces: ['safe'], capability_evidence: { external_socket_budget: 0, raw_material_persisted: false, complete_result_count: 0, terminal_result_count: 10, result_count: 10 } }],
+})
+assert.equal(tierTerminal.closed.length, 1)
+assert.throws(() => tierATerminalUnknowns([{ version: '2.1.214', status: 'CLOSED_WITH_UNKNOWN', dynamic: { admission: { convergence: { pairs: [{ required_pair: 'restart', run_coverage: 'BLOCKED' }] } } } }], { pair_outcomes: [] }), (error: any) => error.code === 'r4_terminal_unknown_unproven')
+
+const tlsFixture = { schema_version: 'oracle-lab-phase3a-local-tls-connect-summary.v1', status: 'OBSERVED', active_artifact: { entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58', observed_entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58' }, capability: { external_socket_budget: 0, raw_material_persisted: false, local_tls_connect: 'observed', local_https_http: 'observed' }, surfaces: { tls_events: [{ decision: 'accepted-local-tls', protocol: 'TLSv1.3' }], http_events: [{ response_status: 200 }] } }
+assert.equal(tlsTerminalUnknown(tlsFixture).capability_exhausted, true)
+assert.throws(() => tlsTerminalUnknown({ ...tlsFixture, surfaces: { ...tlsFixture.surfaces, tls_events: [] } }), (error: any) => error.code === 'r4_tls_evidence_invalid')
+
+const crossFixture = { schema_version: 'oracle-lab-phase3a-cross-platform-static-corroboration.v1', scope: 'official-claude-code-2.1.215-static-only', artifact_count: 3, artifacts: [{ platform: 'darwin-arm64' }, { platform: 'linux-x64' }, { platform: 'win32-x64' }], structural_corroboration: { status: 'corroborated' }, capability_conclusion: { result: 'static-corroborated', runtime_capability: 'Unknown', phase3b_usable: false }, source_sink_corroboration: [{ status: 'corroborated', missing_on: [] }] }
+assert.equal(crossPlatformTerminalUnknown(crossFixture).capability_exhausted, true)
+assert.throws(() => crossPlatformTerminalUnknown({ ...crossFixture, artifact_count: 2 }), (error: any) => error.code === 'r4_cross_platform_evidence_invalid')
+
+console.log(JSON.stringify({ ok: true, cases: 27 }))

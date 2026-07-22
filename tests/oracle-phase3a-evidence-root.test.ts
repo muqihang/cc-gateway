@@ -88,6 +88,9 @@ for (const repair of [{ name: 'closure-r2-gap-repair-v1', cells: 3 }, { name: 'c
   writeFileSync(path.join(root, 'capsules/P3A-2', repair.name, 'summary.json'), '{}\n')
 }
 writeFileSync(path.join(root, 'capsules/P3A-2', 'closure-r2-coverage-v8.json'), '{}\n')
+mkdirSync(path.join(root, 'capsules/P3A-2', 'closure-r2-local-tls-connect-v1'), { recursive: true })
+writeFileSync(path.join(root, 'capsules/P3A-2', 'closure-r2-local-tls-connect-v1', 'summary.json'), '{}\n')
+writeFileSync(path.join(root, 'capsules/P3A-1', 'cross-platform-static-corroboration-v2.json'), '{}\n')
 for (const relative of [
   'capsules/P3A-2/closure-r2-capability-probe-copy-v7/summary.json',
   'capsules/P3A-2/closure-r2-environment-matrix-closure-v1.json',
@@ -140,6 +143,8 @@ assert.ok(terminalIds.includes('p3a3-tier-a-projection-v5-2.1.214'))
 assert.ok(terminalIds.some((id) => id.startsWith('p3a3-tier-a-binding-v3-2.1.214-')))
 assert.ok(terminalIds.includes('p3a3-closure-tier-a-v11'))
 assert.ok(terminalIds.includes('p3a3-tier-a-rerun-terminal-unknown-v1'))
+assert.ok(terminalIds.includes('p3a2-local-tls-connect-v1'))
+assert.ok(terminalIds.includes('p3a1-cross-platform-static-corroboration-v2'))
 assert.doesNotThrow(() => buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: terminalInputs }))
 assert.doesNotThrow(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }, { artifact_id: 'b' }]))
 assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], []), /row disappeared/)

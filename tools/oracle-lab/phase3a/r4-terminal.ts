@@ -62,7 +62,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const root = ensureEvidenceRoot(values['evidence-root']!); const out = assertEvidencePath(root, values.out!)
   expectedEvidenceInput(root, values.r2!, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 closure')
   expectedEvidenceInput(root, values.r3!, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 closure')
-  expectedEvidenceInput(root, values.leak!, 'capsules/P3A-4/leak-scan-v20.json', 'leak scan')
+  expectedEvidenceInput(root, values.leak!, 'capsules/P3A-4/leak-scan-v21.json', 'leak scan')
   expectedEvidenceInput(root, values['tier-a-rerun']!, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
   const read = (name: string): Record<string, any> => JSON.parse(readFileSync(values[name]!, 'utf8')) as Record<string, any>
   const result = buildR4TerminalManifest({
