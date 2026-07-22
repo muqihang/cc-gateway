@@ -34,12 +34,13 @@ function jsonFilesBelow(root: string, relativeRoot: string): string[] {
 
 export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   const rows: ArtifactIndexInput[] = []
-  const add = (artifactId: string, relativePath: string, scope: string, disposition: ArtifactIndexInput['disposition'] = 'retain', parents: string[] = []): void => {
+  const add = (artifactId: string, relativePath: string, scope: string, disposition: ArtifactIndexInput['disposition'] = 'retain', parents: string[] = [], sensitivity: ArtifactIndexInput['sensitivity'] = 'normalized-safe'): void => {
     if (!existsSync(path.join(root, relativePath))) return
+    const quarantine = sensitivity === 'quarantine'
     rows.push({
       artifact_id: safeId(artifactId), relative_path: relativePath, media_type: 'application/json', source_url: null, scope,
-      requirement_ids: scope === 'P3A-2' ? ['HA-P1-001', 'HA-P1-002'] : ['HA-P1-001'], sensitivity: 'normalized-safe', redaction_transform: 'phase3a-safe-summary-v1',
-      retention_class: 'normalized-until-phase3b', expiry: EXPIRY, disposition,
+      requirement_ids: scope === 'P3A-2' ? ['HA-P1-001', 'HA-P1-002'] : ['HA-P1-001'], sensitivity, redaction_transform: quarantine ? 'quarantine-unredacted-terminal-source' : 'phase3a-safe-summary-v1',
+      retention_class: quarantine ? 'quarantine-24h' : 'normalized-until-phase3b', expiry: EXPIRY, disposition: quarantine ? 'quarantined' : disposition,
       parser_name: 'phase3a-terminal-index', parser_version: '2', parser_agreement: 'agreed', parent_artifact_ids: parents,
     })
   }
@@ -227,7 +228,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   for (const rerunRoot of TIER_A_RERUN_ROOTS) {
     for (const relativePath of jsonFilesBelow(root, rerunRoot)) {
       if (!/(?:\/summary|\/manifest|\/result)\.json$/.test(relativePath)) continue
-      add(`p3a3-tier-a-rerun-source-${sha256Bytes(relativePath).slice(0, 20)}`, relativePath, 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'])
+      add(`p3a3-tier-a-rerun-source-${sha256Bytes(relativePath).slice(0, 20)}`, relativePath, 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'], 'quarantine')
     }
   }
   add('p3a3-tier-a-rerun-terminal-unknown-v1', 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'])
@@ -265,7 +266,15 @@ export function assertAppendOnlyArtifactRows(previous: Array<Record<string, any>
   for (const old of previous) {
     const row = byId.get(String(old.artifact_id))
     if (!row) throw new Phase3AError('artifact_index_not_append_only', `artifact row disappeared: ${String(old.artifact_id)}`)
-    if (canonicalJson(row) !== canonicalJson(old)) throw new Phase3AError('artifact_index_not_append_only', `artifact row changed: ${String(old.artifact_id)}`)
+    if (canonicalJson(row) === canonicalJson(old)) continue
+    const eligible = String(old.artifact_id).startsWith('p3a3-tier-a-rerun-source-')
+      && old.sensitivity === 'normalized-safe'
+      && row.sensitivity === 'quarantine'
+      && old.relative_path === row.relative_path
+      && old.sha256 === row.sha256
+      && old.byte_size === row.byte_size
+      && canonicalJson({ ...old, sensitivity: 'quarantine', redaction_transform: 'quarantine-unredacted-terminal-source', retention_class: 'quarantine-24h', disposition: 'quarantined', validation_status: 'quarantined' }) === canonicalJson(row)
+    if (!eligible) throw new Phase3AError('artifact_index_not_append_only', `artifact row changed: ${String(old.artifact_id)}`)
   }
 }
 

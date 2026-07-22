@@ -147,12 +147,15 @@ assert.ok(terminalIds.some((id) => id.startsWith('p3a3-tier-a-binding-v3-2.1.214
 assert.ok(terminalIds.includes('p3a3-closure-tier-a-v11'))
 assert.ok(terminalIds.includes('p3a3-tier-a-rerun-terminal-unknown-v1'))
 assert.ok(terminalInputs.some((row) => row.relative_path === 'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-214-long-run-restart/lanes/2.1.214/pairs/00-long-run/r00/control/result.json'))
+assert.equal(terminalInputs.find((row) => row.relative_path === 'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-214-long-run-restart/lanes/2.1.214/pairs/00-long-run/r00/control/result.json')?.sensitivity, 'quarantine')
 assert.ok(terminalIds.includes('p3a2-local-tls-connect-v1'))
 assert.ok(terminalIds.includes('p3a1-cross-platform-static-corroboration-v2'))
 assert.doesNotThrow(() => buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: terminalInputs }))
 assert.doesNotThrow(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }, { artifact_id: 'b' }]))
 assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], []), /row disappeared/)
 assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'normalized-safe' }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'quarantine' }]), /artifact row changed/)
+const rerunSourceRow = { artifact_id: 'p3a3-tier-a-rerun-source-fixture', relative_path: 'capsules/P3A-3/rerun/result.json', sha256: 'a', byte_size: 1, sensitivity: 'normalized-safe', redaction_transform: 'phase3a-safe-summary-v1', retention_class: 'normalized-until-phase3b', disposition: 'retain', validation_status: 'valid' }
+assert.doesNotThrow(() => assertAppendOnlyArtifactRows([rerunSourceRow], [{ ...rerunSourceRow, sensitivity: 'quarantine', redaction_transform: 'quarantine-unredacted-terminal-source', retention_class: 'quarantine-24h', disposition: 'quarantined', validation_status: 'quarantined' }]))
 assert.throws(() => parseTerminalIndexArgs(['--out', '--previous-index']), /arguments must/)
 assert.throws(() => parseTerminalIndexArgs(['--out', 'a', '--out', 'b']), /duplicate argument/)
 

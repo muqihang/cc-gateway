@@ -364,7 +364,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
   const r2Path = expectedEvidenceFile(evidenceRoot, values.r2!, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 closure')
   const r3Path = expectedEvidenceFile(evidenceRoot, values.r3!, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 closure')
-  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'capsules/P3A-4/leak-scan-v22.json', 'leak scan')
+  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'capsules/P3A-4/leak-scan-v23.json', 'leak scan')
   const rerunPath = expectedEvidenceFile(evidenceRoot, values['tier-a-terminal-rerun']!, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
   const tlsPath = expectedEvidenceFile(evidenceRoot, values['tls-summary']!, 'capsules/P3A-2/closure-r2-local-tls-connect-v1/summary.json', 'TLS summary')
   const crossPlatformPath = expectedEvidenceFile(evidenceRoot, values['cross-platform']!, 'capsules/P3A-1/cross-platform-static-corroboration-v2.json', 'cross-platform summary')
