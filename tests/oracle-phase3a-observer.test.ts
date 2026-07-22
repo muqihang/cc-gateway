@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { connect } from 'node:net'
+import { connect as connectTls } from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -11,6 +12,7 @@ import { baselineEnvironmentSelection } from '../tools/oracle-lab/phase3a/baseli
 import { assertControlForInstrumentation, buildIsolatedEnvironment, type LaunchManifest, validateLaunchManifest } from '../tools/oracle-lab/phase3a/launch-manifest.js'
 import { startConnectProxy } from '../tools/oracle-lab/phase3a/observers/connect-proxy.js'
 import { startFakeUpstream } from '../tools/oracle-lab/phase3a/observers/fake-upstream.js'
+import { startHttpForwardProxy } from '../tools/oracle-lab/phase3a/observers/http-forward-proxy.js'
 import { descendants, enforceProcessLimits } from '../tools/oracle-lab/phase3a/process-sampler.js'
 import { assertGuardAuthority, buildCellSandboxProfile, classifySafeErrorText, evaluateCellCounters, extractSafeErrorTerms, fingerprintSafeErrorText, runCell, runCellGuardSelfTest } from '../tools/oracle-lab/phase3a/run-cell.js'
 
@@ -65,6 +67,63 @@ try {
   assert.equal(upstream.events[0].path_class, '/v1/messages')
 } finally { await upstream.close() }
 
+const markedApiKey = 'oracle-phase3a-placeholder:observer-api-key-a'
+const markedAuthToken = 'oracle-phase3a-placeholder:observer-auth-token-a'
+const marked = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  header_markers: [
+    { header_name: 'x-api-key', value: markedApiKey, value_class: 'api-key-a' },
+    { header_name: 'authorization', value: `Bearer ${markedAuthToken}`, value_class: 'auth-token-a' },
+  ],
+})
+try {
+  await new Promise<void>((resolve, reject) => {
+    const req = request(`${marked.url}v1/messages`, { headers: { 'x-api-key': markedApiKey, authorization: `Bearer ${markedAuthToken}` } }, (res) => {
+      res.resume(); res.on('end', resolve)
+    })
+    req.on('error', reject); req.end()
+  })
+  assert.equal(marked.events[0].header_value_classes['x-api-key'], 'api-key-a')
+  assert.equal(marked.events[0].header_value_classes.authorization, 'auth-token-a')
+  const persistedMarkerShape = canonicalJson(marked.events)
+  for (const value of [markedApiKey, markedAuthToken, `Bearer ${markedAuthToken}`]) {
+    assert.equal(persistedMarkerShape.includes(value), false)
+    assert.equal(persistedMarkerShape.includes(sha256Bytes(value)), false)
+  }
+  assert.deepEqual(Object.keys(marked.events[0].header_value_classes).filter((name) => ['authorization', 'x-api-key'].includes(name)).sort(), ['authorization', 'x-api-key'])
+} finally { await marked.close() }
+
+await assert.rejects(() => startFakeUpstream({
+  scenario: { kind: 'json' },
+  header_markers: [{ header_name: 'x-api-key', value: 'not-synthetic', value_class: 'unsafe' }],
+}), (error: unknown) => error instanceof Error && 'code' in error && error.code === 'observer_header_marker_invalid')
+
+const normalizedControl = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  string_replacements: [{ value: '/tmp/phase3a-control-root', replacement: '<CWD>' }],
+})
+const normalizedTreatment = await startFakeUpstream({
+  scenario: { kind: 'json' },
+  string_replacements: [{ value: '/tmp/phase3a-treatment-root', replacement: '<CWD>' }],
+})
+try {
+  const postSystem = (url: string, cwd: string) => new Promise<void>((resolve, reject) => {
+    const req = request(`${url}v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' } }, (res) => {
+      res.resume(); res.on('end', resolve)
+    })
+    req.on('error', reject)
+    req.end(JSON.stringify({ system: [{ type: 'text', text: `Working directory: ${cwd}` }], messages: [] }))
+  })
+  await postSystem(normalizedControl.url, '/tmp/phase3a-control-root')
+  await postSystem(normalizedTreatment.url, '/tmp/phase3a-treatment-root')
+  assert.deepEqual(normalizedControl.events[0].body_topology, normalizedTreatment.events[0].body_topology)
+  assert.deepEqual(normalizedControl.events[0].system_summary, normalizedTreatment.events[0].system_summary)
+  assert.deepEqual(normalizedControl.normalization.replacements[0].replacement, '<CWD>')
+  assert.doesNotMatch(canonicalJson(normalizedControl.normalization), /phase3a-control-root/)
+} finally {
+  await Promise.all([normalizedControl.close(), normalizedTreatment.close()])
+}
+
 const proxy = await startConnectProxy({ allowed_targets: [{ host: 'api.synthetic.test', port: 443 }] })
 try {
   const exchange = (authority: string) => new Promise<string>((resolve, reject) => {
@@ -78,6 +137,82 @@ try {
   assert.doesNotMatch(JSON.stringify(proxy.events), /api\.synthetic\.test|1\.1\.1\.1/)
 } finally { await proxy.close() }
 
+const tlsProxy = await startConnectProxy({ allowed_targets: [{ host: 'api.synthetic.test', port: 443 }], mode: 'local-tls' })
+const caPath = tlsProxy.tls?.ca_cert_path
+assert.ok(caPath)
+try {
+  const exchange = await new Promise<string>((resolve, reject) => {
+    const socket = connect(tlsProxy.port, '127.0.0.1')
+    socket.once('connect', () => socket.write('CONNECT api.synthetic.test:443 HTTP/1.1\r\nHost: api.synthetic.test:443\r\n\r\n'))
+    socket.once('data', (response) => {
+      if (!response.toString('ascii').startsWith('HTTP/1.1 200')) {
+        reject(new Error(`unexpected CONNECT response: ${response.toString('ascii')}`))
+        return
+      }
+      const secure = connectTls({ socket, ca: readFileSync(caPath), servername: 'api.synthetic.test', rejectUnauthorized: true })
+      let output = ''
+      secure.once('secureConnect', () => secure.write('GET /v1/messages?synthetic-secret=not-persisted HTTP/1.1\r\nHost: api.synthetic.test\r\nConnection: close\r\n\r\n'))
+      secure.on('data', (chunk) => { output += chunk.toString('utf8') })
+      secure.once('error', reject)
+      secure.once('end', () => resolve(output))
+    })
+    socket.once('error', reject)
+  })
+  assert.match(exchange, /HTTP\/1\.1 200 OK/)
+  assert.equal(tlsProxy.tls?.ca_sha256.length, 64)
+  assert.equal(tlsProxy.tls_events.length, 1)
+  assert.equal(tlsProxy.tls_events[0].decision, 'accepted-local-tls')
+  assert.equal(tlsProxy.http_events[0].path_class, '/v1/messages')
+  assert.doesNotMatch(canonicalJson({ connect: tlsProxy.events, tls: tlsProxy.tls_events, http: tlsProxy.http_events }), /api\.synthetic\.test|synthetic-secret/)
+  if (process.platform === 'darwin') {
+    const caManifest = fixture('trusted-local-ca', tlsProxy.port)
+    caManifest.command = {
+      executable_sha256: sha256File(process.execPath),
+      argv: ['-e', "process.stdout.write(process.env.SSL_CERT_FILE === process.env.NODE_EXTRA_CA_CERTS ? 'ok' : 'no')"],
+      cwd: 'runs/trusted-local-ca/cwd', stdin_sha256: sha256Bytes(new Uint8Array()), timeout_ms: 5000,
+    }
+    caManifest.environment = {
+      ...caManifest.environment,
+      allowlist: { PATH: '/usr/bin:/bin', HTTPS_PROXY: `http://127.0.0.1:${tlsProxy.port}` },
+      base_urls: ['https://api.synthetic.test'],
+    }
+    caManifest.network = { ...caManifest.network, proxy_mode: 'loopback-mitm', ca_sha256: tlsProxy.tls?.ca_sha256 ?? null }
+    caManifest.capture = { ...caManifest.capture, tls: true }
+    caManifest.limits = { ...caManifest.limits, wall_ms: 5000, cpu_ms: 5000, processes: 4, sockets: 4, files: 64 }
+    const caEvidenceRoot = mkdtempSync(path.join(os.tmpdir(), 'phase3a-local-ca-runner-'))
+    const guard = await runCellGuardSelfTest(caManifest, caEvidenceRoot)
+    const result = await runCell({
+      manifest: caManifest,
+      evidence_root: caEvidenceRoot,
+      executable: process.execPath,
+      instrumentation: 'none',
+      guard,
+      trusted_local_ca: { cert_path: caPath, sha256: tlsProxy.tls?.ca_sha256 ?? '' },
+    })
+    assert.equal(result.status, 'complete', JSON.stringify(result))
+    assert.equal(result.stdout.bytes, 2)
+  }
+} finally {
+  await tlsProxy.close()
+  assert.equal(existsSync(caPath), false)
+}
+
+const proxyUpstream = await startFakeUpstream({ scenario: { kind: 'json', response: { proxied: true } } })
+const forwardProxy = await startHttpForwardProxy({ upstream_url: proxyUpstream.url })
+try {
+  const proxied = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port: forwardProxy.port, method: 'POST', path: 'http://aliyun.phase3a.test:19000/v1/messages', headers: { 'content-type': 'application/json' } }, (res) => {
+      let body = ''; res.on('data', (chunk) => { body += chunk.toString('utf8') }); res.on('end', () => resolve({ status: res.statusCode, body }))
+    })
+    req.on('error', reject); req.end('{"synthetic":true}')
+  })
+  assert.equal(proxied.status, 200)
+  assert.match(proxied.body, /proxied/)
+  assert.equal(proxyUpstream.events.length, 1)
+  assert.equal(forwardProxy.events[0].decision, 'forwarded-loopback')
+  assert.doesNotMatch(canonicalJson(forwardProxy.events), /aliyun\.phase3a\.test/)
+} finally { await Promise.all([forwardProxy.close(), proxyUpstream.close()]) }
+
 const manifest = validateLaunchManifest(fixture('control', 19001))
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, base_urls: ['https://example.com/'] } }), /phase3a_schema_invalid/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', NODE_OPTIONS: '--require=x' } } }), /cannot be inherited/)
@@ -85,6 +220,12 @@ assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...mani
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_AUTH_TOKEN: 'not-a-placeholder' } } }), /placeholder namespace/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: '3' } } }), /not admitted/)
 validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'oracle-phase3a-placeholder:api-key', HTTPS_PROXY: 'http://127.0.0.1:19001/' } } })
+validateLaunchManifest({
+  ...manifest,
+  environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'oracle-phase3a-placeholder:api-key', HTTP_PROXY: 'http://127.0.0.1:19001/' }, base_urls: ['http://aliyun.phase3a.test:19000'] },
+  network: { ...manifest.network, proxy_mode: 'loopback-connect' },
+})
+assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, base_urls: ['http://aliyun.phase3a.test:19000'] } }), /loopback proxy/)
 assert.throws(() => validateLaunchManifest({ ...manifest, environment: { ...manifest.environment, allowlist: { PATH: '/usr/bin', HTTPS_PROXY: 'http://192.0.2.1:19001/' } } }), /declared loopback port/)
 assert.throws(() => assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, null, 'preload'), /requires an uninstrumented control/)
 assertControlForInstrumentation({ ...manifest, run_id: 'instrumented' }, manifest, 'preload')
@@ -164,4 +305,4 @@ if (process.platform === 'darwin') {
   } finally { await guardedUpstream.close() }
 }
 
-console.log(JSON.stringify({ ok: true, observer_events: 3, raw_material_persisted: false }))
+console.log(JSON.stringify({ ok: true, observer_events: 4, raw_material_persisted: false }))

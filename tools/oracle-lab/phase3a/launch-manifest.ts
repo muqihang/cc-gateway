@@ -87,12 +87,23 @@ function rejectUnsafeEnvironment(manifest: LaunchManifest): void {
   if (overlap.size > 0) throw new Phase3AError('ambiguous_environment', `variables cannot be both empty and unset: ${[...overlap].sort().join(',')}`)
 }
 
-function urlPort(value: string): number {
+function urlPort(value: string, manifest: LaunchManifest): number | null {
   const parsed = new URL(value)
-  if (!['127.0.0.1', '[::1]', 'localhost'].includes(parsed.hostname)) {
-    throw new Phase3AError('external_destination', 'base URL must be loopback')
+  if (['127.0.0.1', '[::1]', 'localhost'].includes(parsed.hostname)) {
+    return parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80
   }
-  return parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80
+  if (!parsed.hostname.endsWith('.test') || !['http:', 'https:'].includes(parsed.protocol)) throw new Phase3AError('external_destination', 'base URL must be loopback or reserved .test')
+  if (manifest.network.proxy_mode === 'none') throw new Phase3AError('external_destination', 'reserved .test base URL requires a loopback proxy')
+  const proxyBound = [...PROXY_VARIABLES].some((key) => {
+    const value = manifest.environment.allowlist[key]
+    if (!value) return false
+    try {
+      const proxy = new URL(value); const port = proxy.port ? Number(proxy.port) : proxy.protocol === 'https:' ? 443 : 80
+      return ['127.0.0.1', '[::1]', 'localhost'].includes(proxy.hostname) && manifest.network.loopback_ports.includes(port)
+    } catch { return false }
+  })
+  if (!proxyBound) throw new Phase3AError('external_destination', 'reserved .test base URL requires a declared loopback proxy')
+  return null
 }
 
 export function validateLaunchManifest(value: unknown): LaunchManifest {
@@ -106,7 +117,8 @@ export function validateLaunchManifest(value: unknown): LaunchManifest {
   }
   const declared = new Set(manifest.network.loopback_ports)
   for (const baseUrl of manifest.environment.base_urls) {
-    if (!declared.has(urlPort(baseUrl))) throw new Phase3AError('undeclared_loopback_port', 'base URL port is absent from loopback allowlist')
+    const port = urlPort(baseUrl, manifest)
+    if (port !== null && !declared.has(port)) throw new Phase3AError('undeclared_loopback_port', 'base URL port is absent from loopback allowlist')
   }
   rejectUnsafeEnvironment(manifest)
   return manifest

@@ -54,7 +54,7 @@ export type CuratedExitInput = {
 
 export type ExitReport = {
   schema_version: 'oracle-lab-phase3a-exit.v1'
-  status: 'BLOCKED'
+  status: 'GREEN' | 'BLOCKED'
   generated_at: string
   artifact_index_sha256: string
   conclusion_digest: string
@@ -114,7 +114,7 @@ function assertCuratedInput(input: CuratedExitInput): void {
   if (input.repository_capture_required) throw new Phase3AError('repository_capture_required', 'repository bindings must be captured from the frozen worktrees')
   if (!Number.isFinite(Date.parse(input.generated_at))) throw new Phase3AError('exit_input_invalid', 'generated_at must be an ISO timestamp')
   if (!/^[a-f0-9]{64}$/.test(input.artifact_index_sha256)) throw new Phase3AError('exit_input_invalid', 'artifact index digest is invalid')
-  if (input.missing_gates.length === 0) throw new Phase3AError('exit_missing_gate_required', 'blocked exit must name at least one missing gate')
+  if (!Array.isArray(input.missing_gates)) throw new Phase3AError('exit_input_invalid', 'missing_gates must be an array')
   if (Object.values(input.safety_confirmation).some((value) => value !== true && value !== false)) throw new Phase3AError('exit_safety_invalid', 'safety confirmations must be booleans')
   if (input.safety_confirmation.runtime_enforcement_implemented !== false || Object.entries(input.safety_confirmation).some(([key, value]) => key !== 'runtime_enforcement_implemented' && value !== true)) {
     throw new Phase3AError('exit_safety_invalid', 'all safety boundaries must be affirmed and runtime enforcement must remain false')
@@ -135,27 +135,81 @@ function assertCuratedInput(input: CuratedExitInput): void {
   if (forbiddenKey(input)) throw new Phase3AError('exit_forbidden_material', 'curated input contains raw source/prompt/body/profile material')
 }
 
+const ACCEPTANCE_CASES = ['bounded-failure-recovery', 'deterministic-regeneration', 'new-streaming-session', 'resumed-streaming-session', 'ts-go-fixture-agreement']
+
+function assertGreenInput(input: CuratedExitInput, classified: { usable: JsonObject[] }): void {
+  const terminalUnknown = (row: unknown): boolean => {
+    if (!row || typeof row !== 'object') return false
+    const value = row as JsonObject
+    return typeof value.concern === 'string'
+      && typeof value.reason === 'string'
+      && typeof value.next_minimal_action === 'string'
+      && value.phase3b_usable === false
+      && value.capability_exhausted === true
+      && typeof value.capability_evidence === 'string'
+      && typeof value.searched_surfaces === 'object'
+  }
+  if (classified.usable.length === 0) throw new Phase3AError('exit_green_usable_required', 'GREEN exit requires at least one usable conclusion')
+  if (!input.evidence_health.unknowns.every(terminalUnknown)) throw new Phase3AError('exit_green_unknown_invalid', 'GREEN Unknown rows require capability-exhausted evidence and disabled Phase 3B use')
+  if ((input.evidence_hygiene as JsonObject).leak_scan !== 'PASS' || (input.evidence_hygiene as JsonObject).append_only !== true || (input.evidence_hygiene as JsonObject).no_deletion !== true) throw new Phase3AError('exit_green_hygiene_invalid', 'GREEN exit requires leak, append-only, and no-deletion evidence')
+  if ((input.p2_mapping as JsonObject).bundle_unchanged !== true) throw new Phase3AError('exit_green_p2_invalid', 'GREEN exit requires unchanged P2 bytes')
+  if (canonicalJson([...input.phase3b.acceptance_cases].map(String).sort()) !== canonicalJson(ACCEPTANCE_CASES) || input.phase3b.rollback_reference === null) throw new Phase3AError('exit_green_phase3b_invalid', 'GREEN exit requires exact acceptance cases and rollback reference')
+  if (input.artifacts.length === 0 || input.coverage.active.length === 0 || input.protocol_runtime_summaries.length === 0) throw new Phase3AError('exit_green_evidence_incomplete', 'GREEN exit requires artifact, active coverage, and runtime summaries')
+
+  const staticAnalysis = input.static_analysis as JsonObject
+  if (staticAnalysis.phase_status !== 'COMPLETE' || Number(staticAnalysis.required_root_unknown_count ?? 1) !== 0 || Number(staticAnalysis.required_root_count ?? 0) < 15) {
+    throw new Phase3AError('exit_green_static_partial', 'GREEN exit cannot bind stale PARTIAL static analysis')
+  }
+  if (typeof staticAnalysis.r1_static_closure_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(staticAnalysis.r1_static_closure_sha256)) {
+    throw new Phase3AError('exit_green_static_unbound', 'GREEN exit must bind r1-static-closure digest')
+  }
+  if (typeof staticAnalysis.entry_module_ast === 'string' && /unknown/i.test(staticAnalysis.entry_module_ast)) {
+    throw new Phase3AError('exit_green_static_partial', 'GREEN exit cannot leave entry_module_ast Unknown')
+  }
+
+  for (const row of input.coverage.active as JsonObject[]) {
+    if (String(row.status ?? '').toLowerCase() === 'partial' || String(row.status ?? '').toLowerCase() === 'unknown') {
+      throw new Phase3AError('exit_green_coverage_partial', 'GREEN exit cannot leave active coverage partial')
+    }
+  }
+
+  const changePoints = input.coverage.change_points as JsonObject[]
+  const tierAVersions = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
+  if (changePoints.length < tierAVersions.length) throw new Phase3AError('exit_green_r3_wrong_target', 'GREEN exit requires five Claude Code Tier A change-point lanes')
+  for (const version of tierAVersions) {
+    const row = changePoints.find((entry) => entry.version === version)
+    if (!row || row.role !== 'tier-a' || !['PASS', 'REPRODUCED', 'CLOSED_WITH_UNKNOWN'].includes(String(row.status))) {
+      throw new Phase3AError('exit_green_r3_wrong_target', `GREEN exit requires Tier A change-point lane for ${version}`)
+    }
+    if (row.target === 'sub2api-adapter' || row.tier_a_tests !== undefined) {
+      throw new Phase3AError('exit_green_r3_wrong_target', 'GREEN exit cannot treat Sub2API adapter regression as Claude Code Tier A')
+    }
+  }
+}
+
 export function buildExitReport(input: CuratedExitInput): ExitReport {
   assertCuratedInput(input)
   const classified = boundedConclusions(input)
+  const green = input.missing_gates.length === 0
+  if (green) assertGreenInput(input, classified)
   const partial = (value: unknown[] | JsonObject): SectionStatus => Array.isArray(value) && value.length === 0 ? 'BLOCKED' : 'PARTIAL'
   const report: ExitReport = {
-    schema_version: 'oracle-lab-phase3a-exit.v1', status: 'BLOCKED', generated_at: input.generated_at,
+    schema_version: 'oracle-lab-phase3a-exit.v1', status: green ? 'GREEN' : 'BLOCKED', generated_at: input.generated_at,
     artifact_index_sha256: input.artifact_index_sha256,
     conclusion_digest: sha256Bytes(canonicalJson(classified.conclusions)),
     sections: {
-      repository_state: section(input.repositories, partial(input.repositories)),
-      artifact_identity: section(input.artifacts, partial(input.artifacts)),
-      toolchain_capabilities: section(input.toolchain_capabilities, partial(input.toolchain_capabilities)),
-      static_analysis: section(input.static_analysis, partial(input.static_analysis)),
-      coverage: section(input.coverage, 'PARTIAL'),
-      protocol_runtime_summaries: section(input.protocol_runtime_summaries, partial(input.protocol_runtime_summaries)),
-      perturbation_source_agreement: section(input.perturbation_source_agreement, 'PARTIAL'),
-      evidence_health: section({ ...input.evidence_health, unknown_conclusion_ids: classified.unknown.map((row) => row.conclusion_id) }, 'BLOCKED'),
-      conclusions: section(classified.conclusions, classified.usable.length > 0 ? 'PARTIAL' : 'BLOCKED'),
-      p2_mapping: section(input.p2_mapping, 'PARTIAL'),
-      evidence_hygiene: section(input.evidence_hygiene, 'PARTIAL'),
-      reproduction: section(input.reproduction, 'PARTIAL'),
+      repository_state: section(input.repositories, green ? 'COMPLETE' : partial(input.repositories)),
+      artifact_identity: section(input.artifacts, green ? 'COMPLETE' : partial(input.artifacts)),
+      toolchain_capabilities: section(input.toolchain_capabilities, green ? 'COMPLETE' : partial(input.toolchain_capabilities)),
+      static_analysis: section(input.static_analysis, green ? 'COMPLETE' : partial(input.static_analysis)),
+      coverage: section(input.coverage, green ? 'COMPLETE' : 'PARTIAL'),
+      protocol_runtime_summaries: section(input.protocol_runtime_summaries, green ? 'COMPLETE' : partial(input.protocol_runtime_summaries)),
+      perturbation_source_agreement: section(input.perturbation_source_agreement, green ? 'COMPLETE' : 'PARTIAL'),
+      evidence_health: section({ ...input.evidence_health, unknown_conclusion_ids: classified.unknown.map((row) => row.conclusion_id) }, green ? 'COMPLETE' : 'BLOCKED'),
+      conclusions: section(classified.conclusions, green ? 'COMPLETE' : classified.usable.length > 0 ? 'PARTIAL' : 'BLOCKED'),
+      p2_mapping: section(input.p2_mapping, green ? 'COMPLETE' : 'PARTIAL'),
+      evidence_hygiene: section(input.evidence_hygiene, green ? 'COMPLETE' : 'PARTIAL'),
+      reproduction: section(input.reproduction, green ? 'COMPLETE' : 'PARTIAL'),
       phase3b_inputs: section({
         candidate_input_schema: input.phase3b.candidate_input_schema,
         candidate_input_rows: classified.usable.map((row) => ({ conclusion_id: row.conclusion_id, phase3b_usable: true })),
@@ -163,7 +217,7 @@ export function buildExitReport(input: CuratedExitInput): ExitReport {
         acceptance_cases: input.phase3b.acceptance_cases,
         rollback_reference: input.phase3b.rollback_reference,
         generated_runtime_profile: false,
-      }, 'BLOCKED'),
+      }, green ? 'COMPLETE' : 'BLOCKED'),
       safety_confirmation: section(input.safety_confirmation, 'COMPLETE'),
     },
     missing_gates: [...new Set(input.missing_gates)].sort(),
@@ -191,13 +245,13 @@ export function renderExitMarkdown(reportInput: ExitReport): string {
   return `${lines.join('\n').replace(/\n+$/, '')}\n`
 }
 
-export function buildBlockedHandoff(input: CuratedExitInput, reportInput?: ExitReport): JsonObject {
+export function buildHandoff(input: CuratedExitInput, reportInput?: ExitReport): JsonObject {
   const report = reportInput ?? buildExitReport(input)
   assertExitReport(report)
   const conclusions = report.sections.conclusions.details as JsonObject[]
   const usableRows = conclusions.filter((row) => row.phase3b_usable === true).map((row) => ({ conclusion_id: row.conclusion_id, phase3b_usable: true }))
   const handoff = {
-    schema_version: 'oracle-lab-phase3a-handoff.v1', status: 'BLOCKED', exit_report_path: input.exit_report_path,
+    schema_version: 'oracle-lab-phase3a-handoff.v1', status: report.status === 'GREEN' ? 'READY' : 'BLOCKED', exit_report_path: input.exit_report_path,
     exit_report_sha256: sha256Bytes(`${canonicalJson(report)}\n`), p2: input.p2, artifact_index_sha256: input.artifact_index_sha256,
     usable_conclusion_ids: usableRows.map((row) => row.conclusion_id),
     unknown_conclusion_ids: conclusions.filter((row) => row.level === 'Unknown').map((row) => row.conclusion_id),
@@ -213,7 +267,7 @@ export function buildBlockedHandoff(input: CuratedExitInput, reportInput?: ExitR
 
 export function buildBlockedDeliverables(input: CuratedExitInput): { exit: ExitReport; markdown: string; handoff: JsonObject } {
   const exit = buildExitReport(input)
-  return { exit, markdown: renderExitMarkdown(exit), handoff: buildBlockedHandoff(input, exit) }
+  return { exit, markdown: renderExitMarkdown(exit), handoff: buildHandoff(input, exit) }
 }
 
 function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1] }

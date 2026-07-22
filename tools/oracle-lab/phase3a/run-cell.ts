@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File } from './core.js'
 import { assertControlForInstrumentation, buildIsolatedEnvironment, loadLaunchManifest, type Instrumentation, type LaunchManifest, validateLaunchManifest } from './launch-manifest.js'
 import { enforceProcessLimits, sampleProcessTree, sampleSocketCount, type ProcessSample } from './process-sampler.js'
+import { classifySafeDiagnosticText, type SafeDiagnostic } from './safe-diagnostic.js'
 
 export type GuardAuthority = {
   schema_version: 'oracle-lab-phase3a-cell-guard.v1'
@@ -32,6 +33,7 @@ export type GuardAuthority = {
 export type CellResult = {
   schema_version: 'oracle-lab-phase3a-cell-result.v1'
   run_id: string
+  command_digest: string
   status: 'complete' | 'failed' | 'timeout' | 'resource-limit' | 'spawn-error'
   exit_code: number | null
   signal: NodeJS.Signals | null
@@ -44,6 +46,7 @@ export type CellResult = {
   max_sockets: number | null
   retry_events: number
   hook_event_count: number
+  safe_diagnostic: SafeDiagnostic
   safe_error_categories: string[]
   safe_error_terms: string[]
   stderr_fingerprint: SafeTextFingerprint
@@ -73,6 +76,12 @@ export type RunCellOptions = {
   guard: GuardAuthority
   stdin?: Uint8Array
   sample_interval_ms?: number
+  trusted_local_ca?: { cert_path: string; sha256: string }
+}
+
+/** Persist only a digest of the validated command descriptor with the cell result. */
+export function cellCommandDigest(manifest: Pick<LaunchManifest, 'command'>): string {
+  return sha256Bytes(canonicalJson(manifest.command))
 }
 
 export function evaluateCellCounters(counters: { output_bytes: number; processes: number; retries: number; sockets: number }, limits: LaunchManifest['limits']): string | null {
@@ -228,11 +237,16 @@ function write(file){try{fs.writeFileSync(file,'synthetic',{flag:'wx'});return t
   } finally { await Promise.all([close(alternate), close(unix)]) }
 }
 
-function hookFiles(instrumentation: Instrumentation): { argv: string[]; env: NodeJS.ProcessEnv } {
+export function prepareHookFiles(instrumentation: Instrumentation, runtimeRoot?: string): { argv: string[]; env: NodeJS.ProcessEnv } {
   const root = path.dirname(fileURLToPath(import.meta.url))
   if (instrumentation === 'preload') return { argv: ['--require', path.join(root, 'hooks/preload.cjs')], env: {} }
   if (instrumentation === 'loader') return { argv: ['--experimental-loader', path.join(root, 'hooks/loader.mjs')], env: {} }
-  if (instrumentation === 'bun') return { argv: ['--preload', path.join(root, 'hooks/bun-preload.ts')], env: {} }
+  if (instrumentation === 'bun') {
+    if (!runtimeRoot) throw new Phase3AError('hook_runtime_root_missing', 'bun preload requires an isolated runtime root')
+    const target = path.join(runtimeRoot, 'oracle-phase3a-bun-preload.mjs')
+    copyFileSync(path.join(root, 'hooks/bun-preload.mjs'), target, fsConstants.COPYFILE_EXCL)
+    return { argv: ['--preload', target], env: {} }
+  }
   if (instrumentation === 'inspector') return { argv: ['--inspect=127.0.0.1:0'], env: {} }
   if (instrumentation === 'probe-copy') throw new Phase3AError('probe_copy_not_prepared', 'probe-copy requires a separately digest-bound isolated copy')
   return { argv: [], env: {} }
@@ -277,6 +291,17 @@ function hookSummary(file: string): { count: number; retries: number } {
   return { count, retries }
 }
 
+function validateTrustedLocalCa(manifest: LaunchManifest, localCa: RunCellOptions['trusted_local_ca']): string | null {
+  if (!localCa) return null
+  if (manifest.network.proxy_mode !== 'loopback-mitm' || manifest.network.ca_sha256 !== localCa.sha256) {
+    throw new Phase3AError('local_ca_manifest_mismatch', 'runtime local CA does not match the loopback MITM manifest binding')
+  }
+  if (!path.isAbsolute(localCa.cert_path) || !lstatSync(localCa.cert_path).isFile() || lstatSync(localCa.cert_path).isSymbolicLink() || sha256File(localCa.cert_path) !== localCa.sha256) {
+    throw new Phase3AError('local_ca_invalid', 'runtime local CA certificate is not the declared regular file')
+  }
+  return localCa.cert_path
+}
+
 export async function runCell(options: RunCellOptions): Promise<CellResult> {
   const manifest = validateLaunchManifest(options.manifest)
   if (!new Set<Instrumentation>(['none', 'preload', 'loader', 'bun', 'inspector', 'probe-copy']).has(options.instrumentation)) {
@@ -286,12 +311,14 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   if (!path.isAbsolute(options.executable) || !lstatSync(options.executable).isFile()) throw new Phase3AError('invalid_executable', 'executable must be an absolute regular file')
   if (sha256File(options.executable) !== manifest.command.executable_sha256) throw new Phase3AError('executable_digest_mismatch', 'executable bytes differ from manifest')
   const { env, directories } = buildIsolatedEnvironment(manifest, options.evidence_root)
+  const localCaPath = validateTrustedLocalCa(manifest, options.trusted_local_ca)
+  if (localCaPath) Object.assign(env, { SSL_CERT_FILE: localCaPath, NODE_EXTRA_CA_CERTS: localCaPath })
   const profile = buildCellSandboxProfile(manifest, options.evidence_root)
   assertGuardAuthority(manifest, options.guard, profile)
   if (process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec')) throw new Phase3AError('isolation_unavailable', 'this runner requires the already-tested macOS sandbox adapter')
   const stdin = Buffer.from(options.stdin ?? [])
   if (sha256Bytes(stdin) !== manifest.command.stdin_sha256) throw new Phase3AError('stdin_digest_mismatch', 'stdin bytes differ from manifest')
-  const hook = hookFiles(options.instrumentation)
+  const hook = prepareHookFiles(options.instrumentation, directories.tmp)
   const hookOutput = path.join(directories.tmp, 'hook-events.jsonl')
   if (options.instrumentation !== 'none') Object.assign(env, hook.env, { ORACLE_PHASE3A_HOOK_OUTPUT: hookOutput, ORACLE_PHASE3A_HOOK_MAX_EVENTS: '10000', ORACLE_PHASE3A_HOOK_MAX_BYTES: String(Math.min(manifest.limits.output_bytes, 8 * 1024 * 1024)) })
   const targetArgs = [...hook.argv, ...manifest.command.argv]
@@ -354,17 +381,19 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   if (evaluateCellCounters({ output_bytes: stdoutBytes + stderrBytes, processes: maxProcesses, retries: hooks.retries, sockets: maxSockets ?? 0 }, manifest.limits) === 'retry_limit') terminationReason ??= 'retry_limit'
   const status: CellResult['status'] = closed.spawnError ? 'spawn-error' : terminationReason === 'wall_timeout' ? 'timeout' : terminationReason ? 'resource-limit' : closed.code === 0 ? 'complete' : 'failed'
   const safeErrorText = Buffer.concat(safeErrorChunks).toString('utf8')
+  const safeDiagnostic = classifySafeDiagnosticText(safeErrorText)
   const safeErrorCategories = classifySafeErrorText(safeErrorText)
   const safeErrorTerms = extractSafeErrorTerms(safeErrorText)
   const stderrFingerprint = fingerprintSafeErrorText(Buffer.concat(safeErrorChunks))
   for (const chunk of safeErrorChunks) chunk.fill(0)
   return {
     schema_version: 'oracle-lab-phase3a-cell-result.v1', run_id: manifest.run_id, status,
+    command_digest: cellCommandDigest(manifest),
     exit_code: closed.code, signal: closed.signal, duration_ms: Number((process.hrtime.bigint() - started) / 1_000_000n), termination_reason: terminationReason,
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },
     process_samples: samples, max_processes: maxProcesses, max_sockets: maxSockets,
-    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, stderr_fingerprint: stderrFingerprint, raw_output_persisted: false,
+    retry_events: hooks.retries, hook_event_count: hooks.count, safe_diagnostic: safeDiagnostic, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, stderr_fingerprint: stderrFingerprint, raw_output_persisted: false,
   }
 }
 

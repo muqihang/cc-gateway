@@ -40,6 +40,10 @@ function durationBucket(milliseconds: number): string {
   return 'gte-30s'
 }
 
+export function normalizedEventOrder(events: Array<{ response_class?: unknown }>): string[] {
+  return [...new Set(events.map((event) => String(event.response_class)))]
+}
+
 function verifyFileBindings(directory: string, summary: JsonObject): void {
   for (const name of ['manifest', 'guard', 'observer', 'result'] as const) {
     const expected = summary[`${name}_sha256`]
@@ -114,7 +118,7 @@ export function normalizeCapsule(directoryInput: string): NormalizedObservation 
     },
     response: {
       http_sse_ast: { response_classes: unique(events.map((event) => event.response_class)) },
-      event_order: events.map((event) => String(event.response_class)),
+      event_order: normalizedEventOrder(events),
       partial_output_topology: { coverage: 'not-observed' },
       compact_fields: { coverage: 'not-observed' },
       prompt_cache_fields: { coverage: 'not-observed' },

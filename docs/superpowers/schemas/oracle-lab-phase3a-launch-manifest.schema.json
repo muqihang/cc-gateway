@@ -54,7 +54,7 @@
         "explicit_empty": {"$ref": "#/$defs/uniqueStrings"}, "unset": {"$ref": "#/$defs/uniqueStrings"},
         "home": {"$ref": "#/$defs/relativePath"}, "xdg": {"$ref": "#/$defs/relativePath"}, "tmp": {"$ref": "#/$defs/relativePath"},
         "tz": {"type": "string"}, "lang": {"type": "string"}, "lc_all": {"type": "string"},
-        "base_urls": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^https?://(?:127\\.0\\.0\\.1|\\[::1\\]|localhost)(?::[0-9]{1,5})?(?:/|$)"}}
+        "base_urls": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^https?://(?:(?:127\\.0\\.0\\.1|\\[::1\\]|localhost)(?::[0-9]{1,5})?|(?:[A-Za-z0-9-]+\\.)+test(?::[0-9]{1,5})?)(?:/|$)"}}
       }
     },
     "network": {
