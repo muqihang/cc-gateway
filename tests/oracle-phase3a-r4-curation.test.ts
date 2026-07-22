@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
-import { closureConclusions, evidenceRelativePath, parseR4CurationArgs } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { closureConclusions, evidenceRelativePath, parseR4CurationArgs, r2TerminalUnknownReason } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { canonicalJson } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-r4-curation.test.ts')
 
@@ -21,4 +22,15 @@ assert.throws(() => parseR4CurationArgs(['--r2', 'a', '--r2', 'b']), /duplicate 
 assert.equal(evidenceRelativePath('/evidence/root', '/evidence/root/capsules/P3A-4/phase-3a-exit-report-v2.json'), 'capsules/P3A-4/phase-3a-exit-report-v2.json')
 assert.throws(() => evidenceRelativePath('/evidence/root', '/tmp/unrelated/capsules/P3A-4/exit.json'), /evidence root/)
 
-console.log(JSON.stringify({ ok: true, cases: 15 }))
+const r2V8UpdateUnknown = {
+  hypothesis: 'telemetry-diagnostic-update-error-traffic',
+  source: 'gap-update-repair-v5',
+  failure_classification: 'update-no-platform-safe-boundary',
+  next_minimal_action: 'Preserve this terminal Unknown unless an operator authorizes a separately isolated update-application fixture.',
+}
+const r2V8UpdateReason = r2TerminalUnknownReason(r2V8UpdateUnknown)
+assert.equal(r2V8UpdateReason, 'The bounded update command reached the loopback no-platform boundary before download or replacement.')
+assert.doesNotThrow(() => canonicalJson({ ...r2V8UpdateUnknown, reason: r2V8UpdateReason }))
+assert.throws(() => r2TerminalUnknownReason({ hypothesis: 'other', source: 'other' }), (error: any) => error.code === 'r4_input_invalid')
+
+console.log(JSON.stringify({ ok: true, cases: 18 }))

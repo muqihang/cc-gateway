@@ -15,6 +15,7 @@ const TIER_A_VERSIONS = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
 const R2_ARTIFACT_ID = 'p3a2-closure-coverage-v8'
 const R3_ARTIFACT_ID = 'p3a3-closure-tier-a-v11'
 const TIER_A_RERUN_ARTIFACT_ID = 'p3a3-tier-a-rerun-terminal-unknown-v1'
+const R2_UPDATE_NO_PLATFORM_REASON = 'The bounded update command reached the loopback no-platform boundary before download or replacement.'
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 
 export function evidenceRelativePath(root: string, file: string): string {
@@ -56,6 +57,14 @@ export function closureConclusions(input: { environment_complete?: boolean; tier
     unknown('CL-P3A-TLS-RUNTIME-UNKNOWN', 'Positive TLS runtime behavior remains unclassified.', 'tls-positive-runtime-unavailable'),
     unknown('CL-P3A-CROSS-PLATFORM-UNKNOWN', 'Behavior outside darwin-arm64 remains unclassified.', 'cross-platform-corroboration-unavailable'),
   ]
+}
+
+export function r2TerminalUnknownReason(row: Record<string, unknown>): string {
+  if (typeof row.reason === 'string' && row.reason.length > 0) return row.reason
+  if (row.source === 'gap-update-repair-v5' && row.failure_classification === 'update-no-platform-safe-boundary') {
+    return R2_UPDATE_NO_PLATFORM_REASON
+  }
+  fail('r4_input_invalid', 'R2 terminal Unknown is missing a reason')
 }
 
 export function parseR4CurationArgs(argv: string[]): Record<string, string> {
@@ -179,7 +188,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   ]
   const terminalUnknowns = [
     ...executableUnknowns.map((row: any) => ({
-      concern: row.hypothesis, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false,
+      concern: row.hypothesis, reason: r2TerminalUnknownReason(row), next_minimal_action: row.next_minimal_action, phase3b_usable: false,
       capability_exhausted: false,
       capability_evidence: row.source === 'gap' ? `r2-gap-executed-no-positive-classifier:${String(row.failure_classification)}` : 'local-loopback-action-still-available',
       searched_surfaces: Array.isArray(row.searched_surfaces) ? row.searched_surfaces : ['active-probe-copy', 'fake-upstream', 'loopback-proxy'],
