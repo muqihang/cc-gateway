@@ -58,7 +58,7 @@ function assertTierARerunEnvelope(value: Record<string, any>, artifacts: Array<R
       || typeof outcome.source_bindings.pair_summary?.path !== 'string' || !/^[a-f0-9]{64}$/.test(String(outcome.source_bindings.pair_summary?.sha256))
       || !/^[a-f0-9]{64}$/.test(String(outcome.source_bindings.result_set_digest))
       || evidence?.external_socket_budget !== 0 || evidence?.raw_material_persisted !== false || evidence?.complete_result_count !== 0
-      || !Number.isInteger(evidence?.result_count) || evidence.result_count < 10 || evidence.terminal_result_count !== evidence.result_count
+      || !Number.isInteger(evidence?.result_count) || evidence.result_count < 10 || evidence.result_count > 24 || evidence.result_count % 2 !== 0 || evidence.terminal_result_count !== evidence.result_count
       || evidence.process_sampled_result_count !== evidence.result_count || evidence.safe_diagnostic_result_count !== evidence.result_count) {
       fail('r4_terminal_binding_invalid', 'Tier A terminal rerun outcome is incomplete')
     }

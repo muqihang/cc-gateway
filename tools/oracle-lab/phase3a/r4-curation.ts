@@ -214,7 +214,7 @@ export function assertTierAOutcomeResultCounts(outcome: Record<string, any>, row
 }
 
 export function assertTierAPairedSchedule(pair: Record<string, any>): Array<Record<string, any>> {
-  if (!Number.isInteger(pair.repetitions) || pair.repetitions < 5 || !Array.isArray(pair.runs) || pair.runs.length !== pair.repetitions * 2) {
+  if (!Number.isInteger(pair.repetitions) || pair.repetitions < 5 || pair.repetitions > 12 || !Array.isArray(pair.runs) || pair.runs.length !== pair.repetitions * 2) {
     fail('r4_terminal_source_invalid', 'Tier A rerun pair does not contain a complete paired schedule')
   }
   const seen = new Set<string>()
