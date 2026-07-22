@@ -13,6 +13,16 @@ const digest = (seed: string): string => {
 
 const activeEntrypoint = digest('active-entrypoint')
 const activeTree = digest('active-tree')
+const blockedAdmission = {
+  status: 'BLOCKED' as const,
+  static_anchor: { status: 'BLOCKED' as const }, artifact_binding: { status: 'BLOCKED' as const }, control_treatment_run_coverage: { status: 'BLOCKED' as const },
+  dual_source: { status: 'BLOCKED' as const }, perturbation: { status: 'BLOCKED' as const }, convergence: { status: 'BLOCKED' as const },
+}
+const admitted = {
+  status: 'PASS' as const,
+  static_anchor: { status: 'PASS' as const }, artifact_binding: { status: 'PASS' as const }, control_treatment_run_coverage: { status: 'PASS' as const },
+  dual_source: { status: 'PASS' as const }, perturbation: { status: 'PASS' as const }, convergence: { status: 'PASS' as const },
+}
 
 const lanes: TierALaneInput[] = TIER_A_LANES.map((expected, index) => ({
   version: expected.version,
@@ -43,6 +53,7 @@ const lanes: TierALaneInput[] = TIER_A_LANES.map((expected, index) => ({
     pair_count: 0,
     required_pairs: [...expected.required_pairs],
     next_minimal_action: `run ${expected.version} pairs`,
+    admission: blockedAdmission,
   },
 }))
 
@@ -53,6 +64,7 @@ const result = evaluateClaudeCodeR3Closure({
   lanes,
 })
 assert.equal(result.status, 'CLOSED_WITH_UNKNOWN')
+assert.equal(result.schema_version, 'oracle-lab-phase3a-r3-closure.v2')
 assert.equal(result.target, 'claude-code-tier-a-change-points')
 assert.equal(result.tier_a.lane_count, 5)
 assert.equal(result.tier_a.lanes.length, 5)
@@ -72,12 +84,12 @@ assert.throws(() => evaluateClaudeCodeR3Closure({
 assert.throws(() => evaluateClaudeCodeR3Closure({
   active_version: '2.1.215',
   active_entrypoint_sha256: activeEntrypoint,
-  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const } })),
+  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const, admission: admitted } })),
 }), /dynamic pair count/)
 const resolved = evaluateClaudeCodeR3Closure({
   active_version: '2.1.215',
   active_entrypoint_sha256: activeEntrypoint,
-  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const, pair_count: lane.dynamic.required_pairs.length } })),
+  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const, pair_count: lane.dynamic.required_pairs.length, admission: admitted } })),
 })
 assert.equal(resolved.status, 'PASS')
 assert.ok(resolved.tier_a.lanes.every((lane: any) => lane.dynamic.next_minimal_action === null))

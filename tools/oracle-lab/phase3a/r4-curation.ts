@@ -6,10 +6,15 @@ import { buildBlockedDeliverables, type CuratedExitInput } from './build-exit.js
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File } from './core.js'
 import { captureRepositoryBinding } from './repository-binding.js'
 import { verifyArtifactIndex } from './artifact-index.js'
+import { TIER_A_RERUN_TERMINAL_UNKNOWN_TARGETS } from './tier-a-rerun-terminal-unknown.js'
 
 const ACTIVE = '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
 const PROHIBITED = ['CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED']
+const TIER_A_VERSIONS = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
+const R2_ARTIFACT_ID = 'p3a2-closure-coverage-v8'
+const R3_ARTIFACT_ID = 'p3a3-closure-tier-a-v11'
+const TIER_A_RERUN_ARTIFACT_ID = 'p3a3-tier-a-rerun-terminal-unknown-v1'
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 
 export function evidenceRelativePath(root: string, file: string): string {
@@ -31,7 +36,7 @@ export function closureConclusions(input: { environment_complete?: boolean; tier
       platform_limits: ['darwin-arm64 only', 'synthetic loopback observers only'], expiry: EXPIRY, negative_capabilities: [], phase3b_usable: true, prohibited_claims: PROHIBITED,
     }, authority_ceiling: 'Reproduced', observation_count: 5, parser_agreement: 'agreed', perturbed: false,
   })
-  const unknown = (id: string, statement: string, negative: string, support = ['p3a2-closure-coverage-v7']) => ({
+  const unknown = (id: string, statement: string, negative: string, support = [R2_ARTIFACT_ID]) => ({
     conclusion: {
       schema_version: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: id, level: 'Unknown',
       scope: 'claude-code-2.1.215 darwin-arm64 synthetic loopback fixtures', statement,
@@ -41,13 +46,13 @@ export function closureConclusions(input: { environment_complete?: boolean; tier
     }, authority_ceiling: 'Unknown', observation_count: 0, parser_agreement: 'not-applicable', perturbed: false,
   })
   return [
-    reproduced('CL-P3A-R2-CONFIG-AUTH', 'Config precedence and placeholder credential lifecycle were stable in the bounded local campaign.', ['p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'], ['closure-r2-config-v2', 'closure-r2-auth-v1', 'closure-r2-auth-co-v2'], ['closure-r2-config-v2-control']),
-    reproduced('CL-P3A-R2-FAILURE-STREAM', 'HTTP failure, reset, partial stream, and complete stream terminal classes were stable in the bounded local campaign.', ['p3a2-closure-scenarios-v2', 'p3a2-closure-coverage-v7'], ['closure-r2-scenario-v2', 'closure-r2-partial-v6', 'closure-r2-complete-v7'], ['closure-r2-scenario-v2-control']),
+    reproduced('CL-P3A-R2-CONFIG-AUTH', 'Config precedence and placeholder credential lifecycle were stable in the bounded local campaign.', ['p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', R2_ARTIFACT_ID], ['closure-r2-config-v2', 'closure-r2-auth-v1', 'closure-r2-auth-co-v2'], ['closure-r2-config-v2-control']),
+    reproduced('CL-P3A-R2-FAILURE-STREAM', 'HTTP failure, reset, partial stream, and complete stream terminal classes were stable in the bounded local campaign.', ['p3a2-closure-scenarios-v2', R2_ARTIFACT_ID], ['closure-r2-scenario-v2', 'closure-r2-partial-v6', 'closure-r2-complete-v7'], ['closure-r2-scenario-v2-control']),
     ...(input.environment_complete === false ? [unknown('CL-P3A-ROUTING-ENVIRONMENT-UNKNOWN', 'Full environment routing and provider-selection coverage remains unclassified.', 'environment-routing-protocol-coverage-incomplete')] : []),
-    unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified after the bounded long-context attempt.', 'compact-cache-lifecycle-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
-    unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified after bounded doctor and update commands.', 'positive-nonessential-traffic-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
-    unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified after bounded persistent-state resume.', 'resume-restart-lineage-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
-    ...(input.tier_a_complete === false ? [unknown('CL-P3A-TIER-A-DYNAMIC-UNKNOWN', 'Some Tier A change-point lanes did not complete all required dynamic pairs.', 'tier-a-dynamic-pairs-incomplete', ['p3a3-closure-tier-a-v10'])] : []),
+    unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified after the bounded long-context attempt.', 'compact-cache-lifecycle-untriggered', ['p3a2-gap-campaign-v2', R2_ARTIFACT_ID]),
+    unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified after bounded doctor and update commands.', 'positive-nonessential-traffic-untriggered', ['p3a2-gap-campaign-v2', R2_ARTIFACT_ID]),
+    unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified after bounded persistent-state resume.', 'resume-restart-lineage-untriggered', ['p3a2-gap-campaign-v2', R2_ARTIFACT_ID]),
+    ...(input.tier_a_complete === false ? [unknown('CL-P3A-TIER-A-DYNAMIC-UNKNOWN', 'Some Tier A change-point lanes did not complete all required dynamic pairs.', 'tier-a-dynamic-pairs-incomplete', [R3_ARTIFACT_ID, TIER_A_RERUN_ARTIFACT_ID])] : []),
     unknown('CL-P3A-TLS-RUNTIME-UNKNOWN', 'Positive TLS runtime behavior remains unclassified.', 'tls-positive-runtime-unavailable'),
     unknown('CL-P3A-CROSS-PLATFORM-UNKNOWN', 'Behavior outside darwin-arm64 remains unclassified.', 'cross-platform-corroboration-unavailable'),
   ]
@@ -56,7 +61,7 @@ export function closureConclusions(input: { environment_complete?: boolean; tier
 export function parseR4CurationArgs(argv: string[]): Record<string, string> {
   const values = argv[0] === '--' ? argv.slice(1) : argv
   const output: Record<string, string> = {}
-  const allowed = new Set(['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff'])
+  const allowed = new Set(['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'tier-a-terminal-rerun', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff'])
   for (let index = 0; index < values.length; index += 2) {
     if (!values[index]?.startsWith('--') || !values[index + 1] || values[index + 1].startsWith('--')) fail('invalid_arguments', 'arguments must be --name value pairs')
     const name = values[index].slice(2)
@@ -66,13 +71,69 @@ export function parseR4CurationArgs(argv: string[]): Record<string, string> {
   }
   return output
 }
+
+function expectedEvidenceFile(root: string, input: string, relative: string, label: string): string {
+  const expected = path.resolve(root, relative)
+  if (path.resolve(root, input) !== expected) fail('r4_input_invalid', `${label} must be ${relative}`)
+  return expected
+}
+
+function assertDeterministic(value: Record<string, any>, name: string): void {
+  const { deterministic_digest, ...base } = value
+  if (typeof deterministic_digest !== 'string' || deterministic_digest !== sha256Bytes(canonicalJson(base))) fail('r4_input_invalid', `${name} deterministic digest is invalid`)
+}
+
+function indexedArtifact(artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>, artifactId: string, sha256: string, label: string): void {
+  const artifact = artifacts.get(artifactId)
+  if (!artifact || artifact.sha256 !== sha256) fail('r4_input_invalid', `${label} is not bound to indexed evidence: ${artifactId}`)
+}
+
+function assertTierAProjectionSupport(evidenceRoot: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>, lanes: Array<Record<string, any>>): void {
+  for (const version of TIER_A_VERSIONS) {
+    const lane = lanes.find((row) => row.version === version)
+    const evidence = lane?.dynamic?.evidence
+    const relativeProjection = `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`
+    if (evidence?.projection_path !== relativeProjection || typeof evidence.projection_sha256 !== 'string') fail('r4_input_invalid', `R3 lane ${version} must bind Tier A projection v5`)
+    indexedArtifact(artifacts, `p3a3-tier-a-projection-v5-${version}`, evidence.projection_sha256, `Tier A projection ${version}`)
+    const projectionPath = expectedEvidenceFile(evidenceRoot, evidence.projection_path, relativeProjection, `Tier A projection ${version}`)
+    const projection = JSON.parse(readFileSync(projectionPath, 'utf8')) as Record<string, any>
+    assertDeterministic(projection, `Tier A projection ${version}`)
+    const bindings = projection.source_bindings
+    const bindingRoot = `capsules/P3A-3/tier-a-cell-bindings-v3/${version}`
+    if (projection.schema_version !== 'oracle-lab-phase3a-tier-a-dynamic-projection.v3' || projection.version !== version || projection.external_socket_budget !== 0 || projection.raw_material_persisted !== false || bindings?.binding_root !== bindingRoot || !Array.isArray(bindings.binding_capsules) || bindings.binding_capsules.length === 0) {
+      fail('r4_input_invalid', `Tier A projection ${version} does not bind v3 cell capsules`)
+    }
+    for (const binding of bindings.binding_capsules) {
+      if (typeof binding?.path !== 'string' || typeof binding.sha256 !== 'string' || !binding.path.startsWith(`${bindingRoot}/`)) fail('r4_input_invalid', `Tier A projection ${version} has an invalid v3 binding capsule`)
+      const indexed = [...artifacts.values()].find((artifact) => artifact.relative_path === binding.path)
+      if (!indexed || indexed.sha256 !== binding.sha256) fail('r4_input_invalid', `Tier A projection ${version} binding capsule is not indexed`)
+    }
+  }
+}
+
+function assertTierARerunArtifact(value: Record<string, any>, sha256: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
+  indexedArtifact(artifacts, TIER_A_RERUN_ARTIFACT_ID, sha256, 'Tier A terminal rerun artifact')
+  assertDeterministic(value, 'Tier A terminal rerun artifact')
+  if (value.schema_version !== 'oracle-lab-phase3a-tier-a-rerun-terminal-unknown.v1' || value.classification !== 'TERMINAL_UNKNOWN' || value.phase3b_usable !== false || value.external_socket_budget !== 0 || value.raw_material_persisted !== false || !Array.isArray(value.pair_outcomes)) {
+    fail('r4_input_invalid', 'Tier A terminal rerun artifact is invalid')
+  }
+  const expected = TIER_A_RERUN_TERMINAL_UNKNOWN_TARGETS.map((target) => `${target.version}:${target.required_pair}`).sort()
+  const actual = value.pair_outcomes.map((row: Record<string, any>) => `${row.version}:${row.required_pair}`).sort()
+  if (canonicalJson(actual) !== canonicalJson(expected) || value.pair_outcomes.some((row: Record<string, any>) => row.classification !== 'TERMINAL_UNKNOWN' || row.phase3b_usable !== false)) {
+    fail('r4_input_invalid', 'Tier A terminal rerun artifact does not cover the declared terminal Unknowns')
+  }
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const required = ['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff']
+  const required = ['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'tier-a-terminal-rerun', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff']
   const values = parseR4CurationArgs(process.argv.slice(2))
   if (required.some((name) => !values[name])) fail('usage', 'r4-curation requires template, closure, repository, and output arguments')
   const evidenceRoot = ensureEvidenceRoot(values['evidence-root']!)
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
-  const r2 = JSON.parse(readFileSync(values.r2!, 'utf8')) as Record<string, any>; const r3 = JSON.parse(readFileSync(values.r3!, 'utf8')) as Record<string, any>
+  const r2Path = expectedEvidenceFile(evidenceRoot, values.r2!, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 closure')
+  const r3Path = expectedEvidenceFile(evidenceRoot, values.r3!, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 closure')
+  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'guards/leak-scan-v19.json', 'leak scan')
+  const rerunPath = expectedEvidenceFile(evidenceRoot, values['tier-a-terminal-rerun']!, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
+  const r2 = JSON.parse(readFileSync(r2Path, 'utf8')) as Record<string, any>; const r3 = JSON.parse(readFileSync(r3Path, 'utf8')) as Record<string, any>
   if (!['PASS', 'CLOSED_WITH_UNKNOWN'].includes(String(r2.status)) || !['PASS', 'CLOSED_WITH_UNKNOWN', 'INCOMPLETE'].includes(String(r3.status))) fail('r4_input_invalid', 'R2 and R3 closures are not terminal')
   const r1Path = path.join(evidenceRoot, 'capsules/P3A-1/r1-static-closure-v1.json')
   const censusPath = path.join(evidenceRoot, 'static/90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58/discovery-r1-census-v3.json')
@@ -81,22 +142,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const r1Sha = sha256File(r1Path); const censusSha = sha256File(censusPath)
   const recoveredRoots = Array.isArray(r1.required_roots) ? r1.required_roots.filter((row: any) => row.disposition === 'static-path-recovered') : []
   if (r1.status !== 'complete' || recoveredRoots.length !== 15) fail('r4_static_incomplete', 'R1 must recover all 15 required roots before R4 can claim complete static analysis')
-  const r2Sha = sha256File(values.r2!); const r3Sha = sha256File(values.r3!); const indexSha = sha256File(values['artifact-index']!); const leakSha = sha256File(values['leak-scan']!)
-  const artifactIndex = JSON.parse(readFileSync(values['artifact-index']!, 'utf8')) as { artifacts: Array<{ artifact_id: string; sha256: string }> }
+  const r2Sha = sha256File(r2Path); const r3Sha = sha256File(r3Path); const indexSha = sha256File(values['artifact-index']!); const leakSha = sha256File(leakPath); const rerunSha = sha256File(rerunPath)
+  const artifactIndex = JSON.parse(readFileSync(values['artifact-index']!, 'utf8')) as { artifacts: Array<{ artifact_id: string; sha256: string; relative_path?: string }> }
   verifyArtifactIndex(artifactIndex, evidenceRoot)
-  const leak = JSON.parse(readFileSync(values['leak-scan']!, 'utf8')) as Record<string, any>
+  const leak = JSON.parse(readFileSync(leakPath, 'utf8')) as Record<string, any>
   if (leak.schema_version !== 'oracle-lab-phase3a-leak-scan.v1' || leak.status !== 'PASS' || leak.index_sha256 !== indexSha || !Array.isArray(leak.findings) || leak.findings.length !== 0) fail('r4_input_invalid', 'leak scan must pass against the supplied artifact index')
   const artifactById = new Map(artifactIndex.artifacts.map((row) => [row.artifact_id, row]))
-  const assertClosureBinding = (artifactId: string, observed: string): void => {
-    const artifact = artifactById.get(artifactId)
-    if (!artifact || artifact.sha256 !== observed) fail('r4_input_invalid', `closure is not bound to indexed evidence: ${artifactId}`)
-  }
-  const assertDeterministic = (closure: Record<string, any>, name: string): void => {
-    const { deterministic_digest, ...base } = closure
-    if (typeof deterministic_digest !== 'string' || deterministic_digest !== sha256Bytes(canonicalJson(base))) fail('r4_input_invalid', `${name} deterministic digest is invalid`)
-  }
-  assertClosureBinding('p3a2-closure-coverage-v7', r2Sha)
-  assertClosureBinding('p3a3-closure-tier-a-v10', r3Sha)
+  indexedArtifact(artifactById, R2_ARTIFACT_ID, r2Sha, 'R2 closure')
+  indexedArtifact(artifactById, R3_ARTIFACT_ID, r3Sha, 'R3 closure')
   assertDeterministic(r2, 'R2')
   assertDeterministic(r3, 'R3')
   const envReproduced = Number(r2.inputs?.environment?.statuses?.REPRODUCED ?? r2.coverage_counts?.Reproduced ?? 0)
@@ -109,6 +162,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       : [{ target: 'sub2api-adapter', status: r3.status, tier_a_tests: r3.tier_a?.total_tests, tier_b: r3.tier_b?.status }]
   const expectedTierAVersions = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
   if (changePoints.length !== expectedTierAVersions.length || expectedTierAVersions.some((version) => changePoints.filter((lane: any) => lane.version === version && lane.role === 'tier-a').length !== 1)) fail('r4_input_invalid', 'R3 must contain exactly the five expected Tier A lanes')
+  assertTierAProjectionSupport(evidenceRoot, artifactById, changePoints)
+  assertTierARerunArtifact(JSON.parse(readFileSync(rerunPath, 'utf8')) as Record<string, any>, rerunSha, artifactById)
   const incompleteTierALanes = changePoints.filter((row: any) => !['PASS', 'REPRODUCED'].includes(String(row.status)))
   const conclusions = closureConclusions({ environment_complete: coverageComplete, tier_a_complete: incompleteTierALanes.length === 0 })
   const indexedIds = new Set(artifactIndex.artifacts.map((row) => row.artifact_id))

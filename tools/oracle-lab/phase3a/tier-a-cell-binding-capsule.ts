@@ -3,9 +3,26 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
+import { tierAInterfaceDigest } from './tier-a-interface.js'
 
 type JsonObject = Record<string, unknown>
 type Arm = 'control' | 'treatment'
+
+export type TierACellBindingAssessment = {
+  capsule: JsonObject
+  run_id: string
+  pair_id: string
+  required_pair: string
+  version: string
+  hypothesis_id: string
+  repetition: number
+  arm: Arm
+  sequence_index: number | null
+  terminal: boolean
+  dual_source: boolean
+  perturbation_free: boolean
+  interface_sha256: string
+}
 
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^\d+\.\d+\.\d+$/
@@ -238,7 +255,7 @@ function bindCell(input: {
   pair: string
   repetition: number
   arm: Arm
-}): JsonObject {
+}): TierACellBindingAssessment {
   const evidenceRoot = ensureEvidenceRoot(input.evidenceRoot)
   const campaignRoot = existingDirectory(evidenceRoot, input.campaignRoot, 'campaign root')
   if (!isBelow(evidenceRoot, realpathSync(campaignRoot))) fail('tier_a_binding_path_invalid', 'campaign root must be below the evidence root')
@@ -260,6 +277,7 @@ function bindCell(input: {
   const manifest = readObject(manifestPath, 'cell manifest')
   const observer = readObject(observerPath, 'cell observer')
   const result = readObject(resultPath, 'cell result')
+  const guard = readObject(guardPath, 'cell guard')
 
   if (summary.schema_version !== 'oracle-lab-phase3a-tier-a-cell-summary.v1') fail('tier_a_binding_cell_invalid', 'cell summary schema is invalid')
   requireSafety(summary, 'cell summary')
@@ -270,6 +288,9 @@ function bindCell(input: {
   equalDigest(sha256File(observerPath), summary.observer_sha256, 'cell summary observer digest')
   equalDigest(sha256File(resultPath), summary.result_sha256, 'cell summary result digest')
   equalDigest(sha256File(guardPath), summary.guard_sha256, 'cell summary guard digest')
+  if (guard.schema_version !== 'oracle-lab-phase3a-cell-guard.v1' || guard.status !== 'PASS' || guard.external_socket_budget !== 0 || guard.same_scope_probe !== true) {
+    fail('tier_a_binding_cell_invalid', 'cell guard is not a passing zero-egress authority')
+  }
 
   if (manifest.schema_version !== 'oracle-lab-phase3a-launch-manifest.v1' || string(manifest.run_id, 'manifest run ID') !== run.run_id || string(manifest.pair_id, 'manifest pair ID') !== selectedPair.pair.pair_id || string(manifest.hypothesis_id, 'manifest hypothesis ID') !== `${selectedLane.lane.hypothesis_id}:${selectedPair.pair.required_pair}`) {
     fail('cross_lane_reference', 'manifest does not reference the selected campaign lane and pair')
@@ -291,7 +312,7 @@ function bindCell(input: {
   ] as const) {
     if (value !== expected) fail('tier_a_binding_version_entrypoint_mismatch', `${label} digest does not match its versioned artifact`)
   }
-  if (observer.schema_version !== 'oracle-lab-phase3a-safe-observer.v1' || observer.raw_material_persisted !== false || string(result.status, 'result status') !== run.status || string(summary.status, 'cell summary status') !== run.status) {
+  if (observer.schema_version !== 'oracle-lab-phase3a-safe-observer.v1' || observer.raw_material_persisted !== false || result.raw_output_persisted !== false || string(result.status, 'result status') !== run.status || string(summary.status, 'cell summary status') !== run.status) {
     fail('tier_a_binding_cell_invalid', 'raw cell files do not match the pair run record')
   }
 
@@ -315,7 +336,26 @@ function bindCell(input: {
     external_socket_budget: 0,
     raw_material_persisted: false,
   }
-  return { ...base, deterministic_digest: sha256Bytes(canonicalJson(base)) }
+  const capsule = { ...base, deterministic_digest: sha256Bytes(canonicalJson(base)) }
+  const events = Array.isArray(observer.events) ? observer.events : []
+  const hookEventCount = typeof result.hook_event_count === 'number' && Number.isInteger(result.hook_event_count) && result.hook_event_count >= 0
+    ? result.hook_event_count : 0
+  const processSamples = Array.isArray(result.process_samples) ? result.process_samples.length : 0
+  return {
+    capsule,
+    run_id: run.run_id,
+    pair_id: selectedPair.pair.pair_id,
+    required_pair: requestedPair,
+    version: selectedLane.lane.version,
+    hypothesis_id: selectedLane.lane.hypothesis_id,
+    repetition: requestedRepetition,
+    arm: input.arm,
+    sequence_index: typeof manifest.sequence_index === 'number' && Number.isInteger(manifest.sequence_index) && manifest.sequence_index >= 0 ? manifest.sequence_index : null,
+    terminal: run.status === 'complete' && result.status === 'complete' && summary.status === 'complete',
+    dual_source: Number(events.length > 0) + Number(hookEventCount > 0) + Number(processSamples > 0) >= 2,
+    perturbation_free: hookEventCount === 0,
+    interface_sha256: tierAInterfaceDigest(events),
+  }
 }
 
 export function buildTierACellBindingCapsule(input: {
@@ -333,7 +373,23 @@ export function buildTierACellBindingCapsule(input: {
     pair: input.pair,
     repetition: input.repetition,
     arm: input.arm,
+  }).capsule
+}
+
+/** Rebuild a binding from raw evidence and reject any capsule that is not exact. */
+export function validateTierACellBindingCapsule(input: Parameters<typeof buildTierACellBindingCapsule>[0] & { capsule: unknown }): TierACellBindingAssessment {
+  const rebuilt = bindCell({
+    evidenceRoot: input.evidence_root,
+    campaignRoot: input.campaign_root,
+    version: input.version,
+    pair: input.pair,
+    repetition: input.repetition,
+    arm: input.arm,
   })
+  if (!isObject(input.capsule) || canonicalJson(input.capsule) !== canonicalJson(rebuilt.capsule)) {
+    fail('tier_a_binding_content_mismatch', 'binding capsule does not reproduce its raw cell content')
+  }
+  return rebuilt
 }
 
 export function writeTierACellBindingCapsule(input: Parameters<typeof buildTierACellBindingCapsule>[0] & { out: string }): { out: string; sha256: string; capsule: JsonObject } {

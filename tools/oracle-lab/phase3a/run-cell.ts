@@ -33,6 +33,7 @@ export type GuardAuthority = {
 export type CellResult = {
   schema_version: 'oracle-lab-phase3a-cell-result.v1'
   run_id: string
+  command_digest: string
   status: 'complete' | 'failed' | 'timeout' | 'resource-limit' | 'spawn-error'
   exit_code: number | null
   signal: NodeJS.Signals | null
@@ -75,6 +76,12 @@ export type RunCellOptions = {
   guard: GuardAuthority
   stdin?: Uint8Array
   sample_interval_ms?: number
+  trusted_local_ca?: { cert_path: string; sha256: string }
+}
+
+/** Persist only a digest of the validated command descriptor with the cell result. */
+export function cellCommandDigest(manifest: Pick<LaunchManifest, 'command'>): string {
+  return sha256Bytes(canonicalJson(manifest.command))
 }
 
 export function evaluateCellCounters(counters: { output_bytes: number; processes: number; retries: number; sockets: number }, limits: LaunchManifest['limits']): string | null {
@@ -284,6 +291,17 @@ function hookSummary(file: string): { count: number; retries: number } {
   return { count, retries }
 }
 
+function validateTrustedLocalCa(manifest: LaunchManifest, localCa: RunCellOptions['trusted_local_ca']): string | null {
+  if (!localCa) return null
+  if (manifest.network.proxy_mode !== 'loopback-mitm' || manifest.network.ca_sha256 !== localCa.sha256) {
+    throw new Phase3AError('local_ca_manifest_mismatch', 'runtime local CA does not match the loopback MITM manifest binding')
+  }
+  if (!path.isAbsolute(localCa.cert_path) || !lstatSync(localCa.cert_path).isFile() || lstatSync(localCa.cert_path).isSymbolicLink() || sha256File(localCa.cert_path) !== localCa.sha256) {
+    throw new Phase3AError('local_ca_invalid', 'runtime local CA certificate is not the declared regular file')
+  }
+  return localCa.cert_path
+}
+
 export async function runCell(options: RunCellOptions): Promise<CellResult> {
   const manifest = validateLaunchManifest(options.manifest)
   if (!new Set<Instrumentation>(['none', 'preload', 'loader', 'bun', 'inspector', 'probe-copy']).has(options.instrumentation)) {
@@ -293,6 +311,8 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   if (!path.isAbsolute(options.executable) || !lstatSync(options.executable).isFile()) throw new Phase3AError('invalid_executable', 'executable must be an absolute regular file')
   if (sha256File(options.executable) !== manifest.command.executable_sha256) throw new Phase3AError('executable_digest_mismatch', 'executable bytes differ from manifest')
   const { env, directories } = buildIsolatedEnvironment(manifest, options.evidence_root)
+  const localCaPath = validateTrustedLocalCa(manifest, options.trusted_local_ca)
+  if (localCaPath) Object.assign(env, { SSL_CERT_FILE: localCaPath, NODE_EXTRA_CA_CERTS: localCaPath })
   const profile = buildCellSandboxProfile(manifest, options.evidence_root)
   assertGuardAuthority(manifest, options.guard, profile)
   if (process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec')) throw new Phase3AError('isolation_unavailable', 'this runner requires the already-tested macOS sandbox adapter')
@@ -368,6 +388,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   for (const chunk of safeErrorChunks) chunk.fill(0)
   return {
     schema_version: 'oracle-lab-phase3a-cell-result.v1', run_id: manifest.run_id, status,
+    command_digest: cellCommandDigest(manifest),
     exit_code: closed.code, signal: closed.signal, duration_ms: Number((process.hrtime.bigint() - started) / 1_000_000n), termination_reason: terminationReason,
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },

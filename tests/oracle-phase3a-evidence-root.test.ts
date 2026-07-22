@@ -48,15 +48,49 @@ writeFileSync(path.join(root, 'campaign/P3A-2/c4-tz-utc-shanghai/input.json'), '
 writeFileSync(path.join(root, 'campaign/P3A-2/c4-tz-utc-shanghai/result.json'), '{}\n')
 assert.throws(() => terminalArtifactInputs(root), (error: unknown) => error instanceof Phase3AError && error.code === 'c4_evidence_incomplete')
 for (const runId of expectedAuthoritativeC4RunIds()) mkdirSync(path.join(root, 'capsules/P3A-2', runId), { recursive: true })
+mkdirSync(path.join(root, 'capsules/P3A-1'), { recursive: true })
+writeFileSync(path.join(root, 'capsules/P3A-1', 'static-summary.json'), '{}\n')
+writeFileSync(path.join(root, 'capsules/P3A-1', 'r1-static-closure-v1.json'), '{}\n')
+writeFileSync(path.join(root, 'capsules/P3A-2', 'closure-r2-coverage-v7.json'), '{}\n')
+for (const repair of [{ name: 'closure-r2-gap-repair-v1', cells: 3 }, { name: 'closure-r2-gap-update-repair-v5', cells: 1 }]) {
+  for (let index = 0; index < repair.cells; index += 1) {
+    const cell = path.join(root, 'capsules/P3A-2', repair.name, 'cells', String(index).padStart(2, '0'))
+    mkdirSync(cell, { recursive: true })
+    for (const file of ['manifest.json', 'guard.json', 'observer.json', 'result.json', 'summary.json', 'normalized.json']) writeFileSync(path.join(cell, file), '{}\n')
+    if (repair.name === 'closure-r2-gap-update-repair-v5') {
+      writeFileSync(path.join(cell, 'fixture-self-test.json'), '{}\n')
+      writeFileSync(path.join(cell, 'update-proxy.json'), '{}\n')
+    }
+  }
+  writeFileSync(path.join(root, 'capsules/P3A-2', repair.name, 'summary.json'), '{}\n')
+}
+writeFileSync(path.join(root, 'capsules/P3A-2', 'closure-r2-coverage-v8.json'), '{}\n')
+mkdirSync(path.join(root, 'capsules/P3A-3'), { recursive: true })
+for (const version of ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']) {
+  writeFileSync(path.join(root, 'capsules/P3A-3', `tier-a-dynamic-projection-v5-${version}.json`), '{}\n')
+  const binding = path.join(root, 'capsules/P3A-3', 'tier-a-cell-bindings-v3', version, 'telemetry', 'r00-control.json')
+  mkdirSync(path.dirname(binding), { recursive: true })
+  writeFileSync(binding, '{}\n')
+}
+writeFileSync(path.join(root, 'capsules/P3A-3', 'closure-r3-tier-a-v11.json'), '{}\n')
+writeFileSync(path.join(root, 'capsules/P3A-3', 'tier-a-rerun-terminal-unknown-v1.json'), '{}\n')
 const terminalIds = terminalArtifactInputs(root).map((row) => row.artifact_id)
 assert.ok(terminalIds.includes(`p3a2-${c4Run}-manifest`))
 assert.ok(terminalIds.includes(`p3a2-${c4Run}-normalized`))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-input'))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-result'))
+assert.ok(terminalIds.includes('p3a1-r1-static-closure'))
+assert.ok(terminalIds.includes('p3a2-gap-repair-v1-cell-01-result'))
+assert.ok(terminalIds.includes('p3a2-gap-update-repair-v5-cell-00-update-proxy'))
+assert.ok(terminalIds.includes('p3a2-closure-coverage-v8'))
+assert.ok(terminalIds.includes('p3a3-tier-a-projection-v5-2.1.214'))
+assert.ok(terminalIds.some((id) => id.startsWith('p3a3-tier-a-binding-v3-2.1.214-')))
+assert.ok(terminalIds.includes('p3a3-closure-tier-a-v11'))
+assert.ok(terminalIds.includes('p3a3-tier-a-rerun-terminal-unknown-v1'))
 assert.doesNotThrow(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }, { artifact_id: 'b' }]))
 assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], []), /row disappeared/)
 assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'normalized-safe' }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'quarantine' }]), /artifact row changed/)
 assert.throws(() => parseTerminalIndexArgs(['--out', '--previous-index']), /arguments must/)
 assert.throws(() => parseTerminalIndexArgs(['--out', 'a', '--out', 'b']), /duplicate argument/)
 
-console.log(JSON.stringify({ ok: true, cases: 19 }))
+console.log(JSON.stringify({ ok: true, cases: 27 }))

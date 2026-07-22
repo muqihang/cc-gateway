@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { connect } from 'node:net'
+import { connect as connectTls } from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -135,6 +136,66 @@ try {
   assert.deepEqual(proxy.events.map((event) => event.decision), ['accepted-local-termination', 'rejected'])
   assert.doesNotMatch(JSON.stringify(proxy.events), /api\.synthetic\.test|1\.1\.1\.1/)
 } finally { await proxy.close() }
+
+const tlsProxy = await startConnectProxy({ allowed_targets: [{ host: 'api.synthetic.test', port: 443 }], mode: 'local-tls' })
+const caPath = tlsProxy.tls?.ca_cert_path
+assert.ok(caPath)
+try {
+  const exchange = await new Promise<string>((resolve, reject) => {
+    const socket = connect(tlsProxy.port, '127.0.0.1')
+    socket.once('connect', () => socket.write('CONNECT api.synthetic.test:443 HTTP/1.1\r\nHost: api.synthetic.test:443\r\n\r\n'))
+    socket.once('data', (response) => {
+      if (!response.toString('ascii').startsWith('HTTP/1.1 200')) {
+        reject(new Error(`unexpected CONNECT response: ${response.toString('ascii')}`))
+        return
+      }
+      const secure = connectTls({ socket, ca: readFileSync(caPath), servername: 'api.synthetic.test', rejectUnauthorized: true })
+      let output = ''
+      secure.once('secureConnect', () => secure.write('GET /v1/messages?synthetic-secret=not-persisted HTTP/1.1\r\nHost: api.synthetic.test\r\nConnection: close\r\n\r\n'))
+      secure.on('data', (chunk) => { output += chunk.toString('utf8') })
+      secure.once('error', reject)
+      secure.once('end', () => resolve(output))
+    })
+    socket.once('error', reject)
+  })
+  assert.match(exchange, /HTTP\/1\.1 200 OK/)
+  assert.equal(tlsProxy.tls?.ca_sha256.length, 64)
+  assert.equal(tlsProxy.tls_events.length, 1)
+  assert.equal(tlsProxy.tls_events[0].decision, 'accepted-local-tls')
+  assert.equal(tlsProxy.http_events[0].path_class, '/v1/messages')
+  assert.doesNotMatch(canonicalJson({ connect: tlsProxy.events, tls: tlsProxy.tls_events, http: tlsProxy.http_events }), /api\.synthetic\.test|synthetic-secret/)
+  if (process.platform === 'darwin') {
+    const caManifest = fixture('trusted-local-ca', tlsProxy.port)
+    caManifest.command = {
+      executable_sha256: sha256File(process.execPath),
+      argv: ['-e', "process.stdout.write(process.env.SSL_CERT_FILE === process.env.NODE_EXTRA_CA_CERTS ? 'ok' : 'no')"],
+      cwd: 'runs/trusted-local-ca/cwd', stdin_sha256: sha256Bytes(new Uint8Array()), timeout_ms: 5000,
+    }
+    caManifest.environment = {
+      ...caManifest.environment,
+      allowlist: { PATH: '/usr/bin:/bin', HTTPS_PROXY: `http://127.0.0.1:${tlsProxy.port}` },
+      base_urls: ['https://api.synthetic.test'],
+    }
+    caManifest.network = { ...caManifest.network, proxy_mode: 'loopback-mitm', ca_sha256: tlsProxy.tls?.ca_sha256 ?? null }
+    caManifest.capture = { ...caManifest.capture, tls: true }
+    caManifest.limits = { ...caManifest.limits, wall_ms: 5000, cpu_ms: 5000, processes: 4, sockets: 4, files: 64 }
+    const caEvidenceRoot = mkdtempSync(path.join(os.tmpdir(), 'phase3a-local-ca-runner-'))
+    const guard = await runCellGuardSelfTest(caManifest, caEvidenceRoot)
+    const result = await runCell({
+      manifest: caManifest,
+      evidence_root: caEvidenceRoot,
+      executable: process.execPath,
+      instrumentation: 'none',
+      guard,
+      trusted_local_ca: { cert_path: caPath, sha256: tlsProxy.tls?.ca_sha256 ?? '' },
+    })
+    assert.equal(result.status, 'complete', JSON.stringify(result))
+    assert.equal(result.stdout.bytes, 2)
+  }
+} finally {
+  await tlsProxy.close()
+  assert.equal(existsSync(caPath), false)
+}
 
 const proxyUpstream = await startFakeUpstream({ scenario: { kind: 'json', response: { proxied: true } } })
 const forwardProxy = await startHttpForwardProxy({ upstream_url: proxyUpstream.url })

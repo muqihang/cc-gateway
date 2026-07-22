@@ -10,9 +10,10 @@ import { balancedPairOrder } from './converge.js'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File, stableError } from './core.js'
 import { type LaunchManifest, validateLaunchManifest } from './launch-manifest.js'
 import { normalizeCapsule } from './normalize.js'
-import { startFakeUpstream, type SafeUpstreamEvent } from './observers/fake-upstream.js'
+import { startFakeUpstream } from './observers/fake-upstream.js'
 import { TIER_A_LANES } from './r3-closure.js'
 import { runCell, runCellGuardSelfTest } from './run-cell.js'
+import { tierAInterfaceDigest } from './tier-a-interface.js'
 
 const ACTIVE_VERSION = '2.1.215'
 const P2_BUNDLE = '2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce'
@@ -54,37 +55,20 @@ type TierAPairDefinition = {
   environment_overrides: Record<string, string>
 }
 
-function topologyInterface(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(topologyInterface)
-  if (value === null || typeof value !== 'object') return value
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
-    key,
-    key === 'sha256' ? '<VALUE_SHA256>' : topologyInterface(child),
-  ]))
+type TierALaneDefinition = {
+  readonly version: string
+  readonly hypothesis_id: string
+  readonly reason: string
+  readonly required_pairs: readonly string[]
 }
 
-export function tierAInterfaceDigest(events: SafeUpstreamEvent[]): string {
-  return sha256Bytes(canonicalJson(events.map((event) => ({
-    method: event.method,
-    path_class: event.path_class,
-    header_names: event.header_names,
-    header_value_classes: event.header_value_classes,
-    body_topology: topologyInterface(event.body_topology),
-    response_class: event.response_class,
-    request_class: event.request_class,
-    cch_class: event.cch_class,
-    system_summary: {
-      status: event.system_summary.status,
-      byte_length: event.system_summary.byte_length,
-      ast_topology: topologyInterface(event.system_summary.ast_topology),
-      span_layout: event.system_summary.span_hashes.map((span) => ({
-        path_sha256: span.path_sha256,
-        ordinal: span.ordinal,
-        byte_length: span.byte_length,
-      })),
-    },
-  }))))
-}
+export type TierADynamicLaneSelection = Readonly<{
+  lane: TierALaneDefinition
+  pairs: readonly string[]
+  complete: boolean
+}>
+
+export { tierAInterfaceDigest } from './tier-a-interface.js'
 
 function tierAPairDefinition(requiredPair: string): TierAPairDefinition {
   const definitions: Record<string, Omit<TierAPairDefinition, 'required_pair'>> = {
@@ -352,6 +336,51 @@ export function classifyPair(runs: RunRecord[], repetitions: number): { status: 
   }
 }
 
+export function selectTierADynamicLanes(options: { versions?: readonly string[]; pairs?: string }): TierADynamicLaneSelection[] {
+  const lanes = TIER_A_LANES as readonly TierALaneDefinition[]
+  const byVersion = new Map(lanes.map((lane) => [lane.version, lane]))
+  const versions = options.versions === undefined ? lanes.map((lane) => lane.version) : options.versions
+  if (versions.length === 0) fail('tier_a_version_selection_empty', 'at least one Tier A version must be selected')
+
+  const selectedVersions = new Set<string>()
+  const selectedLanes = versions.map((version) => {
+    if (selectedVersions.has(version)) fail('tier_a_version_duplicate', `duplicate Tier A version selection: ${version}`)
+    selectedVersions.add(version)
+    const lane = byVersion.get(version)
+    if (!lane) fail('tier_a_version_unknown', `unknown Tier A version: ${version}`)
+    return lane
+  })
+  if (options.pairs === undefined) return selectedLanes.map((lane) => ({ lane, pairs: [...lane.required_pairs], complete: true }))
+  if (options.pairs.length === 0) fail('tier_a_pair_selector_invalid', '--pairs must select at least one version:pair entry')
+
+  const allPairs = new Set(lanes.flatMap((lane) => lane.required_pairs))
+  const selectedPairs = new Map(selectedLanes.map((lane) => [lane.version, [] as string[]]))
+  for (const entry of options.pairs.split(',')) {
+    const separator = entry.indexOf(':')
+    if (entry.length === 0 || entry.trim() !== entry || separator <= 0 || separator === entry.length - 1 || entry.indexOf(':', separator + 1) !== -1) {
+      fail('tier_a_pair_selector_invalid', '--pairs entries must be VERSION:PAIR with no whitespace')
+    }
+    const version = entry.slice(0, separator)
+    const pair = entry.slice(separator + 1)
+    const lane = byVersion.get(version)
+    if (!lane) fail('tier_a_version_unknown', `unknown Tier A version in --pairs: ${version}`)
+    if (!selectedVersions.has(version)) fail('tier_a_pair_cross_lane', `pair ${pair} is selected for unselected Tier A version ${version}`)
+    if (!lane.required_pairs.includes(pair)) {
+      if (allPairs.has(pair)) fail('tier_a_pair_cross_lane', `pair ${pair} is not required for Tier A version ${version}`)
+      fail('tier_a_pair_unknown', `unknown Tier A pair: ${pair}`)
+    }
+    const lanePairs = selectedPairs.get(version)!
+    if (lanePairs.includes(pair)) fail('tier_a_pair_duplicate', `duplicate Tier A pair selection: ${version}:${pair}`)
+    lanePairs.push(pair)
+  }
+
+  return selectedLanes.map((lane) => {
+    const pairs = selectedPairs.get(lane.version)!
+    if (pairs.length === 0) fail('tier_a_pair_selection_incomplete', `--pairs is missing a selection for Tier A version ${lane.version}`)
+    return { lane, pairs, complete: pairs.length === lane.required_pairs.length }
+  })
+}
+
 export async function runTierADynamicCampaign(options: {
   evidence_root: string
   out_relative: string
@@ -364,26 +393,26 @@ export async function runTierADynamicCampaign(options: {
   sub2api_tree: string
   toolchain_digest: string
   versions?: string[]
+  pairs?: string
 }): Promise<Record<string, unknown>> {
   if (!Number.isInteger(options.repetitions) || options.repetitions < 5 || options.repetitions > 12) fail('invalid_repetitions', 'tier-a repetitions must be 5..12')
+  const selected = selectTierADynamicLanes({ versions: options.versions, pairs: options.pairs })
   const root = ensureEvidenceRoot(options.evidence_root)
   const output = assertEvidencePath(root, path.join(root, options.out_relative))
   if (existsSync(output)) fail('evidence_exists', 'tier-a campaign output already exists')
   mkdirSync(output, { recursive: true, mode: 0o700 })
   const activeArtifact = loadPlatformArtifact(root, ACTIVE_VERSION)
   if (sha256File(options.active_binary) !== activeArtifact.entrypoint_sha256) fail('artifact_identity', 'active binary digest mismatch')
-  const selected = options.versions?.length ? TIER_A_LANES.filter((lane) => options.versions!.includes(lane.version)) : [...TIER_A_LANES]
-  if (selected.length === 0) fail('invalid_versions', 'no Tier A versions selected')
   const laneSummaries: Record<string, unknown>[] = []
 
-  for (const lane of selected) {
+  for (const { lane, pairs: selectedPairs, complete: completePairSelection } of selected) {
     const controlArtifact = loadPlatformArtifact(root, lane.version)
     const rebuild = rebuildControlUnpacked(root, lane.version)
     const laneOutput = path.join(output, 'lanes', lane.version)
     mkdirSync(laneOutput, { recursive: true, mode: 0o700 })
     const pairSummaries: Record<string, unknown>[] = []
-    for (let pairIndex = 0; pairIndex < lane.required_pairs.length; pairIndex += 1) {
-      const pair = tierAPairDefinition(lane.required_pairs[pairIndex])
+    for (let pairIndex = 0; pairIndex < selectedPairs.length; pairIndex += 1) {
+      const pair = tierAPairDefinition(selectedPairs[pairIndex])
       const pairId = `tier-a-${lane.version}-${pair.required_pair}`
       const pairOutput = path.join(laneOutput, 'pairs', `${String(pairIndex).padStart(2, '0')}-${pair.required_pair}`)
       mkdirSync(pairOutput, { recursive: true, mode: 0o700 })
@@ -430,13 +459,13 @@ export async function runTierADynamicCampaign(options: {
       writeJson(path.join(pairOutput, 'summary.json'), summary)
       pairSummaries.push(summary)
     }
-    const laneStatus = pairSummaries.every((pair) => pair.status === 'REPRODUCED') ? 'REPRODUCED' : 'UNKNOWN'
+    const laneStatus = completePairSelection && pairSummaries.every((pair) => pair.status === 'REPRODUCED') ? 'REPRODUCED' : 'UNKNOWN'
     const laneEffect = pairSummaries.some((pair) => pair.effect === 'semantic-change') ? 'semantic-change'
       : pairSummaries.some((pair) => pair.effect === 'unresolved') ? 'unresolved' : 'no-observed-effect'
     const summary = {
       schema_version: 'oracle-lab-phase3a-tier-a-lane-summary.v1',
       version: lane.version, role: 'tier-a', hypothesis_id: lane.hypothesis_id, reason: lane.reason,
-      required_pairs: [...lane.required_pairs],
+      required_pairs: [...lane.required_pairs], selected_pairs: [...selectedPairs], complete_required_pair_selection: completePairSelection,
       pair_count: pairSummaries.length, status: laneStatus, effect: laneEffect, pairs: pairSummaries,
       active: activeArtifact, control: controlArtifact,
       rebuild: { rebuild_root: path.relative(root, rebuild.rebuild_root), receipt: path.relative(root, rebuild.rebuild_receipt), entrypoint_sha256: rebuild.entrypoint_sha256 },
@@ -463,7 +492,7 @@ export async function runTierADynamicCampaign(options: {
     statuses,
     lanes: laneSummaries.map((lane) => ({
       version: lane.version, status: lane.status, effect: lane.effect, pair_count: lane.pair_count,
-      hypothesis_id: lane.hypothesis_id, required_pairs: lane.required_pairs,
+      hypothesis_id: lane.hypothesis_id, required_pairs: lane.required_pairs, selected_pairs: lane.selected_pairs,
     })),
     external_socket_budget: 0, raw_material_persisted: false,
   }
@@ -475,7 +504,7 @@ export async function runTierADynamicCampaign(options: {
 export function parseTierADynamicArgs(argv: string[]): Record<string, string> {
   const output: Record<string, string> = {}
   const values = argv[0] === '--' ? argv.slice(1) : argv
-  const allowed = new Set(['evidence-root', 'out-relative', 'campaign-id', 'active-binary', 'repetitions', 'cc-commit', 'cc-tree', 'sub2api-commit', 'sub2api-tree', 'toolchain-digest', 'versions'])
+  const allowed = new Set(['evidence-root', 'out-relative', 'campaign-id', 'active-binary', 'repetitions', 'cc-commit', 'cc-tree', 'sub2api-commit', 'sub2api-tree', 'toolchain-digest', 'versions', 'pairs'])
   for (let index = 0; index < values.length; index += 2) {
     if (!values[index]?.startsWith('--') || !values[index + 1] || values[index + 1].startsWith('--')) fail('invalid_arguments', 'arguments must be --name value pairs')
     const name = values[index].slice(2)
@@ -497,6 +526,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
       cc_commit: values['cc-commit'], cc_tree: values['cc-tree'], sub2api_commit: values['sub2api-commit'], sub2api_tree: values['sub2api-tree'],
       toolchain_digest: values['toolchain-digest'],
       versions: values.versions ? values.versions.split(',') : undefined,
+      pairs: values.pairs,
     })
     process.stdout.write(`${canonicalJson(summary)}\n`)
   } catch (error) {

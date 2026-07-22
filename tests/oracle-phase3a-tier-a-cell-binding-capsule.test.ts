@@ -3,8 +3,9 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import os from 'node:os'
 import path from 'node:path'
 
-import { buildTierACellBindingCapsule, parseTierACellBindingArgs, writeTierACellBindingCapsule } from '../tools/oracle-lab/phase3a/tier-a-cell-binding-capsule.js'
+import { buildTierACellBindingCapsule, parseTierACellBindingArgs, validateTierACellBindingCapsule, writeTierACellBindingCapsule } from '../tools/oracle-lab/phase3a/tier-a-cell-binding-capsule.js'
 import { Phase3AError, sha256Bytes, sha256File } from '../tools/oracle-lab/phase3a/core.js'
+import { loadTierACellBindingCapsules } from '../tools/oracle-lab/phase3a/tier-a-dynamic-projection.js'
 
 console.log('\ntests/oracle-phase3a-tier-a-cell-binding-capsule.test.ts')
 
@@ -57,8 +58,8 @@ function makeFixture(): Fixture {
     artifact: control, command: { executable_sha256: control.entrypoint_sha256, argv: ['opaque-command-material'] },
   })
   writeJson(observerPath, { schema_version: 'oracle-lab-phase3a-safe-observer.v1', raw_material_persisted: false, opaque_raw_material: 'observer-content-must-not-escape' })
-  writeJson(resultPath, { status: 'complete', opaque_raw_material: 'result-content-must-not-escape' })
-  writeJson(guardPath, { status: 'PASS' })
+  writeJson(resultPath, { status: 'complete', raw_output_persisted: false, opaque_raw_material: 'result-content-must-not-escape' })
+  writeJson(guardPath, { schema_version: 'oracle-lab-phase3a-cell-guard.v1', status: 'PASS', external_socket_budget: 0, same_scope_probe: true })
   writeJson(path.join(cellRoot, 'summary.json'), {
     schema_version: 'oracle-lab-phase3a-tier-a-cell-summary.v1', run_id: run.run_id, arm: run.arm, version: run.version, status: run.status,
     manifest_sha256: sha256File(manifestPath), observer_sha256: sha256File(observerPath), result_sha256: sha256File(resultPath), guard_sha256: sha256File(guardPath),
@@ -101,7 +102,13 @@ withFixture((fixture) => {
   assert.equal(written.capsule.raw_result_sha256, sha256File(fixture.resultPath))
   assert.equal(written.capsule.command_sha256, sha256Bytes(JSON.stringify({ argv: ['opaque-command-material'], executable_sha256: 'b'.repeat(64) })))
   assert.equal(JSON.stringify(written.capsule).includes('content-must-not-escape'), false)
+  assert.equal(validateTierACellBindingCapsule({ ...fixture.input, capsule: written.capsule }).run_id, 'campaign-214-telemetry-r0-control')
+  assert.throws(() => validateTierACellBindingCapsule({ ...fixture.input, capsule: { ...written.capsule, raw_result_sha256: 'f'.repeat(64) } }), (error: unknown) => error instanceof Phase3AError && error.code === 'tier_a_binding_content_mismatch')
+  const loaded = loadTierACellBindingCapsules({ evidence_root: fixture.root, campaign_root: fixture.campaignRoot, binding_root: 'capsules/P3A-3/bindings', version: '2.1.214' })
+  assert.equal(loaded.cells.length, 1)
   assert.throws(() => writeTierACellBindingCapsule({ ...fixture.input, out: 'capsules/P3A-3/bindings/cell.json' }), /output already exists/)
+  writeJson(path.join(fixture.root, 'capsules/P3A-3/bindings/cell.json'), { ...written.capsule, raw_result_sha256: 'f'.repeat(64) })
+  assert.throws(() => loadTierACellBindingCapsules({ evidence_root: fixture.root, campaign_root: fixture.campaignRoot, binding_root: 'capsules/P3A-3/bindings', version: '2.1.214' }), (error: unknown) => error instanceof Phase3AError && error.code === 'tier_a_binding_content_mismatch')
 })
 
 withFixture((fixture) => {
@@ -122,7 +129,7 @@ withFixture((fixture) => {
 })
 
 withFixture((fixture) => {
-  writeJson(fixture.resultPath, { status: 'complete', opaque_raw_material: 'drifted-result-content' })
+  writeJson(fixture.resultPath, { status: 'complete', raw_output_persisted: false, opaque_raw_material: 'drifted-result-content' })
   assert.throws(() => buildTierACellBindingCapsule(fixture.input), /result digest does not match/)
 })
 

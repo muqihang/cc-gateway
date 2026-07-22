@@ -8,8 +8,24 @@ import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sh
 
 const TOOLCHAIN = '6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
+const TIER_A_VERSIONS = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
 
 function safeId(value: string): string { return value.replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 120) }
+
+function jsonFilesBelow(root: string, relativeRoot: string): string[] {
+  const directory = path.join(root, relativeRoot)
+  if (!existsSync(directory)) return []
+  const files: string[] = []
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      const child = path.join(current, entry.name)
+      if (entry.isDirectory()) visit(child)
+      else if (entry.isFile() && entry.name.endsWith('.json')) files.push(path.relative(root, child).split(path.sep).join('/'))
+    }
+  }
+  visit(directory)
+  return files
+}
 
 export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   const rows: ArtifactIndexInput[] = []
@@ -121,6 +137,35 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   add('p3a2-closure-coverage-v5', 'capsules/P3A-2/closure-r2-coverage-v5.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-saturation', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', 'p3a2-gap-campaign-v1'])
   add('p3a2-closure-coverage-v6', 'capsules/P3A-2/closure-r2-coverage-v6.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-saturation', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', 'p3a2-gap-campaign-v1'])
   add('p3a2-closure-coverage-v7', 'capsules/P3A-2/closure-r2-coverage-v7.json', 'P3A-2', 'retain', ['p3a2-closure-environment-v3', 'p3a2-closure-saturation', 'p3a2-closure-scenarios-v2', 'p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement', 'p3a2-gap-campaign-v2'])
+  add('p3a1-r1-static-closure', 'capsules/P3A-1/r1-static-closure-v1.json', 'P3A-1', 'retain', ['p3a1-static-summary'])
+  const addFocusedRepair = (version: 'v1' | 'v5', cells: number, includeUpdateBoundaryFiles = false): void => {
+    const repair = version === 'v1' ? 'closure-r2-gap-repair-v1' : 'closure-r2-gap-update-repair-v5'
+    const prefix = version === 'v1' ? 'p3a2-gap-repair-v1' : 'p3a2-gap-update-repair-v5'
+    const cellSummaryIds: string[] = []
+    for (let index = 0; index < cells; index += 1) {
+      const cell = `capsules/P3A-2/${repair}/cells/${String(index).padStart(2, '0')}`
+      const manifestId = `${prefix}-cell-${String(index).padStart(2, '0')}-manifest`
+      const guardId = `${prefix}-cell-${String(index).padStart(2, '0')}-guard`
+      const observerId = `${prefix}-cell-${String(index).padStart(2, '0')}-observer`
+      const resultId = `${prefix}-cell-${String(index).padStart(2, '0')}-result`
+      const summaryId = `${prefix}-cell-${String(index).padStart(2, '0')}-summary`
+      add(manifestId, `${cell}/manifest.json`, 'P3A-2', 'retain', ['p3a1-r1-static-closure'])
+      add(guardId, `${cell}/guard.json`, 'P3A-2', 'retain', [manifestId])
+      add(observerId, `${cell}/observer.json`, 'P3A-2', 'retain', [manifestId])
+      add(resultId, `${cell}/result.json`, 'P3A-2', 'retain', [guardId, observerId])
+      if (includeUpdateBoundaryFiles) {
+        add(`${prefix}-cell-${String(index).padStart(2, '0')}-fixture-self-test`, `${cell}/fixture-self-test.json`, 'P3A-2', 'retain', [manifestId])
+        add(`${prefix}-cell-${String(index).padStart(2, '0')}-update-proxy`, `${cell}/update-proxy.json`, 'P3A-2', 'retain', [manifestId])
+      }
+      add(summaryId, `${cell}/summary.json`, 'P3A-2', 'retain', [resultId])
+      add(`${prefix}-cell-${String(index).padStart(2, '0')}-normalized`, `${cell}/normalized.json`, 'P3A-2', 'retain', [summaryId])
+      cellSummaryIds.push(summaryId)
+    }
+    add(prefix, `capsules/P3A-2/${repair}/summary.json`, 'P3A-2', 'retain', cellSummaryIds)
+  }
+  addFocusedRepair('v1', 3)
+  addFocusedRepair('v5', 1, true)
+  add('p3a2-closure-coverage-v8', 'capsules/P3A-2/closure-r2-coverage-v8.json', 'P3A-2', 'retain', ['p3a2-closure-coverage-v7', 'p3a1-r1-static-closure', 'p3a2-gap-repair-v1', 'p3a2-gap-update-repair-v5'])
   add('p3a3-closure-tier-a', 'capsules/P3A-3/closure-r3-tier-a-v1.json', 'P3A-3', 'retain', ['p3a2-closure-coverage'])
   add('p3a3-closure-tier-a-v2', 'capsules/P3A-3/closure-r3-tier-a-v2.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v2'])
   add('p3a3-closure-tier-a-v3', 'capsules/P3A-3/closure-r3-tier-a-v3.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v4'])
@@ -153,6 +198,26 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
     tierAProjectionV4Ids.push(projectionId)
   }
   add('p3a3-closure-tier-a-v10', 'capsules/P3A-3/closure-r3-tier-a-v10.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v7', ...tierAProjectionV4Ids])
+  const tierABindingV3Ids = new Map<string, string[]>()
+  for (const version of TIER_A_VERSIONS) {
+    const bindingRoot = `capsules/P3A-3/tier-a-cell-bindings-v3/${version}`
+    const bindingIds: string[] = []
+    for (const relativePath of jsonFilesBelow(root, bindingRoot)) {
+      const relativeName = relativePath.slice(`${bindingRoot}/`.length).replace(/\.json$/, '')
+      const bindingId = `p3a3-tier-a-binding-v3-${safeId(version)}-${safeId(relativeName)}-${sha256Bytes(relativePath).slice(0, 12)}`
+      add(bindingId, relativePath, 'P3A-3', 'retain', ['p3a1-r1-static-closure'])
+      bindingIds.push(bindingId)
+    }
+    tierABindingV3Ids.set(version, bindingIds)
+  }
+  const tierAProjectionV5Ids: string[] = []
+  for (const version of TIER_A_VERSIONS) {
+    const projectionId = `p3a3-tier-a-projection-v5-${version}`
+    add(projectionId, `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`, 'P3A-3', 'retain', tierABindingV3Ids.get(version) ?? [])
+    tierAProjectionV5Ids.push(projectionId)
+  }
+  add('p3a3-closure-tier-a-v11', 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v8', ...tierAProjectionV5Ids])
+  add('p3a3-tier-a-rerun-terminal-unknown-v1', 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
     { artifact_id: 'raw-release-intake-record-quarantine', relative_path: 'intake/release/2.1.215/artifact.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },
