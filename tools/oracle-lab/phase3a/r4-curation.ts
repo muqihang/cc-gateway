@@ -213,6 +213,25 @@ export function assertTierAOutcomeResultCounts(outcome: Record<string, any>, row
   }
 }
 
+export function assertTierAPairedSchedule(pair: Record<string, any>): Array<Record<string, any>> {
+  if (!Number.isInteger(pair.repetitions) || pair.repetitions < 5 || !Array.isArray(pair.runs) || pair.runs.length !== pair.repetitions * 2) {
+    fail('r4_terminal_source_invalid', 'Tier A rerun pair does not contain a complete paired schedule')
+  }
+  const seen = new Set<string>()
+  for (const run of pair.runs) {
+    if (!run || !['control', 'treatment'].includes(run.arm) || !Number.isInteger(run.repetition) || run.repetition < 0 || run.repetition >= pair.repetitions || typeof run.run_id !== 'string') {
+      fail('r4_terminal_source_invalid', 'Tier A rerun pair run is invalid')
+    }
+    const key = `${run.arm}:${run.repetition}`
+    if (seen.has(key)) fail('r4_terminal_source_invalid', 'Tier A rerun pair schedule is duplicated')
+    seen.add(key)
+  }
+  for (let repetition = 0; repetition < pair.repetitions; repetition += 1) {
+    for (const arm of ['control', 'treatment']) if (!seen.has(`${arm}:${repetition}`)) fail('r4_terminal_source_invalid', 'Tier A rerun pair schedule is incomplete')
+  }
+  return pair.runs
+}
+
 function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any>, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
   if (!Array.isArray(rerun.rerun_mappings) || !Array.isArray(rerun.pair_outcomes)) fail('r4_terminal_source_invalid', 'Tier A rerun sources are required')
   const mappingKeys = new Set<string>()
@@ -231,13 +250,12 @@ function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any
     const pairSource = indexedSource(evidenceRoot, artifacts, outcome.source_bindings?.pair_summary, 'Tier A rerun pair')
     const pair = pairSource.value
     if (lane.version !== outcome.version || !Array.isArray(lane.selected_pairs) || !lane.selected_pairs.includes(outcome.required_pair)
-      || pair.version !== outcome.version || pair.required_pair !== outcome.required_pair || !Array.isArray(pair.runs) || pair.runs.length < 10) {
+      || pair.version !== outcome.version || pair.required_pair !== outcome.required_pair) {
       fail('r4_terminal_source_invalid', 'Tier A rerun summaries do not bind the declared outcome')
     }
     const rows: Array<{ command_digest: string; duration_ms: number; status: string; process_sampled: boolean; safe_diagnostic: boolean }> = []
     const seen = new Set<string>()
-    for (const run of pair.runs) {
-      if (!run || !['control', 'treatment'].includes(run.arm) || !Number.isInteger(run.repetition) || typeof run.run_id !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun pair run is invalid')
+    for (const run of assertTierAPairedSchedule(pair)) {
       const key = `${run.arm}:${run.repetition}`
       if (seen.has(key)) fail('r4_terminal_source_invalid', 'Tier A rerun pair schedule is duplicated')
       seen.add(key)

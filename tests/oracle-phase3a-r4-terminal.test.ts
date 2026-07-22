@@ -33,8 +33,8 @@ const input = {
          indexed(`p3a3-tier-a-rerun-campaign-${index}`, `${index + 1}`.repeat(64), `capsules/P3A-3/rerun-${index}/summary.json`),
          indexed(`p3a3-tier-a-rerun-lane-${index}`, '8'.repeat(64), `capsules/P3A-3/rerun-${index}/lane.json`),
          indexed(`p3a3-tier-a-rerun-pair-${index}`, '9'.repeat(64), `capsules/P3A-3/rerun-${index}/pair/summary.json`),
-         ...Array.from({ length: 10 }, (_, run) => indexed(`p3a3-tier-a-rerun-result-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(run).padStart(2, '0')}/control/result.json`)),
-         ...Array.from({ length: 10 }, (_, run) => indexed(`p3a3-tier-a-rerun-manifest-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(run).padStart(2, '0')}/control/manifest.json`)),
+         ...Array.from({ length: 10 }, (_, run) => { const repetition = Math.floor(run / 2); const arm = run % 2 === 0 ? 'control' : 'treatment'; return indexed(`p3a3-tier-a-rerun-result-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(repetition).padStart(2, '0')}/${arm}/result.json`) }),
+         ...Array.from({ length: 10 }, (_, run) => { const repetition = Math.floor(run / 2); const arm = run % 2 === 0 ? 'control' : 'treatment'; return indexed(`p3a3-tier-a-rerun-manifest-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(repetition).padStart(2, '0')}/${arm}/manifest.json`) }),
        ]),
     ],
   },
@@ -51,5 +51,6 @@ assert.throws(() => buildR4TerminalManifest({ ...input, index: { artifacts: inpu
 assert.throws(() => buildR4TerminalManifest({ ...input, tier_a_rerun: { ...tier_a_rerun, pair_outcomes: [] } } as any), /terminal rerun/)
 assert.throws(() => buildR4TerminalManifest({ ...input, tier_a_rerun: { ...tier_a_rerun, pair_outcomes: tier_a_rerun.pair_outcomes.map((outcome: any, index) => index === 0 ? { ...outcome, capability_evidence: { ...outcome.capability_evidence, process_sampled_result_count: 0 } } : outcome) } } as any), /terminal rerun/)
 assert.throws(() => buildR4TerminalManifest({ ...input, index: { artifacts: input.index.artifacts.filter((row: any) => row.relative_path !== 'capsules/P3A-3/rerun-0/lane.json') } } as any), /rerun lane source/)
+assert.throws(() => buildR4TerminalManifest({ ...input, index: { artifacts: input.index.artifacts.filter((row: any) => row.relative_path !== 'capsules/P3A-3/rerun-0/pair/r00/treatment/result.json') } } as any), /result sources are incomplete/)
 
 console.log(JSON.stringify({ ok: true, cases: 8 }))

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { assertTierAOutcomeResultCounts, closureConclusions, crossPlatformTerminalUnknown, evidenceRelativePath, parseR4CurationArgs, r2EnvironmentCoverage, r2TerminalUnknown, r2TerminalUnknownReason, tierATerminalUnknowns, tlsTerminalUnknown } from '../tools/oracle-lab/phase3a/r4-curation.js'
+import { assertTierAOutcomeResultCounts, assertTierAPairedSchedule, closureConclusions, crossPlatformTerminalUnknown, evidenceRelativePath, parseR4CurationArgs, r2EnvironmentCoverage, r2TerminalUnknown, r2TerminalUnknownReason, tierATerminalUnknowns, tlsTerminalUnknown } from '../tools/oracle-lab/phase3a/r4-curation.js'
 import { canonicalJson, sha256Bytes } from '../tools/oracle-lab/phase3a/core.js'
 
 console.log('\ntests/oracle-phase3a-r4-curation.test.ts')
@@ -53,6 +53,7 @@ assert.throws(() => tierATerminalUnknowns([{ version: '2.1.214', status: 'CLOSED
 assert.throws(() => tierATerminalUnknowns([{ version: '2.1.214', status: 'CLOSED_WITH_UNKNOWN', dynamic: { admission: { convergence: { pairs: [{ required_pair: 'restart', run_coverage: 'BLOCKED' }] } } } }], { pair_outcomes: [{ version: '2.1.214', required_pair: 'restart', classification: 'TERMINAL_UNKNOWN', phase3b_usable: false, searched_surfaces: ['safe'], capability_evidence: { external_socket_budget: 0, raw_material_persisted: false, complete_result_count: 0, terminal_result_count: 10, result_count: 10, process_sampled_result_count: 0, safe_diagnostic_result_count: 10 } }] }), (error: any) => error.code === 'r4_terminal_unknown_unproven')
 const outcomeCounts = { capability_evidence: { result_count: 1, terminal_result_count: 1, complete_result_count: 0, process_sampled_result_count: 1, safe_diagnostic_result_count: 1 }, source_bindings: { result_set_digest: sha256Bytes(canonicalJson([{ command_digest: 'a'.repeat(64), duration_ms: 1, status: 'complete' }])) } }
 assert.throws(() => assertTierAOutcomeResultCounts(outcomeCounts, [{ command_digest: 'a'.repeat(64), duration_ms: 1, status: 'complete', process_sampled: true, safe_diagnostic: true }]), (error: any) => error.code === 'r4_terminal_source_invalid')
+assert.throws(() => assertTierAPairedSchedule({ repetitions: 5, runs: Array.from({ length: 10 }, (_, repetition) => ({ arm: 'control', repetition, run_id: `run-${repetition}` })) }), (error: any) => error.code === 'r4_terminal_source_invalid')
 
 const tlsFixture = { schema_version: 'oracle-lab-phase3a-local-tls-connect-summary.v1', status: 'OBSERVED', active_artifact: { entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58', observed_entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58' }, capability: { external_socket_budget: 0, raw_material_persisted: false, local_tls_connect: 'observed', local_https_http: 'observed' }, surfaces: { tls_events: [{ decision: 'accepted-local-tls', protocol: 'TLSv1.3' }], http_events: [{ response_status: 200 }] } }
 assert.equal(tlsTerminalUnknown(tlsFixture).capability_exhausted, true)

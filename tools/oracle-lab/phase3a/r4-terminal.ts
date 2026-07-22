@@ -20,6 +20,26 @@ function indexedSource(artifacts: Array<Record<string, any>>, source: Record<str
   return row
 }
 
+function assertPairedSourceRows(rows: Array<Record<string, any>>, manifests: Array<Record<string, any>>, expectedCount: number): void {
+  const keys = (values: Array<Record<string, any>>, kind: 'result' | 'manifest'): Set<string> => {
+    const output = new Set<string>()
+    for (const row of values) {
+      const match = String(row.relative_path).match(new RegExp(`/r(\\d+)/(control|treatment)/${kind}\\.json$`))
+      if (!match) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun source path is invalid')
+      output.add(`${match[1]}:${match[2]}`)
+    }
+    return output
+  }
+  const resultKeys = keys(rows, 'result'); const manifestKeys = keys(manifests, 'manifest')
+  if (rows.length !== expectedCount || manifests.length !== expectedCount || resultKeys.size !== expectedCount || manifestKeys.size !== expectedCount || canonicalJson([...resultKeys].sort()) !== canonicalJson([...manifestKeys].sort())) {
+    fail('r4_terminal_binding_invalid', 'Tier A terminal rerun result sources are incomplete')
+  }
+  for (const key of resultKeys) {
+    const [repetition] = key.split(':')
+    if (!resultKeys.has(`${repetition}:control`) || !resultKeys.has(`${repetition}:treatment`)) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun schedule is not paired')
+  }
+}
+
 function assertTierARerunEnvelope(value: Record<string, any>, artifacts: Array<Record<string, any>>): void {
   const { deterministic_digest, ...base } = value
   if (deterministic_digest !== sha256Bytes(canonicalJson(base)) || !Array.isArray(value.rerun_mappings) || !Array.isArray(value.pair_outcomes)) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun deterministic envelope is invalid')
@@ -47,7 +67,7 @@ function assertTierARerunEnvelope(value: Record<string, any>, artifacts: Array<R
     const pairRoot = path.posix.dirname(String(pair.relative_path))
     const resultRows = artifacts.filter((artifact) => typeof artifact.relative_path === 'string' && artifact.relative_path.startsWith(`${pairRoot}/`) && /\/r\d+\/(?:control|treatment)\/result\.json$/.test(artifact.relative_path))
     const manifestRows = artifacts.filter((artifact) => typeof artifact.relative_path === 'string' && artifact.relative_path.startsWith(`${pairRoot}/`) && /\/r\d+\/(?:control|treatment)\/manifest\.json$/.test(artifact.relative_path))
-    if (resultRows.length !== evidence.result_count || manifestRows.length !== evidence.result_count) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun result sources are incomplete')
+    assertPairedSourceRows(resultRows, manifestRows, evidence.result_count)
   }
 }
 
