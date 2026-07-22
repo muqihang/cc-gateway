@@ -9,6 +9,11 @@ import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sh
 const TOOLCHAIN = '6f86c18ddf1f22095d5817ee82ee1ff1d6babae689c1f0ebbe51bb2b8217fd6d'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
 const TIER_A_VERSIONS = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
+const TIER_A_RERUN_ROOTS = [
+  'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-214-long-run-restart',
+  'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-212-restart',
+  'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-211-base-url-background-restart',
+] as const
 
 function safeId(value: string): string { return value.replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 120) }
 
@@ -219,6 +224,12 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
     tierAProjectionV5Ids.push(projectionId)
   }
   add('p3a3-closure-tier-a-v11', 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v8', ...tierAProjectionV5Ids])
+  for (const rerunRoot of TIER_A_RERUN_ROOTS) {
+    for (const relativePath of jsonFilesBelow(root, rerunRoot)) {
+      if (!/(?:\/summary|\/manifest|\/result)\.json$/.test(relativePath)) continue
+      add(`p3a3-tier-a-rerun-source-${sha256Bytes(relativePath).slice(0, 20)}`, relativePath, 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'])
+    }
+  }
   add('p3a3-tier-a-rerun-terminal-unknown-v1', 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'P3A-3', 'retain', ['p3a3-closure-tier-a-v11'])
   rows.push(
     { artifact_id: 'raw-intake-index-quarantine', relative_path: 'intake/artifact-index.json', media_type: 'application/json', source_url: null, scope: 'P3A-0-raw', requirement_ids: ['HA-P1-001'], sensitivity: 'quarantine', redaction_transform: 'none-quarantined', retention_class: 'quarantine-24h', expiry: EXPIRY, disposition: 'quarantined', parser_name: 'phase3a-terminal-index', parser_version: '1', parser_agreement: 'not-applicable', parent_artifact_ids: [] },

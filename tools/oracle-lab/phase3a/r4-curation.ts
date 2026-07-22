@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 
 import { buildBlockedDeliverables, type CuratedExitInput } from './build-exit.js'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File } from './core.js'
+import { loadLaunchManifest } from './launch-manifest.js'
 import { captureRepositoryBinding } from './repository-binding.js'
 import { verifyArtifactIndex } from './artifact-index.js'
 import { TIER_A_RERUN_TERMINAL_UNKNOWN_TARGETS } from './tier-a-rerun-terminal-unknown.js'
@@ -150,6 +151,8 @@ export function tierATerminalUnknowns(lanes: Array<Record<string, any>>, rerun: 
       || outcome.capability_evidence?.complete_result_count !== 0
       || outcome.capability_evidence?.terminal_result_count !== outcome.capability_evidence?.result_count
       || outcome.capability_evidence?.result_count < 10
+      || outcome.capability_evidence?.process_sampled_result_count !== outcome.capability_evidence?.result_count
+      || outcome.capability_evidence?.safe_diagnostic_result_count !== outcome.capability_evidence?.result_count
       || !Array.isArray(outcome.searched_surfaces)
       || outcome.searched_surfaces.length === 0)) {
       fail('r4_terminal_unknown_unproven', `Tier A terminal rerun does not prove every incomplete pair: ${String(lane.version)}`)
@@ -165,6 +168,77 @@ export function tierATerminalUnknowns(lanes: Array<Record<string, any>>, rerun: 
     })
   }
   return { closed, open }
+}
+
+function indexedSource(evidenceRoot: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>, source: Record<string, any>, label: string): { relative: string; value: Record<string, any> } {
+  if (typeof source.path !== 'string' || !/^[a-f0-9]{64}$/.test(String(source.sha256))) fail('r4_terminal_source_invalid', `${label} source binding is invalid`)
+  const relative = source.path
+  const absolute = path.resolve(evidenceRoot, relative)
+  if (path.relative(evidenceRoot, absolute).startsWith('..') || path.isAbsolute(path.relative(evidenceRoot, absolute))) fail('r4_terminal_source_invalid', `${label} source binding escapes evidence root`)
+  const indexed = [...artifacts.values()].find((artifact) => artifact.relative_path === relative && artifact.sha256 === source.sha256)
+  if (!indexed || sha256File(absolute) !== source.sha256) fail('r4_terminal_source_invalid', `${label} source is not hash-bound by the terminal index`)
+  try {
+    const value = JSON.parse(readFileSync(absolute, 'utf8')) as Record<string, any>
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('r4_terminal_source_invalid', `${label} source must be an object`)
+    return { relative, value }
+  } catch (error) {
+    if (error instanceof Phase3AError) throw error
+    fail('r4_terminal_source_invalid', `${label} source is not valid JSON`)
+  }
+}
+
+function resultCommandDigest(evidenceRoot: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>, result: Record<string, any>, resultRelative: string): string {
+  if (/^[a-f0-9]{64}$/.test(String(result.command_digest))) return result.command_digest
+  const manifestRelative = path.join(path.dirname(resultRelative), 'manifest.json').split(path.sep).join('/')
+  const manifest = indexedSource(evidenceRoot, artifacts, { path: manifestRelative, sha256: sha256File(path.resolve(evidenceRoot, manifestRelative)) }, 'Tier A result manifest').value
+  const parsed = loadLaunchManifest(path.resolve(evidenceRoot, manifestRelative))
+  if (parsed.run_id !== result.run_id || manifest.run_id !== result.run_id) fail('r4_terminal_source_invalid', 'Tier A result manifest does not bind its result')
+  return sha256Bytes(canonicalJson(parsed.command))
+}
+
+function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any>, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
+  if (!Array.isArray(rerun.rerun_mappings) || !Array.isArray(rerun.pair_outcomes)) fail('r4_terminal_source_invalid', 'Tier A rerun sources are required')
+  const mappingKeys = new Set<string>()
+  for (const mapping of rerun.rerun_mappings) {
+    if (!mapping?.target || typeof mapping.rerun_root !== 'string' || typeof mapping.campaign_id !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun mapping is invalid')
+    const key = `${mapping.target.version}:${mapping.target.required_pair}`
+    if (mappingKeys.has(key)) fail('r4_terminal_source_invalid', 'Tier A rerun mapping is duplicated')
+    mappingKeys.add(key)
+    const campaign = indexedSource(evidenceRoot, artifacts, mapping.summary, 'Tier A rerun campaign').value
+    if (campaign.campaign_id !== mapping.campaign_id) fail('r4_terminal_source_invalid', 'Tier A rerun campaign ID does not match its mapping')
+  }
+  for (const outcome of rerun.pair_outcomes) {
+    const key = `${outcome.version}:${outcome.required_pair}`
+    if (!mappingKeys.has(key)) fail('r4_terminal_source_invalid', 'Tier A outcome has no rerun mapping')
+    const lane = indexedSource(evidenceRoot, artifacts, outcome.source_bindings?.lane_summary, 'Tier A rerun lane').value
+    const pairSource = indexedSource(evidenceRoot, artifacts, outcome.source_bindings?.pair_summary, 'Tier A rerun pair')
+    const pair = pairSource.value
+    if (lane.version !== outcome.version || !Array.isArray(lane.selected_pairs) || !lane.selected_pairs.includes(outcome.required_pair)
+      || pair.version !== outcome.version || pair.required_pair !== outcome.required_pair || !Array.isArray(pair.runs) || pair.runs.length < 10) {
+      fail('r4_terminal_source_invalid', 'Tier A rerun summaries do not bind the declared outcome')
+    }
+    const rows: Array<{ command_digest: string; duration_ms: number; status: string }> = []
+    let sampled = 0
+    let diagnostic = 0
+    const seen = new Set<string>()
+    for (const run of pair.runs) {
+      if (!run || !['control', 'treatment'].includes(run.arm) || !Number.isInteger(run.repetition) || typeof run.run_id !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun pair run is invalid')
+      const key = `${run.arm}:${run.repetition}`
+      if (seen.has(key)) fail('r4_terminal_source_invalid', 'Tier A rerun pair schedule is duplicated')
+      seen.add(key)
+      const resultRelative = path.join(path.dirname(pairSource.relative), `r${String(run.repetition).padStart(2, '0')}`, run.arm, 'result.json').split(path.sep).join('/')
+      const result = indexedSource(evidenceRoot, artifacts, { path: resultRelative, sha256: sha256File(path.resolve(evidenceRoot, resultRelative)) }, 'Tier A rerun result').value
+      if (result.run_id !== run.run_id || result.raw_output_persisted !== false || !Number.isSafeInteger(result.duration_ms) || typeof result.status !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun result is invalid')
+      if (Array.isArray(result.process_samples) && result.process_samples.length > 0) sampled += 1
+      if (result.safe_diagnostic && typeof result.safe_diagnostic === 'object' && !Array.isArray(result.safe_diagnostic)) diagnostic += 1
+      rows.push({ command_digest: resultCommandDigest(evidenceRoot, artifacts, result, resultRelative), duration_ms: result.duration_ms, status: result.status })
+    }
+    const evidence = outcome.capability_evidence
+    if (evidence?.result_count !== rows.length || evidence.terminal_result_count !== rows.length || evidence.process_sampled_result_count !== sampled || evidence.safe_diagnostic_result_count !== diagnostic
+      || outcome.source_bindings?.result_set_digest !== sha256Bytes(canonicalJson(rows))) {
+      fail('r4_terminal_source_invalid', 'Tier A rerun capability counts or result digest do not match indexed sources')
+    }
+  }
 }
 
 export function tlsTerminalUnknown(value: Record<string, any>): TerminalUnknown {
@@ -269,7 +343,7 @@ function assertTierAProjectionSupport(evidenceRoot: string, artifacts: Map<strin
   }
 }
 
-function assertTierARerunArtifact(value: Record<string, any>, sha256: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
+function assertTierARerunArtifact(evidenceRoot: string, value: Record<string, any>, sha256: string, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
   indexedArtifact(artifacts, TIER_A_RERUN_ARTIFACT_ID, sha256, 'Tier A terminal rerun artifact')
   assertDeterministic(value, 'Tier A terminal rerun artifact')
   if (value.schema_version !== 'oracle-lab-phase3a-tier-a-rerun-terminal-unknown.v1' || value.classification !== 'TERMINAL_UNKNOWN' || value.phase3b_usable !== false || value.external_socket_budget !== 0 || value.raw_material_persisted !== false || !Array.isArray(value.pair_outcomes)) {
@@ -280,6 +354,7 @@ function assertTierARerunArtifact(value: Record<string, any>, sha256: string, ar
   if (canonicalJson(actual) !== canonicalJson(expected) || value.pair_outcomes.some((row: Record<string, any>) => row.classification !== 'TERMINAL_UNKNOWN' || row.phase3b_usable !== false)) {
     fail('r4_input_invalid', 'Tier A terminal rerun artifact does not cover the declared terminal Unknowns')
   }
+  assertTierARerunSources(evidenceRoot, value, artifacts)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const required = ['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'tier-a-terminal-rerun', 'tls-summary', 'cross-platform', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff']
@@ -289,7 +364,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
   const r2Path = expectedEvidenceFile(evidenceRoot, values.r2!, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 closure')
   const r3Path = expectedEvidenceFile(evidenceRoot, values.r3!, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 closure')
-  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'capsules/P3A-4/leak-scan-v21.json', 'leak scan')
+  const leakPath = expectedEvidenceFile(evidenceRoot, values['leak-scan']!, 'capsules/P3A-4/leak-scan-v22.json', 'leak scan')
   const rerunPath = expectedEvidenceFile(evidenceRoot, values['tier-a-terminal-rerun']!, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
   const tlsPath = expectedEvidenceFile(evidenceRoot, values['tls-summary']!, 'capsules/P3A-2/closure-r2-local-tls-connect-v1/summary.json', 'TLS summary')
   const crossPlatformPath = expectedEvidenceFile(evidenceRoot, values['cross-platform']!, 'capsules/P3A-1/cross-platform-static-corroboration-v2.json', 'cross-platform summary')
@@ -327,7 +402,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (changePoints.length !== expectedTierAVersions.length || expectedTierAVersions.some((version) => changePoints.filter((lane: any) => lane.version === version && lane.role === 'tier-a').length !== 1)) fail('r4_input_invalid', 'R3 must contain exactly the five expected Tier A lanes')
   assertTierAProjectionSupport(evidenceRoot, artifactById, changePoints)
   const rerun = JSON.parse(readFileSync(rerunPath, 'utf8')) as Record<string, any>
-  assertTierARerunArtifact(rerun, rerunSha, artifactById)
+  assertTierARerunArtifact(evidenceRoot, rerun, rerunSha, artifactById)
   const tierA = tierATerminalUnknowns(changePoints, rerun)
   const tlsUnknown = tlsTerminalUnknown(JSON.parse(readFileSync(tlsPath, 'utf8')) as Record<string, any>)
   const crossPlatformUnknown = crossPlatformTerminalUnknown(JSON.parse(readFileSync(crossPlatformPath, 'utf8')) as Record<string, any>)

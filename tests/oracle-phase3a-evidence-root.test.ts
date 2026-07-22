@@ -124,6 +124,9 @@ for (const version of ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']) {
 }
 writeFileSync(path.join(root, 'capsules/P3A-3', 'closure-r3-tier-a-v11.json'), '{}\n')
 writeFileSync(path.join(root, 'capsules/P3A-3', 'tier-a-rerun-terminal-unknown-v1.json'), '{}\n')
+const rerunSource = path.join(root, 'capsules/P3A-3', 'tier-a-dynamic-campaign-v6-rerun-214-long-run-restart')
+mkdirSync(path.join(rerunSource, 'lanes/2.1.214/pairs/00-long-run/r00/control'), { recursive: true })
+for (const relative of ['summary.json', 'lanes/2.1.214/summary.json', 'lanes/2.1.214/pairs/00-long-run/summary.json', 'lanes/2.1.214/pairs/00-long-run/r00/control/manifest.json', 'lanes/2.1.214/pairs/00-long-run/r00/control/result.json']) writeFileSync(path.join(rerunSource, relative), '{}\n')
 for (const relative of ['intake/artifact-index.json', 'intake/release/2.1.215/artifact.json']) {
   const file = path.join(root, relative)
   mkdirSync(path.dirname(file), { recursive: true })
@@ -143,6 +146,7 @@ assert.ok(terminalIds.includes('p3a3-tier-a-projection-v5-2.1.214'))
 assert.ok(terminalIds.some((id) => id.startsWith('p3a3-tier-a-binding-v3-2.1.214-')))
 assert.ok(terminalIds.includes('p3a3-closure-tier-a-v11'))
 assert.ok(terminalIds.includes('p3a3-tier-a-rerun-terminal-unknown-v1'))
+assert.ok(terminalInputs.some((row) => row.relative_path === 'capsules/P3A-3/tier-a-dynamic-campaign-v6-rerun-214-long-run-restart/lanes/2.1.214/pairs/00-long-run/r00/control/result.json'))
 assert.ok(terminalIds.includes('p3a2-local-tls-connect-v1'))
 assert.ok(terminalIds.includes('p3a1-cross-platform-static-corroboration-v2'))
 assert.doesNotThrow(() => buildArtifactIndex({ evidenceRoot: root, evidenceRootId: 'test-root', generatedAt: '2026-07-20T00:00:00.000Z', previousIndexSha256: null, toolchainDigest: 'a'.repeat(64), artifacts: terminalInputs }))
