@@ -30,6 +30,7 @@ type TerminalUnknown = {
   capability_evidence: string
   searched_surfaces: string[]
 }
+const TERMINAL_RESULT_STATUSES = new Set(['complete', 'failed', 'timeout', 'resource-limit', 'spawn-error'])
 
 export function evidenceRelativePath(root: string, file: string): string {
   const relative = path.relative(path.resolve(root), path.resolve(file))
@@ -196,6 +197,22 @@ function resultCommandDigest(evidenceRoot: string, artifacts: Map<string, { arti
   return sha256Bytes(canonicalJson(parsed.command))
 }
 
+export function assertTierAOutcomeResultCounts(outcome: Record<string, any>, rows: Array<{ command_digest: string; duration_ms: number; status: string; process_sampled: boolean; safe_diagnostic: boolean }>): void {
+  const evidence = outcome.capability_evidence
+  const complete = rows.filter((row) => row.status === 'complete').length
+  const sampled = rows.filter((row) => row.process_sampled).length
+  const diagnostic = rows.filter((row) => row.safe_diagnostic).length
+  if (rows.some((row) => !TERMINAL_RESULT_STATUSES.has(row.status))
+    || evidence?.result_count !== rows.length
+    || evidence.terminal_result_count !== rows.length
+    || evidence.complete_result_count !== complete
+    || evidence.process_sampled_result_count !== sampled
+    || evidence.safe_diagnostic_result_count !== diagnostic
+    || outcome.source_bindings?.result_set_digest !== sha256Bytes(canonicalJson(rows.map(({ command_digest, duration_ms, status }) => ({ command_digest, duration_ms, status }))))) {
+    fail('r4_terminal_source_invalid', 'Tier A rerun capability counts or result digest do not match indexed sources')
+  }
+}
+
 function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any>, artifacts: Map<string, { artifact_id: string; sha256: string; relative_path?: string }>): void {
   if (!Array.isArray(rerun.rerun_mappings) || !Array.isArray(rerun.pair_outcomes)) fail('r4_terminal_source_invalid', 'Tier A rerun sources are required')
   const mappingKeys = new Set<string>()
@@ -217,9 +234,7 @@ function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any
       || pair.version !== outcome.version || pair.required_pair !== outcome.required_pair || !Array.isArray(pair.runs) || pair.runs.length < 10) {
       fail('r4_terminal_source_invalid', 'Tier A rerun summaries do not bind the declared outcome')
     }
-    const rows: Array<{ command_digest: string; duration_ms: number; status: string }> = []
-    let sampled = 0
-    let diagnostic = 0
+    const rows: Array<{ command_digest: string; duration_ms: number; status: string; process_sampled: boolean; safe_diagnostic: boolean }> = []
     const seen = new Set<string>()
     for (const run of pair.runs) {
       if (!run || !['control', 'treatment'].includes(run.arm) || !Number.isInteger(run.repetition) || typeof run.run_id !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun pair run is invalid')
@@ -229,15 +244,13 @@ function assertTierARerunSources(evidenceRoot: string, rerun: Record<string, any
       const resultRelative = path.join(path.dirname(pairSource.relative), `r${String(run.repetition).padStart(2, '0')}`, run.arm, 'result.json').split(path.sep).join('/')
       const result = indexedSource(evidenceRoot, artifacts, { path: resultRelative, sha256: sha256File(path.resolve(evidenceRoot, resultRelative)) }, 'Tier A rerun result').value
       if (result.run_id !== run.run_id || result.raw_output_persisted !== false || !Number.isSafeInteger(result.duration_ms) || typeof result.status !== 'string') fail('r4_terminal_source_invalid', 'Tier A rerun result is invalid')
-      if (Array.isArray(result.process_samples) && result.process_samples.length > 0) sampled += 1
-      if (result.safe_diagnostic && typeof result.safe_diagnostic === 'object' && !Array.isArray(result.safe_diagnostic)) diagnostic += 1
-      rows.push({ command_digest: resultCommandDigest(evidenceRoot, artifacts, result, resultRelative), duration_ms: result.duration_ms, status: result.status })
+      rows.push({
+        command_digest: resultCommandDigest(evidenceRoot, artifacts, result, resultRelative), duration_ms: result.duration_ms, status: result.status,
+        process_sampled: Array.isArray(result.process_samples) && result.process_samples.length > 0,
+        safe_diagnostic: Boolean(result.safe_diagnostic && typeof result.safe_diagnostic === 'object' && !Array.isArray(result.safe_diagnostic)),
+      })
     }
-    const evidence = outcome.capability_evidence
-    if (evidence?.result_count !== rows.length || evidence.terminal_result_count !== rows.length || evidence.process_sampled_result_count !== sampled || evidence.safe_diagnostic_result_count !== diagnostic
-      || outcome.source_bindings?.result_set_digest !== sha256Bytes(canonicalJson(rows))) {
-      fail('r4_terminal_source_invalid', 'Tier A rerun capability counts or result digest do not match indexed sources')
-    }
+    assertTierAOutcomeResultCounts(outcome, rows)
   }
 }
 

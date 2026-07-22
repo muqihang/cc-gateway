@@ -13,12 +13,23 @@ type Input = {
 }
 function fail(code: string, message: string): never { throw new Phase3AError(code, message) }
 
-function assertTierARerunEnvelope(value: Record<string, any>): void {
+function indexedSource(artifacts: Array<Record<string, any>>, source: Record<string, any>, label: string): Record<string, any> {
+  if (typeof source?.path !== 'string' || !/^[a-f0-9]{64}$/.test(String(source.sha256))) fail('r4_terminal_binding_invalid', `${label} source binding is invalid`)
+  const row = artifacts.find((artifact) => artifact.relative_path === source.path && artifact.sha256 === source.sha256)
+  if (!row) fail('r4_terminal_binding_invalid', `${label} source is not bound by the terminal index`)
+  return row
+}
+
+function assertTierARerunEnvelope(value: Record<string, any>, artifacts: Array<Record<string, any>>): void {
   const { deterministic_digest, ...base } = value
   if (deterministic_digest !== sha256Bytes(canonicalJson(base)) || !Array.isArray(value.rerun_mappings) || !Array.isArray(value.pair_outcomes)) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun deterministic envelope is invalid')
   const keys = (rows: Array<Record<string, any>>, nested: string): string[] => rows.map((row) => nested === 'target' ? `${row.target?.version}:${row.target?.required_pair}` : `${row.version}:${row.required_pair}`).sort()
   if (canonicalJson(keys(value.rerun_mappings, 'target')) !== canonicalJson(TIER_A_TERMINAL_TARGETS.slice().sort()) || canonicalJson(keys(value.pair_outcomes, 'outcome')) !== canonicalJson(TIER_A_TERMINAL_TARGETS.slice().sort())) {
     fail('r4_terminal_binding_invalid', 'Tier A terminal rerun does not cover every declared target')
+  }
+  for (const mapping of value.rerun_mappings) {
+    if (typeof mapping.rerun_root !== 'string' || typeof mapping.campaign_id !== 'string') fail('r4_terminal_binding_invalid', 'Tier A rerun mapping is incomplete')
+    indexedSource(artifacts, mapping.summary, 'Tier A rerun campaign')
   }
   for (const outcome of value.pair_outcomes) {
     const evidence = outcome.capability_evidence
@@ -31,6 +42,12 @@ function assertTierARerunEnvelope(value: Record<string, any>): void {
       || evidence.process_sampled_result_count !== evidence.result_count || evidence.safe_diagnostic_result_count !== evidence.result_count) {
       fail('r4_terminal_binding_invalid', 'Tier A terminal rerun outcome is incomplete')
     }
+    indexedSource(artifacts, outcome.source_bindings.lane_summary, 'Tier A rerun lane')
+    const pair = indexedSource(artifacts, outcome.source_bindings.pair_summary, 'Tier A rerun pair')
+    const pairRoot = path.posix.dirname(String(pair.relative_path))
+    const resultRows = artifacts.filter((artifact) => typeof artifact.relative_path === 'string' && artifact.relative_path.startsWith(`${pairRoot}/`) && /\/r\d+\/(?:control|treatment)\/result\.json$/.test(artifact.relative_path))
+    const manifestRows = artifacts.filter((artifact) => typeof artifact.relative_path === 'string' && artifact.relative_path.startsWith(`${pairRoot}/`) && /\/r\d+\/(?:control|treatment)\/manifest\.json$/.test(artifact.relative_path))
+    if (resultRows.length !== evidence.result_count || manifestRows.length !== evidence.result_count) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun result sources are incomplete')
   }
 }
 
@@ -52,10 +69,16 @@ function tierASupportDigest(index: Record<string, any>, r2Sha256: string, r3Sha2
     if (rows.length === 0) fail('r4_terminal_binding_invalid', `Tier A binding v3 is missing for ${version}`)
     return rows
   })
-  const sourceRoots = rerunValue.rerun_mappings.map((mapping: Record<string, any>) => String(mapping.rerun_root))
-  const rerunSources = artifacts.filter((row) => sourceRoots.some((root) => typeof row.relative_path === 'string' && row.relative_path.startsWith(`${root}/`)))
-  if (rerunSources.length === 0 || sourceRoots.some((root) => !rerunSources.some((row) => row.relative_path.startsWith(`${root}/`)))) fail('r4_terminal_binding_invalid', 'Tier A rerun source artifacts are not bound by the terminal index')
-  const support = [...new Map([...projections, ...bindings, ...rerunSources, r2, r3, rerun].map((row) => [String(row.artifact_id), { artifact_id: row.artifact_id, sha256: row.sha256, relative_path: row.relative_path }])).values()]
+  const declaredSources = [
+    ...rerunValue.rerun_mappings.map((mapping: Record<string, any>) => indexedSource(artifacts, mapping.summary, 'Tier A rerun campaign')),
+    ...rerunValue.pair_outcomes.flatMap((outcome: Record<string, any>) => {
+      const lane = indexedSource(artifacts, outcome.source_bindings.lane_summary, 'Tier A rerun lane')
+      const pair = indexedSource(artifacts, outcome.source_bindings.pair_summary, 'Tier A rerun pair')
+      const pairRoot = path.posix.dirname(String(pair.relative_path))
+      return [lane, pair, ...artifacts.filter((artifact) => typeof artifact.relative_path === 'string' && artifact.relative_path.startsWith(`${pairRoot}/`) && /\/r\d+\/(?:control|treatment)\/(?:manifest|result)\.json$/.test(artifact.relative_path))]
+    }),
+  ]
+  const support = [...new Map([...projections, ...bindings, ...declaredSources, r2, r3, rerun].map((row) => [String(row.artifact_id), { artifact_id: row.artifact_id, sha256: row.sha256, relative_path: row.relative_path }])).values()]
   return sha256Bytes(canonicalJson(support.sort((left, right) => left.artifact_id.localeCompare(right.artifact_id))))
 }
 
@@ -66,7 +89,7 @@ export function buildR4TerminalManifest(input: Input): Record<string, any> {
   if (input.handoff.exit_report_sha256 !== input.exit_sha256) fail('r4_terminal_exit_mismatch', 'handoff must bind the exit report')
   if (input.leak.status !== 'PASS' || input.leak.index_sha256 !== input.index_sha256 || !Array.isArray(input.leak.findings) || input.leak.findings.length !== 0) fail('r4_terminal_leak_mismatch', 'leak scan must pass against the pre-exit index')
   if (input.tier_a_rerun.schema_version !== 'oracle-lab-phase3a-tier-a-rerun-terminal-unknown.v1' || input.tier_a_rerun.classification !== 'TERMINAL_UNKNOWN' || input.tier_a_rerun.phase3b_usable !== false || input.tier_a_rerun.external_socket_budget !== 0 || input.tier_a_rerun.raw_material_persisted !== false) fail('r4_terminal_binding_invalid', 'Tier A terminal rerun artifact is invalid')
-  assertTierARerunEnvelope(input.tier_a_rerun)
+  assertTierARerunEnvelope(input.tier_a_rerun, input.index.artifacts as Array<Record<string, any>>)
   const green = input.exit.status === 'GREEN' && input.handoff.status === 'READY'
   const blocked = input.exit.status === 'BLOCKED' && input.handoff.status === 'BLOCKED'
   if (!green && !blocked) fail('r4_terminal_status_mismatch', 'exit and handoff terminal statuses are inconsistent')

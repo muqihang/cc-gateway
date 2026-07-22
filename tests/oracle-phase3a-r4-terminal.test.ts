@@ -11,10 +11,10 @@ const terminalTargets = [['2.1.214', 'long-run'], ['2.1.214', 'restart'], ['2.1.
 const indexed = (artifact_id: string, sha256: string, relative_path: string) => ({ artifact_id, sha256, relative_path })
 const rerunBase = {
   schema_version: 'oracle-lab-phase3a-tier-a-rerun-terminal-unknown.v1', classification: 'TERMINAL_UNKNOWN', phase3b_usable: false, external_socket_budget: 0, raw_material_persisted: false,
-  rerun_mappings: terminalTargets.map(([version, required_pair], index) => ({ target: { version, required_pair }, rerun_root: `capsules/P3A-3/rerun-${index}`, campaign_id: `campaign-${index}` })),
-  pair_outcomes: terminalTargets.map(([version, required_pair]) => ({
+  rerun_mappings: terminalTargets.map(([version, required_pair], index) => ({ target: { version, required_pair }, rerun_root: `capsules/P3A-3/rerun-${index}`, campaign_id: `campaign-${index}`, summary: { path: `capsules/P3A-3/rerun-${index}/summary.json`, sha256: `${index + 1}`.repeat(64) } })),
+  pair_outcomes: terminalTargets.map(([version, required_pair], index) => ({
     version, required_pair, classification: 'TERMINAL_UNKNOWN', phase3b_usable: false, command_digest: '7'.repeat(64),
-    source_bindings: { lane_summary: { path: 'capsules/P3A-3/lane.json', sha256: '8'.repeat(64) }, pair_summary: { path: 'capsules/P3A-3/pair.json', sha256: '9'.repeat(64) }, result_set_digest: 'a'.repeat(64) },
+    source_bindings: { lane_summary: { path: `capsules/P3A-3/rerun-${index}/lane.json`, sha256: '8'.repeat(64) }, pair_summary: { path: `capsules/P3A-3/rerun-${index}/pair/summary.json`, sha256: '9'.repeat(64) }, result_set_digest: 'a'.repeat(64) },
     capability_evidence: { external_socket_budget: 0, raw_material_persisted: false, complete_result_count: 0, result_count: 10, terminal_result_count: 10, process_sampled_result_count: 10, safe_diagnostic_result_count: 10 },
   })),
 }
@@ -29,7 +29,13 @@ const input = {
       indexed('p3a3-tier-a-rerun-terminal-unknown-v1', '6'.repeat(64), 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json'),
        ...projectionVersions.map((version, index) => indexed(`p3a3-tier-a-projection-v5-${version}`, `${index}`.repeat(64), `capsules/P3A-3/tier-a-dynamic-projections-v5/tier-a-dynamic-projection-v5-${version}.json`)),
        ...projectionVersions.map((version, index) => indexed(`p3a3-tier-a-binding-v3-${version}-fixture`, `${index + 5}`.repeat(64), `capsules/P3A-3/tier-a-cell-bindings-v3/${version}/fixture.json`)),
-       ...terminalTargets.map((_, index) => indexed(`p3a3-tier-a-rerun-source-${index}`, `${index + 1}`.repeat(64), `capsules/P3A-3/rerun-${index}/result.json`)),
+       ...terminalTargets.flatMap((_, index) => [
+         indexed(`p3a3-tier-a-rerun-campaign-${index}`, `${index + 1}`.repeat(64), `capsules/P3A-3/rerun-${index}/summary.json`),
+         indexed(`p3a3-tier-a-rerun-lane-${index}`, '8'.repeat(64), `capsules/P3A-3/rerun-${index}/lane.json`),
+         indexed(`p3a3-tier-a-rerun-pair-${index}`, '9'.repeat(64), `capsules/P3A-3/rerun-${index}/pair/summary.json`),
+         ...Array.from({ length: 10 }, (_, run) => indexed(`p3a3-tier-a-rerun-result-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(run).padStart(2, '0')}/control/result.json`)),
+         ...Array.from({ length: 10 }, (_, run) => indexed(`p3a3-tier-a-rerun-manifest-${index}-${run}`, `${(run % 10)}`.repeat(64), `capsules/P3A-3/rerun-${index}/pair/r${String(run).padStart(2, '0')}/control/manifest.json`)),
+       ]),
     ],
   },
   exit: { artifact_index_sha256: sha, status: 'GREEN' }, handoff: { artifact_index_sha256: sha, exit_report_sha256: 'c'.repeat(64), status: 'READY' }, leak: { index_sha256: sha, status: 'PASS', findings: [] },
@@ -44,5 +50,6 @@ assert.throws(() => buildR4TerminalManifest({ ...input, handoff: { ...input.hand
 assert.throws(() => buildR4TerminalManifest({ ...input, index: { artifacts: input.index.artifacts.filter((row: any) => row.artifact_id !== 'p3a3-tier-a-rerun-terminal-unknown-v1') } } as any), /terminal rerun artifact/)
 assert.throws(() => buildR4TerminalManifest({ ...input, tier_a_rerun: { ...tier_a_rerun, pair_outcomes: [] } } as any), /terminal rerun/)
 assert.throws(() => buildR4TerminalManifest({ ...input, tier_a_rerun: { ...tier_a_rerun, pair_outcomes: tier_a_rerun.pair_outcomes.map((outcome: any, index) => index === 0 ? { ...outcome, capability_evidence: { ...outcome.capability_evidence, process_sampled_result_count: 0 } } : outcome) } } as any), /terminal rerun/)
+assert.throws(() => buildR4TerminalManifest({ ...input, index: { artifacts: input.index.artifacts.filter((row: any) => row.relative_path !== 'capsules/P3A-3/rerun-0/lane.json') } } as any), /rerun lane source/)
 
 console.log(JSON.stringify({ ok: true, cases: 8 }))
