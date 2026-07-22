@@ -92,7 +92,7 @@ function assertTierAProjectionSupport(evidenceRoot: string, artifacts: Map<strin
   for (const version of TIER_A_VERSIONS) {
     const lane = lanes.find((row) => row.version === version)
     const evidence = lane?.dynamic?.evidence
-    const relativeProjection = `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`
+    const relativeProjection = `capsules/P3A-3/tier-a-dynamic-projections-v5/tier-a-dynamic-projection-v5-${version}.json`
     if (evidence?.projection_path !== relativeProjection || typeof evidence.projection_sha256 !== 'string') fail('r4_input_invalid', `R3 lane ${version} must bind Tier A projection v5`)
     indexedArtifact(artifacts, `p3a3-tier-a-projection-v5-${version}`, evidence.projection_sha256, `Tier A projection ${version}`)
     const projectionPath = expectedEvidenceFile(evidenceRoot, evidence.projection_path, relativeProjection, `Tier A projection ${version}`)

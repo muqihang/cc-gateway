@@ -23,7 +23,7 @@ function tierASupportDigest(index: Record<string, any>, r2Sha256: string, r3Sha2
   const r2 = required('p3a2-closure-coverage-v8', r2Sha256, 'capsules/P3A-2/closure-r2-coverage-v8.json', 'R2 v8')
   const r3 = required('p3a3-closure-tier-a-v11', r3Sha256, 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'R3 v11')
   const rerun = required('p3a3-tier-a-rerun-terminal-unknown-v1', rerunSha256, 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json', 'Tier A terminal rerun artifact')
-  const projections = TIER_A_VERSIONS.map((version) => required(`p3a3-tier-a-projection-v5-${version}`, String(artifacts.find((row) => row.artifact_id === `p3a3-tier-a-projection-v5-${version}`)?.sha256 ?? ''), `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`, `Tier A projection v5 ${version}`))
+  const projections = TIER_A_VERSIONS.map((version) => required(`p3a3-tier-a-projection-v5-${version}`, String(artifacts.find((row) => row.artifact_id === `p3a3-tier-a-projection-v5-${version}`)?.sha256 ?? ''), `capsules/P3A-3/tier-a-dynamic-projections-v5/tier-a-dynamic-projection-v5-${version}.json`, `Tier A projection v5 ${version}`))
   const bindings = TIER_A_VERSIONS.flatMap((version) => {
     const prefix = `capsules/P3A-3/tier-a-cell-bindings-v3/${version}/`
     const rows = artifacts.filter((row) => typeof row.relative_path === 'string' && row.relative_path.startsWith(prefix))

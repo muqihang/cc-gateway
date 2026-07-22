@@ -213,7 +213,7 @@ export function terminalArtifactInputs(root: string): ArtifactIndexInput[] {
   const tierAProjectionV5Ids: string[] = []
   for (const version of TIER_A_VERSIONS) {
     const projectionId = `p3a3-tier-a-projection-v5-${version}`
-    add(projectionId, `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`, 'P3A-3', 'retain', tierABindingV3Ids.get(version) ?? [])
+    add(projectionId, `capsules/P3A-3/tier-a-dynamic-projections-v5/tier-a-dynamic-projection-v5-${version}.json`, 'P3A-3', 'retain', tierABindingV3Ids.get(version) ?? [])
     tierAProjectionV5Ids.push(projectionId)
   }
   add('p3a3-closure-tier-a-v11', 'capsules/P3A-3/closure-r3-tier-a-v11.json', 'P3A-3', 'retain', ['p3a2-closure-coverage-v8', ...tierAProjectionV5Ids])

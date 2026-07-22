@@ -15,7 +15,7 @@ const input = {
       indexed('p3a2-closure-coverage-v8', 'f'.repeat(64), 'capsules/P3A-2/closure-r2-coverage-v8.json'),
       indexed('p3a3-closure-tier-a-v11', '1'.repeat(64), 'capsules/P3A-3/closure-r3-tier-a-v11.json'),
       indexed('p3a3-tier-a-rerun-terminal-unknown-v1', '6'.repeat(64), 'capsules/P3A-3/tier-a-rerun-terminal-unknown-v1.json'),
-      ...projectionVersions.map((version, index) => indexed(`p3a3-tier-a-projection-v5-${version}`, `${index}`.repeat(64), `capsules/P3A-3/tier-a-dynamic-projection-v5-${version}.json`)),
+      ...projectionVersions.map((version, index) => indexed(`p3a3-tier-a-projection-v5-${version}`, `${index}`.repeat(64), `capsules/P3A-3/tier-a-dynamic-projections-v5/tier-a-dynamic-projection-v5-${version}.json`)),
       ...projectionVersions.map((version, index) => indexed(`p3a3-tier-a-binding-v3-${version}-fixture`, `${index + 5}`.repeat(64), `capsules/P3A-3/tier-a-cell-bindings-v3/${version}/fixture.json`)),
     ],
   },
