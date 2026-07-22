@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-phase3a-conclusion.schema.json",
+  "title": "Oracle Lab Phase 3A conclusion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "conclusion_id", "level", "scope", "statement", "supporting_artifact_ids", "contradicting_artifact_ids", "static_anchor", "dynamic_reproduction", "single_source_reason", "platform_limits", "expiry", "negative_capabilities", "phase3b_usable", "prohibited_claims"],
+  "properties": {
+    "schema_version": {"const": "oracle-lab-phase3a-conclusion.v1"}, "conclusion_id": {"$ref": "#/$defs/id"},
+    "level": {"enum": ["Observed", "Reproduced", "Inferred", "Unknown"]}, "scope": {"type": "string", "minLength": 1, "maxLength": 1024}, "statement": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "supporting_artifact_ids": {"$ref": "#/$defs/ids"}, "contradicting_artifact_ids": {"$ref": "#/$defs/ids"},
+    "static_anchor": {"anyOf": [{"type": "object", "additionalProperties": false, "required": ["artifact_digest", "location", "reproduction_command_digest"], "properties": {"artifact_digest": {"$ref": "#/$defs/sha256"}, "location": {"type": "string"}, "reproduction_command_digest": {"$ref": "#/$defs/sha256"}}}, {"type": "null"}]},
+    "dynamic_reproduction": {"anyOf": [{"type": "object", "additionalProperties": false, "required": ["run_ids", "control_run_ids", "source_count"], "properties": {"run_ids": {"$ref": "#/$defs/ids"}, "control_run_ids": {"$ref": "#/$defs/ids"}, "source_count": {"type": "integer", "minimum": 1, "maximum": 4}}}, {"type": "null"}]},
+    "single_source_reason": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]}, "platform_limits": {"type": "array", "items": {"type": "string"}},
+    "expiry": {"type": "string", "format": "date-time"}, "negative_capabilities": {"type": "array", "items": {"type": "string"}}, "phase3b_usable": {"type": "boolean"},
+    "prohibited_claims": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["CL-PINNED-OBS-001", "CL-OFFICIAL-CLIENT-IDENTITY-PROHIBITED", "CL-CCH-SERVER-ACCEPTANCE-PROHIBITED", "CL-TLS-WIRE-EQUIVALENCE-PROHIBITED", "CL-LONG-TERM-ACCOUNT-SAFETY-PROHIBITED", "CL-CHANGELOG-RISK-RULES-PROHIBITED", "CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED"]}}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}, "ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}}
+}

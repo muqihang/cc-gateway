@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-phase3a-launch-manifest.schema.json",
+  "title": "Oracle Lab Phase 3A launch manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "parent_run_id", "pair_id", "sequence_index", "randomization_seed", "phase", "requirement_ids", "hypothesis_id", "evidence_level_ceiling", "repositories", "contract", "artifact", "toolchain_digest", "platform", "command", "environment", "network", "matrix", "limits", "capture", "redaction_policy", "retention_class", "expiry", "previous_manifest_sha256", "preflight"],
+  "properties": {
+    "schema_version": {"const": "oracle-lab-phase3a-launch-manifest.v1"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "parent_run_id": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "pair_id": {"$ref": "#/$defs/id"},
+    "sequence_index": {"type": "integer", "minimum": 0},
+    "randomization_seed": {"type": "integer", "minimum": 0},
+    "phase": {"const": "3A"},
+    "requirement_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z]{2}-P[0-9]-[0-9]{3}$"}},
+    "hypothesis_id": {"$ref": "#/$defs/id"},
+    "evidence_level_ceiling": {"enum": ["Observed", "Reproduced", "Inferred", "Unknown"]},
+    "repositories": {
+      "type": "object", "additionalProperties": false, "required": ["cc_gateway", "sub2api"],
+      "properties": {"cc_gateway": {"$ref": "#/$defs/repository"}, "sub2api": {"$ref": "#/$defs/repository"}}
+    },
+    "contract": {
+      "type": "object", "additionalProperties": false, "required": ["bundle_id", "bundle_sha256", "schema_range", "predecessor_sha256"],
+      "properties": {
+        "bundle_id": {"const": "oracle.compatibility.v1"}, "bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "schema_range": {"const": "1:0-0"}, "predecessor_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["package", "version", "registry_url", "archive_sha256", "tree_sha256", "entrypoint_sha256"],
+      "properties": {
+        "package": {"type": "string", "minLength": 1, "maxLength": 160}, "version": {"$ref": "#/$defs/version"},
+        "registry_url": {"type": "string", "format": "uri", "pattern": "^https://registry\\.npmjs\\.org/"},
+        "archive_sha256": {"$ref": "#/$defs/sha256"}, "tree_sha256": {"$ref": "#/$defs/sha256"}, "entrypoint_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "toolchain_digest": {"$ref": "#/$defs/sha256"},
+    "platform": {
+      "type": "object", "additionalProperties": false, "required": ["os", "release", "arch", "runtime", "virtualization"],
+      "properties": {"os": {"type": "string"}, "release": {"type": "string"}, "arch": {"type": "string"}, "runtime": {"type": "string"}, "virtualization": {"type": "string"}}
+    },
+    "command": {
+      "type": "object", "additionalProperties": false, "required": ["executable_sha256", "argv", "cwd", "stdin_sha256", "timeout_ms"],
+      "properties": {
+        "executable_sha256": {"$ref": "#/$defs/sha256"}, "argv": {"type": "array", "maxItems": 128, "items": {"type": "string", "maxLength": 4096}},
+        "cwd": {"$ref": "#/$defs/relativePath"}, "stdin_sha256": {"$ref": "#/$defs/sha256"}, "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 7200000}
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false, "required": ["allowlist", "explicit_empty", "unset", "home", "xdg", "tmp", "tz", "lang", "lc_all", "base_urls"],
+      "properties": {
+        "allowlist": {"type": "object", "additionalProperties": {"type": "string", "maxLength": 4096}},
+        "explicit_empty": {"$ref": "#/$defs/uniqueStrings"}, "unset": {"$ref": "#/$defs/uniqueStrings"},
+        "home": {"$ref": "#/$defs/relativePath"}, "xdg": {"$ref": "#/$defs/relativePath"}, "tmp": {"$ref": "#/$defs/relativePath"},
+        "tz": {"type": "string"}, "lang": {"type": "string"}, "lc_all": {"type": "string"},
+        "base_urls": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^https?://(?:127\\.0\\.0\\.1|\\[::1\\]|localhost)(?::[0-9]{1,5})?(?:/|$)"}}
+      }
+    },
+    "network": {
+      "type": "object", "additionalProperties": false, "required": ["policy", "loopback_ports", "proxy_mode", "ca_sha256", "external_socket_budget"],
+      "properties": {
+        "policy": {"const": "declared_loopback_only"}, "loopback_ports": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1, "maximum": 65535}},
+        "proxy_mode": {"enum": ["none", "loopback-connect", "loopback-mitm"]}, "ca_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}, "external_socket_budget": {"const": 0}
+      }
+    },
+    "matrix": {
+      "type": "object", "additionalProperties": false, "required": ["changed_variable", "control_value", "treatment_value", "fixed_variables"],
+      "properties": {"changed_variable": {"type": "string", "minLength": 1}, "control_value": {}, "treatment_value": {}, "fixed_variables": {"type": "object"}}
+    },
+    "limits": {
+      "type": "object", "additionalProperties": false, "required": ["wall_ms", "cpu_ms", "rss_bytes", "output_bytes", "processes", "retries", "sockets", "files"],
+      "properties": {
+        "wall_ms": {"type": "integer", "minimum": 1, "maximum": 7200000}, "cpu_ms": {"type": "integer", "minimum": 1}, "rss_bytes": {"type": "integer", "minimum": 1048576},
+        "output_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456}, "processes": {"type": "integer", "minimum": 1, "maximum": 32},
+        "retries": {"type": "integer", "minimum": 0, "maximum": 8}, "sockets": {"type": "integer", "minimum": 1, "maximum": 128}, "files": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "capture": {
+      "type": "object", "additionalProperties": false, "required": ["hook", "inspector", "process", "fs", "network", "tls", "http", "pcap", "stdout", "stderr"],
+      "properties": {"hook": {"type": "boolean"}, "inspector": {"type": "boolean"}, "process": {"type": "boolean"}, "fs": {"type": "boolean"}, "network": {"type": "boolean"}, "tls": {"type": "boolean"}, "http": {"type": "boolean"}, "pcap": {"type": "boolean"}, "stdout": {"type": "boolean"}, "stderr": {"type": "boolean"}}
+    },
+    "redaction_policy": {"const": "oracle-lab-phase3a-redaction.v1"},
+    "retention_class": {"enum": ["synthetic-raw-14d", "normalized-until-phase3b", "official-artifact-until-acceptance", "quarantine-24h"]},
+    "expiry": {"type": "string", "format": "date-time"},
+    "previous_manifest_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "preflight": {
+      "type": "object", "additionalProperties": false, "required": ["status", "cc_head", "cc_tree", "sub2api_head", "sub2api_tree", "plan_sha256", "p2_bundle_sha256", "predecessor_sha256", "codegraph_current"],
+      "properties": {
+        "status": {"const": "PASS"}, "cc_head": {"$ref": "#/$defs/commit"}, "cc_tree": {"$ref": "#/$defs/commit"}, "sub2api_head": {"$ref": "#/$defs/commit"}, "sub2api_tree": {"$ref": "#/$defs/commit"},
+        "plan_sha256": {"$ref": "#/$defs/sha256"}, "p2_bundle_sha256": {"$ref": "#/$defs/sha256"}, "predecessor_sha256": {"$ref": "#/$defs/sha256"}, "codegraph_current": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "relativePath": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$", "maxLength": 1024},
+    "uniqueStrings": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}},
+    "repository": {
+      "type": "object", "additionalProperties": false, "required": ["commit", "tree", "dirty_digest"],
+      "properties": {"commit": {"$ref": "#/$defs/commit"}, "tree": {"$ref": "#/$defs/commit"}, "dirty_digest": {"$ref": "#/$defs/sha256"}}
+    }
+  }
+}
