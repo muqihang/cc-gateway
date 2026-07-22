@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
-import { TIER_A_LANES, evaluateClaudeCodeR3Closure, evaluateR3Closure, type TierALaneInput } from '../tools/oracle-lab/phase3a/r3-closure.js'
+import { TIER_A_LANES, evaluateClaudeCodeR3Closure, evaluateR3Closure, parseR3ClosureArgs, type TierALaneInput } from '../tools/oracle-lab/phase3a/r3-closure.js'
+import { buildTierACellSummary, tierAInterfaceDigest } from '../tools/oracle-lab/phase3a/tier-a-dynamic-campaign.js'
 
 console.log('\ntests/oracle-phase3a-r3-closure.test.ts')
 
@@ -68,5 +69,33 @@ assert.throws(() => evaluateClaudeCodeR3Closure({
   active_entrypoint_sha256: activeEntrypoint,
   lanes: lanes.slice(0, 4),
 }), /exactly 5/)
+assert.throws(() => evaluateClaudeCodeR3Closure({
+  active_version: '2.1.215',
+  active_entrypoint_sha256: activeEntrypoint,
+  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const } })),
+}), /dynamic pair count/)
+const resolved = evaluateClaudeCodeR3Closure({
+  active_version: '2.1.215',
+  active_entrypoint_sha256: activeEntrypoint,
+  lanes: lanes.map((lane) => ({ ...lane, dynamic: { ...lane.dynamic, status: 'REPRODUCED' as const, pair_count: lane.dynamic.required_pairs.length } })),
+})
+assert.equal(resolved.status, 'PASS')
+assert.ok(resolved.tier_a.lanes.every((lane: any) => lane.dynamic.next_minimal_action === null))
+const cellSummary = buildTierACellSummary({
+  run_id: 'tier-a-fixture', arm: 'control', version: '2.1.214', status: 'complete',
+  hook_event_count: 1, observer_event_count: 1, process_samples: 1,
+  manifest_sha256: digest('manifest'), guard_sha256: digest('guard'), observer_sha256: digest('observer'), result_sha256: digest('result'),
+})
+for (const name of ['manifest', 'guard', 'observer', 'result']) assert.match(String(cellSummary[`${name}_sha256`]), /^[a-f0-9]{64}$/)
+const dynamicSystemEvent = (valueDigest: string) => ({
+  method: 'POST', path_class: '/v1/messages', header_names: ['content-type'], header_value_classes: { 'content-type': 'json' },
+  body_topology: { type: 'object', fields: [{ key_sha256: digest('body-key'), value: { type: 'string', bytes: 12, sha256: valueDigest } }] },
+  response_class: 'anthropic:sse', request_class: 'messages', cch_class: 'body-cache-control',
+  system_summary: { status: 'observed', byte_length: 40, sha256: valueDigest, ast_topology: { type: 'array', length: 1, items: [{ type: 'string', bytes: 40, sha256: valueDigest }] }, span_hashes: [{ path_sha256: digest('span'), ordinal: 0, byte_length: 40, sha256: valueDigest }] },
+})
+assert.equal(tierAInterfaceDigest([dynamicSystemEvent(digest('run-a'))]), tierAInterfaceDigest([dynamicSystemEvent(digest('run-b'))]))
+assert.notEqual(tierAInterfaceDigest([dynamicSystemEvent(digest('run-a'))]), tierAInterfaceDigest([{ ...dynamicSystemEvent(digest('run-b')), system_summary: { ...dynamicSystemEvent(digest('run-b')).system_summary, byte_length: 41 } }]))
+assert.throws(() => parseR3ClosureArgs(['--dynamic-roots', 'legacy']), /unknown argument/)
+assert.throws(() => parseR3ClosureArgs(['--out', 'a', '--out', 'b']), /duplicate argument/)
 
-console.log(JSON.stringify({ ok: true, cases: 6 }))
+console.log(JSON.stringify({ ok: true, cases: 14 }))

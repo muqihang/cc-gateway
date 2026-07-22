@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { artifactRow, buildArtifactIndex, verifyArtifactIndex } from '../tools/oracle-lab/phase3a/artifact-index.js'
-import { artifactSetDigest, assertAppendOnlyArtifactRows, terminalArtifactInputs } from '../tools/oracle-lab/phase3a/build-terminal-index.js'
+import { artifactSetDigest, assertAppendOnlyArtifactRows, parseTerminalIndexArgs, terminalArtifactInputs } from '../tools/oracle-lab/phase3a/build-terminal-index.js'
 import { expectedAuthoritativeC4RunIds } from '../tools/oracle-lab/phase3a/c4-evidence.js'
 import { Phase3AError } from '../tools/oracle-lab/phase3a/core.js'
 
@@ -54,6 +54,9 @@ assert.ok(terminalIds.includes(`p3a2-${c4Run}-normalized`))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-input'))
 assert.ok(terminalIds.includes('p3a2-c4-tz-utc-shanghai-campaign-result'))
 assert.doesNotThrow(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }, { artifact_id: 'b' }]))
-assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], []), /changed or disappeared/)
+assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1 }], []), /row disappeared/)
+assert.throws(() => assertAppendOnlyArtifactRows([{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'normalized-safe' }], [{ artifact_id: 'a', relative_path: 'a.json', sha256: 'a', byte_size: 1, sensitivity: 'quarantine' }]), /artifact row changed/)
+assert.throws(() => parseTerminalIndexArgs(['--out', '--previous-index']), /arguments must/)
+assert.throws(() => parseTerminalIndexArgs(['--out', 'a', '--out', 'b']), /duplicate argument/)
 
-console.log(JSON.stringify({ ok: true, cases: 16 }))
+console.log(JSON.stringify({ ok: true, cases: 19 }))

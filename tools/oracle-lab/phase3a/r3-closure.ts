@@ -3,6 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { canonicalJson, Phase3AError, sha256Bytes, sha256File } from './core.js'
+import { projectTierADynamicLane } from './tier-a-dynamic-projection.js'
 
 export const TIER_A_LANES = [
   {
@@ -66,6 +67,14 @@ export type TierALaneInput = {
     pair_count: number
     required_pairs: string[]
     next_minimal_action?: string | null
+    evidence?: {
+      campaign_summary_path?: string
+      campaign_summary_sha256?: string
+      lane_summary_path?: string
+      lane_summary_sha256?: string
+      projection_path?: string
+      projection_sha256?: string
+    }
   }
 }
 
@@ -101,6 +110,12 @@ export function evaluateClaudeCodeR3Closure(input: {
     if (!isSha256(lane.structural.active_entrypoint_sha256) || lane.structural.active_entrypoint_sha256 !== input.active_entrypoint_sha256) {
       fail('r3_structural_active_mismatch', `structural active entrypoint mismatch for ${expected.version}`)
     }
+    const expectedPairs = [...expected.required_pairs].sort()
+    const actualPairs = Array.isArray(lane.dynamic.required_pairs) ? [...new Set(lane.dynamic.required_pairs)].sort() : []
+    if (lane.dynamic.status === 'PASS' || lane.dynamic.status === 'REPRODUCED') {
+      if (lane.dynamic.pair_count !== expectedPairs.length) fail('r3_dynamic_pair_count', `dynamic pair count must equal required pairs for ${expected.version}`)
+      if (canonicalJson(actualPairs) !== canonicalJson(expectedPairs)) fail('r3_dynamic_pair_coverage', `dynamic required pairs do not match lane requirements for ${expected.version}`)
+    }
     const status = lane.dynamic.status === 'UNKNOWN' ? 'CLOSED_WITH_UNKNOWN' : lane.structural.status === 'PASS' && ['PASS', 'REPRODUCED'].includes(lane.dynamic.status)
       ? 'PASS'
       : lane.dynamic.status === 'REPRODUCED' || lane.structural.status === 'REPRODUCED'
@@ -117,8 +132,10 @@ export function evaluateClaudeCodeR3Closure(input: {
       dynamic: {
         ...lane.dynamic,
         required_pairs: [...expected.required_pairs],
-        next_minimal_action: lane.dynamic.next_minimal_action
-          ?? `Run bounded loopback pairs for ${expected.required_pairs.join(', ')} against control ${expected.version} and stop after first resolving observation.`,
+        next_minimal_action: ['PASS', 'REPRODUCED'].includes(lane.dynamic.status)
+          ? null
+          : lane.dynamic.next_minimal_action
+            ?? `Run bounded loopback pairs for ${expected.required_pairs.join(', ')} against control ${expected.version} and stop after first resolving observation.`,
       },
     }
   })
@@ -166,9 +183,18 @@ export function evaluateR3Closure(intake: {
   fail('r3_wrong_target', 'Sub2API adapter regression is not Claude Code Tier A; use evaluateClaudeCodeR3Closure')
 }
 
-function argument(name: string): string | undefined {
-  const index = process.argv.indexOf(name)
-  return index < 0 ? undefined : process.argv[index + 1]
+export function parseR3ClosureArgs(argv: string[]): Record<string, string> {
+  const values = argv[0] === '--' ? argv.slice(1) : argv
+  const output: Record<string, string> = {}
+  const allowed = new Set(['evidence-root', 'out', 'active-version', 'dynamic-projections'])
+  for (let index = 0; index < values.length; index += 2) {
+    if (!values[index]?.startsWith('--') || !values[index + 1] || values[index + 1].startsWith('--')) fail('invalid_arguments', 'arguments must be --name value pairs')
+    const name = values[index].slice(2)
+    if (!allowed.has(name)) fail('invalid_arguments', `unknown argument: --${name}`)
+    if (output[name] !== undefined) fail('invalid_arguments', `duplicate argument: --${name}`)
+    output[name] = values[index + 1]
+  }
+  return output
 }
 
 function loadPlatformArtifact(evidenceRoot: string, version: string): Record<string, any> {
@@ -180,7 +206,90 @@ function loadPlatformArtifact(evidenceRoot: string, version: string): Record<str
   return { ...artifact, artifact_path: artifactPath, artifact_sha256: sha256File(artifactPath) }
 }
 
-function buildLaneFromIntake(active: Record<string, any>, control: Record<string, any>, expected: (typeof TIER_A_LANES)[number]): TierALaneInput {
+function loadDynamicLane(evidenceRoot: string, dynamicRoot: string, expected: (typeof TIER_A_LANES)[number]): TierALaneInput['dynamic'] {
+  const root = path.resolve(evidenceRoot)
+  const campaignRoot = path.resolve(root, dynamicRoot)
+  const relativeRoot = path.relative(root, campaignRoot)
+  if (relativeRoot === '' || relativeRoot.startsWith(`..${path.sep}`) || path.isAbsolute(relativeRoot)) fail('r3_dynamic_path_invalid', 'dynamic campaign must be inside evidence root')
+  const campaignPath = path.join(campaignRoot, 'summary.json')
+  const lanePath = path.join(campaignRoot, 'lanes', expected.version, 'summary.json')
+  if (!existsSync(campaignPath) || !existsSync(lanePath)) fail('r3_dynamic_evidence_missing', `missing dynamic evidence for ${expected.version}`)
+  const campaign = JSON.parse(readFileSync(campaignPath, 'utf8')) as Record<string, any>
+  const lane = JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, any>
+  if (campaign.external_socket_budget !== 0 || lane.external_socket_budget !== 0 || campaign.raw_material_persisted !== false || lane.raw_material_persisted !== false) {
+    fail('r3_dynamic_evidence_invalid', `dynamic evidence safety invariant failed for ${expected.version}`)
+  }
+  if (lane.version !== expected.version || lane.hypothesis_id !== expected.hypothesis_id || !Array.isArray(lane.pairs)) {
+    fail('r3_dynamic_evidence_invalid', `dynamic lane identity invalid for ${expected.version}`)
+  }
+  const pairs = lane.pairs as Array<Record<string, any>>
+  const pairNames = [...new Set(pairs.map((pair) => String(pair.required_pair)))].sort()
+  const expectedPairs = [...expected.required_pairs].sort()
+  if (pairs.length !== expectedPairs.length || canonicalJson(pairNames) !== canonicalJson(expectedPairs)) {
+    fail('r3_dynamic_pair_coverage', `dynamic pair coverage invalid for ${expected.version}`)
+  }
+  if (pairs.some((pair) => pair.status !== 'REPRODUCED' || pair.external_socket_budget !== 0 || pair.raw_material_persisted !== false)) {
+    fail('r3_dynamic_pair_incomplete', `dynamic pair did not reproduce safely for ${expected.version}`)
+  }
+  return {
+    status: lane.status === 'REPRODUCED' ? 'REPRODUCED' : 'CLOSED_WITH_UNKNOWN',
+    pair_count: pairs.length,
+    required_pairs: pairNames,
+    next_minimal_action: lane.status === 'REPRODUCED' ? null : `Resolve incomplete dynamic pairs for ${expected.version}`,
+    evidence: {
+      campaign_summary_path: path.relative(root, campaignPath),
+      campaign_summary_sha256: sha256File(campaignPath),
+      lane_summary_path: path.relative(root, lanePath),
+      lane_summary_sha256: sha256File(lanePath),
+    },
+  }
+}
+
+function loadDynamicProjection(evidenceRoot: string, projectionInput: string, expected: (typeof TIER_A_LANES)[number]): TierALaneInput['dynamic'] {
+  const root = path.resolve(evidenceRoot)
+  const projectionPath = path.resolve(root, projectionInput)
+  const relative = path.relative(root, projectionPath)
+  if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !existsSync(projectionPath)) fail('r3_dynamic_projection_invalid', 'dynamic projection must be an evidence-root file')
+  const projection = JSON.parse(readFileSync(projectionPath, 'utf8')) as Record<string, any>
+  if (projection.schema_version !== 'oracle-lab-phase3a-tier-a-dynamic-projection.v2' || projection.version !== expected.version || projection.hypothesis_id !== expected.hypothesis_id || !['REPRODUCED', 'UNKNOWN'].includes(projection.status) || projection.external_socket_budget !== 0 || projection.raw_material_persisted !== false || !Array.isArray(projection.pairs)) {
+    fail('r3_dynamic_projection_invalid', `dynamic projection is invalid for ${expected.version}`)
+  }
+  const pairs = projection.pairs as Array<Record<string, any>>
+  const pairNames = [...new Set(pairs.map((pair) => String(pair.required_pair)))].sort()
+  const expectedPairs = [...expected.required_pairs].sort()
+  if (pairs.length !== expectedPairs.length || canonicalJson(pairNames) !== canonicalJson(expectedPairs)) fail('r3_dynamic_projection_incomplete', `dynamic projection lacks required pair coverage for ${expected.version}`)
+  const bindings = projection.source_bindings as Record<string, any>
+  if (!bindings || !isSha256(bindings.campaign_summary_sha256) || !isSha256(bindings.lane_summary_sha256) || typeof bindings.campaign_summary_path !== 'string' || typeof bindings.lane_summary_path !== 'string') fail('r3_dynamic_projection_invalid', `dynamic projection source bindings are invalid for ${expected.version}`)
+  const sourcePath = (relativePath: string): string => {
+    const absolute = path.resolve(root, relativePath)
+    const relation = path.relative(root, absolute)
+    if (relation === '' || relation.startsWith(`..${path.sep}`) || path.isAbsolute(relation) || !existsSync(absolute)) fail('r3_dynamic_projection_invalid', `dynamic projection source is unavailable for ${expected.version}`)
+    return absolute
+  }
+  const campaignPath = sourcePath(bindings.campaign_summary_path)
+  const lanePath = sourcePath(bindings.lane_summary_path)
+  if (sha256File(campaignPath) !== bindings.campaign_summary_sha256 || sha256File(lanePath) !== bindings.lane_summary_sha256) fail('r3_dynamic_projection_invalid', `dynamic projection source hash mismatch for ${expected.version}`)
+  const regenerated = projectTierADynamicLane({
+    campaign: JSON.parse(readFileSync(campaignPath, 'utf8')) as Record<string, any>,
+    lane: JSON.parse(readFileSync(lanePath, 'utf8')) as Record<string, any>,
+    campaign_summary_path: bindings.campaign_summary_path,
+    lane_summary_path: bindings.lane_summary_path,
+    campaign_summary_sha256: bindings.campaign_summary_sha256,
+    lane_summary_sha256: bindings.lane_summary_sha256,
+  })
+  if (canonicalJson(projection) !== canonicalJson(regenerated)) fail('r3_dynamic_projection_invalid', `dynamic projection does not reproduce its source summaries for ${expected.version}`)
+  if (pairs.some((pair) => pair.external_socket_budget !== 0 || pair.raw_material_persisted !== false)) fail('r3_dynamic_projection_invalid', `dynamic projection safety invariant failed for ${expected.version}`)
+  const reproduced = projection.status === 'REPRODUCED' && pairs.every((pair) => pair.status === 'REPRODUCED' && Number(pair.terminal_cells) >= 10 && Number(pair.dual_source_cells) >= 10 && Number(pair.protocol_cells) >= 10)
+  return {
+    status: reproduced ? 'REPRODUCED' : 'CLOSED_WITH_UNKNOWN',
+    pair_count: pairs.length,
+    required_pairs: pairNames,
+    next_minimal_action: reproduced ? null : `Resolve incomplete dynamic pairs for ${expected.version}`,
+    evidence: { projection_path: path.relative(root, projectionPath), projection_sha256: sha256File(projectionPath) },
+  }
+}
+
+function buildLaneFromIntake(active: Record<string, any>, control: Record<string, any>, expected: (typeof TIER_A_LANES)[number], dynamic?: TierALaneInput['dynamic']): TierALaneInput {
   const controlEntrypoint = typeof control.entrypoint_sha256 === 'string' ? control.entrypoint_sha256 : null
   const activeEntrypoint = String(active.entrypoint_sha256)
   const semanticChange = Boolean(controlEntrypoint && controlEntrypoint !== activeEntrypoint)
@@ -212,7 +321,7 @@ function buildLaneFromIntake(active: Record<string, any>, control: Record<string
       ...structuralBase,
       digest: sha256Bytes(canonicalJson(structuralBase)),
     },
-    dynamic: {
+    dynamic: dynamic ?? {
       status: 'CLOSED_WITH_UNKNOWN',
       pair_count: 0,
       required_pairs: [...expected.required_pairs],
@@ -222,14 +331,26 @@ function buildLaneFromIntake(active: Record<string, any>, control: Record<string
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  const evidenceRoot = argument('--evidence-root')
-  const out = argument('--out')
-  const activeVersion = argument('--active-version') ?? '2.1.215'
+  const values = parseR3ClosureArgs(process.argv.slice(2))
+  const evidenceRoot = values['evidence-root']
+  const out = values.out
+  const activeVersion = values['active-version'] ?? '2.1.215'
   if (!evidenceRoot || !out) fail('usage', 'r3-closure requires --evidence-root and --out')
   if (activeVersion !== '2.1.215') fail('r3_active_invalid', 'active Claude Code version must be 2.1.215')
   const active = loadPlatformArtifact(evidenceRoot, activeVersion)
   if (!isSha256(active.entrypoint_sha256)) fail('r3_active_digest_invalid', 'active platform entrypoint digest is required')
-  const lanes = TIER_A_LANES.map((expected) => buildLaneFromIntake(active, loadPlatformArtifact(evidenceRoot, expected.version), expected))
+  const dynamicProjections = values['dynamic-projections']?.split(',').filter(Boolean) ?? []
+  const dynamicByVersion = new Map<string, TierALaneInput['dynamic']>()
+  if (dynamicProjections.length !== TIER_A_LANES.length) fail('r3_dynamic_projection_incomplete', 'exactly five dynamic projections are required')
+  for (const projection of dynamicProjections) {
+    const absolute = path.resolve(evidenceRoot, projection)
+    if (!existsSync(absolute)) fail('r3_dynamic_projection_invalid', `dynamic projection does not exist: ${projection}`)
+    const version = String((JSON.parse(readFileSync(absolute, 'utf8')) as Record<string, any>).version)
+    const expected = TIER_A_LANES.find((lane) => lane.version === version)
+    if (!expected || dynamicByVersion.has(version)) fail('r3_dynamic_projection_invalid', 'dynamic projections must cover each Tier A version exactly once')
+    dynamicByVersion.set(version, loadDynamicProjection(evidenceRoot, projection, expected))
+  }
+  const lanes = TIER_A_LANES.map((expected) => buildLaneFromIntake(active, loadPlatformArtifact(evidenceRoot, expected.version), expected, dynamicByVersion.get(expected.version)))
   const result = evaluateClaudeCodeR3Closure({
     active_version: activeVersion,
     active_entrypoint_sha256: String(active.entrypoint_sha256),

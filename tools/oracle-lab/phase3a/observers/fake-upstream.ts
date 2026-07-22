@@ -8,6 +8,7 @@ export type FakeScenario =
   | { kind: 'json'; status?: number; response?: unknown }
   | { kind: 'sse'; events: Array<{ event?: string; data: unknown }>; delay_ms?: number; close_after?: number }
   | { kind: 'anthropic' }
+  | { kind: 'update' }
   | { kind: 'reset' }
   | { kind: 'delayed'; delay_ms: number; status?: number }
 
@@ -221,6 +222,17 @@ function respond(request: IncomingMessage, response: ServerResponse, scenario: F
     response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'request-id': 'req_phase3a_synthetic' })
     response.end(body)
     return 'anthropic:json'
+  }
+  if (scenario.kind === 'update') {
+    const pathname = new URL(request.url ?? '/', 'http://loopback.invalid').pathname
+    if (request.method === 'HEAD' && pathname === '/') {
+      response.writeHead(204, { 'cache-control': 'no-store', 'content-length': '0' })
+      response.end()
+      return 'update:root-head'
+    }
+    response.writeHead(404, { 'content-length': '0' })
+    response.end()
+    return 'update:unsupported'
   }
   const body = canonicalJson(scenario.response ?? { type: 'message', synthetic: true })
   response.writeHead(scenario.status ?? 200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })

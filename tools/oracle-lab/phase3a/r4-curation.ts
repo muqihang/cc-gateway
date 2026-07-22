@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { buildBlockedDeliverables, type CuratedExitInput } from './build-exit.js'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File } from './core.js'
 import { captureRepositoryBinding } from './repository-binding.js'
+import { verifyArtifactIndex } from './artifact-index.js'
 
 const ACTIVE = '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58'
 const EXPIRY = '2026-08-03T00:00:00.000Z'
@@ -19,7 +20,7 @@ export function evidenceRelativePath(root: string, file: string): string {
   return normalized
 }
 
-export function closureConclusions(): any[] {
+export function closureConclusions(input: { environment_complete?: boolean; tier_a_complete?: boolean } = {}): any[] {
   const reproduced = (id: string, statement: string, support: string[], runs: string[], controls: string[]) => ({
     conclusion: {
       schema_version: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: id, level: 'Reproduced',
@@ -30,31 +31,44 @@ export function closureConclusions(): any[] {
       platform_limits: ['darwin-arm64 only', 'synthetic loopback observers only'], expiry: EXPIRY, negative_capabilities: [], phase3b_usable: true, prohibited_claims: PROHIBITED,
     }, authority_ceiling: 'Reproduced', observation_count: 5, parser_agreement: 'agreed', perturbed: false,
   })
-  const unknown = (id: string, statement: string, negative: string) => ({
+  const unknown = (id: string, statement: string, negative: string, support = ['p3a2-closure-coverage-v7']) => ({
     conclusion: {
       schema_version: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: id, level: 'Unknown',
       scope: 'claude-code-2.1.215 darwin-arm64 synthetic loopback fixtures', statement,
-      supporting_artifact_ids: ['p3a2-closure-coverage-v3'], contradicting_artifact_ids: [], static_anchor: null, dynamic_reproduction: null,
+      supporting_artifact_ids: support, contradicting_artifact_ids: [], static_anchor: null, dynamic_reproduction: null,
       single_source_reason: 'The bounded campaign did not trigger this positive lifecycle.', platform_limits: ['positive lifecycle trigger absent'], expiry: EXPIRY,
       negative_capabilities: [negative], phase3b_usable: false, prohibited_claims: PROHIBITED,
     }, authority_ceiling: 'Unknown', observation_count: 0, parser_agreement: 'not-applicable', perturbed: false,
   })
   return [
     reproduced('CL-P3A-R2-CONFIG-AUTH', 'Config precedence and placeholder credential lifecycle were stable in the bounded local campaign.', ['p3a2-closure-config', 'p3a2-closure-auth-primary', 'p3a2-closure-auth-supplement'], ['closure-r2-config-v2', 'closure-r2-auth-v1', 'closure-r2-auth-co-v2'], ['closure-r2-config-v2-control']),
-    reproduced('CL-P3A-R2-FAILURE-STREAM', 'HTTP failure, reset, partial stream, and complete stream terminal classes were stable in the bounded local campaign.', ['p3a2-closure-scenarios-v2', 'p3a2-closure-coverage-v3'], ['closure-r2-scenario-v2', 'closure-r2-partial-v6', 'closure-r2-complete-v7'], ['closure-r2-scenario-v2-control']),
-    unknown('CL-P3A-ROUTING-ENVIRONMENT-UNKNOWN', 'Full environment routing and provider-selection coverage remains unclassified.', 'environment-routing-protocol-coverage-incomplete'),
-    unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified.', 'compact-cache-lifecycle-untriggered'),
-    unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified.', 'positive-nonessential-traffic-untriggered'),
-    unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified.', 'resume-restart-lineage-untriggered'),
+    reproduced('CL-P3A-R2-FAILURE-STREAM', 'HTTP failure, reset, partial stream, and complete stream terminal classes were stable in the bounded local campaign.', ['p3a2-closure-scenarios-v2', 'p3a2-closure-coverage-v7'], ['closure-r2-scenario-v2', 'closure-r2-partial-v6', 'closure-r2-complete-v7'], ['closure-r2-scenario-v2-control']),
+    ...(input.environment_complete === false ? [unknown('CL-P3A-ROUTING-ENVIRONMENT-UNKNOWN', 'Full environment routing and provider-selection coverage remains unclassified.', 'environment-routing-protocol-coverage-incomplete')] : []),
+    unknown('CL-P3A-COMPACT-CACHE-UNKNOWN', 'Compact and cache lifecycle behavior remains unclassified after the bounded long-context attempt.', 'compact-cache-lifecycle-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
+    unknown('CL-P3A-TELEMETRY-UPDATE-UNKNOWN', 'Positive telemetry, diagnostic, and update traffic behavior remains unclassified after bounded doctor and update commands.', 'positive-nonessential-traffic-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
+    unknown('CL-P3A-RESUME-LINEAGE-UNKNOWN', 'Restart, resume, and child-process lineage behavior remains unclassified after bounded persistent-state resume.', 'resume-restart-lineage-untriggered', ['p3a2-gap-campaign-v2', 'p3a2-closure-coverage-v7']),
+    ...(input.tier_a_complete === false ? [unknown('CL-P3A-TIER-A-DYNAMIC-UNKNOWN', 'Some Tier A change-point lanes did not complete all required dynamic pairs.', 'tier-a-dynamic-pairs-incomplete', ['p3a3-closure-tier-a-v10'])] : []),
     unknown('CL-P3A-TLS-RUNTIME-UNKNOWN', 'Positive TLS runtime behavior remains unclassified.', 'tls-positive-runtime-unavailable'),
     unknown('CL-P3A-CROSS-PLATFORM-UNKNOWN', 'Behavior outside darwin-arm64 remains unclassified.', 'cross-platform-corroboration-unavailable'),
   ]
 }
 
-function argument(name: string): string | undefined { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1] }
+export function parseR4CurationArgs(argv: string[]): Record<string, string> {
+  const values = argv[0] === '--' ? argv.slice(1) : argv
+  const output: Record<string, string> = {}
+  const allowed = new Set(['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff'])
+  for (let index = 0; index < values.length; index += 2) {
+    if (!values[index]?.startsWith('--') || !values[index + 1] || values[index + 1].startsWith('--')) fail('invalid_arguments', 'arguments must be --name value pairs')
+    const name = values[index].slice(2)
+    if (!allowed.has(name)) fail('invalid_arguments', `unknown argument: --${name}`)
+    if (output[name] !== undefined) fail('invalid_arguments', `duplicate argument: --${name}`)
+    output[name] = values[index + 1]
+  }
+  return output
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const required = ['evidence-root', 'template', 'r2', 'r3', 'artifact-index', 'leak-scan', 'cc-root', 'sub2api-root', 'cc-base', 'sub2api-base', 'cc-freeze', 'sub2api-freeze', 'out-input', 'out-exit', 'out-markdown', 'out-handoff']
-  const values = Object.fromEntries(required.map((name) => [name, argument(`--${name}`)]))
+  const values = parseR4CurationArgs(process.argv.slice(2))
   if (required.some((name) => !values[name])) fail('usage', 'r4-curation requires template, closure, repository, and output arguments')
   const evidenceRoot = ensureEvidenceRoot(values['evidence-root']!)
   const template = JSON.parse(readFileSync(values.template!, 'utf8')) as CuratedExitInput
@@ -68,30 +82,59 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const recoveredRoots = Array.isArray(r1.required_roots) ? r1.required_roots.filter((row: any) => row.disposition === 'static-path-recovered') : []
   if (r1.status !== 'complete' || recoveredRoots.length !== 15) fail('r4_static_incomplete', 'R1 must recover all 15 required roots before R4 can claim complete static analysis')
   const r2Sha = sha256File(values.r2!); const r3Sha = sha256File(values.r3!); const indexSha = sha256File(values['artifact-index']!); const leakSha = sha256File(values['leak-scan']!)
-  const artifactIndex = JSON.parse(readFileSync(values['artifact-index']!, 'utf8')) as { artifacts: Array<{ artifact_id: string }> }
-  const conclusions = closureConclusions()
-  const indexedIds = new Set(artifactIndex.artifacts.map((row) => row.artifact_id))
-  for (const row of conclusions) for (const id of row.conclusion.supporting_artifact_ids) if (!indexedIds.has(id)) fail('r4_support_unresolved', `conclusion support is not indexed: ${id}`)
+  const artifactIndex = JSON.parse(readFileSync(values['artifact-index']!, 'utf8')) as { artifacts: Array<{ artifact_id: string; sha256: string }> }
+  verifyArtifactIndex(artifactIndex, evidenceRoot)
+  const leak = JSON.parse(readFileSync(values['leak-scan']!, 'utf8')) as Record<string, any>
+  if (leak.schema_version !== 'oracle-lab-phase3a-leak-scan.v1' || leak.status !== 'PASS' || leak.index_sha256 !== indexSha || !Array.isArray(leak.findings) || leak.findings.length !== 0) fail('r4_input_invalid', 'leak scan must pass against the supplied artifact index')
+  const artifactById = new Map(artifactIndex.artifacts.map((row) => [row.artifact_id, row]))
+  const assertClosureBinding = (artifactId: string, observed: string): void => {
+    const artifact = artifactById.get(artifactId)
+    if (!artifact || artifact.sha256 !== observed) fail('r4_input_invalid', `closure is not bound to indexed evidence: ${artifactId}`)
+  }
+  const assertDeterministic = (closure: Record<string, any>, name: string): void => {
+    const { deterministic_digest, ...base } = closure
+    if (typeof deterministic_digest !== 'string' || deterministic_digest !== sha256Bytes(canonicalJson(base))) fail('r4_input_invalid', `${name} deterministic digest is invalid`)
+  }
+  assertClosureBinding('p3a2-closure-coverage-v7', r2Sha)
+  assertClosureBinding('p3a3-closure-tier-a-v10', r3Sha)
+  assertDeterministic(r2, 'R2')
+  assertDeterministic(r3, 'R3')
   const envReproduced = Number(r2.inputs?.environment?.statuses?.REPRODUCED ?? r2.coverage_counts?.Reproduced ?? 0)
   const envUnknown = Number(r2.inputs?.environment?.statuses?.UNKNOWN ?? 0)
-  const coverageComplete = envUnknown === 0 && Number(r2.coverage_counts?.Unknown ?? 0) === 0
+  const coverageComplete = r2.inputs?.environment?.status === 'PASS' && envUnknown === 0
   const changePoints = Array.isArray(r3.tier_a?.lanes)
     ? r3.tier_a.lanes
     : Array.isArray(r3.lanes)
       ? r3.lanes
       : [{ target: 'sub2api-adapter', status: r3.status, tier_a_tests: r3.tier_a?.total_tests, tier_b: r3.tier_b?.status }]
+  const expectedTierAVersions = ['2.1.214', '2.1.212', '2.1.211', '2.1.208', '2.1.207']
+  if (changePoints.length !== expectedTierAVersions.length || expectedTierAVersions.some((version) => changePoints.filter((lane: any) => lane.version === version && lane.role === 'tier-a').length !== 1)) fail('r4_input_invalid', 'R3 must contain exactly the five expected Tier A lanes')
+  const incompleteTierALanes = changePoints.filter((row: any) => !['PASS', 'REPRODUCED'].includes(String(row.status)))
+  const conclusions = closureConclusions({ environment_complete: coverageComplete, tier_a_complete: incompleteTierALanes.length === 0 })
+  const indexedIds = new Set(artifactIndex.artifacts.map((row) => row.artifact_id))
+  for (const row of conclusions) for (const id of row.conclusion.supporting_artifact_ids) if (!indexedIds.has(id)) fail('r4_support_unresolved', `conclusion support is not indexed: ${id}`)
   const executableUnknowns = (r2.coverage ?? []).filter((row: any) => row.evidence_level === 'Unknown')
   const missingGates = [
     ...(coverageComplete ? [] : ['environment-routing-protocol-coverage']),
     ...(executableUnknowns.map((row: any) => String(row.hypothesis))),
     ...(Array.isArray(r3.tier_a?.lanes) && r3.tier_a.lanes.length === 5 ? [] : ['claude-code-tier-a-change-points']),
+    ...incompleteTierALanes.map((lane: any) => `claude-code-tier-a-dynamic-${String(lane.version ?? lane.hypothesis_id)}`),
     'tls-positive-runtime-coverage',
     'cross-platform-corroboration',
   ]
   const terminalUnknowns = [
     ...executableUnknowns.map((row: any) => ({
       concern: row.hypothesis, reason: row.reason, next_minimal_action: row.next_minimal_action, phase3b_usable: false,
-      capability_exhausted: false, capability_evidence: 'local-loopback-action-still-available', searched_surfaces: ['active-probe-copy', 'fake-upstream', 'loopback-proxy'],
+      capability_exhausted: false,
+      capability_evidence: row.source === 'gap' ? `r2-gap-executed-no-positive-classifier:${String(row.failure_classification)}` : 'local-loopback-action-still-available',
+      searched_surfaces: Array.isArray(row.searched_surfaces) ? row.searched_surfaces : ['active-probe-copy', 'fake-upstream', 'loopback-proxy'],
+    })),
+    ...incompleteTierALanes.map((lane: any) => ({
+      concern: `claude-code-tier-a-dynamic-${String(lane.version ?? lane.hypothesis_id)}`,
+      reason: 'required dynamic pair campaign did not complete with reproduced evidence',
+      next_minimal_action: lane.dynamic?.next_minimal_action ?? 'Resolve the incomplete bounded pair campaign.',
+      phase3b_usable: false, capability_exhausted: false, capability_evidence: 'bounded-tier-a-pair-replay-available',
+      searched_surfaces: ['tier-a-dynamic-projection', 'loopback-observer', 'process-lineage'],
     })),
     {
       concern: 'tls-positive-runtime-coverage', reason: 'TLS capture has not been executed for the bounded active campaign.',

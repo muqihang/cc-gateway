@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { assertEvidencePath, canonicalJson, ensureEvidenceRoot, Phase3AError, sha256Bytes, sha256File } from './core.js'
 import { assertControlForInstrumentation, buildIsolatedEnvironment, loadLaunchManifest, type Instrumentation, type LaunchManifest, validateLaunchManifest } from './launch-manifest.js'
 import { enforceProcessLimits, sampleProcessTree, sampleSocketCount, type ProcessSample } from './process-sampler.js'
+import { classifySafeDiagnosticText, type SafeDiagnostic } from './safe-diagnostic.js'
 
 export type GuardAuthority = {
   schema_version: 'oracle-lab-phase3a-cell-guard.v1'
@@ -44,6 +45,7 @@ export type CellResult = {
   max_sockets: number | null
   retry_events: number
   hook_event_count: number
+  safe_diagnostic: SafeDiagnostic
   safe_error_categories: string[]
   safe_error_terms: string[]
   stderr_fingerprint: SafeTextFingerprint
@@ -359,6 +361,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
   if (evaluateCellCounters({ output_bytes: stdoutBytes + stderrBytes, processes: maxProcesses, retries: hooks.retries, sockets: maxSockets ?? 0 }, manifest.limits) === 'retry_limit') terminationReason ??= 'retry_limit'
   const status: CellResult['status'] = closed.spawnError ? 'spawn-error' : terminationReason === 'wall_timeout' ? 'timeout' : terminationReason ? 'resource-limit' : closed.code === 0 ? 'complete' : 'failed'
   const safeErrorText = Buffer.concat(safeErrorChunks).toString('utf8')
+  const safeDiagnostic = classifySafeDiagnosticText(safeErrorText)
   const safeErrorCategories = classifySafeErrorText(safeErrorText)
   const safeErrorTerms = extractSafeErrorTerms(safeErrorText)
   const stderrFingerprint = fingerprintSafeErrorText(Buffer.concat(safeErrorChunks))
@@ -369,7 +372,7 @@ export async function runCell(options: RunCellOptions): Promise<CellResult> {
     stdout: { bytes: stdoutBytes, sha256: stdoutHash.digest('hex'), truncated: exceeded },
     stderr: { bytes: stderrBytes, sha256: stderrHash.digest('hex'), truncated: exceeded },
     process_samples: samples, max_processes: maxProcesses, max_sockets: maxSockets,
-    retry_events: hooks.retries, hook_event_count: hooks.count, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, stderr_fingerprint: stderrFingerprint, raw_output_persisted: false,
+    retry_events: hooks.retries, hook_event_count: hooks.count, safe_diagnostic: safeDiagnostic, safe_error_categories: safeErrorCategories, safe_error_terms: safeErrorTerms, stderr_fingerprint: stderrFingerprint, raw_output_persisted: false,
   }
 }
 
