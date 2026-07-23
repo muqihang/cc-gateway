@@ -1127,3 +1127,81 @@ git diff --check
 No command in this task may invoke Claude Code, any P3A-S future command, `go test ./...`,
 `go test ./internal/service`, a package-wide runner, or a production/runtime path. The final PR
 must contain only this plan file; local CodeGraph files remain ignored and unstaged.
+
+## 16. Append-only static blocker closure authority (2026-07-23)
+
+This section is an append-only successor to the merged plan whose exact predecessor SHA-256 is
+`c13969d1d838e3a921eda8d7a0491fa0472ed35f15bb3ea7374a7b3d153059a6`. It does not rewrite P3A
+v13, does not alter the `supplement-closure-dag`, and does not create or authorize a controller.
+The earlier plan-only changed-file assertion applied to the PR #40 planning task; this successor
+recon PR is the Section 14 lifecycle action and has its own focused static gate.
+
+The authoritative static recon tuple is:
+
+| object | exact relative path | schema / digest |
+| --- | --- | --- |
+| closure record | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.json` | exact-file SHA-256 `b4f1212584afbeb7d2b59457d778713bd3d8b967bd5a0a48f73c0140f41642ff`; internal JCS digest `ea6ec9d5b9d027d5ed434714cfc38b28ecd81af93d7b51d102821d9d5ecba5a9`; `oracle-lab-phase3a-static-blocker-recon@1.0` |
+| reviewable report | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.md` | SHA-256 `3e1b025ca5f075e21ca528544c9be096e1b1afb090a9aecfe448660563fe38bc` |
+| strict schema | `docs/superpowers/schemas/oracle-lab-phase3a-static-blocker-recon.schema.json` | SHA-256 `d685bc7e71e00a4d0fbfb123004b1a7ac5dced46b279d037ec81ba0651605900` |
+| deterministic scanner/builder | `tools/oracle-lab/phase3a/static-blocker-recon.ts` | SHA-256 `275511cd2a0000bd637ae81ddfe4f4760e5a1d8319e6d424d14ae5eb7773c4b8` |
+
+The record binds the official 2.1.215 Darwin arm64 archive
+`599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600`, release tree
+`f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe`, and direct native
+entrypoint `claude` with SHA-256
+`90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58`. Its 20,163,513-byte
+entry module starts at artifact offset 217,140,984, has SHA-256
+`67472f5f9cd28b3b83003eb29ee0747bdcebc6969cc14f726bfdae2e4d998d0f`, and has static scan
+digest `cac6799818f1f6780280d993adcb24cf2a834f7f5fd048a9c82fa35d0e464928`.
+
+The exact approved operation token classes and order are frozen by the closure record:
+
+```text
+creation/new-control:
+  --print --bare --verbose --output-format stream-json --input-format stream-json
+  --session-id <operation-specific-session-safe-ref>
+resume-positive:
+  --print --bare --verbose --output-format stream-json --input-format stream-json
+  --resume <predecessor-session-safe-ref>
+```
+
+There is no positional prompt. Synthetic stream-json stdin is digest-bound. `--continue`,
+`--fork-session`, and `--no-session-persistence` are excluded. The creation/resume operations use
+the same isolated state-root safe ref; new-control uses a distinct root. The target state path is
+the NFC-normalized config root, then `projects/<canonical-cwd-key>/<session-uuid>.jsonl`; creation
+is target-attributed append and resume is target-attributed resolve/read/parse/reconstruct.
+
+The target-generated state-dependent network signal is exactly the ordered predecessor prefix at
+`POST /v1/messages` JSON AST `$.messages`, before the final current input. Observer A projects
+loopback HTTP JSON/SSE topology. Observer B projects Darwin vnode open/read plus process-start and
+executable attribution. They use distinct surfaces, dependencies, parsers, outputs, and failure
+modes. Both are mandatory; ordinary fresh HTTP, headers, a session ID, controller-supplied proof,
+absence inference, or two parsers over one byte stream remain insufficient.
+
+The fake endpoint is bound only through `ANTHROPIC_BASE_URL` to the declared loopback safe ref;
+the SDK static precedence is explicit client `baseURL`, that environment key, then SDK default.
+The connected reader-to-`POST /v1/messages` derivation binds signal-anchor digest
+`11981d9f74d3e7a7cd0ab0c5e7d78bdbabbeaa0cbc2f69f33b2293e14f05e4d5` and derivation digest
+`15211ac067c3b8192a49bb451af96dc59960d46e4162bf076ba8371d0d775ecc`.
+
+The static chain is bound by 36 function/method and 2 constant source/offset/hash/direct-call/
+structural-CFG anchors from selector and JSONL reader through mutable messages and
+`beta.messages.create`. The target has no whole-file
+cryptographic state-integrity check on this path and may ignore malformed lines, so the future
+Observer B pre-open digest check is mandatory. Missing, tampered, swapped, fallback, wrong
+PID/process-start, and nonterminal controls all deny.
+
+Subject to one independent holistic review of the immutable recon tip finding zero Critical and
+zero Important issues, the lifecycle becomes `RECON_APPEND_ONLY_CLOSED` with:
+
+- `missing_exact_state_protocol=CLOSED`;
+- `missing_state_dependent_network_signal=CLOSED`;
+- `dynamic_execution_authorized=false`;
+- `controller_creation_authorized=false`; and
+- `phase3b_usable=false`.
+
+Any future supplement input manifest must bind the exact closure record path, exact-file SHA-256,
+internal digest, schema ID/revision, schema digest, tool digest, official artifact tuple, and
+36-function/2-constant scan digest under the existing DAG's `pinned_inputs` node. It may not discover a newer
+file, regenerate argv, weaken either observer, or treat this static record as a dynamic result.
+The next permissible action is only a separately reviewed controller-creation decision.
