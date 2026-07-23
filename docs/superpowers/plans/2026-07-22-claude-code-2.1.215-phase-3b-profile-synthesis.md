@@ -110,13 +110,13 @@ supported schema range
 Phase 3B must bind the existing safe handoff by path and digest. It must not copy, regenerate, or
 walk raw Phase 3A evidence. The authoritative planning bindings are:
 
-| Artifact | Absolute existing path | SHA-256 |
-| --- | --- | --- |
-| P3A exit v13 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/phase-3a-exit-report-v13.json` | `57f16b207933b3a751f96471733d435fa4b0c9801fbef2f5495e8884dfe0bd1b` |
-| P3A/3.5 handoff v13 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/phase-3b-3.5-handoff-v13.json` | `9d188072719dc27a2f9cc9939bc79afa598802b84dd4d9161fb1da3263a792d7` |
-| terminal manifest v8 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/closure-terminal-manifest-v8.json` | `c9ee57fbe29125c88278961565f814326b052077b861bb41008cdde6161f12f5` |
-| artifact index v23 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/artifact-index-v23.json` | `e8645c7ed4bc984a926f91e3df1b756c4b009b3a02408de213cbe81b060e80d4` |
-| leak scan v23 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/leak-scan-v23.json` | `7ed3e2776c7fcc47d6c8d513318b33547919c92a33a068a4f0c0cb3706bad145` |
+| Artifact | Absolute existing path | SHA-256 | Exact `schema_version` |
+| --- | --- | --- | --- |
+| P3A exit v13 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/phase-3a-exit-report-v13.json` | `57f16b207933b3a751f96471733d435fa4b0c9801fbef2f5495e8884dfe0bd1b` | `oracle-lab-phase3a-exit.v1` |
+| P3A/3.5 handoff v13 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/phase-3b-3.5-handoff-v13.json` | `9d188072719dc27a2f9cc9939bc79afa598802b84dd4d9161fb1da3263a792d7` | `oracle-lab-phase3a-handoff.v1` |
+| terminal manifest v8 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/closure-terminal-manifest-v8.json` | `c9ee57fbe29125c88278961565f814326b052077b861bb41008cdde6161f12f5` | `oracle-lab-phase3a-r4-terminal.v1` |
+| artifact index v23 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/artifact-index-v23.json` | `e8645c7ed4bc984a926f91e3df1b756c4b009b3a02408de213cbe81b060e80d4` | `oracle-lab-phase3a-artifact-index.v1` |
+| leak scan v23 | `/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/capsules/P3A-4/leak-scan-v23.json` | `7ed3e2776c7fcc47d6c8d513318b33547919c92a33a068a4f0c0cb3706bad145` | `oracle-lab-phase3a-leak-scan.v1` |
 
 The terminal manifest is GREEN and the leak scan is PASS with zero findings. This means the P3A
 closure package is internally complete; it does not mean every Claude behavior is classified.
@@ -157,7 +157,7 @@ raw artifacts.
 | Requirement | Phase 3B interpretation | Planned gate/output |
 | --- | --- | --- |
 | `RA-P0-001` | deterministic evidence-to-profile compiler | P3B-2 compiler, repeat-build byte equality, bundle digest |
-| `RA-P0-002` | at least one truthful complete candidate; negative-only completion forbidden | five-case coverage gate; currently blocked on resume and version-role review |
+| `RA-P0-002` | at least one truthful complete candidate; negative-only completion forbidden | five-case coverage gate; currently blocked on usable-row revalidation and resume only |
 | `RA-P0-005` | preserve the P2 versioned cross-project contract/readiness vocabulary | exact P2 digest/range binding and paired TS/Go artifacts; no P2 in-place mutation |
 | `RA-P0-007` | bounded response/failure/retry facts | de-identified failure/stream profile and conformance fixtures only; runtime OutcomeEnvelope remains Phase 4 |
 | `RA-P0-009` | protected production remains disabled | generated negative manifest includes production, canary, real upstream, and protected runtime denies |
@@ -166,7 +166,9 @@ raw artifacts.
 | `RA-P1-003` | typed de-identified fixtures and bounded drift facts | typed request/response/state/failure fixtures and mutation corpus; no raw values |
 | `RA-P1-004` | lineage and migration contract | generated fail-closed lineage profile; resume stays disabled until supplement; runtime state machine remains Phase 4 |
 | `RA-P1-007` | liveness/readiness/capability generations | generated readiness expectation artifact only; no endpoint or scheduling wiring |
+| `RA-P1-008` | telemetry/update claims remain evidence-bounded | negative-capability manifest denies positive telemetry/update; Unknown cannot produce a control-plane route |
 | `HA-P0-001`, `HA-P0-002`, `HA-P0-004` | registry, precedence, and fresh baseline truthfulness | input binding, current heads, immutable requirement mapping |
+| `HA-P0-003` | claim ceilings prevent evidence overreach | per-field provenance and selected-input allowlist reject a field above its source evidence level |
 | `HA-P0-006` | shared contract discovery | P2 contract digest/range/predecessor check |
 | `HA-P0-009` | negative capability is explicit and fail closed | missing/Unknown/unsupported/expired/contradicted input denies generation |
 | `HA-P1-001` | claims require independent dynamic observation | supplement observers use separate implementations/dependencies and must agree on prior-state consumption |
@@ -270,13 +272,72 @@ Minimum supplement scope:
 6. Capture only root/session/task safe refs, parent/current relation, client/profile generation,
    request class, header-name/value-class summary, request AST topology/digest, SSE event grammar,
    terminal class, retry class, local process lineage, and the run/digest bindings above.
-7. Emit append-only, schema-valid, unexpired, contradiction-free normalized-safe conclusions plus
-   refreshed terminal manifest, artifact index, leak scan, exit report, and Phase 3B handoff. Each
-   resume cell and each renewed conclusion records the relative path, SHA-256, and schema ID/version
-   of all five closure artifacts; the P3B-0 preflight binds all five independently. Do not overwrite
-   v13 or reuse an old receipt/context/lease/Recovery namespace.
+7. Emit append-only, schema-valid, unexpired, contradiction-free normalized-safe conclusions and
+   closure artifacts in the one-way DAG below. A leaf cell/run envelope contains only pinned input
+   digests, predecessor safe-state digest/run ID, observer-output digests, and a `payload_digest`
+   over its canonical payload; it contains no index/leak/exit/handoff/terminal digest. Its file
+   digest is assigned externally after the envelope bytes exist. A conclusion aggregates only
+   already-existing leaf file digests and never references a closure artifact.
 8. Preserve all other v13 Unknown rows. The supplement does not authorize restart migration,
    child-process lineage, compact/cache, telemetry/update, provider TLS, or other platforms.
+
+The DAG uses `node -> depends_on`; every dependency must already exist before its node is emitted.
+The artifact index covers immutable supplement payload only: pinned-input identities, observer
+results, leaf envelopes, and conclusions. It excludes itself and the later leak, exit, handoff,
+terminal, and external digest-set files. Generation order for the five closure files is uniquely
+`artifact_index`, `leak_report`, `exit_report`, `handoff`, `terminal_manifest`. A separately reviewed
+external digest set is created last and binds all five path/SHA-256/schema identities; none of the
+five references that external set.
+
+```json supplement-closure-dag
+{
+  "nodes": [
+    {"id":"pinned_inputs","stage":0},
+    {"id":"predecessor_safe_state","stage":0},
+    {"id":"observer_a_output","stage":1},
+    {"id":"observer_b_output","stage":1},
+    {"id":"leaf_cell_run_records","stage":2},
+    {"id":"normalized_safe_conclusions","stage":3},
+    {"id":"artifact_index","stage":4},
+    {"id":"leak_report","stage":5},
+    {"id":"exit_report","stage":6},
+    {"id":"handoff","stage":7},
+    {"id":"terminal_manifest","stage":8},
+    {"id":"external_digest_set","stage":9}
+  ],
+  "edges": [
+    {"node":"observer_a_output","depends_on":"pinned_inputs"},
+    {"node":"observer_b_output","depends_on":"pinned_inputs"},
+    {"node":"observer_b_output","depends_on":"predecessor_safe_state"},
+    {"node":"leaf_cell_run_records","depends_on":"pinned_inputs"},
+    {"node":"leaf_cell_run_records","depends_on":"predecessor_safe_state"},
+    {"node":"leaf_cell_run_records","depends_on":"observer_a_output"},
+    {"node":"leaf_cell_run_records","depends_on":"observer_b_output"},
+    {"node":"normalized_safe_conclusions","depends_on":"leaf_cell_run_records"},
+    {"node":"artifact_index","depends_on":"normalized_safe_conclusions"},
+    {"node":"leak_report","depends_on":"artifact_index"},
+    {"node":"exit_report","depends_on":"artifact_index"},
+    {"node":"exit_report","depends_on":"leak_report"},
+    {"node":"handoff","depends_on":"artifact_index"},
+    {"node":"handoff","depends_on":"leak_report"},
+    {"node":"handoff","depends_on":"exit_report"},
+    {"node":"terminal_manifest","depends_on":"artifact_index"},
+    {"node":"terminal_manifest","depends_on":"leak_report"},
+    {"node":"terminal_manifest","depends_on":"exit_report"},
+    {"node":"terminal_manifest","depends_on":"handoff"},
+    {"node":"external_digest_set","depends_on":"artifact_index"},
+    {"node":"external_digest_set","depends_on":"leak_report"},
+    {"node":"external_digest_set","depends_on":"exit_report"},
+    {"node":"external_digest_set","depends_on":"handoff"},
+    {"node":"external_digest_set","depends_on":"terminal_manifest"}
+  ],
+  "closure_order":["artifact_index","leak_report","exit_report","handoff","terminal_manifest"],
+  "index_scope":{
+    "includes":["pinned_inputs","predecessor_safe_state","observer_a_output","observer_b_output","leaf_cell_run_records","normalized_safe_conclusions"],
+    "excludes":["artifact_index","leak_report","exit_report","handoff","terminal_manifest","external_digest_set"]
+  }
+}
+```
 
 Supplement acceptance command names are future P3A-owned commands, not commands to run in this
 planning task:
@@ -286,6 +347,7 @@ npm exec tsx tests/oracle-phase3a-resume-supplement.test.ts
 npm exec tsx tests/oracle-phase3a-usable-revalidation.test.ts
 npm exec tsx tests/oracle-phase3a-prior-state-controls.test.ts
 npm exec tsx tests/oracle-phase3a-observer-independence.test.ts
+npm exec tsx tests/oracle-phase3a-closure-dag.test.ts
 npm exec tsx tests/oracle-phase3a-convergence.test.ts
 npm exec tsx tests/oracle-phase3a-r4-terminal.test.ts
 npm exec tsx tests/oracle-phase3a-leak-guard.test.ts
@@ -307,9 +369,11 @@ and expiry values are copied as source fields so identical inputs regenerate ide
 external handoff/exit/terminal/index/leak paths and digests, selected append-only revalidation and
 resume conclusion paths/digests/schemas, usable conclusion IDs, claim ceilings, compiler schema
 version, and a sorted negative-capability list. `phase3b-input-binding.schema.json` requires every
-safe input to contain `{relative_path, sha256, schema_id, schema_major, schema_revision,
-evidence_level, conclusion_id, issued_at_ms, expires_at_ms, predecessor_digest}`. Only relative
-paths explicitly present in the independently reviewed artifact index are allowed; directory
+safe payload input to contain `{relative_path, sha256, schema_id, schema_major, schema_revision,
+evidence_level, conclusion_id, issued_at_ms, expires_at_ms, predecessor_digest}`. Normalized-safe
+observer/leaf/conclusion inputs must be present in the independently reviewed artifact index. The
+five closure artifacts are the sole exception: they are not index entries and must instead match
+the final external digest set plus P3B-0's independent path/SHA/schema/root verification. Directory
 walking and implicit supporting-artifact discovery are forbidden. Generated distributable
 artifacts retain only safe relative evidence IDs and digests.
 
@@ -321,6 +385,8 @@ silently normalized during validation.
 
 | Artifact | Required schema | Array/order rule and canonical identity |
 | --- | --- | --- |
+| all profile variants | `profile.schema.json` | strict `artifact_kind` discriminator for client-build/request/response/control/transport/authentication/session-lineage; profile refs sorted by kind; JCS SHA-256 |
+| all typed fixture variants | `fixture.schema.json` | strict `fixture_kind` discriminator for new-session/resumed-session/failure-recovery/deterministic-regeneration; semantic event sequences retain order; JCS SHA-256 |
 | input binding | `phase3b-input-binding.schema.json` | inputs sorted by `(conclusion_id, relative_path)`; JCS SHA-256 |
 | field provenance | `field-provenance.schema.json` | unique rows sorted by JSON Pointer; JCS SHA-256 |
 | negative capabilities | `negative-capabilities.schema.json` | unique stable IDs sorted lexically; JCS SHA-256 |
@@ -332,6 +398,12 @@ silently normalized during validation.
 Unknown field, missing field, duplicate key, unsupported schema revision, wrong set order,
 reordered sequence, absolute path, unindexed normalized-safe path, or path/schema/digest
 disagreement is a stable deny before generation.
+
+`bundle-index.json` contains a schema registry row for every schema in the table:
+`{schema_id, schema_digest, artifact_kinds}`. The compiler, generated manifest, TS validator, Go
+validator, each artifact, and the bundle index must resolve the same exact schema ID/digest. Profile
+and fixture variants receive the complete parser and semantic mutation corpus; they are not covered
+by a weaker generic-object check.
 
 ### 8.2 Profile artifacts
 
@@ -410,23 +482,37 @@ Absence is denial. No consumer treats omission as permission.
 ### 8.6 Rollback tuple
 
 `rollback-tuple.json` is independently addressable and validated by both TS and Go. It is not the
-P2 contract bundle or predecessor digest. `rollback-tuple.schema.json` requires:
+P2 contract bundle or predecessor digest. The root requires the common fields below plus exactly one
+`target` branch. The schema uses `oneOf`; each branch uses `additionalProperties: false`; the root
+uses `unevaluatedProperties: false` so mixed or ambiguous states cannot validate.
 
 ```text
 schema_id, schema_major, schema_revision, rollback_tuple_id
-active_profile_tuple_digest, rollback_target_tuple_digest, rollback_profile_refs
-evidence_source_relative_path, evidence_source_digest, evidence_source_schema_id
-current_generation, target_generation, rollback_floor_generation
-revoked, revocation_ids, issued_at_ms, expires_at_ms, contradiction_ids
+active_profile_tuple_digest, evidence_source_relative_path, evidence_source_digest
+evidence_source_schema_id, current_generation, issued_at_ms, expires_at_ms, contradiction_ids
+
+target oneOf:
+  coherent_tuple:
+    target_kind="coherent_tuple"
+    rollback_target_tuple_digest, rollback_profile_refs, target_generation
+    rollback_floor_generation, target_expires_at_ms, revoked, revocation_ids
+  disable_to_no_profile:
+    target_kind="disable_to_no_profile"
+    deny_reason_code, negative_capability_ref
+    removal_semantics="remove_generated_profile_refs_and_disable_local_conformance"
+    # rollback_target_tuple_digest, rollback_profile_refs, target_generation,
+    # rollback_floor_generation, target_expires_at_ms, revoked, revocation_ids are forbidden
 ```
 
 The target is selected only from an independently generated, schema-valid coherent tuple whose
 profile digests all resolve, whose generation is lower than current but not below the rollback
 floor, whose platform/build/install scope exactly matches, and whose evidence remains unexpired,
-unrevoked, and contradiction-free. If no such positive target exists, the tuple uses the explicit
-`disable-to-no-profile` negative target; it may never substitute a P2 contract digest or invent a
-profile. Missing, stale, revoked, regressed, mismatched, or ambiguous targets, contract-as-profile
-substitution, or TS/Go digest disagreement fail closed before config generation.
+unrevoked, and contradiction-free. If no such positive target exists, the tuple uses the
+`disable_to_no_profile` branch and removes all generated profile refs from both local config
+projections while denying local conformance; it may never substitute a P2 contract digest or invent
+a profile. Missing tag, mixed branches, forbidden extra fields, missing branch requirements, stale,
+revoked, regressed, mismatched, or ambiguous targets, contract-as-profile substitution, or TS/Go
+digest/code disagreement fail closed before config generation.
 
 ## 9. Future repository layout and ownership
 
@@ -521,13 +607,16 @@ mirror. There is one consolidated review at P3B-8, not a per-task review loop.
 - **Owner:** Phase 3B controller.
 - **Inputs:** fresh `muqihang/main` heads, merged plan, P2 bundle, approved resume supplement, both
   append-only usable-row revalidations, and the resolved version-role decision.
-- **Actions:** create and digest-check the local-only CodeGraph exclusion before every graph command;
-  verify clean trees and the exact v13 plus supplement exit/handoff/terminal/index/leak digests;
+- **Actions:** reject dangerous inherited Git environment variables; assert exact reviewed HEAD,
+  tree, frozen remote main, branch, and tracked-clean state; create and digest-check the local-only
+  CodeGraph exclusion before every graph command; verify exact path/SHA/schema/root identities for
+  all v13 and supplement exit/handoff/terminal/index/leak artifacts;
   validate selected-input precedence, usability, expiry, predecessor, pinned snapshot, and
   contradictions; run the protected-safe static P2 joint check plus explicit-file P2 Go tests. The
   existing CLI's package-wide Go child command and every package-wide implicit runner are forbidden.
-- **RED gate:** a deliberately mutated handoff digest and a non-usable resume row both return stable
-  deny codes before any output directory is written.
+- **RED gate:** wrong Git freeze field, dirty tracked state, dangerous Git environment, any missing/
+  swapped/mismatched/cross-root/symlinked fixed artifact, a mutated handoff digest, and a non-usable
+  resume row all return stable deny codes before any output directory is written.
 - **Output:** in-memory preflight decision and safe command result only; no receipt/context/lease.
 
 ### P3B-1: Schemas and test-first corpus
@@ -613,13 +702,15 @@ mirror. There is one consolidated review at P3B-8, not a per-task review loop.
 
 The future corpus is table-driven and every mutation changes one dimension at a time:
 
-1. input path escape, symlink, digest mismatch, wrong artifact index/terminal/leak pairing;
+1. each v13 or supplement fixed artifact missing, swapped, digest-mismatched, schema-mismatched,
+   cross-root, symlinked, or paired with the wrong exit/handoff/terminal/index/leak set;
 2. floating package tag, wrong active/reference version, `2.1.207`/`2.1.215` evidence relabel;
 3. missing, false, unknown, expired, near-expiry-at-P3B-0, contradicted, parser-disagreeing, or
    non-usable conclusion; snapshot drift, predecessor mismatch, or competing eligible successors;
 4. duplicate JSON key, invalid UTF-8, lone surrogate, negative zero, unsafe integer, trailing data,
    missing/extra/unsupported field, enum extension, wrongly ordered set, reordered sequence, and
-   oversized object for every schema in Section 8.1;
+   oversized object for every schema in Section 8.1, including every profile and typed-fixture
+   discriminator variant;
 5. missing field-provenance row, source digest mismatch, illegal evidence level, handwritten
    upstream-visible UA/header/body/transport constant;
 6. missing negative capability, negative match, absent positive declaration, unsupported
@@ -629,7 +720,8 @@ The future corpus is table-driven and every mutation changes one dimension at a 
    cell; lineage parent/root mismatch; stale migration sequence; generation regression;
 8. mixed request/response/auth/transport profile refs, profile/manifest/contract mismatch,
    Frankenprofile tuple, stale fixture digest;
-9. expired manifest, open contradiction, invalidated dependency, missing/stale/revoked/regressed/
+9. rollback missing/unknown tag, mixed branch, ambiguous `oneOf`, forbidden extra field, or missing
+   branch field; expired manifest, open contradiction, invalidated dependency, missing/stale/revoked/regressed/
    platform-mismatched rollback target, rollback below floor, P2 contract digest used as profile
    target, ambiguous target, parent/checkpoint mismatch, or TS/Go rollback disagreement;
 10. SSE missing start/stop, duplicated/reordered event, malformed JSON, reset before first byte,
@@ -640,6 +732,11 @@ The future corpus is table-driven and every mutation changes one dimension at a 
 13. one-byte CC/Sub2API mirror drift, TS/Go decision disagreement, manifest/fixture digest mismatch;
 14. attempts to enable real upstream, real credentials, profile promotion, protected runtime,
     deployment, production, canary, Phase 4/6A behavior, or direct egress fallback.
+15. wrong local HEAD, wrong tree, moved frozen remote main, unexpected/detached branch, staged or
+    unstaged tracked dirt, and each forbidden inherited Git environment variable;
+16. supplement DAG self-loop, two-node cycle, conclusion dependency on artifact index, leaf or
+    conclusion dependency on any later closure node, closure order mismatch, self-entry, and any
+    edge whose dependency stage is not strictly earlier.
 
 Positive cases are not weakened to make mutations pass. Stable error codes are part of
 `expected-results.json`.
@@ -652,6 +749,30 @@ Paths are environment variables so the controller can use fresh roots:
 export CC_GATEWAY_ROOT=/absolute/fresh/cc-gateway
 export SUB2API_ROOT=/absolute/fresh/sub2api
 export P3A_ROOT=/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A
+: "${CC_REVIEWED_HEAD:?set independently reviewed CC commit}"
+: "${CC_REVIEWED_TREE:?set independently reviewed CC tree}"
+: "${CC_FROZEN_REMOTE_MAIN:?set frozen CC muqihang/main commit}"
+: "${CC_EXPECTED_BRANCH:?set exact reviewed CC branch}"
+: "${SUB_REVIEWED_HEAD:?set independently reviewed Sub2API commit}"
+: "${SUB_REVIEWED_TREE:?set independently reviewed Sub2API tree}"
+: "${SUB_FROZEN_REMOTE_MAIN:?set frozen Sub2API muqihang/main commit}"
+: "${SUB_EXPECTED_BRANCH:?set exact reviewed Sub2API branch}"
+
+export P3A_V13_EXIT="$P3A_ROOT/capsules/P3A-4/phase-3a-exit-report-v13.json"
+export P3A_V13_EXIT_SHA256=57f16b207933b3a751f96471733d435fa4b0c9801fbef2f5495e8884dfe0bd1b
+export P3A_V13_EXIT_SCHEMA=oracle-lab-phase3a-exit.v1
+export P3A_V13_HANDOFF="$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json"
+export P3A_V13_HANDOFF_SHA256=9d188072719dc27a2f9cc9939bc79afa598802b84dd4d9161fb1da3263a792d7
+export P3A_V13_HANDOFF_SCHEMA=oracle-lab-phase3a-handoff.v1
+export P3A_V13_TERMINAL="$P3A_ROOT/capsules/P3A-4/closure-terminal-manifest-v8.json"
+export P3A_V13_TERMINAL_SHA256=c9ee57fbe29125c88278961565f814326b052077b861bb41008cdde6161f12f5
+export P3A_V13_TERMINAL_SCHEMA=oracle-lab-phase3a-r4-terminal.v1
+export P3A_V13_INDEX="$P3A_ROOT/capsules/P3A-4/artifact-index-v23.json"
+export P3A_V13_INDEX_SHA256=e8645c7ed4bc984a926f91e3df1b756c4b009b3a02408de213cbe81b060e80d4
+export P3A_V13_INDEX_SCHEMA=oracle-lab-phase3a-artifact-index.v1
+export P3A_V13_LEAK="$P3A_ROOT/capsules/P3A-4/leak-scan-v23.json"
+export P3A_V13_LEAK_SHA256=7ed3e2776c7fcc47d6c8d513318b33547919c92a33a068a4f0c0cb3706bad145
+export P3A_V13_LEAK_SCHEMA=oracle-lab-phase3a-leak-scan.v1
 : "${P3A_SUPP_EXIT:?set reviewed supplement exit path}"
 : "${P3A_SUPP_EXIT_SHA256:?set reviewed supplement exit SHA-256}"
 : "${P3A_SUPP_EXIT_SCHEMA:?set reviewed exit schema_id@major.revision}"
@@ -706,13 +827,38 @@ codegraph_with_exclusion() {
     "$CODEGRAPH_CONFIG_SHA256"
 }
 
+assert_no_dangerous_git_env() {
+  node --input-type=module -e '
+    const forbidden=["GIT_DIR","GIT_WORK_TREE","GIT_INDEX_FILE","GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES","GIT_COMMON_DIR","GIT_NAMESPACE","GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_SYSTEM","GIT_CONFIG_NOSYSTEM","GIT_CONFIG_COUNT","GIT_CONFIG_PARAMETERS",
+      "GIT_ATTR_NOSYSTEM","GIT_EXEC_PATH","GIT_PREFIX","GIT_CEILING_DIRECTORIES",
+      "GIT_DISCOVERY_ACROSS_FILESYSTEM"];
+    const inherited=forbidden.filter((name)=>Object.hasOwn(process.env,name));
+    if (inherited.length) { console.error(inherited.join(",")); process.exit(65); }
+  '
+}
+
+assert_git_freeze() {
+  root="$1"; reviewed_head="$2"; reviewed_tree="$3"; frozen_remote="$4"; expected_branch="$5"
+  test "$(git -C "$root" rev-parse HEAD)" = "$reviewed_head"
+  test "$(git -C "$root" rev-parse 'HEAD^{tree}')" = "$reviewed_tree"
+  test "$(git -C "$root" rev-parse refs/remotes/muqihang/main)" = "$frozen_remote"
+  test "$(git -C "$root" symbolic-ref --quiet --short HEAD)" = "$expected_branch"
+  test -z "$(git -C "$root" status --porcelain=v1 --untracked-files=no)"
+  git -C "$root" diff-index --quiet HEAD --
+}
+
 # Freshness and immutable inputs
+assert_no_dangerous_git_env
 git -C "$CC_GATEWAY_ROOT" fetch muqihang main --prune
 git -C "$SUB2API_ROOT" fetch muqihang main --prune
+assert_git_freeze "$CC_GATEWAY_ROOT" "$CC_REVIEWED_HEAD" "$CC_REVIEWED_TREE" \
+  "$CC_FROZEN_REMOTE_MAIN" "$CC_EXPECTED_BRANCH"
+assert_git_freeze "$SUB2API_ROOT" "$SUB_REVIEWED_HEAD" "$SUB_REVIEWED_TREE" \
+  "$SUB_FROZEN_REMOTE_MAIN" "$SUB_EXPECTED_BRANCH"
 install_codegraph_exclusion "$CC_GATEWAY_ROOT"
 install_codegraph_exclusion "$SUB2API_ROOT"
-git -C "$CC_GATEWAY_ROOT" status --short --branch
-git -C "$SUB2API_ROOT" status --short --branch
 for operation in init index sync status; do
   codegraph_with_exclusion "$CC_GATEWAY_ROOT" "$operation"
   codegraph_with_exclusion "$SUB2API_ROOT" "$operation"
@@ -725,25 +871,37 @@ codegraph_with_exclusion "$CC_GATEWAY_ROOT" status > /tmp/cc-codegraph-status.tx
 codegraph_with_exclusion "$SUB2API_ROOT" status > /tmp/sub2api-codegraph-status.txt
 shasum -a 256 "$CC_GATEWAY_ROOT/codegraph.json" "$SUB2API_ROOT/codegraph.json" \
   /tmp/cc-codegraph-status.txt /tmp/sub2api-codegraph-status.txt
-shasum -a 256 "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json"
 verify_safe_binding() {
-  path="$1"; expected_sha="$2"; expected_schema="$3"
+  path="$1"; expected_sha="$2"; expected_schema="$3"; expected_root="$4"
+  test -f "$path" && test ! -L "$path"
+  test "$(node --input-type=module -e '
+    import fs from "node:fs"; import path from "node:path";
+    const file=fs.realpathSync(process.argv[1]); const root=fs.realpathSync(process.argv[2]);
+    process.stdout.write(String(file.startsWith(root + path.sep)));
+  ' "$path" "$expected_root")" = true
   test "$(shasum -a 256 "$path" | awk '{print $1}')" = "$expected_sha"
   test "$(node --input-type=module -e '
     import fs from "node:fs";
     const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
-    process.stdout.write(`${value.schema_id}@${value.schema_major}.${value.schema_revision}`);
+    process.stdout.write(value.schema_version ??
+      `${value.schema_id}@${value.schema_major}.${value.schema_revision}`);
   ' "$path")" = "$expected_schema"
 }
-verify_safe_binding "$P3A_SUPP_EXIT" "$P3A_SUPP_EXIT_SHA256" "$P3A_SUPP_EXIT_SCHEMA"
-verify_safe_binding "$P3A_SUPP_HANDOFF" "$P3A_SUPP_HANDOFF_SHA256" "$P3A_SUPP_HANDOFF_SCHEMA"
-verify_safe_binding "$P3A_SUPP_TERMINAL" "$P3A_SUPP_TERMINAL_SHA256" "$P3A_SUPP_TERMINAL_SCHEMA"
-verify_safe_binding "$P3A_SUPP_INDEX" "$P3A_SUPP_INDEX_SHA256" "$P3A_SUPP_INDEX_SCHEMA"
-verify_safe_binding "$P3A_SUPP_LEAK" "$P3A_SUPP_LEAK_SHA256" "$P3A_SUPP_LEAK_SCHEMA"
+verify_safe_binding "$P3A_V13_EXIT" "$P3A_V13_EXIT_SHA256" "$P3A_V13_EXIT_SCHEMA" "$P3A_ROOT"
+verify_safe_binding "$P3A_V13_HANDOFF" "$P3A_V13_HANDOFF_SHA256" "$P3A_V13_HANDOFF_SCHEMA" "$P3A_ROOT"
+verify_safe_binding "$P3A_V13_TERMINAL" "$P3A_V13_TERMINAL_SHA256" "$P3A_V13_TERMINAL_SCHEMA" "$P3A_ROOT"
+verify_safe_binding "$P3A_V13_INDEX" "$P3A_V13_INDEX_SHA256" "$P3A_V13_INDEX_SCHEMA" "$P3A_ROOT"
+verify_safe_binding "$P3A_V13_LEAK" "$P3A_V13_LEAK_SHA256" "$P3A_V13_LEAK_SCHEMA" "$P3A_ROOT"
+P3A_SUPP_ROOT="$(dirname "$P3A_SUPP_HANDOFF")"
+verify_safe_binding "$P3A_SUPP_EXIT" "$P3A_SUPP_EXIT_SHA256" "$P3A_SUPP_EXIT_SCHEMA" "$P3A_SUPP_ROOT"
+verify_safe_binding "$P3A_SUPP_HANDOFF" "$P3A_SUPP_HANDOFF_SHA256" "$P3A_SUPP_HANDOFF_SCHEMA" "$P3A_SUPP_ROOT"
+verify_safe_binding "$P3A_SUPP_TERMINAL" "$P3A_SUPP_TERMINAL_SHA256" "$P3A_SUPP_TERMINAL_SCHEMA" "$P3A_SUPP_ROOT"
+verify_safe_binding "$P3A_SUPP_INDEX" "$P3A_SUPP_INDEX_SHA256" "$P3A_SUPP_INDEX_SCHEMA" "$P3A_SUPP_ROOT"
+verify_safe_binding "$P3A_SUPP_LEAK" "$P3A_SUPP_LEAK_SHA256" "$P3A_SUPP_LEAK_SCHEMA" "$P3A_SUPP_ROOT"
 verify_safe_binding "$P3A_REVALIDATED_CONFIG_AUTH" "$P3A_REVALIDATED_CONFIG_AUTH_SHA256" \
-  "$P3A_REVALIDATED_CONFIG_AUTH_SCHEMA"
+  "$P3A_REVALIDATED_CONFIG_AUTH_SCHEMA" "$P3A_SUPP_ROOT"
 verify_safe_binding "$P3A_REVALIDATED_FAILURE_STREAM" \
-  "$P3A_REVALIDATED_FAILURE_STREAM_SHA256" "$P3A_REVALIDATED_FAILURE_STREAM_SCHEMA"
+  "$P3A_REVALIDATED_FAILURE_STREAM_SHA256" "$P3A_REVALIDATED_FAILURE_STREAM_SCHEMA" "$P3A_SUPP_ROOT"
 
 # Unchanged P2 gate
 cd "$CC_GATEWAY_ROOT"
@@ -765,6 +923,8 @@ go test oracle_contract_canonical.go oracle_contract_types.go \
 npm exec tsx tests/oracle-profile-input.test.ts
 npm exec tsx tests/oracle-profile-schema.test.ts
 npm exec tsx tests/oracle-profile-command-chain.test.ts
+npm exec tsx tests/oracle-profile-git-freeze.test.ts
+npm exec tsx tests/oracle-profile-closure-dag.test.ts
 npm exec tsx tests/oracle-profile-compiler.test.ts
 npm exec tsx tests/oracle-profile-provenance.test.ts
 npm exec tsx tests/oracle-profile-negative-capability.test.ts
@@ -779,20 +939,32 @@ go test ./internal/oracleprofile -run '^TestOracleProfile' -count=1
 # Deterministic generation and exact cross-project agreement
 cd "$CC_GATEWAY_ROOT"
 npm exec tsx tools/oracle-profile/compile.ts -- \
-  --base-handoff "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json" \
-  --supplement-exit "$P3A_SUPP_EXIT" --supplement-handoff "$P3A_SUPP_HANDOFF" \
-  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-index "$P3A_SUPP_INDEX" \
-  --supplement-leak "$P3A_SUPP_LEAK" \
-  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" \
-  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" \
+  --base-exit "$P3A_V13_EXIT" --base-exit-sha "$P3A_V13_EXIT_SHA256" --base-exit-schema "$P3A_V13_EXIT_SCHEMA" \
+  --base-handoff "$P3A_V13_HANDOFF" --base-handoff-sha "$P3A_V13_HANDOFF_SHA256" --base-handoff-schema "$P3A_V13_HANDOFF_SCHEMA" \
+  --base-terminal "$P3A_V13_TERMINAL" --base-terminal-sha "$P3A_V13_TERMINAL_SHA256" --base-terminal-schema "$P3A_V13_TERMINAL_SCHEMA" \
+  --base-index "$P3A_V13_INDEX" --base-index-sha "$P3A_V13_INDEX_SHA256" --base-index-schema "$P3A_V13_INDEX_SCHEMA" \
+  --base-leak "$P3A_V13_LEAK" --base-leak-sha "$P3A_V13_LEAK_SHA256" --base-leak-schema "$P3A_V13_LEAK_SCHEMA" \
+  --supplement-exit "$P3A_SUPP_EXIT" --supplement-exit-sha "$P3A_SUPP_EXIT_SHA256" --supplement-exit-schema "$P3A_SUPP_EXIT_SCHEMA" \
+  --supplement-handoff "$P3A_SUPP_HANDOFF" --supplement-handoff-sha "$P3A_SUPP_HANDOFF_SHA256" --supplement-handoff-schema "$P3A_SUPP_HANDOFF_SCHEMA" \
+  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-terminal-sha "$P3A_SUPP_TERMINAL_SHA256" --supplement-terminal-schema "$P3A_SUPP_TERMINAL_SCHEMA" \
+  --supplement-index "$P3A_SUPP_INDEX" --supplement-index-sha "$P3A_SUPP_INDEX_SHA256" --supplement-index-schema "$P3A_SUPP_INDEX_SCHEMA" \
+  --supplement-leak "$P3A_SUPP_LEAK" --supplement-leak-sha "$P3A_SUPP_LEAK_SHA256" --supplement-leak-schema "$P3A_SUPP_LEAK_SCHEMA" \
+  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" --revalidated-config-auth-sha "$P3A_REVALIDATED_CONFIG_AUTH_SHA256" --revalidated-config-auth-schema "$P3A_REVALIDATED_CONFIG_AUTH_SCHEMA" \
+  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" --revalidated-failure-stream-sha "$P3A_REVALIDATED_FAILURE_STREAM_SHA256" --revalidated-failure-stream-schema "$P3A_REVALIDATED_FAILURE_STREAM_SCHEMA" \
   --out /tmp/oracle-profile-a
 TZ=Asia/Shanghai LANG=C LC_ALL=C npm exec tsx tools/oracle-profile/compile.ts -- \
-  --base-handoff "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json" \
-  --supplement-exit "$P3A_SUPP_EXIT" --supplement-handoff "$P3A_SUPP_HANDOFF" \
-  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-index "$P3A_SUPP_INDEX" \
-  --supplement-leak "$P3A_SUPP_LEAK" \
-  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" \
-  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" \
+  --base-exit "$P3A_V13_EXIT" --base-exit-sha "$P3A_V13_EXIT_SHA256" --base-exit-schema "$P3A_V13_EXIT_SCHEMA" \
+  --base-handoff "$P3A_V13_HANDOFF" --base-handoff-sha "$P3A_V13_HANDOFF_SHA256" --base-handoff-schema "$P3A_V13_HANDOFF_SCHEMA" \
+  --base-terminal "$P3A_V13_TERMINAL" --base-terminal-sha "$P3A_V13_TERMINAL_SHA256" --base-terminal-schema "$P3A_V13_TERMINAL_SCHEMA" \
+  --base-index "$P3A_V13_INDEX" --base-index-sha "$P3A_V13_INDEX_SHA256" --base-index-schema "$P3A_V13_INDEX_SCHEMA" \
+  --base-leak "$P3A_V13_LEAK" --base-leak-sha "$P3A_V13_LEAK_SHA256" --base-leak-schema "$P3A_V13_LEAK_SCHEMA" \
+  --supplement-exit "$P3A_SUPP_EXIT" --supplement-exit-sha "$P3A_SUPP_EXIT_SHA256" --supplement-exit-schema "$P3A_SUPP_EXIT_SCHEMA" \
+  --supplement-handoff "$P3A_SUPP_HANDOFF" --supplement-handoff-sha "$P3A_SUPP_HANDOFF_SHA256" --supplement-handoff-schema "$P3A_SUPP_HANDOFF_SCHEMA" \
+  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-terminal-sha "$P3A_SUPP_TERMINAL_SHA256" --supplement-terminal-schema "$P3A_SUPP_TERMINAL_SCHEMA" \
+  --supplement-index "$P3A_SUPP_INDEX" --supplement-index-sha "$P3A_SUPP_INDEX_SHA256" --supplement-index-schema "$P3A_SUPP_INDEX_SCHEMA" \
+  --supplement-leak "$P3A_SUPP_LEAK" --supplement-leak-sha "$P3A_SUPP_LEAK_SHA256" --supplement-leak-schema "$P3A_SUPP_LEAK_SCHEMA" \
+  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" --revalidated-config-auth-sha "$P3A_REVALIDATED_CONFIG_AUTH_SHA256" --revalidated-config-auth-schema "$P3A_REVALIDATED_CONFIG_AUTH_SCHEMA" \
+  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" --revalidated-failure-stream-sha "$P3A_REVALIDATED_FAILURE_STREAM_SHA256" --revalidated-failure-stream-schema "$P3A_REVALIDATED_FAILURE_STREAM_SCHEMA" \
   --out /tmp/oracle-profile-b
 diff -ru /tmp/oracle-profile-a /tmp/oracle-profile-b
 npm exec tsx tools/oracle-profile/check-cross-repo.ts -- \
@@ -808,8 +980,10 @@ npm exec tsx tools/oracle-profile/check-cross-repo.ts -- \
 are rechecked before and after every `init`, `index`, `sync`, and `status`. The SQLite assertions
 query only the CodeGraph file inventory and must return zero; they never open the protected source.
 The command-chain test mutates missing config, wrong digest, wrong working directory, unsupported
-operation, indexed protected-path inventory, `go test ./...`, `go test ./internal/service`, and an
-implicit package-wide child runner. Every mutation must deny before command execution.
+operation, indexed protected-path inventory, wrong HEAD/tree/remote/branch, tracked dirt, dangerous
+Git environment, fixed-artifact missing/swap/digest/schema/root/symlink failures, `go test ./...`,
+`go test ./internal/service`, and an implicit package-wide child runner. Every mutation must deny
+before command execution.
 
 `/tmp/oracle-profile-*` are disposable execution outputs, but deletion still follows the active
 operator safety policy. Phase 3B permits only the explicit P2 Go file list above and
@@ -821,8 +995,9 @@ include, open, search, compile, or otherwise consume the protected keepalive tes
 
 Phase 3B may exit GREEN only when all are true:
 
-1. fresh heads/trees and CodeGraph stats are recorded; the exclusion config canonical digest is
-   verified around every graph command and the protected path inventory count is zero;
+1. reviewed HEAD/tree/frozen remote/branch and tracked-clean state are asserted with no dangerous
+   Git environment; CodeGraph stats are recorded; the exclusion config canonical digest is verified
+   around every graph command and the protected path inventory count is zero;
 2. P2 bundle/predecessor/range, all five v13 artifacts, all five supplement closure artifacts, and
    both append-only usable-row revalidations match their independently reviewed path/digest/schema;
 3. every generated leaf has evidence level/source and every Unknown is explicit/fail closed;
@@ -887,23 +1062,97 @@ on stale P3A/P1 chat context.
 This planning task runs only document/baseline checks:
 
 ```bash
-PLAN=docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
+export PLAN=docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
 test -s docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
 ! rg -n 'TO[D]O|TB[D]|FIXM[E]|PLACEHOLDE[R]|@lates[t]' \
   "$PLAN"
-rg -n 'RA-P0-001|RA-P0-002|RA-P0-005|RA-P0-007|RA-P0-009|RA-P1-001|RA-P1-002|RA-P1-003|RA-P1-004|RA-P1-007|HA-P1-001' \
+rg -n 'RA-P0-001|RA-P0-002|RA-P0-005|RA-P0-007|RA-P0-009|RA-P1-001|RA-P1-002|RA-P1-003|RA-P1-004|RA-P1-007|RA-P1-008|HA-P0-003|HA-P1-001' \
   "$PLAN"
 rg -n 'BLOCKED|CL-P3A-RESUME-LINEAGE-UNKNOWN|phase3b_usable' \
   "$PLAN"
-for schema in phase3b-input-binding field-provenance negative-capabilities coherent-tuples \
-  config-projection rollback-tuple bundle-index; do rg -q "$schema.schema.json" "$PLAN"; done
+for schema in profile fixture phase3b-input-binding field-provenance negative-capabilities \
+  coherent-tuples config-projection rollback-tuple bundle-index; do rg -q "$schema.schema.json" "$PLAN"; done
 rg -q 'missing, tampered, or swapped predecessor' "$PLAN"
 rg -q 'missing/stale/revoked/regressed' "$PLAN"
 rg -q 'missing/extra/unsupported field' "$PLAN"
 rg -q 'wrongly ordered set, reordered sequence' "$PLAN"
+rg -q 'target_kind="coherent_tuple"' "$PLAN"
+rg -q 'target_kind="disable_to_no_profile"' "$PLAN"
+rg -q 'oneOf.*additionalProperties: false' "$PLAN"
+rg -q 'unevaluatedProperties: false' "$PLAN"
+rg -q 'assert_no_dangerous_git_env' "$PLAN"
+rg -q 'assert_git_freeze' "$PLAN"
+for kind in exit handoff terminal index leak; do
+  rg -q -- "--base-$kind .*--base-$kind-sha .*--base-$kind-schema" "$PLAN"
+done
+for mutation in 'wrong local HEAD' 'moved frozen remote main' 'staged or' \
+  'missing/unknown tag' 'ambiguous `oneOf`' 'cross-root' 'schema-mismatched'; do
+  rg -q "$mutation" "$PLAN"
+done
 test "$(printf '%s\n' '{"exclude":["backend/internal/service/openai_compact_sse_keepalive_test.go"]}' | \
   shasum -a 256 | awk '{print $1}')" = f885ea40698ff4de9881ce6a9537388ce80c04be9515bf2c77ac186d39140e98
 ! rg -n '^go test (\./\.\.\.|\./internal/service)( |$)' "$PLAN"
+node --input-type=module <<'NODE'
+import fs from "node:fs";
+const text=fs.readFileSync(process.env.PLAN,"utf8");
+const match=text.match(/```json supplement-closure-dag\n([\s\S]*?)\n```/);
+if (!match) throw new Error("missing structured supplement DAG");
+const base=JSON.parse(match[1]);
+const expectedClosure=["artifact_index","leak_report","exit_report","handoff","terminal_manifest"];
+const expectedIncludes=["pinned_inputs","predecessor_safe_state","observer_a_output","observer_b_output","leaf_cell_run_records","normalized_safe_conclusions"];
+const expectedExcludes=[...expectedClosure,"external_digest_set"];
+
+function validate(dag) {
+  const nodes=new Map();
+  for (const node of dag.nodes) {
+    if (nodes.has(node.id) || !Number.isInteger(node.stage)) throw new Error("invalid node");
+    nodes.set(node.id,node.stage);
+  }
+  if (JSON.stringify(dag.closure_order)!==JSON.stringify(expectedClosure))
+    throw new Error("closure order mismatch");
+  expectedClosure.forEach((id,index)=>{
+    if (nodes.get(id)!==index+4) throw new Error("closure stage mismatch");
+  });
+  if (JSON.stringify(dag.index_scope?.includes)!==JSON.stringify(expectedIncludes) ||
+      JSON.stringify(dag.index_scope?.excludes)!==JSON.stringify(expectedExcludes))
+    throw new Error("index scope mismatch");
+  const indegree=new Map([...nodes.keys()].map((id)=>[id,0]));
+  const outgoing=new Map([...nodes.keys()].map((id)=>[id,[]]));
+  for (const edge of dag.edges) {
+    if (!nodes.has(edge.node)||!nodes.has(edge.depends_on)) throw new Error("unknown edge node");
+    if (edge.node===edge.depends_on) throw new Error("self loop");
+    indegree.set(edge.node,indegree.get(edge.node)+1);
+    outgoing.get(edge.depends_on).push(edge.node);
+  }
+  const ready=[...indegree].filter(([,n])=>n===0).map(([id])=>id).sort();
+  let visited=0;
+  while (ready.length) {
+    const id=ready.shift(); visited++;
+    for (const next of outgoing.get(id).sort()) {
+      indegree.set(next,indegree.get(next)-1);
+      if (indegree.get(next)===0) ready.push(next);
+    }
+    ready.sort();
+  }
+  if (visited!==nodes.size) throw new Error("cycle");
+  for (const edge of dag.edges)
+    if (nodes.get(edge.depends_on)>=nodes.get(edge.node)) throw new Error("closure reverse edge");
+}
+const clone=()=>structuredClone(base);
+validate(base);
+const redMutations=[
+  (d)=>d.edges.push({node:"artifact_index",depends_on:"artifact_index"}),
+  (d)=>d.edges.push({node:"observer_a_output",depends_on:"observer_b_output"},{node:"observer_b_output",depends_on:"observer_a_output"}),
+  (d)=>d.edges.push({node:"normalized_safe_conclusions",depends_on:"artifact_index"}),
+  (d)=>d.edges.push({node:"leaf_cell_run_records",depends_on:"terminal_manifest"})
+];
+for (const mutate of redMutations) {
+  const candidate=clone(); mutate(candidate);
+  let denied=false; try { validate(candidate); } catch { denied=true; }
+  if (!denied) throw new Error("DAG mutation unexpectedly accepted");
+}
+console.log("supplement closure DAG: PASS; RED mutations: 4/4");
+NODE
 test "$(git diff --name-only | wc -l | tr -d ' ')" = 1
 test "$(git diff --name-only)" = "$PLAN"
 git diff --check
