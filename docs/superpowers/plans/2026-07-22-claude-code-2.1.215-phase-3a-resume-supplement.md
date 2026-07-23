@@ -1,6 +1,6 @@
 # Claude Code 2.1.215 P3A-S Resume/Session-Lineage Supplement Plan
 
-> **Plan-only status (2026-07-22): BLOCKED.** This document authorizes no dynamic Claude Code
+> **Plan-only status (2026-07-23): BLOCKED.** This document authorizes no dynamic Claude Code
 > execution, no supplement execution, no Phase 3B implementation, no profile generation, no real
 > upstream, no real credential, no canary, and no runtime wiring. The only positive resume claim
 > allowed by this plan is `CL-P3A-SUPP-RESUME-LINEAGE`; it may set `phase3b_usable=true` only
@@ -72,6 +72,12 @@ The PR review freeze for this one-time revision is also explicit: base
 `34902775b63c8bf0960ca02139d00bfd4a51eeff919ac3310c17852f6a28355c`. The prior digest is
 invalid after this revision. The new head/tree and revised plan digest are reported only after
 the revision commit.
+
+For this final micro-revision, the frozen starting PR head is
+`80bda726e8d60a559b0be5944d665e5b286516ec`, tree
+`7ec529053862deed06beb38fa1be926a1f8e27e5`, and the exact 64-character starting plan digest is
+`5edf90eaee05f85bd3e5b91f9eccf27bcdde1b304d01f3d692f60813b38d7b6c`. The prior 63-character
+transcription without the final `c` is invalid and is not an input.
 
 ### 2.3 CodeGraph refresh and exclusion proof
 
@@ -421,27 +427,39 @@ independently bind the same creation digest and the treatment run is not a new-s
 
 Every dynamic negative uses `seed=3141592653`, the exact six-position
 `balancedPairOrder(seed, 6)`, and six repetitions. It is evaluated for stable denial, not passed to
-positive convergence; parser/schema mutations are counted separately. The exact matrix is:
+positive convergence; parser/schema mutations are counted separately. The side-effect tuple is
+`target_launches/upstream_safe_requests/filesystem_safe_records`, where each count is a bounded
+durable safe classification count, never raw bytes. Every dynamic row below has exactly six
+repetitions and order slots `0..5` from `balancedPairOrder(3141592653, 6)`.
 
-| cell family | arm ID / run suffix | expected stable deny code | side-effect expectation | positive convergence |
-| --- | --- | --- | --- | --- |
-| `new-session-control` | `a01-new` | `new_control_no_predecessor` | target may create only its own fresh state; no predecessor read; no resume claim | paired control only |
-| `resume-candidate` | `a02-resume` | none; requires `Reproduced` | target-created predecessor read by target; no controller state write | yes |
-| `missing-predecessor` | `a03-neg-missing-predecessor` | `missing_predecessor` | deny before resume launch; no state read/write; no positive output | no |
-| `tampered-predecessor` | `a03-neg-tampered-predecessor` | `predecessor_digest_mismatch` | target read denied or classified mismatch; no state write; no positive output | no |
-| `swapped-predecessor` | `a03-neg-swapped-predecessor` | `predecessor_cell_mismatch` | target read denied; no access to another cell's state; no positive output | no |
-| `wrong-run-binding` | `a03-neg-wrong-run-binding` | `run_binding_mismatch` | deny before positive classification; no state write; no positive output | no |
-| `fresh-session-fallback` | `a03-neg-fresh-session-fallback` | `fresh_session_fallback` | fresh target session only; no predecessor read; no positive output | no |
-| `nonterminal-creation` | `a03-neg-nonterminal-creation` | `predecessor_nonterminal` | predecessor rejected; no resume reader event; no state write | no |
-| `observer-disagreement` | `a03-neg-observer-disagreement` | `observer_disagreement` | both observer results retained as bounded digests only; no conclusion | no |
-| `instrumentation-perturbation` | `a03-neg-instrumentation-perturbation` | `instrumentation_perturbation` | instrumented result not selected; no positive output | no |
+The exact unique dynamic matrix is:
 
-For every row, `arm_id` is `P3AS-215-SNN-RNN-<suffix>`, `run_id` is
-`p3as-215-sNN-rNN-aNN-<suffix>`, and `NN` is zero-padded decimal. Each repetition must emit the
-same deny code and side-effect class. One mismatch is `Unknown` and disables the entire supplement.
+| cell family | exact arm ID / run suffix | seed/order/reps | stable deny code | side-effect tuple | observer agreement | terminal expectation | positive convergence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `new-session-control` | `P3AS-215-SNN-RNN-A01-NEW` / `a01-new` | `3141592653` / slots `0..5` / 6 | `new_control_no_predecessor` | `1/1/0` | A/B not required; no predecessor proof | `CONTROL_NEW_SESSION` | paired control only |
+| `resume-candidate` | `P3AS-215-SNN-RNN-A02-RESUME` / `a02-resume` | `3141592653` / slots `0..5` / 6 | none; requires `Reproduced` | `1/1/1` | A and B agree on same creation digest | `REPRODUCED_RESUME_CANDIDATE` | yes |
+| `missing-predecessor` | `P3AS-215-SNN-RNN-A03-MISSING-PREDECESSOR` / `a03-neg-missing-predecessor` | `3141592653` / slots `0..5` / 6 | `missing_predecessor` | `0/0/0` | both not started; no proof | `DENY_MISSING_PREDECESSOR` | no |
+| `tampered-predecessor` | `P3AS-215-SNN-RNN-A04-TAMPERED-PREDECESSOR` / `a04-neg-tampered-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_digest_mismatch` | `1/0/1` | A/B agree on mismatch; no consumption agreement | `DENY_PREDECESSOR_DIGEST` | no |
+| `swapped-predecessor` | `P3AS-215-SNN-RNN-A05-SWAPPED-PREDECESSOR` / `a05-neg-swapped-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_cell_mismatch` | `1/0/1` | A/B agree on wrong cell; no consumption agreement | `DENY_PREDECESSOR_CELL` | no |
+| `wrong-run-binding` | `P3AS-215-SNN-RNN-A06-WRONG-RUN-BINDING` / `a06-neg-wrong-run-binding` | `3141592653` / slots `0..5` / 6 | `run_binding_mismatch` | `0/0/0` | both not started; no proof | `DENY_RUN_BINDING` | no |
+| `fresh-session-fallback` | `P3AS-215-SNN-RNN-A07-FRESH-SESSION-FALLBACK` / `a07-neg-fresh-session-fallback` | `3141592653` / slots `0..5` / 6 | `fresh_session_fallback` | `1/1/0` | A/B agree on fresh session and absence of consumption | `UNKNOWN_FRESH_FALLBACK` | no |
+| `nonterminal-creation` | `P3AS-215-SNN-RNN-A08-NONTERMINAL-CREATION` / `a08-neg-nonterminal-creation` | `3141592653` / slots `0..5` / 6 | `predecessor_nonterminal` | `0/0/0` | both not started; no proof | `DENY_PREDECESSOR_NONTERMINAL` | no |
+| `observer-disagreement` | `P3AS-215-SNN-RNN-A09-OBSERVER-DISAGREEMENT` / `a09-neg-observer-disagreement` | `3141592653` / slots `0..5` / 6 | `observer_disagreement` | `1/1/1` | A/B disagree; disagreement is stable | `UNKNOWN_OBSERVER_DISAGREEMENT` | no |
+| `instrumentation-perturbation` | `P3AS-215-SNN-RNN-A10-INSTRUMENTATION-PERTURBATION` / `a10-neg-instrumentation-perturbation` | `3141592653` / slots `0..5` / 6 | `instrumentation_perturbation` | `1/1/1` | A/B agree only that perturbation invalidates result | `UNKNOWN_INSTRUMENTATION_PERTURBATION` | no |
+| `network-only-proof` | `P3AS-215-SNN-RNN-A11-NETWORK-ONLY-PROOF` / `a11-neg-network-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_b_missing` | `1/1/0` | A present/B absent; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
+| `filesystem-only-proof` | `P3AS-215-SNN-RNN-A12-FILESYSTEM-ONLY-PROOF` / `a12-neg-filesystem-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_a_missing` | `1/0/1` | A absent/B present; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
+| `missing-state-dependent-network-signal` | `P3AS-215-SNN-RNN-A13-MISSING-SIGNAL` / `a13-neg-missing-state-dependent-network-signal` | `3141592653` / slots `0..5` / 6 | `missing_state_dependent_network_signal` | `1/1/1` | B present/A signal absent; insufficient agreement | `UNKNOWN_NETWORK_SIGNAL` | no |
+| `controller-supplied-predecessor-proof` | `P3AS-215-SNN-RNN-A14-CONTROLLER-SUPPLIED-PROOF` / `a14-neg-controller-supplied-predecessor-proof` | `3141592653` / slots `0..5` / 6 | `controller_supplied_proof` | `0/0/0` | both not started; controller proof is never observer agreement | `DENY_CONTROLLER_PROOF` | no |
+| `wrong-reader-pid-process-start` | `P3AS-215-SNN-RNN-A15-WRONG-READER-IDENTITY` / `a15-neg-wrong-reader-pid-process-start` | `3141592653` / slots `0..5` / 6 | `wrong_reader_process_identity` | `1/1/1` | A present/B wrong PID or process-start; disagreement | `UNKNOWN_WRONG_READER_IDENTITY` | no |
+
+For every row, `arm_id` is the exact uppercase value shown, `run_id` is
+`p3as-215-sNN-rNN-aNN-<suffix>`, and every `NN` is zero-padded decimal. Each repetition must emit
+the same deny code, side-effect tuple, observer-agreement class, and terminal class. One mismatch
+is `Unknown` and disables the entire supplement. The five observer dynamic controls are not
+prose-only: they are the `A11`-`A15` rows above, each has exactly six repetitions, and each has
+`positive convergence=no`. A negative must never enter `analyzeConvergence`'s positive leaf set.
 The `new-session-control` is not evidence of resume consumption; it only proves the negative
-control is a distinct new operation. A negative must never enter `analyzeConvergence`'s positive
-leaf set.
+control is a distinct new operation.
 
 The negative corpus is not optional. A positive result inferred from the absence of a new
 session request, from a matching session ID alone, or from a fallback path fails the run.
@@ -736,6 +754,31 @@ normalized path is valid, and no absolute ephemeral path is written inside an ar
 | Phase 3B handoff | `capsules/P3A-S/phase-3b-supplement-handoff-v1.json` | `oracle-lab-phase3a-supplement-handoff@1.0` |
 | external five-piece digest set | `capsules/P3A-S/closure-digest-set-v1.json` | `oracle-lab-phase3a-supplement-digest-set@1.0` |
 
+### 9.1 Durable modes and leaf paths
+
+The mode contract is fixed and does not rely on the process umask: `P3A_SUPP_ROOT` and every
+durable directory below it are `0o700`; every durable JSON file is `0o600`. The external evidence
+parent supplied by the operator is also `0o700`. Creation must use explicit directory/file modes,
+then `stat` must assert the exact mode; wrong mode, group/other permission, symlink, hard link, or
+missing path fails closed. No absolute ephemeral path, raw argv/env, or raw state bytes can appear
+in durable bytes.
+
+The four observer/state leaf artifacts have these exact single-root templates:
+
+| durable artifact | exact path template | schema ID | mode | size ceiling | canonicalization/digest |
+| --- | --- | --- | --- | --- | --- |
+| creation-state record | `capsules/P3A-S/cells/<cell_id>/state/creation-state.json` | `oracle-lab-phase3a-supplement-creation-state@1.0` | dir `0o700`, file `0o600` | 64 KiB | UTF-8 JCS + final LF; SHA-256 exact bytes excluding no field; `payload_digest` excludes itself |
+| resume-state record | `capsules/P3A-S/cells/<cell_id>/state/resume-state.json` | `oracle-lab-phase3a-supplement-state@1.0` | dir `0o700`, file `0o600` | 64 KiB | UTF-8 JCS + final LF; SHA-256 exact bytes; `payload_digest` excludes itself |
+| Observer A network output | `capsules/P3A-S/cells/<cell_id>/observers/observer-a-network.json` | `oracle-lab-phase3a-supplement-observer-a@1.0` | dir `0o700`, file `0o600` | 16 KiB | UTF-8 JCS + final LF; SHA-256 exact bytes; `output_digest` excludes itself |
+| Observer B filesystem/process output | `capsules/P3A-S/cells/<cell_id>/observers/observer-b-filesystem-process.json` | `oracle-lab-phase3a-supplement-observer-b@1.0` | dir `0o700`, file `0o600` | 16 KiB | UTF-8 JCS + final LF; SHA-256 exact bytes; `output_digest` excludes itself |
+
+The creation-state, resume-state, and observer files are leaf inputs to the cell/run record and
+are included by the authority `index_scope` through the leaf/observer payloads; they never contain
+index, leak, exit, handoff, terminal, or external digest-set hashes. A missing leaf, wrong mode,
+cross-root path, swapped schema/path pair, symlink, oversize file, non-canonical bytes, or a
+duplicate path is a stable deny before index generation. The path validator applies both lexical
+relative-path checks and realpath containment from `verify_safe_binding`.
+
 Every future Phase 3B compiler input is an explicit tuple of `{relative_path, sha256, schema_id,
 schema_major, schema_revision}` for each required file. The compiler must receive all five closure
 paths/digests/schemas plus both revalidated conclusions and the resume conclusion; it may not walk
@@ -778,8 +821,8 @@ outside the root. All deny before compiler selection.
 
 ## 10. Future implementation work packages
 
-The following are implementation tasks for a later, separately approved P3A-S controller, not
-work performed by this plan PR.
+The following are bounded specification work packages for a later review; they are not an
+implementation-ready or authorized controller plan, and none is work performed by this PR.
 
 1. **P3AS-0 freeze and RED first:** freeze repositories, artifact identity, toolchain, exclusion,
    root policy, placeholder policy, capability matrix, and the reviewed exact creation/resume
@@ -821,7 +864,8 @@ DAG RED mutations are mandatory and explicit: self-loop, two-node cycle, reverse
 stage/order, missing explicit edge, authority drift, orphan dependency, duplicate node ID, missing
 stage, and later-closure hash inserted into the bounded index. Path RED mutations are separate:
 cross-root successor, `..` escape, symlink, hard-link/swap, handoff dirname mismatch, lexical
-containment with realpath escape, and swapped fixed artifact. Parser/schema mutations and dynamic
+containment with realpath escape, swapped fixed artifact, wrong directory mode, wrong file mode,
+missing leaf path, oversize leaf, and schema/path swap. Parser/schema mutations and dynamic
 controls have separate counts and reports; neither count is silently folded into positive
 convergence.
 
@@ -940,11 +984,25 @@ metadata or the named BLOCKED missing-capability record, DAG equality/topologica
 result, terminal/exit/handoff/external digest-set bindings, mutation results, deterministic
 regeneration comparison, negative-capability list, resource usage, and changed-file inventory.
 
-The next action after this plan PR is a fresh independent plan review. Only after zero Critical,
-zero Important findings and plan merge may a separately approved P3A-S execution controller run.
-Only after the supplement is complete, independently reviewed, and selected by exact path/digest/
-schema may Phase 3B create a new execution controller. No dynamic supplement or Phase 3B
-implementation ran for this plan.
+The lifecycle is fail-closed and explicit:
+
+1. `PR40_OPEN_BLOCKED`: independent review may inspect this plan; no controller may be created or
+   started.
+2. `PR40_MERGED_RECON_ONLY`: even after zero Critical/zero Important review and plan merge, the
+   only next task permitted is a read-only/static recon task for the exact launch metadata and
+   target-generated state-dependent network-signal anchor named in Section 5.0. That task may
+   update neither runtime code nor P3A v13.
+3. `BLOCKERS_OPEN`: while `missing_exact_state_protocol` or
+   `missing_state_dependent_network_signal` remains open, controller creation is denied before
+   any runtime preflight. A runtime preflight is not a substitute for the controller-creation
+   gate and cannot legitimize an illegal launch.
+4. `RECON_APPEND_ONLY_CLOSED`: only after both blockers are independently reviewed closed, an
+   append-only authoritative supplement records the exact metadata/anchor, and this plan plus the
+   merged authority are updated to bind those new digests may a separately reviewed decision about
+   creating a future controller occur. This PR itself neither creates nor starts it.
+
+No dynamic supplement, Claude Code execution, Phase 3B implementation, execution controller, or
+runtime wiring ran for this plan.
 
 ## 15. Planning self-checks
 
@@ -952,6 +1010,7 @@ Run only document/static checks in this plan task:
 
 ```bash
 export PLAN=docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3a-resume-supplement.md
+PYTHON=python3
 test -s "$PLAN"
 ! rg -n 'T[O]DO|T[B]D|FIXM[E]|@lates[t]' "$PLAN"
 rg -n 'BLOCKED|CL-P3A-SUPP-RESUME-LINEAGE|phase3b_usable|RA-P0-001|RA-P1-004|HA-P1-001|HA-P1-002|HA-P1-003' "$PLAN"
@@ -979,6 +1038,32 @@ assert.deepEqual(
 )
 console.log('authority DAG structured equality: PASS')
 NODE
+"$PYTHON" - "$PLAN" <<'PY'
+import re, sys
+plan = open(sys.argv[1], encoding='utf-8').read()
+matrix = plan[plan.index('The exact unique dynamic matrix is:'):plan.index('For every row, `arm_id`')]
+rows = [line for line in matrix.splitlines() if line.startswith('| `')]
+assert len(rows) == 15
+assert sorted(re.findall(r'/ `a(\\d{2})-', '\\n'.join(rows))) == [f'{i:02d}' for i in range(1, 16)]
+for row in rows:
+    assert '`3141592653` / slots `0..5` / 6' in row
+    assert re.search(r'\\| `\\d+/\\d+/\\d+` \\|', row)
+for name in ('network-only-proof', 'filesystem-only-proof',
+             'missing-state-dependent-network-signal',
+             'controller-supplied-predecessor-proof', 'wrong-reader-pid-process-start'):
+    assert matrix.count(f'`{name}`') == 1
+assert all(x in plan for x in ('creation-state record', 'resume-state record',
+  'Observer A network output', 'Observer B filesystem/process output'))
+assert plan.count('file `0o600`') >= 4
+assert 'every durable directory below it are `0o700`' in plan
+states = ['PR40_OPEN_BLOCKED', 'PR40_MERGED_RECON_ONLY', 'BLOCKERS_OPEN',
+          'RECON_APPEND_ONLY_CLOSED']
+assert [plan.index(x) for x in states] == sorted(plan.index(x) for x in states)
+assert 'only next task permitted is a read-only/static recon task' in plan
+assert 'controller creation is denied before' in plan
+assert 'runtime preflight is not a substitute' in plan
+print('matrix uniqueness/count, schema/path/mode, blocker state machine: PASS')
+PY
 git diff --check
 ```
 
