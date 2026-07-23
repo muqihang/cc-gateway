@@ -86,7 +86,12 @@ current.
 
 CodeGraph 1.1.6 was rebuilt in both roots. The protected
 `backend/internal/service/openai_compact_sse_keepalive_test.go` path was excluded before Sub2API
-indexing and was not read, searched, modified, staged, or committed.
+indexing and was not directly opened or searched during discovery. It was never modified, staged,
+or committed. One initial planning invocation of the existing P2 joint CLI indirectly ran
+package-wide `go test ./internal/service`; the Go tool therefore compiled every test in that
+package, so this planning run cannot claim a strict zero-read attestation for the protected file.
+No file content was displayed. All subsequent checks, and every future command in Section 12, use
+explicit P2 file lists or the dedicated `internal/oracleprofile` package to prevent recurrence.
 
 | Repository | Files | Nodes | Edges | Status |
 | --- | ---: | ---: | ---: | --- |
