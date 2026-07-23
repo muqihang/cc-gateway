@@ -1160,3 +1160,36 @@ git diff --name-only
 ```
 
 The expected planning diff is exactly this plan document. No Phase 3B implementation has started.
+
+## 17. Append-only P3A-S static blocker closure binding (2026-07-23)
+
+This section is an append-only successor to the Phase 3B authority predecessor with SHA-256
+`0687ccaea710647a357993aaefc389078d68f54c2d5ae51f6710d63c2e3906d3`. It does not change the
+authoritative `supplement-closure-dag`, start Phase 3B, or make any conclusion
+`phase3b_usable=true`.
+
+After an independent holistic review of the immutable recon tip reports zero Critical and zero
+Important issues, Phase 3B recognizes both P3A-S controller-creation static blockers as closed by
+this exact tuple:
+
+| object | exact relative path | schema / digest |
+| --- | --- | --- |
+| closure record | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.json` | exact-file SHA-256 `963038e5629646c2c101b4f81014ab9abd6001f8688175544c07e01f74a86df3`; internal JCS digest `731be5a8cba26f5ee867fd46e9798eaec5d8b2ea4e5b77d92fae0648c42143dd`; `oracle-lab-phase3a-static-blocker-recon@1.0` |
+| reviewable report | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.md` | SHA-256 `42f0611fa542aedbc16fefe6b194b198f46f8cdb0d66747ed3a4c6141cda6007` |
+| strict schema | `docs/superpowers/schemas/oracle-lab-phase3a-static-blocker-recon.schema.json` | SHA-256 `3c2d28fa8a72956b2c59003e8ac15ec146bb334149a8ea136a5e658bb7e40a0c` |
+| deterministic scanner/builder | `tools/oracle-lab/phase3a/static-blocker-recon.ts` | SHA-256 `019b9377c9508e7a6f9fd8e9d6154ab312403ce34254225a0ba405121f3a70ae` |
+
+The tuple is valid only for official Claude Code 2.1.215 Darwin arm64 archive
+`599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600`, tree
+`f5a04795289524b639b479fe6ffac187218d7c558a5a5be312ee228850c6e7fe`, and executable
+`90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58`. It freezes exact
+creation/new-control/resume token order and the state-dependent `$.messages` predecessor-prefix
+signal, with independent loopback-network and Darwin-filesystem/process observers required for
+any future dynamic conclusion.
+
+This binding changes only the controller-creation precondition from static blockers open to
+`RECON_APPEND_ONLY_CLOSED`; the static closure remains `phase3b_usable=false`. Phase 3B remains
+blocked until a separately authorized controller
+produces and independently reviews the full dynamic P3A-S DAG: both revalidated v13 successors,
+the resumed-lineage conclusion, all Observer A/B outputs, convergence, index, leak, exit, handoff,
+terminal, and external digest set. Static closure is not a substitute for any of those artifacts.
