@@ -61,17 +61,11 @@ Conflicts resolve in this order:
 Review Amendments Section 4 is normative for Phase 3B. In particular, unsupported behavior being
 safely disabled is insufficient for exit; all five minimum cases must pass truthfully. The
 historical text names a `2.1.207` candidate while the merged Phase 2 active-target overlay and this
-task name `2.1.215` and retain `2.1.207` only as a reference role. A lower-precedence overlay must
-not silently rewrite higher-precedence text. Therefore the consolidated independent plan review
-must record one of these decisions before implementation starts:
-
-- the active-target overlay validly parameterizes the Section 4.4 candidate version to `2.1.215`;
-  or
-- a separately reviewed `2.1.207` usable evidence input is also required.
-
-Absent that explicit decision, the version-role gate remains blocked even if the resume supplement
-passes. No `2.1.207` observation may be copied onto `2.1.215`, and no `2.1.215` conclusion may be
-relabeled as `2.1.207`.
+task name `2.1.215` and retain `2.1.207` only as a reference role. The independent PR #39 review
+resolved this authority question: the merged active-target overlay validly parameterizes the
+Section 4.4 candidate version to `2.1.215`; `2.1.207` remains historical/reference-only and is not
+an additional usable-input requirement. No `2.1.207` observation may be copied onto `2.1.215`, and
+no `2.1.215` conclusion may be relabeled as `2.1.207`. Any such relabel is a stable deny.
 
 ## 3. Fresh planning baseline
 
@@ -96,7 +90,7 @@ explicit P2 file lists or the dedicated `internal/oracleprofile` package to prev
 | Repository | Files | Nodes | Edges | Status |
 | --- | ---: | ---: | ---: | --- |
 | CC Gateway | 262 | 9,229 | 32,322 | up to date |
-| Sub2API | 1,909 | 71,683 | 97,383 | up to date; CLI reports an engine-improvement reindex notice despite the fresh build |
+| Sub2API | 3,064 | 98,766 | 322,427 | up to date; CLI reports an engine-improvement reindex notice despite the fresh build |
 
 The merged Phase 2 contract index is byte-identical in both repositories:
 
@@ -135,10 +129,28 @@ The handoff's only candidate input rows are:
 ]
 ```
 
-The compiler must verify all five hashes, schema validity, expiry, conclusion IDs, and
-`phase3b_usable: true` before reading safe conclusion projections. It must reject a path outside
-the bound evidence root, a symlink, digest mismatch, unknown row, expired row, contradiction,
-parser disagreement, or an attempt to traverse supporting raw artifacts.
+The v13 usable rows both expire at `2026-08-03T00:00:00Z`. They remain the immutable historical
+baseline but are not sufficient as selected Phase 3B inputs after expiry. Before the resume row may
+unblock Phase 3B, the separately approved supplement must independently revalidate
+`CL-P3A-R2-CONFIG-AUTH` and `CL-P3A-R2-FAILURE-STREAM` against the same pinned `2.1.215` Darwin
+arm64 artifact. Each revalidation emits a new append-only normalized-safe artifact with a new
+conclusion ID, source relative path, SHA-256, schema ID/version, evidence level, issue time, and
+expiry; no v13 byte or row is overwritten or relabeled.
+
+Selected-input precedence is exact: v13 remains the historical source and contradiction baseline;
+the newest independently reviewed, unexpired append-only revalidation of the same conclusion
+family is selected only when its predecessor is the exact v13 conclusion digest, its pinned
+artifact identity is unchanged, its safe projection is schema-valid, and the supplement terminal,
+index, leak, exit, and handoff bindings all agree. No newest-by-time fallback is permitted. Missing
+revalidation, expiry at P3B-0, snapshot/artifact drift, predecessor mismatch, digest mismatch, open
+contradiction, parser disagreement, or multiple eligible successors denies selection and keeps
+Phase 3B BLOCKED.
+
+The compiler must verify the five v13 hashes plus every selected supplement/revalidation hash,
+schema validity, expiry, conclusion IDs, and `phase3b_usable: true` before reading safe conclusion
+projections. It must reject a path outside the bound evidence root, a symlink, digest mismatch,
+unknown row, expired row, contradiction, parser disagreement, or an attempt to traverse supporting
+raw artifacts.
 
 ## 5. Requirement traceability
 
@@ -149,6 +161,7 @@ parser disagreement, or an attempt to traverse supporting raw artifacts.
 | `RA-P0-005` | preserve the P2 versioned cross-project contract/readiness vocabulary | exact P2 digest/range binding and paired TS/Go artifacts; no P2 in-place mutation |
 | `RA-P0-007` | bounded response/failure/retry facts | de-identified failure/stream profile and conformance fixtures only; runtime OutcomeEnvelope remains Phase 4 |
 | `RA-P0-009` | protected production remains disabled | generated negative manifest includes production, canary, real upstream, and protected runtime denies |
+| `RA-P1-001` | build/version change-point coverage is evidence-bound | pinned `2.1.215` active-target identity plus reference-only `2.1.207`; cross-version relabel mutation denies |
 | `RA-P1-002` | coherent build/request/response/control/auth/transport outputs | one evidence-bound tuple graph; no mixed refs or handwritten upstream-visible constants |
 | `RA-P1-003` | typed de-identified fixtures and bounded drift facts | typed request/response/state/failure fixtures and mutation corpus; no raw values |
 | `RA-P1-004` | lineage and migration contract | generated fail-closed lineage profile; resume stays disabled until supplement; runtime state machine remains Phase 4 |
@@ -156,6 +169,7 @@ parser disagreement, or an attempt to traverse supporting raw artifacts.
 | `HA-P0-001`, `HA-P0-002`, `HA-P0-004` | registry, precedence, and fresh baseline truthfulness | input binding, current heads, immutable requirement mapping |
 | `HA-P0-006` | shared contract discovery | P2 contract digest/range/predecessor check |
 | `HA-P0-009` | negative capability is explicit and fail closed | missing/Unknown/unsupported/expired/contradicted input denies generation |
+| `HA-P1-001` | claims require independent dynamic observation | supplement observers use separate implementations/dependencies and must agree on prior-state consumption |
 | `HA-P1-002` | lifecycle/resume needs reproduced evidence | resume supplement hard gate and convergence criteria |
 | `HA-P1-003` | bounded safe error classification | stable compiler/validator error codes and leak-canary mutation tests |
 | `OL-LEGACY-001` | legacy/reference tuple is comparison-only | no mutation or promotion of a legacy tuple |
@@ -209,10 +223,10 @@ file list, search, mutation, and diff.
 
 | Minimum case | P3A usable source | Exact future typed fixture | Planning verdict | Future acceptance |
 | --- | --- | --- | --- | --- |
-| new session + streaming Messages | `CL-P3A-R2-CONFIG-AUTH` for local config/placeholder auth plus `CL-P3A-R2-FAILURE-STREAM` for complete stream | `fixtures/new-session-streaming.json` | **ELIGIBLE**, not yet implemented | request profile, auth profile, complete SSE grammar, terminal class, tuple refs, TS/Go digest all pass |
+| new session + streaming Messages | selected append-only revalidations of `CL-P3A-R2-CONFIG-AUTH` and `CL-P3A-R2-FAILURE-STREAM`, with v13 as predecessor baseline | `fixtures/new-session-streaming.json` | **ELIGIBLE only after revalidation**, not yet implemented | request profile, auth profile, complete SSE grammar, terminal class, tuple refs, TS/Go digest all pass |
 | resumed session + streaming Messages | no usable row; `CL-P3A-RESUME-LINEAGE-UNKNOWN` is explicitly non-usable | `fixtures/resumed-session-streaming.json` | **BLOCKED** | only a separately approved P3A supplement may populate the fixture; otherwise fixture is a negative rejection case |
-| bounded response failure/recovery | `CL-P3A-R2-FAILURE-STREAM` | `fixtures/bounded-failure-recovery.json` | **ELIGIBLE**, not yet implemented | HTTP failure, reset, partial stream, complete stream, retry-owner and terminal/no-retry expectations agree |
-| deterministic regeneration | exact handoff v13 + approved resume supplement + P2 bundle | `fixtures/deterministic-regeneration.json` | **STRUCTURAL GATE** | two isolated compiler runs produce identical file set, JCS bytes, modes, and bundle digest |
+| bounded response failure/recovery | selected append-only revalidation of `CL-P3A-R2-FAILURE-STREAM`, with v13 as predecessor baseline | `fixtures/bounded-failure-recovery.json` | **ELIGIBLE only after revalidation**, not yet implemented | HTTP failure, reset, partial stream, complete stream, retry-owner and terminal/no-retry expectations agree |
+| deterministic regeneration | exact v13 bindings + selected revalidations + approved resume supplement + P2 bundle | `fixtures/deterministic-regeneration.json` | **STRUCTURAL GATE** | two isolated compiler runs produce identical file set, JCS bytes, modes, and bundle digest |
 | TS/Go/manifest/typed-fixture agreement | v13 rows, approved supplement, and P2 bundle; no additional Claude behavior claim | all three fixtures plus `bundle-index.json` | **STRUCTURAL GATE** | TS and Go validators return identical allow/deny codes and digests for every positive/mutation row |
 
 No case is GREEN during planning. A generated negative resume fixture is useful for fail-closed
@@ -226,19 +240,42 @@ PR and requires its own approval because it executes P3A evidence work.
 
 Minimum supplement scope:
 
-1. Use the already pinned `2.1.215` Darwin arm64 artifact and a new isolated loopback-only session
-   state fixture. Persist only typed safe refs and hashes, never raw session state or prompts.
-2. Run paired new/resume controls from the same synthetic placeholder transcript, with at least
-   two independent safe observers, perturbation control, seeded order, and the existing
-   convergence rule.
-3. Capture only: root/session/task safe refs, parent/current relation, client/profile generation,
+1. Use the already pinned `2.1.215` Darwin arm64 artifact and a new isolated loopback-only ephemeral
+   session-state fixture. Persist only typed safe refs and hashes, never raw session state or
+   prompts. The fixture is destroyed under the supplement's separately approved evidence policy;
+   Phase 3B receives no state bytes.
+2. Before resume observation, independently revalidate both
+   `CL-P3A-R2-CONFIG-AUTH` and `CL-P3A-R2-FAILURE-STREAM` as append-only normalized-safe successors
+   with updated expiry and exact v13 predecessor conclusion digests. A successor may narrow a claim
+   but may not silently expand, rewrite, or replace v13.
+3. Run paired new/resume controls from the same synthetic placeholder transcript, with seeded order,
+   perturbation controls, the existing convergence rule, and these two independent observers:
+   - **Observer A, loopback semantic observer:** an application-level fake-upstream process records
+     normalized request AST topology/digest, header name/value-class facts, SSE grammar, terminal
+     class, and retry class. It never receives Observer B output.
+   - **Observer B, Darwin process/filesystem observer:** a separately built supervisor records only
+     process parent/current safe refs, ephemeral prior-state open/access class, pre-open content
+     digest, and local process lineage. It does not parse HTTP, JSON, SSE, or Observer A output.
+   Independence requires different executable digests, no shared observation library, no shared
+   parser, unidirectional write-only result files, separately recorded dependency/toolchain digests,
+   and agreement performed only by the terminal builder after both observers exit.
+4. Every resume cell binds `prior_state_creation_run_id`, `prior_state_safe_digest`,
+   `prior_state_artifact_digest`, `resume_run_id`, `resume_run_digest`, seed/order cell ID, and the
+   exact safe result digests from both observers. The prior-state digest must be created by the
+   paired new-session control and consumed by the resume run; a run ID or artifact mismatch denies.
+5. Run missing, one-byte-tampered, and same-schema-but-swapped predecessor controls. Each must
+   produce a bounded deny/Unknown result with no positive resume conclusion. Fresh-session fallback,
+   nonterminal execution, observer disagreement, inferred consumption, or run mismatch is Unknown
+   and therefore denies `phase3b_usable`.
+6. Capture only root/session/task safe refs, parent/current relation, client/profile generation,
    request class, header-name/value-class summary, request AST topology/digest, SSE event grammar,
-   terminal class, retry class, and local process lineage.
-4. Prove the resume command actually consumed the prior safe state; a fresh-session fallback,
-   nonterminal cell, or inferred absence remains Unknown.
-5. Emit a schema-valid, unexpired, contradiction-free conclusion plus refreshed terminal manifest,
-   artifact index, leak scan, exit report, and Phase 3B handoff digests. Do not overwrite v13.
-6. Preserve all other v13 Unknown rows. The supplement does not authorize restart migration,
+   terminal class, retry class, local process lineage, and the run/digest bindings above.
+7. Emit append-only, schema-valid, unexpired, contradiction-free normalized-safe conclusions plus
+   refreshed terminal manifest, artifact index, leak scan, exit report, and Phase 3B handoff. Each
+   resume cell and each renewed conclusion records the relative path, SHA-256, and schema ID/version
+   of all five closure artifacts; the P3B-0 preflight binds all five independently. Do not overwrite
+   v13 or reuse an old receipt/context/lease/Recovery namespace.
+8. Preserve all other v13 Unknown rows. The supplement does not authorize restart migration,
    child-process lineage, compact/cache, telemetry/update, provider TLS, or other platforms.
 
 Supplement acceptance command names are future P3A-owned commands, not commands to run in this
@@ -246,6 +283,9 @@ planning task:
 
 ```bash
 npm exec tsx tests/oracle-phase3a-resume-supplement.test.ts
+npm exec tsx tests/oracle-phase3a-usable-revalidation.test.ts
+npm exec tsx tests/oracle-phase3a-prior-state-controls.test.ts
+npm exec tsx tests/oracle-phase3a-observer-independence.test.ts
 npm exec tsx tests/oracle-phase3a-convergence.test.ts
 npm exec tsx tests/oracle-phase3a-r4-terminal.test.ts
 npm exec tsx tests/oracle-phase3a-leak-guard.test.ts
@@ -264,9 +304,34 @@ and expiry values are copied as source fields so identical inputs regenerate ide
 ### 8.1 Input binding
 
 `Phase3BInputBinding.v1` contains exact repository heads/trees, P2 bundle/range/predecessor,
-external handoff/exit/terminal/index/leak paths and digests, usable conclusion IDs, claim ceilings,
-compiler schema version, and a sorted negative-capability list. Paths are local verification
-inputs; generated distributable artifacts retain only safe relative evidence IDs and digests.
+external handoff/exit/terminal/index/leak paths and digests, selected append-only revalidation and
+resume conclusion paths/digests/schemas, usable conclusion IDs, claim ceilings, compiler schema
+version, and a sorted negative-capability list. `phase3b-input-binding.schema.json` requires every
+safe input to contain `{relative_path, sha256, schema_id, schema_major, schema_revision,
+evidence_level, conclusion_id, issued_at_ms, expires_at_ms, predecessor_digest}`. Only relative
+paths explicitly present in the independently reviewed artifact index are allowed; directory
+walking and implicit supporting-artifact discovery are forbidden. Generated distributable
+artifacts retain only safe relative evidence IDs and digests.
+
+Every artifact class has its own exact schema. Schemas use `additionalProperties: false`, require
+all listed keys, reject duplicate keys before schema validation, sort object keys by RFC 8785, and
+declare every array as either an order-significant sequence or a set sorted by its stable key.
+Reordering a sequence is a semantic mutation; noncanonical set ordering is rejected rather than
+silently normalized during validation.
+
+| Artifact | Required schema | Array/order rule and canonical identity |
+| --- | --- | --- |
+| input binding | `phase3b-input-binding.schema.json` | inputs sorted by `(conclusion_id, relative_path)`; JCS SHA-256 |
+| field provenance | `field-provenance.schema.json` | unique rows sorted by JSON Pointer; JCS SHA-256 |
+| negative capabilities | `negative-capabilities.schema.json` | unique stable IDs sorted lexically; JCS SHA-256 |
+| coherent tuples | `coherent-tuples.schema.json` | unique tuple IDs sorted lexically; profile refs sorted by artifact kind; JCS SHA-256 |
+| CC/Sub2API config projections | `config-projection.schema.json` | sequence/set arrays declared separately; both bind one tuple digest; JCS SHA-256 |
+| rollback tuple | `rollback-tuple.schema.json` | target refs sorted by artifact kind; JCS SHA-256 |
+| bundle index | `bundle-index.schema.json` | files sorted by relative POSIX path; aggregate digest over ordered `(path, digest, mode)` rows |
+
+Unknown field, missing field, duplicate key, unsupported schema revision, wrong set order,
+reordered sequence, absolute path, unindexed normalized-safe path, or path/schema/digest
+disagreement is a stable deny before generation.
 
 ### 8.2 Profile artifacts
 
@@ -288,14 +353,17 @@ negative_capability_refs, rollback_profile_digest
 ### 8.3 Per-field source map
 
 The compiler emits `field-provenance.json`, sorted by JSON Pointer. Every generated leaf has one
-entry: `{pointer, evidence_level, source_kind, source_id, source_digest, transform}`. The following
-families are exhaustive; adding a leaf without a provenance row is a schema failure.
+entry: `{pointer, evidence_level, source_kind, source_id, source_relative_path, source_digest,
+source_schema_id, source_schema_revision, transform}`. `source_relative_path` must be one exact
+normalized-safe path allowlisted by the selected artifact index and `source_digest` must match its
+bound bytes. The following families are exhaustive; adding a leaf without a provenance row, using
+an unindexed path, or traversing from a safe artifact into a raw-support path is a schema failure.
 
 | Generated field family | Evidence level | Allowed source | Rule |
 | --- | --- | --- | --- |
-| package/version/artifact/entrypoint digest, Darwin arm64/platform/install mode | `Reproduced` | bound P3A v13 safe artifact identity and usable conclusions' static anchors | exact copy of safe fields; no floating tag |
-| build timestamp category, UA and `x-stainless-*` values | `Reproduced` only if present in safe usable projection; otherwise `Unknown` | usable conclusion projection | missing values disable synthesis; never handwritten |
-| request method/path/query/header classes/body AST/final-byte digest | `Reproduced` only | the two usable rows' safe projections | exact normalized fields; raw prompt/body forbidden |
+| package/version/artifact/entrypoint digest, Darwin arm64/platform/install mode | `Reproduced` | exact indexed normalized-safe artifact identity path/digest/schema | exact copy of safe fields; no floating tag |
+| build timestamp category, UA and `x-stainless-*` values | `Reproduced` only if present in an indexed normalized-safe usable projection; otherwise `Unknown` | exact selected projection path/digest/schema | missing values remain disabled; never handwritten |
+| request method/path/query/header classes/body AST/final-byte digest | `Reproduced` only if explicitly present | exact selected normalized-safe conclusion projection path/digest/schema | absent support, including absent request AST support, remains Unknown/disabled; raw prompt/body forbidden |
 | response headers/SSE ordering/partial/complete/error/terminal classes | `Reproduced` | `CL-P3A-R2-FAILURE-STREAM` | no response bytes persisted; typed placeholders only |
 | config precedence and placeholder auth lifecycle | `Reproduced` | `CL-P3A-R2-CONFIG-AUTH` | only placeholder credential class; no account or token material |
 | control-plane positive telemetry/update | `Unknown`/`Negative` | `CL-P3A-TELEMETRY-UPDATE-UNKNOWN` via v13 negative list | policy is suppress/block locally; no positive route invented |
@@ -304,7 +372,7 @@ families are exhaustive; adding a leaf without a provenance row is a schema fail
 | resume/restart/child lineage | `Unknown`/`Negative` until supplement | `CL-P3A-RESUME-LINEAGE-UNKNOWN` | positive resume tuple forbidden |
 | Linux/Windows runtime | `Unknown`/`Negative` | `CL-P3A-CROSS-PLATFORM-UNKNOWN` | Darwin arm64 tuple cannot claim cross-platform behavior |
 | P2 schema/range/gates/negative semantics | contract fact | P2 bundle digest `254511...` | preserve schema `1:0-0`; do not edit P2 files in place |
-| generation/rollback/expiry/contradiction fields | contract fact plus source evidence | P2 authority model and bound handoff rows | monotonic nonnegative generation; exact prior digest; expired/open contradiction denies |
+| generation/rollback/expiry/contradiction fields | contract fact plus source evidence | P2 authority semantics plus selected profile/rollback evidence paths | monotonic generation; exact profile predecessor digest; P2 contract digest is never a profile digest; expired/open contradiction denies |
 | production/canary/protected sidecar/destination/replay | `Negative` | `RA-P0-009`, `AV-B4/B5/B6`, current deferred runtime state | always disabled in Phase 3B artifacts |
 
 ### 8.4 Coherent allowed tuple
@@ -339,6 +407,27 @@ destination enforcement, and direct egress fallback.
 
 Absence is denial. No consumer treats omission as permission.
 
+### 8.6 Rollback tuple
+
+`rollback-tuple.json` is independently addressable and validated by both TS and Go. It is not the
+P2 contract bundle or predecessor digest. `rollback-tuple.schema.json` requires:
+
+```text
+schema_id, schema_major, schema_revision, rollback_tuple_id
+active_profile_tuple_digest, rollback_target_tuple_digest, rollback_profile_refs
+evidence_source_relative_path, evidence_source_digest, evidence_source_schema_id
+current_generation, target_generation, rollback_floor_generation
+revoked, revocation_ids, issued_at_ms, expires_at_ms, contradiction_ids
+```
+
+The target is selected only from an independently generated, schema-valid coherent tuple whose
+profile digests all resolve, whose generation is lower than current but not below the rollback
+floor, whose platform/build/install scope exactly matches, and whose evidence remains unexpired,
+unrevoked, and contradiction-free. If no such positive target exists, the tuple uses the explicit
+`disable-to-no-profile` negative target; it may never substitute a P2 contract digest or invent a
+profile. Missing, stale, revoked, regressed, mismatched, or ambiguous targets, contract-as-profile
+substitution, or TS/Go digest disagreement fail closed before config generation.
+
 ## 9. Future repository layout and ownership
 
 The implementation controller may refine filenames only through the consolidated review if the
@@ -349,6 +438,13 @@ CC Gateway (authoritative source and TS implementation)
   contracts/oracle-lab/profile-synthesis/v1/
     profile.schema.json
     fixture.schema.json
+    phase3b-input-binding.schema.json
+    field-provenance.schema.json
+    negative-capabilities.schema.json
+    coherent-tuples.schema.json
+    config-projection.schema.json
+    rollback-tuple.schema.json
+    bundle-index.schema.json
     mutation-corpus.json
     expected-results.json
     generated/
@@ -362,6 +458,7 @@ CC Gateway (authoritative source and TS implementation)
       session-task-lineage-profile.json
       negative-capabilities.json
       coherent-tuples.json
+      rollback-tuple.json
       cc-gateway-config.json
       sub2api-config.json
       field-provenance.json
@@ -402,7 +499,7 @@ manifests, or the protected keepalive test.
 
 ```text
 independent plan review -> plan merge
-  -> P3A-S resume supplement approval/execution/review
+  -> P3A-S usable-row revalidation + resume supplement approval/execution/review
   -> P3B-0 fresh freeze + target-role decision + input preflight
   -> P3B-1 schemas and RED corpus
   -> P3B-2 deterministic compiler core
@@ -422,12 +519,13 @@ mirror. There is one consolidated review at P3B-8, not a per-task review loop.
 ### P3B-0: Fresh freeze and preflight
 
 - **Owner:** Phase 3B controller.
-- **Inputs:** fresh `muqihang/main` heads, merged plan, P2 bundle, approved resume supplement,
-  reviewed version-role decision.
-- **Actions:** rebuild CodeGraph with the protected exclusion; verify clean trees and exact external
-  digests; validate conclusion usability/expiry/contradictions; run the protected-safe static P2
-  joint check plus explicit-file P2 Go tests. The existing CLI's package-wide Go child command is
-  not used under this task boundary.
+- **Inputs:** fresh `muqihang/main` heads, merged plan, P2 bundle, approved resume supplement, both
+  append-only usable-row revalidations, and the resolved version-role decision.
+- **Actions:** create and digest-check the local-only CodeGraph exclusion before every graph command;
+  verify clean trees and the exact v13 plus supplement exit/handoff/terminal/index/leak digests;
+  validate selected-input precedence, usability, expiry, predecessor, pinned snapshot, and
+  contradictions; run the protected-safe static P2 joint check plus explicit-file P2 Go tests. The
+  existing CLI's package-wide Go child command and every package-wide implicit runner are forbidden.
 - **RED gate:** a deliberately mutated handoff digest and a non-usable resume row both return stable
   deny codes before any output directory is written.
 - **Output:** in-memory preflight decision and safe command result only; no receipt/context/lease.
@@ -436,8 +534,9 @@ mirror. There is one consolidated review at P3B-8, not a per-task review loop.
 
 - **Owner:** CC Gateway contract owner.
 - **Files:** schemas, mutation corpus, expected results, TS schema tests.
-- **RED first:** missing provenance, Unknown positive field, omitted negative list, extra field,
-  duplicate key, Frankenprofile tuple, and positive resume without supplement fail.
+- **RED first:** missing provenance, Unknown positive field, omitted negative list, missing/extra/
+  unsupported field, duplicate key, wrong set order, reordered sequence, Frankenprofile tuple,
+  invalid rollback target, and positive resume without supplement fail.
 - **Acceptance:** both schema validators enumerate identical stable codes; no compiler yet passes.
 
 ### P3B-2: Deterministic compiler core
@@ -454,11 +553,13 @@ mirror. There is one consolidated review at P3B-8, not a per-task review loop.
 ### P3B-3: Profile, provenance, negatives, and tuple synthesis
 
 - **Owner:** profile coherence owner.
-- **Files:** generated profile objects, field provenance, negative manifest, coherent tuples.
+- **Files:** generated profile objects, field provenance, negative manifest, coherent tuples, and
+  independently addressable rollback tuple.
 - **Rules:** every leaf has evidence; Unknown/negative fails closed; rollback is independently
   addressable; generations cannot regress; no handwritten upstream-visible value.
-- **Acceptance:** new-session tuple can be constructed only from usable safe fields; resume tuple
-  requires supplement; all prohibited capability mutations deny.
+- **Acceptance:** new-session tuple can be constructed only from selected revalidated safe fields;
+  resume tuple requires the accepted supplement; rollback target resolves to a real profile tuple
+  or explicit disable-to-no-profile; all prohibited capability mutations deny in TS and Go.
 
 ### P3B-4: Typed fixtures and generated local configs
 
@@ -514,19 +615,23 @@ The future corpus is table-driven and every mutation changes one dimension at a 
 
 1. input path escape, symlink, digest mismatch, wrong artifact index/terminal/leak pairing;
 2. floating package tag, wrong active/reference version, `2.1.207`/`2.1.215` evidence relabel;
-3. missing, false, unknown, expired, contradicted, parser-disagreeing, or non-usable conclusion;
+3. missing, false, unknown, expired, near-expiry-at-P3B-0, contradicted, parser-disagreeing, or
+   non-usable conclusion; snapshot drift, predecessor mismatch, or competing eligible successors;
 4. duplicate JSON key, invalid UTF-8, lone surrogate, negative zero, unsafe integer, trailing data,
-   unknown field, enum extension, unordered set, and oversized object;
+   missing/extra/unsupported field, enum extension, wrongly ordered set, reordered sequence, and
+   oversized object for every schema in Section 8.1;
 5. missing field-provenance row, source digest mismatch, illegal evidence level, handwritten
    upstream-visible UA/header/body/transport constant;
 6. missing negative capability, negative match, absent positive declaration, unsupported
    platform/auth/entrypoint, positive telemetry/update, compact/cache, provider TLS, Linux/Windows;
-7. positive resume without supplement, fresh-session fallback mislabeled resume, lineage parent/root
-   mismatch, stale migration sequence, generation regression;
+7. positive resume without supplement; missing, tampered, or swapped predecessor; fresh-session
+   fallback mislabeled resume; observer disagreement; creation/resume run mismatch; nonterminal
+   cell; lineage parent/root mismatch; stale migration sequence; generation regression;
 8. mixed request/response/auth/transport profile refs, profile/manifest/contract mismatch,
    Frankenprofile tuple, stale fixture digest;
-9. expired manifest, open contradiction, invalidated dependency, missing rollback target, rollback
-   below floor, revoked target, parent/checkpoint mismatch;
+9. expired manifest, open contradiction, invalidated dependency, missing/stale/revoked/regressed/
+   platform-mismatched rollback target, rollback below floor, P2 contract digest used as profile
+   target, ambiguous target, parent/checkpoint mismatch, or TS/Go rollback disagreement;
 10. SSE missing start/stop, duplicated/reordered event, malformed JSON, reset before first byte,
     partial visible output, terminal error, retry after partial output, wrong retry owner;
 11. raw prompt/credential/account/proxy/response/CCH/ClientHello and representative secret-canary
@@ -547,21 +652,98 @@ Paths are environment variables so the controller can use fresh roots:
 export CC_GATEWAY_ROOT=/absolute/fresh/cc-gateway
 export SUB2API_ROOT=/absolute/fresh/sub2api
 export P3A_ROOT=/Users/muqihang/.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A
-: "${P3A_RESUME_HANDOFF:?set to the separately approved resume-supplement handoff path}"
-: "${P3A_RESUME_HANDOFF_SHA256:?set to its independently reviewed SHA-256}"
+: "${P3A_SUPP_EXIT:?set reviewed supplement exit path}"
+: "${P3A_SUPP_EXIT_SHA256:?set reviewed supplement exit SHA-256}"
+: "${P3A_SUPP_EXIT_SCHEMA:?set reviewed exit schema_id@major.revision}"
+: "${P3A_SUPP_HANDOFF:?set reviewed supplement handoff path}"
+: "${P3A_SUPP_HANDOFF_SHA256:?set reviewed supplement handoff SHA-256}"
+: "${P3A_SUPP_HANDOFF_SCHEMA:?set reviewed handoff schema_id@major.revision}"
+: "${P3A_SUPP_TERMINAL:?set reviewed supplement terminal path}"
+: "${P3A_SUPP_TERMINAL_SHA256:?set reviewed supplement terminal SHA-256}"
+: "${P3A_SUPP_TERMINAL_SCHEMA:?set reviewed terminal schema_id@major.revision}"
+: "${P3A_SUPP_INDEX:?set reviewed supplement index path}"
+: "${P3A_SUPP_INDEX_SHA256:?set reviewed supplement index SHA-256}"
+: "${P3A_SUPP_INDEX_SCHEMA:?set reviewed index schema_id@major.revision}"
+: "${P3A_SUPP_LEAK:?set reviewed supplement leak scan path}"
+: "${P3A_SUPP_LEAK_SHA256:?set reviewed supplement leak scan SHA-256}"
+: "${P3A_SUPP_LEAK_SCHEMA:?set reviewed leak schema_id@major.revision}"
+: "${P3A_REVALIDATED_CONFIG_AUTH:?set normalized-safe CONFIG-AUTH successor path}"
+: "${P3A_REVALIDATED_CONFIG_AUTH_SHA256:?set CONFIG-AUTH successor SHA-256}"
+: "${P3A_REVALIDATED_CONFIG_AUTH_SCHEMA:?set CONFIG-AUTH schema_id@major.revision}"
+: "${P3A_REVALIDATED_FAILURE_STREAM:?set normalized-safe FAILURE-STREAM successor path}"
+: "${P3A_REVALIDATED_FAILURE_STREAM_SHA256:?set FAILURE-STREAM successor SHA-256}"
+: "${P3A_REVALIDATED_FAILURE_STREAM_SCHEMA:?set FAILURE-STREAM schema_id@major.revision}"
+
+# Local-only CodeGraph exclusion. These are the exact canonical bytes, including final LF.
+export CODEGRAPH_CONFIG_CANONICAL='{"exclude":["backend/internal/service/openai_compact_sse_keepalive_test.go"]}'
+export CODEGRAPH_CONFIG_SHA256=f885ea40698ff4de9881ce6a9537388ce80c04be9515bf2c77ac186d39140e98
+
+install_codegraph_exclusion() {
+  root="$1"
+  ! git -C "$root" ls-files --error-unmatch codegraph.json >/dev/null 2>&1
+  common_dir="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)"
+  info_exclude="$common_dir/info/exclude"
+  node --input-type=module -e '
+    import fs from "node:fs";
+    const [configPath, infoExclude, canonical] = process.argv.slice(1);
+    fs.writeFileSync(configPath, canonical + "\n", {encoding:"utf8", mode:0o600});
+    const old = fs.existsSync(infoExclude) ? fs.readFileSync(infoExclude, "utf8") : "";
+    if (!old.split(/\r?\n/).includes("/codegraph.json"))
+      fs.appendFileSync(infoExclude, (old && !old.endsWith("\n") ? "\n" : "") + "/codegraph.json\n");
+  ' "$root/codegraph.json" "$info_exclude" "$CODEGRAPH_CONFIG_CANONICAL"
+  test "$(shasum -a 256 "$root/codegraph.json" | awk '{print $1}')" = \
+    "$CODEGRAPH_CONFIG_SHA256"
+  git -C "$root" check-ignore -q codegraph.json
+}
+
+codegraph_with_exclusion() {
+  root="$1"; operation="$2"
+  case "$operation" in init|index|sync|status) ;; *) return 64 ;; esac
+  test "$(shasum -a 256 "$root/codegraph.json" | awk '{print $1}')" = \
+    "$CODEGRAPH_CONFIG_SHA256"
+  (cd "$root" && /Users/muqihang/.local/bin/codegraph "$operation" .)
+  test "$(shasum -a 256 "$root/codegraph.json" | awk '{print $1}')" = \
+    "$CODEGRAPH_CONFIG_SHA256"
+}
 
 # Freshness and immutable inputs
 git -C "$CC_GATEWAY_ROOT" fetch muqihang main --prune
 git -C "$SUB2API_ROOT" fetch muqihang main --prune
+install_codegraph_exclusion "$CC_GATEWAY_ROOT"
+install_codegraph_exclusion "$SUB2API_ROOT"
 git -C "$CC_GATEWAY_ROOT" status --short --branch
 git -C "$SUB2API_ROOT" status --short --branch
-/Users/muqihang/.local/bin/codegraph index "$CC_GATEWAY_ROOT"
-/Users/muqihang/.local/bin/codegraph index "$SUB2API_ROOT"
-/Users/muqihang/.local/bin/codegraph status "$CC_GATEWAY_ROOT"
-/Users/muqihang/.local/bin/codegraph status "$SUB2API_ROOT"
+for operation in init index sync status; do
+  codegraph_with_exclusion "$CC_GATEWAY_ROOT" "$operation"
+  codegraph_with_exclusion "$SUB2API_ROOT" "$operation"
+done
+test "$(sqlite3 "$CC_GATEWAY_ROOT/.codegraph/codegraph.db" \
+  "SELECT COUNT(*) FROM files WHERE path='backend/internal/service/openai_compact_sse_keepalive_test.go';")" = 0
+test "$(sqlite3 "$SUB2API_ROOT/.codegraph/codegraph.db" \
+  "SELECT COUNT(*) FROM files WHERE path='backend/internal/service/openai_compact_sse_keepalive_test.go';")" = 0
+codegraph_with_exclusion "$CC_GATEWAY_ROOT" status > /tmp/cc-codegraph-status.txt
+codegraph_with_exclusion "$SUB2API_ROOT" status > /tmp/sub2api-codegraph-status.txt
+shasum -a 256 "$CC_GATEWAY_ROOT/codegraph.json" "$SUB2API_ROOT/codegraph.json" \
+  /tmp/cc-codegraph-status.txt /tmp/sub2api-codegraph-status.txt
 shasum -a 256 "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json"
-test "$(shasum -a 256 "$P3A_RESUME_HANDOFF" | awk '{print $1}')" = \
-  "$P3A_RESUME_HANDOFF_SHA256"
+verify_safe_binding() {
+  path="$1"; expected_sha="$2"; expected_schema="$3"
+  test "$(shasum -a 256 "$path" | awk '{print $1}')" = "$expected_sha"
+  test "$(node --input-type=module -e '
+    import fs from "node:fs";
+    const value=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+    process.stdout.write(`${value.schema_id}@${value.schema_major}.${value.schema_revision}`);
+  ' "$path")" = "$expected_schema"
+}
+verify_safe_binding "$P3A_SUPP_EXIT" "$P3A_SUPP_EXIT_SHA256" "$P3A_SUPP_EXIT_SCHEMA"
+verify_safe_binding "$P3A_SUPP_HANDOFF" "$P3A_SUPP_HANDOFF_SHA256" "$P3A_SUPP_HANDOFF_SCHEMA"
+verify_safe_binding "$P3A_SUPP_TERMINAL" "$P3A_SUPP_TERMINAL_SHA256" "$P3A_SUPP_TERMINAL_SCHEMA"
+verify_safe_binding "$P3A_SUPP_INDEX" "$P3A_SUPP_INDEX_SHA256" "$P3A_SUPP_INDEX_SCHEMA"
+verify_safe_binding "$P3A_SUPP_LEAK" "$P3A_SUPP_LEAK_SHA256" "$P3A_SUPP_LEAK_SCHEMA"
+verify_safe_binding "$P3A_REVALIDATED_CONFIG_AUTH" "$P3A_REVALIDATED_CONFIG_AUTH_SHA256" \
+  "$P3A_REVALIDATED_CONFIG_AUTH_SCHEMA"
+verify_safe_binding "$P3A_REVALIDATED_FAILURE_STREAM" \
+  "$P3A_REVALIDATED_FAILURE_STREAM_SHA256" "$P3A_REVALIDATED_FAILURE_STREAM_SCHEMA"
 
 # Unchanged P2 gate
 cd "$CC_GATEWAY_ROOT"
@@ -582,9 +764,11 @@ go test oracle_contract_canonical.go oracle_contract_types.go \
 # RED then GREEN schema/compiler/validator gates
 npm exec tsx tests/oracle-profile-input.test.ts
 npm exec tsx tests/oracle-profile-schema.test.ts
+npm exec tsx tests/oracle-profile-command-chain.test.ts
 npm exec tsx tests/oracle-profile-compiler.test.ts
 npm exec tsx tests/oracle-profile-provenance.test.ts
 npm exec tsx tests/oracle-profile-negative-capability.test.ts
+npm exec tsx tests/oracle-profile-rollback.test.ts
 npm exec tsx tests/oracle-profile-fixture.test.ts
 npm exec tsx tests/oracle-profile-local-conformance.test.ts
 npm exec tsx tests/oracle-profile-mutation.test.ts
@@ -596,11 +780,19 @@ go test ./internal/oracleprofile -run '^TestOracleProfile' -count=1
 cd "$CC_GATEWAY_ROOT"
 npm exec tsx tools/oracle-profile/compile.ts -- \
   --base-handoff "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json" \
-  --resume-supplement "$P3A_RESUME_HANDOFF" \
+  --supplement-exit "$P3A_SUPP_EXIT" --supplement-handoff "$P3A_SUPP_HANDOFF" \
+  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-index "$P3A_SUPP_INDEX" \
+  --supplement-leak "$P3A_SUPP_LEAK" \
+  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" \
+  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" \
   --out /tmp/oracle-profile-a
 TZ=Asia/Shanghai LANG=C LC_ALL=C npm exec tsx tools/oracle-profile/compile.ts -- \
   --base-handoff "$P3A_ROOT/capsules/P3A-4/phase-3b-3.5-handoff-v13.json" \
-  --resume-supplement "$P3A_RESUME_HANDOFF" \
+  --supplement-exit "$P3A_SUPP_EXIT" --supplement-handoff "$P3A_SUPP_HANDOFF" \
+  --supplement-terminal "$P3A_SUPP_TERMINAL" --supplement-index "$P3A_SUPP_INDEX" \
+  --supplement-leak "$P3A_SUPP_LEAK" \
+  --revalidated-config-auth "$P3A_REVALIDATED_CONFIG_AUTH" \
+  --revalidated-failure-stream "$P3A_REVALIDATED_FAILURE_STREAM" \
   --out /tmp/oracle-profile-b
 diff -ru /tmp/oracle-profile-a /tmp/oracle-profile-b
 npm exec tsx tools/oracle-profile/check-cross-repo.ts -- \
@@ -612,30 +804,41 @@ npm exec tsx tools/oracle-profile/check-cross-repo.ts -- \
   "$SUB2API_ROOT/backend/internal/service/testdata/oracle_profile_contract/v1"
 ```
 
+`codegraph.json` is local-only and must remain ignored/untracked; its canonical bytes and SHA-256
+are rechecked before and after every `init`, `index`, `sync`, and `status`. The SQLite assertions
+query only the CodeGraph file inventory and must return zero; they never open the protected source.
+The command-chain test mutates missing config, wrong digest, wrong working directory, unsupported
+operation, indexed protected-path inventory, `go test ./...`, `go test ./internal/service`, and an
+implicit package-wide child runner. Every mutation must deny before command execution.
+
 `/tmp/oracle-profile-*` are disposable execution outputs, but deletion still follows the active
-operator safety policy. Phase 3B ordinary tasks run focused tests only. Full product suites are a
-final integration decision after focused gates, and no test command may include the protected
-keepalive test.
+operator safety policy. Phase 3B permits only the explicit P2 Go file list above and
+`go test ./internal/oracleprofile`; `go test ./...`, `go test ./internal/service`, full product
+suites, and any implicit package-wide runner are forbidden throughout Phase 3B. No command may
+include, open, search, compile, or otherwise consume the protected keepalive test.
 
 ## 13. Acceptance criteria and stop rules
 
 Phase 3B may exit GREEN only when all are true:
 
-1. fresh heads/trees and CodeGraph stats are recorded; protected path remains untouched;
-2. P2 bundle/predecessor/range and all external handoff digests match;
+1. fresh heads/trees and CodeGraph stats are recorded; the exclusion config canonical digest is
+   verified around every graph command and the protected path inventory count is zero;
+2. P2 bundle/predecessor/range, all five v13 artifacts, all five supplement closure artifacts, and
+   both append-only usable-row revalidations match their independently reviewed path/digest/schema;
 3. every generated leaf has evidence level/source and every Unknown is explicit/fail closed;
 4. all logical profiles, negative capabilities, coherent tuple, generated configs, typed fixtures,
    TS validator, Go validator, manifest, and index agree exactly;
 5. new-session streaming, positive resumed-session streaming, and bounded failure/recovery pass
    local loopback conformance;
 6. two isolated generations are byte-identical and have the same digest;
-7. rollback/version/generation/expiry/contradiction mutations fail with stable codes;
+7. rollback/version/generation/expiry/contradiction and command-chain mutations fail with stable
+   TS/Go codes;
 8. leak scan and forbidden raw-material canaries find zero generated leaks;
 9. the independent consolidated review has no Critical or Important finding;
 10. no promotion, production, upstream, credential, canary, deployment, or runtime claim is made.
 
-True blockers are limited to: missing/expired/contradicted usable evidence, resume supplement
-failure, unresolved version-role authority, P2 contract mismatch, TS/Go standard disagreement,
+True blockers are limited to: missing/expired/contradicted usable evidence, revalidation or resume
+supplement failure, pinned snapshot/predecessor drift, P2 contract mismatch, TS/Go disagreement,
 non-deterministic output after root-cause isolation, or inability to keep raw material out of
 artifacts. On a true blocker, stop and publish the exact deny code/input digest. Test failure,
 ordinary implementation difficulty, or a review comment is not permission to broaden scope or
@@ -645,7 +848,7 @@ loop indefinitely.
 
 | Work | Primary owner | Estimate | Parallelism |
 | --- | --- | ---: | --- |
-| P3A resume supplement | P3A evidence owner + reviewer | 2-4 engineer-days plus convergence runtime | must finish first |
+| P3A usable-row revalidation + resume supplement | P3A evidence owner + reviewer | 2-4 engineer-days plus convergence runtime | must finish first |
 | P3B-0/1 freeze, schemas, RED corpus | controller + contract owner | 2 days | sequential entry |
 | P3B-2 compiler core | TS compiler owner | 2-3 days | precedes synthesis |
 | P3B-3/4 profiles, provenance, fixtures/configs | profile + fixture owners | 3-4 days | parallel after compiler contract |
@@ -663,18 +866,19 @@ artifacts and typed fixtures; no raw P3A evidence is duplicated.
 The future Phase 3B handoff includes:
 
 - exact merged CC/Sub2API heads and trees;
-- P2 contract/predecessor/range and external P3A/supplement digests;
+- P2 contract/predecessor/range, five v13 digests, five supplement closure digests, both selected
+  revalidation digests/schemas, and their exact precedence decision;
 - generated bundle index and aggregate digest;
 - file-by-file digests for all profile/config/provenance/negative/tuple/fixture artifacts;
 - TS/Go/manifest/fixture decision matrix and mutation results;
 - deterministic regeneration comparison;
-- rollback target, policy/profile generation, evidence expiry, contradiction state;
+- rollback tuple/target digest, policy/profile generation, evidence expiry, contradiction state;
 - remaining negative capabilities and explicit Phase 4/6A non-goals;
 - exact focused commands and result summary;
 - protected-file untouched assertion and changed-file inventory.
 
-The next step after this plan PR is a fresh independent plan reviewer. Only after plan merge,
-resume supplement approval/completion, and version-role resolution may a new Phase 3B execution
+The next step after this plan PR is a fresh independent plan reviewer. Only after plan merge and
+usable-row revalidation/resume supplement approval/completion may a new Phase 3B execution
 controller begin P3B-0. That controller starts from fresh mains and this handoff; it does not rely
 on stale P3A/P1 chat context.
 
@@ -683,13 +887,25 @@ on stale P3A/P1 chat context.
 This planning task runs only document/baseline checks:
 
 ```bash
+PLAN=docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
 test -s docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
 ! rg -n 'TO[D]O|TB[D]|FIXM[E]|PLACEHOLDE[R]|@lates[t]' \
-  docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
-rg -n 'RA-P0-001|RA-P0-002|RA-P0-005|RA-P0-007|RA-P0-009|RA-P1-002|RA-P1-003|RA-P1-004|RA-P1-007' \
-  docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
+  "$PLAN"
+rg -n 'RA-P0-001|RA-P0-002|RA-P0-005|RA-P0-007|RA-P0-009|RA-P1-001|RA-P1-002|RA-P1-003|RA-P1-004|RA-P1-007|HA-P1-001' \
+  "$PLAN"
 rg -n 'BLOCKED|CL-P3A-RESUME-LINEAGE-UNKNOWN|phase3b_usable' \
-  docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3b-profile-synthesis.md
+  "$PLAN"
+for schema in phase3b-input-binding field-provenance negative-capabilities coherent-tuples \
+  config-projection rollback-tuple bundle-index; do rg -q "$schema.schema.json" "$PLAN"; done
+rg -q 'missing, tampered, or swapped predecessor' "$PLAN"
+rg -q 'missing/stale/revoked/regressed' "$PLAN"
+rg -q 'missing/extra/unsupported field' "$PLAN"
+rg -q 'wrongly ordered set, reordered sequence' "$PLAN"
+test "$(printf '%s\n' '{"exclude":["backend/internal/service/openai_compact_sse_keepalive_test.go"]}' | \
+  shasum -a 256 | awk '{print $1}')" = f885ea40698ff4de9881ce6a9537388ce80c04be9515bf2c77ac186d39140e98
+! rg -n '^go test (\./\.\.\.|\./internal/service)( |$)' "$PLAN"
+test "$(git diff --name-only | wc -l | tr -d ' ')" = 1
+test "$(git diff --name-only)" = "$PLAN"
 git diff --check
 git diff --name-only
 ```
