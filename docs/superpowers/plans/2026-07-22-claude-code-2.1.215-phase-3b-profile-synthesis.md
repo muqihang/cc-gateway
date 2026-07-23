@@ -1174,10 +1174,10 @@ this exact tuple:
 
 | object | exact relative path | schema / digest |
 | --- | --- | --- |
-| closure record | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.json` | exact-file SHA-256 `963038e5629646c2c101b4f81014ab9abd6001f8688175544c07e01f74a86df3`; internal JCS digest `731be5a8cba26f5ee867fd46e9798eaec5d8b2ea4e5b77d92fae0648c42143dd`; `oracle-lab-phase3a-static-blocker-recon@1.0` |
-| reviewable report | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.md` | SHA-256 `42f0611fa542aedbc16fefe6b194b198f46f8cdb0d66747ed3a4c6141cda6007` |
-| strict schema | `docs/superpowers/schemas/oracle-lab-phase3a-static-blocker-recon.schema.json` | SHA-256 `3c2d28fa8a72956b2c59003e8ac15ec146bb334149a8ea136a5e658bb7e40a0c` |
-| deterministic scanner/builder | `tools/oracle-lab/phase3a/static-blocker-recon.ts` | SHA-256 `019b9377c9508e7a6f9fd8e9d6154ab312403ce34254225a0ba405121f3a70ae` |
+| closure record | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.json` | exact-file SHA-256 `b4f1212584afbeb7d2b59457d778713bd3d8b967bd5a0a48f73c0140f41642ff`; internal JCS digest `ea6ec9d5b9d027d5ed434714cfc38b28ecd81af93d7b51d102821d9d5ecba5a9`; `oracle-lab-phase3a-static-blocker-recon@1.0` |
+| reviewable report | `docs/superpowers/evidence/phase3a/claude-code-2.1.215-p3as-static-blocker-recon-v1.md` | SHA-256 `3e1b025ca5f075e21ca528544c9be096e1b1afb090a9aecfe448660563fe38bc` |
+| strict schema | `docs/superpowers/schemas/oracle-lab-phase3a-static-blocker-recon.schema.json` | SHA-256 `d685bc7e71e00a4d0fbfb123004b1a7ac5dced46b279d037ec81ba0651605900` |
+| deterministic scanner/builder | `tools/oracle-lab/phase3a/static-blocker-recon.ts` | SHA-256 `275511cd2a0000bd637ae81ddfe4f4760e5a1d8319e6d424d14ae5eb7773c4b8` |
 
 The tuple is valid only for official Claude Code 2.1.215 Darwin arm64 archive
 `599883973d2b4c8bb25e3490c84d65646f78d158cdc86adc73c1f5a6cfbbd600`, tree
@@ -1186,6 +1186,13 @@ The tuple is valid only for official Claude Code 2.1.215 Darwin arm64 archive
 creation/new-control/resume token order and the state-dependent `$.messages` predecessor-prefix
 signal, with independent loopback-network and Darwin-filesystem/process observers required for
 any future dynamic conclusion.
+
+The static chain has scan digest
+`cac6799818f1f6780280d993adcb24cf2a834f7f5fd048a9c82fa35d0e464928`, signal-anchor digest
+`11981d9f74d3e7a7cd0ab0c5e7d78bdbabbeaa0cbc2f69f33b2293e14f05e4d5`, and connected-flow
+derivation digest `15211ac067c3b8192a49bb451af96dc59960d46e4162bf076ba8371d0d775ecc`.
+The fake endpoint is bound by `ANTHROPIC_BASE_URL` to a declared loopback safe ref; no alternate
+API-base environment key is part of the closure protocol.
 
 This binding changes only the controller-creation precondition from static blockers open to
 `RECON_APPEND_ONLY_CLOSED`; the static closure remains `phase3b_usable=false`. Phase 3B remains

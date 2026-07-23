@@ -4,7 +4,7 @@
   "title": "Oracle Lab Phase 3A static blocker recon",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_id", "schema_major", "schema_revision", "record_kind", "authority", "artifact", "codegraph", "safe_inputs", "exact_state_protocol", "state_dependent_network_signal", "static_anchors", "searched_surfaces", "negative_capabilities", "blocker_decision", "record_digest"],
+  "required": ["schema_id", "schema_major", "schema_revision", "record_kind", "authority", "artifact", "codegraph", "safe_inputs", "exact_state_protocol", "state_dependent_network_signal", "static_anchors", "static_constants", "searched_surfaces", "negative_capabilities", "blocker_decision", "record_digest"],
   "properties": {
     "schema_id": {"const": "oracle-lab-phase3a-static-blocker-recon@1.0"},
     "schema_major": {"const": 1},
@@ -13,10 +13,17 @@
     "authority": {"$ref": "#/$defs/authority"},
     "artifact": {"$ref": "#/$defs/artifact"},
     "codegraph": {"$ref": "#/$defs/codegraph"},
-    "safe_inputs": {"type": "array", "minItems": 5, "maxItems": 5, "items": {"$ref": "#/$defs/safeInput"}},
+    "safe_inputs": {"type": "array", "minItems": 5, "maxItems": 5, "prefixItems": [
+      {"allOf": [{"$ref":"#/$defs/safeInput"},{"type":"object","properties":{"input_kind":{"const":"exit-v13"},"relative_path":{"const":"phase-3a-exit-report-v13.json"},"sha256":{"const":"57f16b207933b3a751f96471733d435fa4b0c9801fbef2f5495e8884dfe0bd1b"},"schema_version":{"const":"oracle-lab-phase3a-exit.v1"}}}]},
+      {"allOf": [{"$ref":"#/$defs/safeInput"},{"type":"object","properties":{"input_kind":{"const":"handoff-v13"},"relative_path":{"const":"phase-3b-3.5-handoff-v13.json"},"sha256":{"const":"9d188072719dc27a2f9cc9939bc79afa598802b84dd4d9161fb1da3263a792d7"},"schema_version":{"const":"oracle-lab-phase3a-handoff.v1"}}}]},
+      {"allOf": [{"$ref":"#/$defs/safeInput"},{"type":"object","properties":{"input_kind":{"const":"terminal-v8"},"relative_path":{"const":"closure-terminal-manifest-v8.json"},"sha256":{"const":"c9ee57fbe29125c88278961565f814326b052077b861bb41008cdde6161f12f5"},"schema_version":{"const":"oracle-lab-phase3a-r4-terminal.v1"}}}]},
+      {"allOf": [{"$ref":"#/$defs/safeInput"},{"type":"object","properties":{"input_kind":{"const":"artifact-index-v23"},"relative_path":{"const":"artifact-index-v23.json"},"sha256":{"const":"e8645c7ed4bc984a926f91e3df1b756c4b009b3a02408de213cbe81b060e80d4"},"schema_version":{"const":"oracle-lab-phase3a-artifact-index.v1"}}}]},
+      {"allOf": [{"$ref":"#/$defs/safeInput"},{"type":"object","properties":{"input_kind":{"const":"leak-scan-v23"},"relative_path":{"const":"leak-scan-v23.json"},"sha256":{"const":"7ed3e2776c7fcc47d6c8d513318b33547919c92a33a068a4f0c0cb3706bad145"},"schema_version":{"const":"oracle-lab-phase3a-leak-scan.v1"}}}]}
+    ], "items": false},
     "exact_state_protocol": {"$ref": "#/$defs/protocol"},
     "state_dependent_network_signal": {"$ref": "#/$defs/networkSignal"},
-    "static_anchors": {"type": "array", "minItems": 30, "maxItems": 30, "items": {"$ref": "#/$defs/anchor"}},
+    "static_anchors": {"type": "array", "minItems": 36, "maxItems": 36, "items": {"$ref": "#/$defs/anchor"}},
+    "static_constants": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/constantAnchor"}},
     "searched_surfaces": {"$ref": "#/$defs/nonEmptyUniqueStrings"},
     "negative_capabilities": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/negativeCapability"}},
     "blocker_decision": {"$ref": "#/$defs/blockerDecision"},
@@ -156,13 +163,17 @@
       "required": ["status", "evidence_level", "operations", "argv_rules", "environment", "cwd", "state_storage", "selector_consumption", "launch_binding", "deny_branches"],
       "properties": {
         "status": {"const": "static-recovered"}, "evidence_level": {"const": "Static-Recovered"},
-        "operations": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/operation"}},
+        "operations": {"const": [
+          {"operation_class":"creation","parser_route":"fresh","selector":"explicit-new-session-uuid","state_root_safe_ref_name":"creation-state-root","cwd_safe_ref_name":"creation-resume-cwd","argv":[{"index":0,"token_class":"literal","literal":"--print","safe_ref_name":null},{"index":1,"token_class":"literal","literal":"--bare","safe_ref_name":null},{"index":2,"token_class":"literal","literal":"--verbose","safe_ref_name":null},{"index":3,"token_class":"literal","literal":"--output-format","safe_ref_name":null},{"index":4,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":5,"token_class":"literal","literal":"--input-format","safe_ref_name":null},{"index":6,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":7,"token_class":"literal","literal":"--session-id","safe_ref_name":null},{"index":8,"token_class":"safe-ref","literal":null,"safe_ref_name":"creation-session-uuid"}],"stdin":{"input_class":"manifest-bound-synthetic-stream-json","digest_required":true,"positional_prompt":false},"state_effect":"target-creates-predecessor-jsonl"},
+          {"operation_class":"new-control","parser_route":"fresh","selector":"explicit-new-session-uuid","state_root_safe_ref_name":"new-control-state-root","cwd_safe_ref_name":"new-control-cwd","argv":[{"index":0,"token_class":"literal","literal":"--print","safe_ref_name":null},{"index":1,"token_class":"literal","literal":"--bare","safe_ref_name":null},{"index":2,"token_class":"literal","literal":"--verbose","safe_ref_name":null},{"index":3,"token_class":"literal","literal":"--output-format","safe_ref_name":null},{"index":4,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":5,"token_class":"literal","literal":"--input-format","safe_ref_name":null},{"index":6,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":7,"token_class":"literal","literal":"--session-id","safe_ref_name":null},{"index":8,"token_class":"safe-ref","literal":null,"safe_ref_name":"new-control-session-uuid"}],"stdin":{"input_class":"manifest-bound-synthetic-stream-json","digest_required":true,"positional_prompt":false},"state_effect":"independent-fresh-control-no-predecessor"},
+          {"operation_class":"resume-positive","parser_route":"resume","selector":"explicit-resume-session-uuid","state_root_safe_ref_name":"creation-state-root","cwd_safe_ref_name":"creation-resume-cwd","argv":[{"index":0,"token_class":"literal","literal":"--print","safe_ref_name":null},{"index":1,"token_class":"literal","literal":"--bare","safe_ref_name":null},{"index":2,"token_class":"literal","literal":"--verbose","safe_ref_name":null},{"index":3,"token_class":"literal","literal":"--output-format","safe_ref_name":null},{"index":4,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":5,"token_class":"literal","literal":"--input-format","safe_ref_name":null},{"index":6,"token_class":"literal","literal":"stream-json","safe_ref_name":null},{"index":7,"token_class":"literal","literal":"--resume","safe_ref_name":null},{"index":8,"token_class":"safe-ref","literal":null,"safe_ref_name":"predecessor-session-uuid"}],"stdin":{"input_class":"manifest-bound-synthetic-stream-json","digest_required":true,"positional_prompt":false},"state_effect":"target-resolves-reads-reconstructs-predecessor-jsonl"}
+        ]},
         "argv_rules": {
           "type": "object", "additionalProperties": false, "required": ["options_before_separator", "positional_prompt_allowed", "continue_allowed", "fork_session_allowed", "no_session_persistence_allowed"],
           "properties": {"options_before_separator": {"const": true}, "positional_prompt_allowed": {"const": false}, "continue_allowed": {"const": false}, "fork_session_allowed": {"const": false}, "no_session_persistence_allowed": {"const": false}}
         },
-        "environment": {"$ref": "#/$defs/environment"}, "cwd": {"$ref": "#/$defs/cwd"}, "state_storage": {"$ref": "#/$defs/stateStorage"},
-        "selector_consumption": {"$ref": "#/$defs/stringMap4"}, "launch_binding": {"$ref": "#/$defs/launchBinding"},
+        "environment": {"const": {"allowlist":[{"name":"ANTHROPIC_API_KEY","value_class":"synthetic-placeholder-credential"},{"name":"ANTHROPIC_BASE_URL","value_class":"declared-loopback-url"},{"name":"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC","value_class":"disabled-boolean"},{"name":"NO_PROXY","value_class":"loopback-only-bypass"},{"name":"PATH","value_class":"system-binary-path"},{"name":"TERM","value_class":"terminal-class"},{"name":"no_proxy","value_class":"loopback-only-bypass"}],"derived_keys":["CLAUDE_CODE_TMPDIR","CLAUDE_CONFIG_DIR","HOME","LANG","LC_ALL","TEMP","TMP","TMPDIR","TZ","XDG_CACHE_HOME","XDG_CONFIG_HOME","XDG_DATA_HOME","XDG_STATE_HOME"],"explicit_empty":[],"unset":["ALL_PROXY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS","AWS_BEARER_TOKEN_BEDROCK","CLAUDE_CODE_API_BASE_URL","CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR","CLAUDE_CODE_OAUTH_TOKEN","HTTPS_PROXY","HTTP_PROXY","SSH_AUTH_SOCK"],"fake_upstream_endpoint_binding":{"environment_key":"ANTHROPIC_BASE_URL","endpoint_safe_ref_name":"fake-upstream-endpoint","address_class":"declared-loopback-http","port_source":"launch-manifest.network.loopback_ports[0]","external_socket_budget":0},"message_base_url_precedence":"explicit-client-baseURL-or-ANTHROPIC_BASE_URL-or-sdk-default","raw_values_persisted":false}}, "cwd": {"$ref": "#/$defs/cwd"}, "state_storage": {"const": {"config_root_derivation":"NFC-normalize(CLAUDE_CONFIG_DIR-if-nonempty-else-join(homedir,.claude))","project_root_derivation":"join(config-root,projects)","project_key_replacement":"javascript-regex-replace(/[^a-zA-Z0-9]/g,\"-\")","project_key_length_limit_utf16_code_units":200,"project_key_overflow":"sanitized.slice(0,200)-plus-hyphen-plus-base36(abs(js-string-hash(original-cwd)))","project_directory_derivation":"join(project-root,project-key)","state_path_derivation":"join(project-directory,session-uuid-plus-.jsonl)","directory_mode":"0o700","file_mode":"0o600","format":"UTF8-JSON-object-per-line-LF","write_operation":"queued-append","read_operation":"resolve-read-parse-reconstruct-parent-chain","whole_file_cryptographic_integrity":false,"malformed_line_behavior":"line-local-parse-failure-may-be-ignored"}},
+        "selector_consumption": {"const": {"new_session":"session-id-option-valid-uuid-must-not-already-exist","resume":"resume-option-uuid-to-project-jsonl-resolver","message_selection":"optional-resume-session-at-must-resolve-in-reconstructed-chain","persistence_gate":"session-persistence-must-remain-enabled"}}, "launch_binding": {"const": {"executable_digest_checked_before_spawn":true,"stdin_digest_checked_before_spawn":true,"spawn_adapter":"darwin-sandbox-exec-direct-child","shell":false,"cwd":"isolated-manifest-directory","environment":"explicit-isolated-map","target_pid_rule":"unique-descendant-with-executable-sha256-and-process-start-bound-to-run"}},
         "deny_branches": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/denyBranch"}}
       }
     },
@@ -237,19 +248,41 @@
     },
     "networkSignal": {
       "type": "object", "additionalProperties": false,
-      "required": ["status", "evidence_level", "signal_class", "request_surface", "state_to_network_flow", "fresh_resume_discriminator", "safe_projection", "observer_a", "observer_b", "proof_rule", "negative_controls"],
+      "required": ["status", "evidence_level", "signal_class", "request_surface", "state_to_network_flow", "fresh_resume_discriminator", "projection_algorithm", "safe_projection", "signal_anchor_digest", "derivation_digest", "observer_a", "observer_b", "proof_rule", "negative_controls"],
       "properties": {
         "status": {"const": "static-recovered"}, "evidence_level": {"const": "Static-Recovered"},
         "signal_class": {"const": "request-messages-predecessor-prefix-topology"}, "request_surface": {"$ref": "#/$defs/requestSurface"},
-        "state_to_network_flow": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/flowEdge"}},
-        "fresh_resume_discriminator": {"$ref": "#/$defs/freshResume"}, "safe_projection": {"$ref": "#/$defs/safeProjection"},
-        "observer_a": {"$ref": "#/$defs/observer"}, "observer_b": {"$ref": "#/$defs/observer"},
+        "state_to_network_flow": {"const": [
+          {"from":"state-file-resolver","to":"state-read-resolver-bridge","relation":"resolved-path-argument"},
+          {"from":"state-jsonl-reader","to":"state-read-resolver-bridge","relation":"parsed-state-return"},
+          {"from":"state-read-resolver-bridge","to":"state-message-reconstructor","relation":"state-map-return"},
+          {"from":"state-message-reconstructor","to":"resume-loader","relation":"reconstructed-conversation-return"},
+          {"from":"resume-loader","to":"print-resume-router","relation":"resume-state-return"},
+          {"from":"print-resume-router","to":"headless-resume-bridge","relation":"messages-return"},
+          {"from":"headless-resume-bridge","to":"headless-message-runner","relation":"messages-argument"},
+          {"from":"headless-message-runner","to":"message-transport-bridge","relation":"nested-callback-messages"},
+          {"from":"message-transport-bridge","to":"query-message-input","relation":"initial-to-mutable-messages"},
+          {"from":"query-message-input","to":"query-generator-bridge","relation":"mutable-copy-plus-current-input"},
+          {"from":"query-generator-bridge","to":"query-pipeline","relation":"query-input"},
+          {"from":"query-pipeline","to":"default-model-dispatch","relation":"dependency-construction"},
+          {"from":"default-model-dispatch","to":"model-call-bridge","relation":"call-model-binding"},
+          {"from":"model-call-bridge","to":"network-request-sink","relation":"nested-generator-request"},
+          {"from":"network-request-sink","to":"request-normalizer","relation":"message-normalization"},
+          {"from":"network-request-sink","to":"request-serializer","relation":"request-builder-serialization"},
+          {"from":"network-request-sink","to":"sdk-message-post-route","relation":"sdk-method-dispatch"}
+        ]},
+        "fresh_resume_discriminator": {"const": {"creation_expected":"creation-request-plus-response-safe-conversation-topology","fresh_expected":"current-input-only-no-predecessor-prefix","resume_expected":"ordered-predecessor-prefix-before-final-current-input","minimum_predecessor_assistant_entries":1,"comparison":"resume-prefix-equals-creation-safe-exchange-projection"}},
+        "projection_algorithm": {"const": {"version":"p3as-predecessor-prefix-projection-v1","input":"loopback-fake-upstream-request-json-ast-$.messages","ordered_steps":["parse-request-body-as-json","select-messages-array","map-each-message-to-role-and-ordered-content-block-shape-without-values","split-final-message-as-current-input","require-nonempty-predecessor-prefix","compare-resume-predecessor-prefix-to-creation-safe-exchange-projection"],"canonicalization":"RFC8785-JCS","current_input_position":"final-array-element","minimum_predecessor_assistant_entries":1,"raw_values_persisted":false}},
+        "safe_projection": {"const": {"allowed_fields":["array-cardinality","content-block-count","content-block-order","content-block-type","object-field-name-class","role-order","sse-event-class-order"],"raw_values_persisted":false,"session_ids_persisted":false,"credentials_persisted":false,"headers_persisted":false,"body_bytes_persisted":false}},
+        "signal_anchor_digest": {"$ref": "#/$defs/sha256"}, "derivation_digest": {"$ref": "#/$defs/sha256"},
+        "observer_a": {"const": {"observer_kind":"network-state-signal","capture_surface":"loopback-fake-upstream-http-json-ast-and-sse-topology","parser_class":"http-json-ast-safe-projector","proves":"predecessor-conversation-topology-reached-target-generated-request","failure_mode":"request-or-ast-or-sse-capture-missing-or-mismatched"}},
+        "observer_b": {"const": {"observer_kind":"darwin-state-process","capture_surface":"darwin-vnode-open-read-plus-process-start-attribution","parser_class":"filesystem-process-event-safe-projector","proves":"exact-predecessor-jsonl-was-opened-read-by-bound-target-process","failure_mode":"vnode-event-or-pid-start-or-executable-attribution-missing-or-mismatched"}},
         "proof_rule": {"$ref": "#/$defs/proofRule"}, "negative_controls": {"type": "array", "minItems": 6, "items": {"$ref": "#/$defs/negativeControl"}}
       }
     },
     "requestSurface": {
-      "type": "object", "additionalProperties": false, "required": ["method", "path_class", "ast_location", "terminal_sink"],
-      "properties": {"method": {"const": "POST"}, "path_class": {"const": "/v1/messages"}, "ast_location": {"const": "$.messages"}, "terminal_sink": {"const": "beta.messages.create"}}
+      "type": "object", "additionalProperties": false, "required": ["method", "path_class", "ast_location", "terminal_sink", "base_url_source"],
+      "properties": {"method": {"const": "POST"}, "path_class": {"const": "/v1/messages"}, "ast_location": {"const": "$.messages"}, "terminal_sink": {"const": "beta.messages.create"}, "base_url_source": {"const": "ANTHROPIC_BASE_URL-bound-fake-upstream-endpoint-safe-ref"}}
     },
     "flowEdge": {
       "type": "object", "additionalProperties": false, "required": ["from", "to", "relation"],
@@ -286,9 +319,20 @@
         "source_sha256": {"$ref": "#/$defs/sha256"}, "direct_calls": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}, "cfg": {"$ref": "#/$defs/cfg"}
       }
     },
+    "constantAnchor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "symbol_name", "node_kind", "module_offset", "artifact_offset", "length", "source_sha256"],
+      "properties": {
+        "id": {"enum": ["config-root-assignment", "project-key-length-constant"]},
+        "symbol_name": {"enum": ["on", "YEt"]},
+        "node_kind": {"enum": ["BinaryExpression", "VariableDeclaration"]},
+        "module_offset": {"type": "integer", "minimum": 0}, "artifact_offset": {"type": "integer", "minimum": 0},
+        "length": {"type": "integer", "minimum": 1}, "source_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "cfg": {
-      "type": "object", "additionalProperties": false, "required": ["branch_count", "kind_counts", "shape_digest"],
-      "properties": {"branch_count": {"type": "integer", "minimum": 0}, "kind_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}}, "shape_digest": {"$ref": "#/$defs/sha256"}}
+      "type": "object", "additionalProperties": false, "required": ["node_count", "edge_count", "branch_count", "kind_counts", "shape_digest"],
+      "properties": {"node_count": {"type": "integer", "minimum": 1}, "edge_count": {"type": "integer", "minimum": 0}, "branch_count": {"type": "integer", "minimum": 0}, "kind_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}}, "shape_digest": {"$ref": "#/$defs/sha256"}}
     },
     "negativeCapability": {
       "type": "object", "additionalProperties": false, "required": ["capability", "status", "consequence"],
