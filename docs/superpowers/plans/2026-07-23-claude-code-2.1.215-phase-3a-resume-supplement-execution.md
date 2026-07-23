@@ -197,14 +197,38 @@ digest-bound. The UUID values are generated once at manifest freeze using UUIDv5
 contains only its `sr1:session:sha256:...` ref. `--continue`, `--fork-session`,
 `--no-session-persistence`, positional prompts, and any extra token are denied.
 
-Creation and resume use one exact realpath CWD and `creation-state-root`; new-control uses a
-different CWD and `new-control-state-root`. Relative runtime layout is fixed:
+`R` is the exact absolute `0o700` evidence root supplied to `freeze-input` by `--evidence-root`;
+`S` is the separately supplied exact absolute supplement root and must be lexical-equal to
+`$R/capsules/P3A-S`. Freeze performs one `realpath` on each, requires `S` containment, writes the
+`sr1:root` binding plus exact paths only into execution-only manifests, and never resolves either
+again. Creation and resume share one CWD/config root; new-control uses a different CWD/config root.
+The complete mapping is:
 
 ```text
-runtime/create-resume/cwd
-runtime/create-resume/config
-runtime/new-control/cwd
-runtime/new-control/config
+creation/resume:
+  cwd=$R/runtime/create-resume/cwd
+  HOME=$R/runtime/create-resume/home
+  CLAUDE_CONFIG_DIR=$R/runtime/create-resume/config
+  CLAUDE_CODE_TMPDIR=$R/runtime/create-resume/tmp
+  TEMP=$R/runtime/create-resume/tmp
+  TMP=$R/runtime/create-resume/tmp
+  TMPDIR=$R/runtime/create-resume/tmp
+  XDG_CACHE_HOME=$R/runtime/create-resume/xdg/cache
+  XDG_CONFIG_HOME=$R/runtime/create-resume/xdg/config
+  XDG_DATA_HOME=$R/runtime/create-resume/xdg/data
+  XDG_STATE_HOME=$R/runtime/create-resume/xdg/state
+new-control:
+  cwd=$R/runtime/new-control/cwd
+  HOME=$R/runtime/new-control/home
+  CLAUDE_CONFIG_DIR=$R/runtime/new-control/config
+  CLAUDE_CODE_TMPDIR=$R/runtime/new-control/tmp
+  TEMP=$R/runtime/new-control/tmp
+  TMP=$R/runtime/new-control/tmp
+  TMPDIR=$R/runtime/new-control/tmp
+  XDG_CACHE_HOME=$R/runtime/new-control/xdg/cache
+  XDG_CONFIG_HOME=$R/runtime/new-control/xdg/config
+  XDG_DATA_HOME=$R/runtime/new-control/xdg/data
+  XDG_STATE_HOME=$R/runtime/new-control/xdg/state
 ```
 
 The target state path is derived only as
@@ -214,60 +238,116 @@ resolve/read/parse/reconstruct. Because the target has no whole-file integrity c
 ignore malformed lines, Observer B must independently hash the exact predecessor immediately
 before launch and reject any later mismatch before accepting an open/read event.
 
-The environment starts empty except for this exact classification contract:
+The environment starts empty and uses these exact literal common values for all three operations:
 
 ```text
-allow: ANTHROPIC_API_KEY=synthetic-placeholder-credential
-       ANTHROPIC_BASE_URL=declared-loopback-url
-       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=disabled-boolean
-       NO_PROXY/no_proxy=loopback-only-bypass, PATH=system-binary-path, TERM=terminal-class
-derive: CLAUDE_CODE_TMPDIR, CLAUDE_CONFIG_DIR, HOME, LANG, LC_ALL, TEMP, TMP, TMPDIR, TZ,
-        XDG_CACHE_HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME
+ANTHROPIC_API_KEY=p3as-synthetic-placeholder-2.1.215
+ANTHROPIC_BASE_URL=http://127.0.0.1:43127/
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+NO_PROXY=127.0.0.1,::1
+no_proxy=127.0.0.1,::1
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+TERM=dumb
+TZ=UTC
+LANG=C
+LC_ALL=C
 unset: ALL_PROXY, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_CUSTOM_HEADERS, AWS_BEARER_TOKEN_BEDROCK,
        CLAUDE_CODE_API_BASE_URL, CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR, CLAUDE_CODE_OAUTH_TOKEN,
        HTTPS_PROXY, HTTP_PROXY, SSH_AUTH_SOCK
 ```
 
-`ANTHROPIC_BASE_URL` is the only fake endpoint binding and comes from
-`launch-manifest.network.loopback_ports[0]`. SDK precedence remains explicit `baseURL`, then
-`ANTHROPIC_BASE_URL`, then SDK default; the first and third routes are denied by the frozen cell.
-The address is `127.0.0.1` or `::1`, policy is `declared_loopback_only`, and external socket
-budget is exactly `0`. No real credential, upstream, account, token, proxy, DNS, Unix socket, or
-canary is permitted.
+Port `43127` is the only launch-manifest loopback port. Preflight binds the fake upstream to
+`127.0.0.1:43127`; an occupied/unavailable port is BLOCKED and no alternate port/address is
+selected. SDK precedence remains explicit `baseURL`, then `ANTHROPIC_BASE_URL`, then SDK default;
+the first and third routes are denied by the frozen cell. Policy is `declared_loopback_only` and
+external socket budget is exactly `0`. No real credential, upstream, account, token, proxy, DNS,
+Unix socket, or canary is permitted. Every exact argv array, stdin digest, CWD, absolute env map,
+state-root ref, and port is separately hashed into its creation/new/resume launch manifest.
 
 ## 5. Mandatory Preflight and dynamic authorization
 
-The future controller has two commands and no implicit default:
+After controller implementation review, the future controller has exactly five commands and no
+implicit default. `R` and `S` below are the already-created exact roots defined in Section 4:
 
-```text
-controller create-authority --controller-authority <exact-file> --decision-receipt <exact-file>
-controller preflight --controller-authority <exact-file> --input-manifest <exact-file>
-controller execute --input-manifest <exact-file> --preflight-receipt <exact-file>
+```bash
+: "${P3A_EVIDENCE_ROOT:?exact absolute evidence root required}"
+: "${P3A_SUPP_ROOT:?exact absolute supplement root required}"
+R="$P3A_EVIDENCE_ROOT"
+S="$P3A_SUPP_ROOT"
+test "$S" = "$R/capsules/P3A-S"
+controller create-authority \
+  --decision-receipt "$R/reviews/controller-creation-decision.json" \
+  --implementation-review-receipt "$R/reviews/controller-implementation-review.json" \
+  --out "$S/controller-authority.json"
+controller freeze-input \
+  --controller-authority "$S/controller-authority.json" \
+  --evidence-root "$R" \
+  --supp-root "$S" \
+  --creation-launch-out "$R/runtime/manifests/creation.json" \
+  --new-control-launch-out "$R/runtime/manifests/new-control.json" \
+  --resume-launch-out "$R/runtime/manifests/resume-positive.json" \
+  --out "$S/input-manifest.json"
+controller preflight \
+  --controller-authority "$S/controller-authority.json" \
+  --input-manifest "$S/input-manifest.json" \
+  --implementation-review-receipt "$R/reviews/controller-implementation-review.json" \
+  --out "$S/preflight-receipt.json"
+controller authorize-execution \
+  --input-manifest "$S/input-manifest.json" \
+  --preflight-receipt "$S/preflight-receipt.json" \
+  --implementation-review-receipt "$R/reviews/controller-implementation-review.json" \
+  --out "$S/dynamic-execution-receipt.json"
+controller execute \
+  --input-manifest "$S/input-manifest.json" \
+  --preflight-receipt "$S/preflight-receipt.json" \
+  --dynamic-execution-receipt "$S/dynamic-execution-receipt.json" \
+  --out-root "$S"
 ```
 
-`create-authority` is source/setup only and cannot spawn the target. `preflight` may run only
-synthetic harness self-tests and Observer B sentinel tests; it cannot launch Claude Code.
-`execute` denies unless all of these receipts are present, canonical, same-root, unexpired, and
-digest-bound:
+The receipt chain and durable contracts are exact:
 
-1. decision merge receipt and reviewed-tip `0C/0I` review;
-2. exact CC/Sub2API commits/trees and clean implementation worktree; no dangerous Git env;
-3. CodeGraph config SHA and `protected_count=0` in both roots;
-4. all merged-plan, P2, static closure, artifact, 36+2 anchor, signal, and v13 bindings;
-5. exact executable version/format/codesign/digest/size and Darwin arm64 platform;
-6. immutable launch manifests, stdin digests, UUID mapping, CWD/state-root, env, and endpoint;
-7. `sandbox-exec` profile self-test, denied external socket/DNS/Unix-socket probes, and direct
+| object | schema | ceiling / mode | binds |
+| --- | --- | --- | --- |
+| decision receipt | `oracle-lab-phase3a-supplement-controller-decision@1.0` | 32 KiB / `0o600` | final plan commit/tree/blob digest, decision review `0C/0I`, PR merge commit/tree |
+| implementation review receipt | `oracle-lab-phase3a-supplement-controller-implementation-review@1.0` | 32 KiB / `0o600` | exact implementation commit/tree, source-set digest, controller build/executable digest, focused result-set digest, review `0C/0I` |
+| controller authority | `oracle-lab-phase3a-supplement-controller-authority@1.0` | 32 KiB / `0o600` | exact SHA-256 of both receipts and all Section 3 authority |
+| input manifest | `oracle-lab-phase3a-supplement-input-manifest@1.0` | 32 KiB / `0o600` | authority SHA, three launch-manifest SHAs, root safe ref, trusted freeze time/expiry |
+| preflight receipt | `oracle-lab-phase3a-supplement-preflight@1.0` | 32 KiB / `0o600` | implementation commit/tree/build, authority/input/launch SHAs and every preflight result digest |
+| execution receipt | `oracle-lab-phase3a-supplement-dynamic-execution@1.0` | 32 KiB / `0o600` | input/preflight/implementation-review SHAs, issued/expiry, exact authorized cell-set digest |
+
+All are JCS plus final LF, exclusive, link-count one, same-root, and exact-byte SHA-bound. The
+three execution-only launch manifests are `0o600`, maximum 32 KiB, use the existing strict launch
+schema, and are immutable after `freeze-input`. The decision and implementation receipts are
+produced by their independent reviewers, not by the controller. `create-authority`, `freeze-input`,
+and `preflight` cannot spawn Claude Code. Preflight may run only synthetic harness self-tests and
+the Observer B sentinel.
+
+Before every target spawn, `execute` reasserts that HEAD commit/tree, source-set digest,
+controller executable digest, and implementation review receipt exactly match the reviewed
+implementation tip. A clean worktree alone is insufficient. It also denies unless all of these
+receipts are canonical, same-root, unexpired, and digest-bound:
+
+1. decision merge receipt and final reviewed plan-tip `0C/0I` review;
+2. implementation review receipt with exact commit/tree/source/build and `0C/0I` review;
+3. exact CC/Sub2API commits/trees and clean implementation worktree; no dangerous Git env;
+4. CodeGraph config SHA and `protected_count=0` in both roots;
+5. all merged-plan, P2, static closure, artifact, 36+2 anchor, signal, and v13 bindings;
+6. exact executable version/format/codesign/digest/size and Darwin arm64 platform;
+7. immutable launch manifests, stdin digests, UUID mapping, CWD/state-root, env, and endpoint;
+8. `sandbox-exec` profile self-test, denied external socket/DNS/Unix-socket probes, and direct
    child process-limit self-test;
-8. Observer A fake-upstream JSON/SSE projector self-test and Observer B no-root sentinel
+9. Observer A fake-upstream JSON/SSE projector self-test and Observer B no-root sentinel
    open/read plus process-start/executable attribution self-test;
-9. free scratch at least 8 GiB, root/directory/file mode checks, file-count budget, four-hour
+10. free scratch at least 8 GiB, root/directory/file mode checks, file-count budget, four-hour
    monotonic deadline, and cleanup manifest;
-10. focused RED then GREEN tests, two isolated deterministic closure regenerations, and zero-leak
+11. focused RED then GREEN tests, two isolated deterministic closure regenerations, and zero-leak
     static fixtures.
 
-Only the resulting `P3AS_DYNAMIC_EXECUTION_GREEN` receipt can set a short-lived
-`dynamic_execution_authorized=true` for the exact input-manifest digest. Any drift returns it to
-false. Controller creation or a GREEN unit test never sets this receipt.
+Only `authorize-execution` may emit `P3AS_DYNAMIC_EXECUTION_GREEN`. Its expiry is
+`min(preflight_completed_at+4h,input_manifest.expires_at)` from the bound trusted time input. It
+sets `dynamic_execution_authorized=true` only for the exact input, implementation, preflight, and
+cell-set digests. Any drift returns it to false. Controller creation, clean Git, or GREEN unit
+tests never set this receipt.
 
 ## 6. Independent observers
 
@@ -288,12 +368,14 @@ fresh fallback, controller injection, or topology/parser disagreement yields Unk
 ### 6.2 Observer B: Darwin vnode/process-start
 
 Implement a separate Swift supervisor source and compiled executable under the supplement module.
-It uses the reviewed no-root Darwin filesystem event surface (`/usr/bin/fs_usage` or a separately
-reviewed equivalent selected at implementation review), plus Darwin process metadata for PID,
-process-start time, parent relation, and executable path/digest. Its preflight launches a
-synthetic sentinel process, requires one attributable open/read/close sequence, and proves the
-surface needs no root. If the exact surface is unavailable, ambiguous, privileged, or lossy,
-execution is BLOCKED; no fallback parser is selected.
+Its only filesystem event source is the exact executable `/usr/bin/fs_usage` with argv
+`-w -f filesystem`; its executable SHA-256 and version output digest are frozen in the input
+manifest. The Swift supervisor obtains process-start, parent relation, and executable path through
+Darwin `proc_pidinfo`/`proc_pidpath`, then hashes the executable itself. Preflight launches a
+synthetic sentinel process, requires one attributable open/read/close sequence, and proves this
+exact command needs no root. If `/usr/bin/fs_usage`, either libproc call, or event attribution is
+unavailable, ambiguous, privileged, or lossy, execution is BLOCKED. No equivalent surface,
+alternate argv, fallback parser, or runtime selection is allowed.
 
 Observer B hashes the bound predecessor from its own process before resume launch, records only
 typed vnode operation classes and safe refs, and accepts the read only from the unique descendant
@@ -490,7 +572,11 @@ tools/oracle-lab/phase3a/supplement/controller.ts
 tools/oracle-lab/phase3a/supplement/conclusions.ts
 tools/oracle-lab/phase3a/supplement/closure.ts
 docs/superpowers/schemas/oracle-lab-phase3a-supplement-controller-authority.schema.json
+docs/superpowers/schemas/oracle-lab-phase3a-supplement-controller-decision.schema.json
+docs/superpowers/schemas/oracle-lab-phase3a-supplement-controller-implementation-review.schema.json
 docs/superpowers/schemas/oracle-lab-phase3a-supplement-input-manifest.schema.json
+docs/superpowers/schemas/oracle-lab-phase3a-supplement-preflight.schema.json
+docs/superpowers/schemas/oracle-lab-phase3a-supplement-dynamic-execution.schema.json
 docs/superpowers/schemas/oracle-lab-phase3a-supplement-state.schema.json
 docs/superpowers/schemas/oracle-lab-phase3a-supplement-observer.schema.json
 docs/superpowers/schemas/oracle-lab-phase3a-supplement-cell-run.schema.json
@@ -545,7 +631,8 @@ receipt.
 GREEN requires exact authority bindings, all 15 families at six repetitions, both positive order
 directions, three unexpired Reproduced conclusions, independent A/B agreement, zero unresolved
 lineage leaves, strict schemas, exact DAG equality/Kahn order, deterministic regeneration, leak
-PASS with zero findings, exit `GREEN`, terminal `GREEN`, and handoff `READY`. Anything less keeps
+PASS with zero findings, exit `GREEN`, handoff `READY_PENDING_TERMINAL`, terminal `GREEN`, a valid
+external digest set, and consumer-derived effective handoff state `READY`. Anything less keeps
 `phase3b_usable=false`.
 
 ## 12. Resource, stop, rollback, and cleanup rules
@@ -570,16 +657,27 @@ append-only closure. This planning task performs none of those actions.
 
 ## 13. Exit, handoff, and Phase 3B consumer binding
 
-P3A-S exit is `GREEN` only when every Section 11 acceptance condition holds. The handoff is
-`READY` only when exit and terminal are GREEN and it binds exact tuples
-`{relative_path,sha256,schema_id,schema_major,schema_revision}` for the three conclusions, index,
-leak, exit, handoff, terminal, and external digest set. Phase 3B may not walk a directory, select a
-newest file, accept an absolute path, or infer readiness from controller existence.
+P3A-S exit is `GREEN` only when its predecessor gates hold. The handoff is generated after exit;
+it may become `READY_PENDING_TERMINAL` and bind only already-generated predecessors: the input
+manifest, three conclusions, artifact index, leak report, and exit report. It never includes its
+own digest and cannot bind terminal or external digest set. The terminal manifest is generated
+next, binds those predecessors plus the handoff digest, and sets final closure status `GREEN` or
+`BLOCKED`. The external digest set is generated last and binds exactly the five closure files
+`artifact_index`, `leak_report`, `exit_report`, `handoff`, and `terminal_manifest`; none of those
+five files references the external set.
+
+`READY_PENDING_TERMINAL` is not Phase 3B readiness. A separate explicit consumer tuple, supplied
+only after the terminal and external set close, contains
+`{relative_path,sha256,schema_id,schema_major,schema_revision}` for the three conclusions and all
+five closure files plus the external digest set. Phase 3B may not walk a directory, select a
+newest file, accept an absolute path, infer readiness from controller existence, or use the
+handoff alone.
 
 The consumer rechecks all three expiries against its trusted time input, the same artifact tuple,
-P2 range, predecessor links, contradictions, parser agreement, and the five closure bindings.
-Only then can Phase 3B treat the P3A-S input as usable. This plan neither implements that consumer
-nor promotes a profile.
+P2 range, predecessor links, contradictions, parser agreement, terminal `GREEN`, the handoff's
+`READY_PENDING_TERMINAL`, and the external digest set's five closure bindings. Only then does the
+consumer derive effective handoff state `READY` and permit Phase 3B to treat P3A-S as usable. This
+plan neither implements that consumer nor promotes a profile.
 
 ## 14. Requirement traceability
 
@@ -598,7 +696,7 @@ nor promotes a profile.
 | schema/path/mode/size | input, terminal, leak tests | strict JCS, containment, `0o700/0o600`, ceilings |
 | deterministic closure | two isolated generations | exact logical bytes/digests equal |
 | leak zero | supplement leak guard | no forbidden fields/canaries/raw material |
-| P3A-S exit/handoff | terminal and closure tests | GREEN/READY and explicit Phase 3B tuple |
+| P3A-S exit/handoff | terminal and closure tests | exit/terminal GREEN, raw handoff READY_PENDING_TERMINAL, external set valid, consumer-derived READY |
 | review boundedness | consolidated review receipt | one holistic review, at most one C/I fix wave and one re-review |
 | `RA-P0-001`, `HA-P1-002` | convergence and deterministic closure | stable balanced repetitions and identical output |
 | `RA-P0-002`, `RA-P1-004` | resume conclusion and A/B records | only Reproduced prior-state consumption is usable |
