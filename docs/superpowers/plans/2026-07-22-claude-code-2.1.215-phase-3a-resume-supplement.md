@@ -416,8 +416,12 @@ negative arms. The exact safe IDs are:
 creation: p3as-215-sNN-rNN-a00-create
 new:      p3as-215-sNN-rNN-a01-new
 resume:   p3as-215-sNN-rNN-a02-resume
-negative: p3as-215-sNN-rNN-a03-neg-<case>
+negative: p3as-215-sNN-rNN-aNN-neg-<case>
 ```
+
+The negative grammar is restricted to two-digit `NN` values `03..15`. Each `NN` maps one-to-one
+to the corresponding `A03..A15` matrix arm, and no other negative arm number is valid. `A01-NEW`
+and `A02-RESUME` retain their independent positive grammars and cannot match the negative pattern.
 
 The treatment row must bind `creation_run_id`, `creation_run_digest`,
 `prior_state_safe_ref`, `prior_state_safe_digest`, `prior_state_artifact_digest`,
@@ -438,23 +442,26 @@ The exact unique dynamic matrix is:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `new-session-control` | `P3AS-215-SNN-RNN-A01-NEW` / `a01-new` | `3141592653` / slots `0..5` / 6 | `new_control_no_predecessor` | `1/1/0` | A/B not required; no predecessor proof | `CONTROL_NEW_SESSION` | paired control only |
 | `resume-candidate` | `P3AS-215-SNN-RNN-A02-RESUME` / `a02-resume` | `3141592653` / slots `0..5` / 6 | none; requires `Reproduced` | `1/1/1` | A and B agree on same creation digest | `REPRODUCED_RESUME_CANDIDATE` | yes |
-| `missing-predecessor` | `P3AS-215-SNN-RNN-A03-MISSING-PREDECESSOR` / `a03-neg-missing-predecessor` | `3141592653` / slots `0..5` / 6 | `missing_predecessor` | `0/0/0` | both not started; no proof | `DENY_MISSING_PREDECESSOR` | no |
-| `tampered-predecessor` | `P3AS-215-SNN-RNN-A04-TAMPERED-PREDECESSOR` / `a04-neg-tampered-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_digest_mismatch` | `1/0/1` | A/B agree on mismatch; no consumption agreement | `DENY_PREDECESSOR_DIGEST` | no |
-| `swapped-predecessor` | `P3AS-215-SNN-RNN-A05-SWAPPED-PREDECESSOR` / `a05-neg-swapped-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_cell_mismatch` | `1/0/1` | A/B agree on wrong cell; no consumption agreement | `DENY_PREDECESSOR_CELL` | no |
-| `wrong-run-binding` | `P3AS-215-SNN-RNN-A06-WRONG-RUN-BINDING` / `a06-neg-wrong-run-binding` | `3141592653` / slots `0..5` / 6 | `run_binding_mismatch` | `0/0/0` | both not started; no proof | `DENY_RUN_BINDING` | no |
-| `fresh-session-fallback` | `P3AS-215-SNN-RNN-A07-FRESH-SESSION-FALLBACK` / `a07-neg-fresh-session-fallback` | `3141592653` / slots `0..5` / 6 | `fresh_session_fallback` | `1/1/0` | A/B agree on fresh session and absence of consumption | `UNKNOWN_FRESH_FALLBACK` | no |
-| `nonterminal-creation` | `P3AS-215-SNN-RNN-A08-NONTERMINAL-CREATION` / `a08-neg-nonterminal-creation` | `3141592653` / slots `0..5` / 6 | `predecessor_nonterminal` | `0/0/0` | both not started; no proof | `DENY_PREDECESSOR_NONTERMINAL` | no |
-| `observer-disagreement` | `P3AS-215-SNN-RNN-A09-OBSERVER-DISAGREEMENT` / `a09-neg-observer-disagreement` | `3141592653` / slots `0..5` / 6 | `observer_disagreement` | `1/1/1` | A/B disagree; disagreement is stable | `UNKNOWN_OBSERVER_DISAGREEMENT` | no |
-| `instrumentation-perturbation` | `P3AS-215-SNN-RNN-A10-INSTRUMENTATION-PERTURBATION` / `a10-neg-instrumentation-perturbation` | `3141592653` / slots `0..5` / 6 | `instrumentation_perturbation` | `1/1/1` | A/B agree only that perturbation invalidates result | `UNKNOWN_INSTRUMENTATION_PERTURBATION` | no |
-| `network-only-proof` | `P3AS-215-SNN-RNN-A11-NETWORK-ONLY-PROOF` / `a11-neg-network-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_b_missing` | `1/1/0` | A present/B absent; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
-| `filesystem-only-proof` | `P3AS-215-SNN-RNN-A12-FILESYSTEM-ONLY-PROOF` / `a12-neg-filesystem-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_a_missing` | `1/0/1` | A absent/B present; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
-| `missing-state-dependent-network-signal` | `P3AS-215-SNN-RNN-A13-MISSING-SIGNAL` / `a13-neg-missing-state-dependent-network-signal` | `3141592653` / slots `0..5` / 6 | `missing_state_dependent_network_signal` | `1/1/1` | B present/A signal absent; insufficient agreement | `UNKNOWN_NETWORK_SIGNAL` | no |
-| `controller-supplied-predecessor-proof` | `P3AS-215-SNN-RNN-A14-CONTROLLER-SUPPLIED-PROOF` / `a14-neg-controller-supplied-predecessor-proof` | `3141592653` / slots `0..5` / 6 | `controller_supplied_proof` | `0/0/0` | both not started; controller proof is never observer agreement | `DENY_CONTROLLER_PROOF` | no |
-| `wrong-reader-pid-process-start` | `P3AS-215-SNN-RNN-A15-WRONG-READER-IDENTITY` / `a15-neg-wrong-reader-pid-process-start` | `3141592653` / slots `0..5` / 6 | `wrong_reader_process_identity` | `1/1/1` | A present/B wrong PID or process-start; disagreement | `UNKNOWN_WRONG_READER_IDENTITY` | no |
+| `missing-predecessor` | `P3AS-215-SNN-RNN-A03-NEG-MISSING-PREDECESSOR` / `a03-neg-missing-predecessor` | `3141592653` / slots `0..5` / 6 | `missing_predecessor` | `0/0/0` | both not started; no proof | `DENY_MISSING_PREDECESSOR` | no |
+| `tampered-predecessor` | `P3AS-215-SNN-RNN-A04-NEG-TAMPERED-PREDECESSOR` / `a04-neg-tampered-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_digest_mismatch` | `1/0/1` | A/B agree on mismatch; no consumption agreement | `DENY_PREDECESSOR_DIGEST` | no |
+| `swapped-predecessor` | `P3AS-215-SNN-RNN-A05-NEG-SWAPPED-PREDECESSOR` / `a05-neg-swapped-predecessor` | `3141592653` / slots `0..5` / 6 | `predecessor_cell_mismatch` | `1/0/1` | A/B agree on wrong cell; no consumption agreement | `DENY_PREDECESSOR_CELL` | no |
+| `wrong-run-binding` | `P3AS-215-SNN-RNN-A06-NEG-WRONG-RUN-BINDING` / `a06-neg-wrong-run-binding` | `3141592653` / slots `0..5` / 6 | `run_binding_mismatch` | `0/0/0` | both not started; no proof | `DENY_RUN_BINDING` | no |
+| `fresh-session-fallback` | `P3AS-215-SNN-RNN-A07-NEG-FRESH-SESSION-FALLBACK` / `a07-neg-fresh-session-fallback` | `3141592653` / slots `0..5` / 6 | `fresh_session_fallback` | `1/1/0` | A/B agree on fresh session and absence of consumption | `UNKNOWN_FRESH_FALLBACK` | no |
+| `nonterminal-creation` | `P3AS-215-SNN-RNN-A08-NEG-NONTERMINAL-CREATION` / `a08-neg-nonterminal-creation` | `3141592653` / slots `0..5` / 6 | `predecessor_nonterminal` | `0/0/0` | both not started; no proof | `DENY_PREDECESSOR_NONTERMINAL` | no |
+| `observer-disagreement` | `P3AS-215-SNN-RNN-A09-NEG-OBSERVER-DISAGREEMENT` / `a09-neg-observer-disagreement` | `3141592653` / slots `0..5` / 6 | `observer_disagreement` | `1/1/1` | A/B disagree; disagreement is stable | `UNKNOWN_OBSERVER_DISAGREEMENT` | no |
+| `instrumentation-perturbation` | `P3AS-215-SNN-RNN-A10-NEG-INSTRUMENTATION-PERTURBATION` / `a10-neg-instrumentation-perturbation` | `3141592653` / slots `0..5` / 6 | `instrumentation_perturbation` | `1/1/1` | A/B agree only that perturbation invalidates result | `UNKNOWN_INSTRUMENTATION_PERTURBATION` | no |
+| `network-only-proof` | `P3AS-215-SNN-RNN-A11-NEG-NETWORK-ONLY-PROOF` / `a11-neg-network-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_b_missing` | `1/1/0` | A present/B absent; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
+| `filesystem-only-proof` | `P3AS-215-SNN-RNN-A12-NEG-FILESYSTEM-ONLY-PROOF` / `a12-neg-filesystem-only-proof` | `3141592653` / slots `0..5` / 6 | `observer_a_missing` | `1/0/1` | A absent/B present; insufficient agreement | `UNKNOWN_OBSERVER_INCOMPLETE` | no |
+| `missing-state-dependent-network-signal` | `P3AS-215-SNN-RNN-A13-NEG-MISSING-STATE-DEPENDENT-NETWORK-SIGNAL` / `a13-neg-missing-state-dependent-network-signal` | `3141592653` / slots `0..5` / 6 | `missing_state_dependent_network_signal` | `1/1/1` | B present/A signal absent; insufficient agreement | `UNKNOWN_NETWORK_SIGNAL` | no |
+| `controller-supplied-predecessor-proof` | `P3AS-215-SNN-RNN-A14-NEG-CONTROLLER-SUPPLIED-PREDECESSOR-PROOF` / `a14-neg-controller-supplied-predecessor-proof` | `3141592653` / slots `0..5` / 6 | `controller_supplied_proof` | `0/0/0` | both not started; controller proof is never observer agreement | `DENY_CONTROLLER_PROOF` | no |
+| `wrong-reader-pid-process-start` | `P3AS-215-SNN-RNN-A15-NEG-WRONG-READER-PID-PROCESS-START` / `a15-neg-wrong-reader-pid-process-start` | `3141592653` / slots `0..5` / 6 | `wrong_reader_process_identity` | `1/1/1` | A present/B wrong PID or process-start; disagreement | `UNKNOWN_WRONG_READER_IDENTITY` | no |
 
-For every row, `arm_id` is the exact uppercase value shown, `run_id` is
-`p3as-215-sNN-rNN-aNN-<suffix>`, and every `NN` is zero-padded decimal. Each repetition must emit
-the same deny code, side-effect tuple, observer-agreement class, and terminal class. One mismatch
+For every row, `arm_id` is the exact uppercase value shown, and lowercasing it after replacing
+the template tokens `SNN`/`RNN` with `s01`/`r01` must equal the example full `run_id`. Positive
+arms use only the independent `a01-new` and `a02-resume` grammar. Negative arms use exactly
+`aNN-neg-<case>` with two-digit decimal `NN` in `03..15`; A03 through A15 map one-to-one to those
+negative run IDs, and A01/A02 cannot match the negative grammar. Each repetition must emit the
+same deny code, side-effect tuple, observer-agreement class, and terminal class. One mismatch
 is `Unknown` and disables the entire supplement. The five observer dynamic controls are not
 prose-only: they are the `A11`-`A15` rows above, each has exactly six repetitions, and each has
 `positive convergence=no`. A negative must never enter `analyzeConvergence`'s positive leaf set.
@@ -529,8 +536,10 @@ encoded length is 84 bytes. The digest preimage is domain-separated
 paths, PIDs, hostnames, and identifiers are never stored in the ref. Unknown kind, uppercase or
 short digest, wrong domain, oversize value, collision, or digest mismatch is a stable
 `invalid_safe_ref` deny. Run IDs are the separate bounded grammar
-`p3as-215-sNN-rNN-aNN-(create|new|resume|neg-[a-z0-9-]+)`; they contain no user/provider
-identifier and are validated before binding.
+`p3as-215-sNN-rNN-<suffix>`; positive suffixes are exactly `a01-new` and `a02-resume`, while
+negative suffixes are exactly `aNN-neg-[a-z0-9-]+` with `NN` restricted to two-digit decimal
+`03..15`. A03..A15 arm IDs map one-to-one to those negative full run IDs; A01/A02 remain outside
+the negative pattern. They contain no user/provider identifier and are validated before binding.
 
 The manifest maximum is 32 KiB, state/cell records 64 KiB each, each observer output 16 KiB,
 each normalized conclusion 64 KiB, and each closure artifact 256 KiB. Canonical bytes are
@@ -1009,8 +1018,10 @@ runtime wiring ran for this plan.
 Run only document/static checks in this plan task:
 
 ```bash
+set -euo pipefail
 export PLAN=docs/superpowers/plans/2026-07-22-claude-code-2.1.215-phase-3a-resume-supplement.md
-PYTHON=python3
+NODE="${NODE:-/Users/muqihang/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node}"
+PYTHON="${PYTHON:-/Users/muqihang/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3}"
 test -s "$PLAN"
 ! rg -n 'T[O]DO|T[B]D|FIXM[E]|@lates[t]' "$PLAN"
 rg -n 'BLOCKED|CL-P3A-SUPP-RESUME-LINEAGE|phase3b_usable|RA-P0-001|RA-P1-004|HA-P1-001|HA-P1-002|HA-P1-003' "$PLAN"
@@ -1022,7 +1033,7 @@ rg -q '2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce' "$PLAN"
 rg -q '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1|schema range.*1:0-0' "$PLAN"
 ! rg -n 'normalized/[P]3A-S' "$PLAN"
 rg -q 'P3A_SUPP_ROOT|closure-digest-set-v1.json|oracle-lab-phase3a-supplement-handoff@1.0' "$PLAN"
-node --input-type=module <<'NODE'
+"$NODE" --input-type=module <<'NODE'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 const plan = fs.readFileSync(process.env.PLAN, 'utf8')
@@ -1038,32 +1049,78 @@ assert.deepEqual(
 )
 console.log('authority DAG structured equality: PASS')
 NODE
-"$PYTHON" - "$PLAN" <<'PY'
-import re, sys
-plan = open(sys.argv[1], encoding='utf-8').read()
-matrix = plan[plan.index('The exact unique dynamic matrix is:'):plan.index('For every row, `arm_id`')]
-rows = [line for line in matrix.splitlines() if line.startswith('| `')]
+
+validate_matrix() {
+  "$PYTHON" -c '
+import re
+import sys
+
+plan = sys.stdin.read()
+matrix = plan[plan.index("The exact unique dynamic matrix is:"):plan.index("For every row, `arm_id`")]
+rows = [line for line in matrix.splitlines() if line.startswith("| `")]
 assert len(rows) == 15
-assert sorted(re.findall(r'/ `a(\\d{2})-', '\\n'.join(rows))) == [f'{i:02d}' for i in range(1, 16)]
+parsed = []
 for row in rows:
-    assert '`3141592653` / slots `0..5` / 6' in row
-    assert re.search(r'\\| `\\d+/\\d+/\\d+` \\|', row)
-for name in ('network-only-proof', 'filesystem-only-proof',
-             'missing-state-dependent-network-signal',
-             'controller-supplied-predecessor-proof', 'wrong-reader-pid-process-start'):
-    assert matrix.count(f'`{name}`') == 1
-assert all(x in plan for x in ('creation-state record', 'resume-state record',
-  'Observer A network output', 'Observer B filesystem/process output'))
-assert plan.count('file `0o600`') >= 4
-assert 'every durable directory below it are `0o700`' in plan
-states = ['PR40_OPEN_BLOCKED', 'PR40_MERGED_RECON_ONLY', 'BLOCKERS_OPEN',
-          'RECON_APPEND_ONLY_CLOSED']
+    match = re.search(r"\| `([^`]+)` / `([^`]+)` \|", row)
+    assert match, row
+    arm, run_suffix = match.groups()
+    arm_match = re.fullmatch(r"P3AS-215-SNN-RNN-A(0[1-9]|1[0-5])-[A-Z0-9-]+", arm)
+    assert arm_match, arm
+    arm_number = int(arm_match.group(1))
+    run_match = re.fullmatch(r"a(\d{2})-(.+)", run_suffix)
+    assert run_match, run_suffix
+    run_number = int(run_match.group(1))
+    assert arm_number == run_number, (arm, run_suffix)
+    expected = f"p3as-215-s01-r01-{run_suffix}"
+    assert arm.lower().replace("snn", "s01").replace("rnn", "r01") == expected
+    assert "`3141592653` / slots `0..5` / 6" in row
+    assert re.search(r"\| `\d+/\d+/\d+` \|", row)
+    if run_number <= 2:
+        assert run_suffix in ("a01-new", "a02-resume")
+        assert "-NEG-" not in arm and "-neg-" not in run_suffix
+    else:
+        assert 3 <= run_number <= 15
+        assert arm.endswith("-NEG-" + run_suffix[run_suffix.index("-neg-") + 5:].upper())
+        assert run_suffix.startswith(f"a{run_number:02d}-neg-")
+    parsed.append((arm, expected))
+assert sorted(int(re.search(r"-A(\d{2})-", arm).group(1)) for arm, _ in parsed) == list(range(1, 16))
+assert len({run_id for _, run_id in parsed}) == 15
+for name in ("network-only-proof", "filesystem-only-proof",
+             "missing-state-dependent-network-signal",
+             "controller-supplied-predecessor-proof", "wrong-reader-pid-process-start"):
+    assert matrix.count(f"`{name}`") == 1
+assert all(x in plan for x in ("creation-state record", "resume-state record",
+  "Observer A network output", "Observer B filesystem/process output"))
+assert plan.count("file `0o600`") >= 4
+assert "every durable directory below it are `0o700`" in plan
+states = ["PR40_OPEN_BLOCKED", "PR40_MERGED_RECON_ONLY", "BLOCKERS_OPEN",
+          "RECON_APPEND_ONLY_CLOSED"]
 assert [plan.index(x) for x in states] == sorted(plan.index(x) for x in states)
-assert 'only next task permitted is a read-only/static recon task' in plan
-assert 'controller creation is denied before' in plan
-assert 'runtime preflight is not a substitute' in plan
-print('matrix uniqueness/count, schema/path/mode, blocker state machine: PASS')
+assert "only next task permitted is a read-only/static recon task" in plan
+assert "controller creation is denied before" in plan
+assert "runtime preflight is not a substitute" in plan
+print("matrix uniqueness/count, schema/path/mode, blocker state machine: PASS")
+'
+}
+
+if "$PYTHON" - "$PLAN" <<'PY' | validate_matrix
+import sys
+plan = open(sys.argv[1], encoding="utf-8").read()
+old = "P3AS-215-SNN-RNN-A" + "01-NEW"
+new = "P3AS-215-SNN-RNN-A" + "99-NEG-MUTATED"
+assert plan.count(old) == 1
+sys.stdout.write(plan.replace(old, new, 1))
 PY
+then
+  echo "matrix mutation unexpectedly passed" >&2
+  exit 1
+else
+  mutation_status=$?
+  test "$mutation_status" -ne 0
+  echo "matrix mutation expected nonzero: PASS"
+fi
+validate_matrix < "$PLAN"
+echo "positive matrix bytes exit 0: PASS"
 git diff --check
 ```
 
