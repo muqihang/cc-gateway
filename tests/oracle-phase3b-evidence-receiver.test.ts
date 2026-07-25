@@ -7,7 +7,6 @@ import test from 'node:test'
 
 import {
   spawnNormalizedSafeReceiver,
-  startNormalizedSafeReceiver,
 } from '../tools/oracle-lab/phase3b-evidence-sufficiency/wire-receiver.js'
 import { validateEvidenceArtifact } from '../tools/oracle-lab/phase3b-evidence-sufficiency/schemas.js'
 
@@ -31,7 +30,7 @@ function sendRaw(port: number, request: Buffer): Promise<Buffer> {
 test('loopback receiver is sole wire leaf writer and emits normalized-safe observation', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'p3b-es-receiver-'))
   mkdirSync(path.join(root, 'capsules/P3B-ES1/observations/receiver'), { recursive: true, mode: 0o700 })
-  const receiver = await startNormalizedSafeReceiver({
+  const receiver = await spawnNormalizedSafeReceiver({
     evidence_root: root,
     output_relative_prefix: 'capsules/P3B-ES1/observations/receiver',
     campaign_id: 'p3b-es1-test', cell_id: 'cell-1', pair_id: 'wire-prompt-only',
@@ -78,7 +77,7 @@ test('loopback receiver is sole wire leaf writer and emits normalized-safe obser
 test('receiver rejects body and attempt overflow with stable codes', async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'p3b-es-receiver-limit-'))
   mkdirSync(path.join(root, 'capsules/P3B-ES1/observations/receiver'), { recursive: true, mode: 0o700 })
-  const receiver = await startNormalizedSafeReceiver({
+  const receiver = await spawnNormalizedSafeReceiver({
     evidence_root: root,
     output_relative_prefix: 'capsules/P3B-ES1/observations/receiver',
     campaign_id: 'p3b-es1-test', cell_id: 'cell-limit', pair_id: 'wire-limit', arm: 'uninstrumented',
@@ -91,7 +90,7 @@ test('receiver rejects body and attempt overflow with stable codes', async () =>
   assert.match(overflowResponse.toString('utf8'), /^HTTP\/1\.1 413 /)
   assert.match(overflowResponse.toString('utf8'), /x-oracle-deny-code: receiver_body_overflow/i)
   overflowResponse.fill(0)
-  await receiver.close()
+  await receiver.done
 })
 
 test('campaign receiver runs as a separate process and remains the exclusive writer', async () => {

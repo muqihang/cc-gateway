@@ -42,7 +42,7 @@ export const RESOURCE_BUDGET = Object.freeze({
   external_socket_budget: 0,
 })
 
-export type EvidenceWriterOwner = 'controller' | 'receiver' | 'probe'
+export type EvidenceWriterOwner = 'controller' | 'probe'
 
 export type DeterministicSchedule = {
   algorithm_id: 'fixed-base-plus-cyclic-rotation-v2'
@@ -181,6 +181,24 @@ export function buildDeterministicSchedule(
   return { ...payload, deterministic_repeat_digest: deterministicRepeatDigest }
 }
 
+export function validateDeterministicSchedule(record: DeterministicSchedule): void {
+  let expected: DeterministicSchedule
+  try { expected = buildDeterministicSchedule(record.campaign_id, record.schedule_id, record.sorted_labels, record.seeds) }
+  catch { fail('schema_invalid', 'schedule inputs are invalid') }
+  if (!canonicalEvidenceBytes(record).equals(canonicalEvidenceBytes(expected))) fail('schema_invalid', 'schedule differs from deterministic derivation')
+  const counts = new Map(record.sorted_labels.map((label) => [label, Array(record.arm_count).fill(0) as number[]]))
+  for (const order of record.orders) {
+    if (order.length !== record.arm_count || new Set(order).size !== record.arm_count) fail('schema_invalid', 'schedule order is not a permutation')
+    order.forEach((label, ordinal) => {
+      const byOrdinal = counts.get(label)
+      if (!byOrdinal) fail('schema_invalid', 'schedule order contains an unknown arm')
+      byOrdinal[ordinal] += 1
+    })
+  }
+  const flattened = [...counts.values()].flat()
+  if (Math.max(...flattened) - Math.min(...flattened) > 1) fail('schema_invalid', 'schedule arm/ordinal balance exceeds one')
+}
+
 function ensureRoot(rootInput: string): string {
   const absolute = path.resolve(rootInput)
   if (!existsSync(absolute)) fail('evidence_root_missing', 'evidence root must already exist')
@@ -210,7 +228,6 @@ function assertNoExistingSymlink(root: string, destination: string): void {
 function assertWriterNamespace(relative: string, owner: EvidenceWriterOwner): void {
   const receiver = 'capsules/P3B-ES1/observations/receiver/'
   const probe = 'capsules/P3B-ES1/control/probe/'
-  if (owner === 'receiver' && !relative.startsWith(receiver)) fail('writer_namespace_violation', 'receiver may write only receiver observations')
   if (owner === 'probe' && !relative.startsWith(probe)) fail('writer_namespace_violation', 'probe may write only probe control artifacts')
   if (owner === 'controller' && (relative.startsWith(receiver) || relative.startsWith(probe))) {
     fail('writer_namespace_violation', 'controller cannot write receiver or probe namespaces')
@@ -304,6 +321,24 @@ export function comparePairedProjection(left: unknown, right: unknown): { equiva
   differencePointers(left, right, '', pointers)
   const differing = [...new Set(pointers)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
   return { equivalent: differing.length === 0, differing_pointers: differing }
+}
+
+const PAIRED_OBSERVATION_OMIT = new Set([
+  'arm', 'cell_id', 'run_id', 'sequence_index', 'receiver_process_digest', 'connection_ordinal',
+])
+
+export function pairedAuthorizingProjection(observation: Record<string, unknown>): Record<string, unknown> {
+  const projection = Object.fromEntries(Object.entries(observation).filter(([key]) => !PAIRED_OBSERVATION_OMIT.has(key)))
+  for (const required of [
+    'pair_id', 'repetition', 'deterministic_seed', 'authority_class', 'method', 'path', 'ordered_header_names',
+    'header_multiplicity', 'auth_marker_winner_class', 'canonical_body_sha256', 'typed_request_ast',
+    'attempt_ordinal', 'scenario_action_ordinal', 'response_program_ref', 'response_projection', 'wire_action_completed', 'raw_material_persisted',
+  ]) if (!(required in projection)) fail('paired_projection_invalid', `paired observation is missing ${required}`)
+  return projection
+}
+
+export function comparePairedObservations(left: Record<string, unknown>, right: Record<string, unknown>): { equivalent: boolean; differing_pointers: string[] } {
+  return comparePairedProjection(pairedAuthorizingProjection(left), pairedAuthorizingProjection(right))
 }
 
 export function evaluateResourceLimits(counters: ResourceCounters, limits: ResourceCounters): string | null {

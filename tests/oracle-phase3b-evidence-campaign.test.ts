@@ -8,6 +8,7 @@ import {
   FIXED_SEEDS,
   buildDeterministicSchedule,
   classifyRetryOwner,
+  comparePairedObservations,
   comparePairedProjection,
   evaluateResourceLimits,
   writeExclusiveEvidence,
@@ -42,10 +43,8 @@ test('exclusive writer enforces append-only owner namespaces', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'p3b-es-writer-'))
   mkdirSync(path.join(root, 'capsules/P3B-ES1/observations/receiver'), { recursive: true, mode: 0o700 })
   const relative = 'capsules/P3B-ES1/observations/receiver/cell-1.json'
-  writeExclusiveEvidence(root, relative, { schema_id: 'safe.test', raw_material_persisted: false }, 'receiver')
-  assert.deepEqual(JSON.parse(readFileSync(path.join(root, relative), 'utf8')), { raw_material_persisted: false, schema_id: 'safe.test' })
-  assert.throws(() => writeExclusiveEvidence(root, relative, { schema_id: 'safe.test', raw_material_persisted: false }, 'receiver'),
-    (error: unknown) => (error as { code?: string }).code === 'evidence_exists')
+  assert.throws(() => writeExclusiveEvidence(root, relative, { schema_id: 'safe.test', raw_material_persisted: false }, 'controller'),
+    (error: unknown) => (error as { code?: string }).code === 'writer_namespace_violation')
   assert.throws(() => writeExclusiveEvidence(root, 'capsules/P3B-ES1/observations/receiver/controller.json', { safe: true }, 'controller'),
     (error: unknown) => (error as { code?: string }).code === 'writer_namespace_violation')
 })
@@ -57,6 +56,19 @@ test('paired comparator detects one mutated normalized leaf', () => {
     equivalent: false,
     differing_pointers: ['/path'],
   })
+})
+
+test('paired observation projection omits identity-only leaves and detects an authorizing mutation', () => {
+  const base = {
+    arm: 'uninstrumented', cell_id: 'cell-a', sequence_index: 1, receiver_process_digest: 'a'.repeat(64), connection_ordinal: 0,
+    pair_id: 'wire-pair', repetition: 0, deterministic_seed: 215001, authority_class: 'synthetic-loopback',
+    method: 'POST', path: '/v1/messages', ordered_header_names: ['content-type'], header_multiplicity: { 'content-type': 1 },
+    auth_marker_winner_class: 'absent', canonical_body_sha256: 'b'.repeat(64), typed_request_ast: { safe: true },
+    attempt_ordinal: 0, scenario_action_ordinal: 0, response_program_ref: 'complete_sse', response_projection: { terminal_event: 'message_stop' }, wire_action_completed: true, raw_material_persisted: false,
+  }
+  const peer = { ...structuredClone(base), arm: 'instrumented', cell_id: 'cell-b', sequence_index: 2, receiver_process_digest: 'c'.repeat(64), connection_ordinal: 5 }
+  assert.deepEqual(comparePairedObservations(base, peer), { equivalent: true, differing_pointers: [] })
+  assert.deepEqual(comparePairedObservations(base, { ...peer, path: '/v1/changed' }), { equivalent: false, differing_pointers: ['/path'] })
 })
 
 test('static anchor binds regular bytes, schema bundle, and a pure comment probe region', () => {

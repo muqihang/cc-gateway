@@ -1,13 +1,14 @@
 import { fork, type ChildProcess } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { closeSync, constants as fsConstants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
   EvidenceSufficiencyError,
+  canonicalEvidenceBytes,
   isLoopbackAddress,
   sha256Bytes,
-  writeExclusiveEvidence,
 } from './core.js'
 import { normalizeWireRequest, type SyntheticLiteralTable } from './normalize-request.js'
 import {
@@ -53,6 +54,39 @@ function fail(code: string, message: string): never {
   throw new EvidenceSufficiencyError(code, message)
 }
 
+function createModulePrivateReceiverWriter(rootInput: string): (relative: string, value: unknown) => void {
+  if (process.env.ORACLE_P3B_RECEIVER_CHILD !== '1' || typeof process.send !== 'function' || process.argv[2] !== '--receiver-child') {
+    fail('writer_namespace_violation', 'receiver writer is available only inside the dedicated IPC child')
+  }
+  const root = realpathSync(path.resolve(rootInput))
+  if (!lstatSync(root).isDirectory() || lstatSync(root).isSymbolicLink()) fail('evidence_root_unsafe', 'receiver evidence root is unsafe')
+  return (relativeInput, value) => {
+    if (!/^capsules\/P3B-ES1\/observations\/receiver\/[A-Za-z0-9._/-]+\.json$/.test(relativeInput) || relativeInput.split('/').includes('..')) {
+      fail('writer_namespace_violation', 'receiver artifact path is outside the exclusive namespace')
+    }
+    const destination = path.resolve(root, ...relativeInput.split('/'))
+    const relative = path.relative(root, destination)
+    if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail('writer_namespace_violation', 'receiver artifact path escapes evidence root')
+    let cursor = root
+    for (const segment of relative.split(path.sep)) {
+      cursor = path.join(cursor, segment)
+      if (existsSync(cursor) && lstatSync(cursor).isSymbolicLink()) fail('source_binding_invalid', 'receiver artifact path contains a symlink')
+    }
+    mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 })
+    const payload = canonicalEvidenceBytes(value)
+    let descriptor: number | undefined
+    try {
+      descriptor = openSync(destination, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600)
+      let offset = 0
+      while (offset < payload.length) offset += writeSync(descriptor, payload, offset, payload.length - offset)
+      fsyncSync(descriptor)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail('evidence_exists', 'append-only receiver artifact already exists')
+      throw error
+    } finally { if (descriptor !== undefined) closeSync(descriptor) }
+  }
+}
+
 function closeServer(server: http.Server): Promise<void> {
   return new Promise((resolve) => {
     if (!server.listening) { resolve(); return }
@@ -94,8 +128,9 @@ function respond(res: ServerResponse, req: IncomingMessage, action: ScenarioActi
   else send()
 }
 
-export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiverConfig): Promise<NormalizedSafeReceiver> {
+async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promise<NormalizedSafeReceiver> {
   validateConfig(config)
+  const writeReceiverObservation = createModulePrivateReceiverWriter(config.evidence_root)
   const source = fileURLToPath(import.meta.url)
   const receiverProcessDigest = sha256Bytes(readFileSync(source))
   const scenario = buildScenarioPrograms(config.campaign_id, config.literal_table).failure_programs
@@ -108,29 +143,25 @@ export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiver
   let doneResolve!: () => void
   const done = new Promise<void>((resolve) => { doneResolve = resolve })
   const observationRelativePaths: string[] = []
+  const terminalDeny = (response: ServerResponse, status: number, code: string): void => {
+    response.writeHead(status, { 'X-Oracle-Deny-Code': code, Connection: 'close' })
+    response.end(() => { void closeServer(server) })
+  }
   const server = http.createServer((request, response) => {
     const currentConnection = connectionOrdinal++
     const currentAttempt = attemptOrdinal++
     if (!isLoopbackAddress(request.socket.remoteAddress)) {
-      response.writeHead(403, { 'X-Oracle-Deny-Code': 'receiver_non_loopback' })
-      response.end()
-      return
+      return terminalDeny(response, 403, 'receiver_non_loopback')
     }
     if (currentAttempt >= config.limits.attempts) {
-      response.writeHead(429, { 'X-Oracle-Deny-Code': 'receiver_attempt_overflow' })
-      response.end()
-      return
+      return terminalDeny(response, 429, 'receiver_attempt_overflow')
     }
     if (request.rawHeaders.length / 2 > config.limits.headers) {
-      response.writeHead(431, { 'X-Oracle-Deny-Code': 'receiver_header_overflow' })
-      response.end()
-      return
+      return terminalDeny(response, 431, 'receiver_header_overflow')
     }
     const controlledAction = scenario.actions[currentAttempt]
     if (!controlledAction) {
-      response.writeHead(409, { 'X-Oracle-Deny-Code': 'attempt_sequence_invalid' })
-      response.end()
-      return
+      return terminalDeny(response, 409, 'attempt_sequence_invalid')
     }
     const chunks: Buffer[] = []
     let total = 0
@@ -149,9 +180,7 @@ export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiver
     })
     request.on('end', () => {
       if (overflow) {
-        response.writeHead(413, { 'X-Oracle-Deny-Code': 'receiver_body_overflow' })
-        response.end()
-        return
+        return terminalDeny(response, 413, 'receiver_body_overflow')
       }
       const body = Buffer.concat(chunks)
       for (const chunk of chunks) chunk.fill(0)
@@ -191,11 +220,12 @@ export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiver
           scenario_action_ordinal: controlledAction.action_ordinal,
           response_program_ref: config.scenario_id,
           response_projection: responseProjection,
+          wire_action_completed: true,
           raw_material_persisted: false,
         }
-        writeExclusiveEvidence(config.evidence_root, relative, observation, 'receiver')
-        observationRelativePaths.push(relative)
         const finish = (): void => {
+          writeReceiverObservation(relative, observation)
+          observationRelativePaths.push(relative)
           materializedResponse.bytes.fill(0)
           if (attemptOrdinal >= config.max_requests) void closeServer(server)
         }
@@ -203,8 +233,7 @@ export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiver
       } catch (error) {
         body.fill(0)
         const code = error instanceof EvidenceSufficiencyError ? error.code : 'receiver_internal_error'
-        response.writeHead(code === 'leak_detected' ? 400 : 500, { 'X-Oracle-Deny-Code': code })
-        response.end(() => { if (attemptOrdinal >= config.max_requests) void closeServer(server) })
+        terminalDeny(response, code === 'leak_detected' ? 400 : 500, code)
       }
     })
   })
@@ -233,6 +262,7 @@ export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiver
   validateConfig(config)
   const child = fork(fileURLToPath(import.meta.url), ['--receiver-child'], {
     execArgv: ['--import', 'tsx'],
+    env: { PATH: process.env.PATH, ORACLE_P3B_RECEIVER_CHILD: '1' },
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   })
   const ready = await new Promise<ChildReady>((resolve, reject) => {
@@ -272,7 +302,7 @@ if (process.argv[2] === '--receiver-child') {
   process.on('message', async (message: { kind: string; config?: NormalizedSafeReceiverConfig }) => {
     try {
       if (message.kind === 'configure' && message.config && receiver === null) {
-        receiver = await startNormalizedSafeReceiver(message.config)
+        receiver = await runDedicatedReceiver(message.config)
         process.send?.({ kind: 'ready', host: receiver.host, port: receiver.port, receiver_process_digest: receiver.receiver_process_digest } satisfies ChildReady)
         await receiver.done
         process.send?.({ kind: 'done', observation_relative_paths: receiver.observation_relative_paths } satisfies ChildDone)
