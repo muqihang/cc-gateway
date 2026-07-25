@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "queryItem": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$.-]{0,127}$",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "https://cc-gateway.local/oracle-lab/p3b-es/request-ast.schema.json#/$defs/node"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://cc-gateway.local/oracle-lab/p3b-es/receiver-observation.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "arm": {
+      "enum": [
+        "instrumented",
+        "uninstrumented",
+        "control/instrumented",
+        "control/uninstrumented",
+        "treatment/instrumented",
+        "treatment/uninstrumented"
+      ]
+    },
+    "attempt_ordinal": {
+      "maximum": 7,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "auth_marker_winner_class": {
+      "pattern": "^(?:absent|[a-z][a-z0-9_.-]{0,95})$",
+      "type": "string"
+    },
+    "authority_class": {
+      "const": "synthetic-loopback"
+    },
+    "base_url_provenance_ref": {
+      "pattern": "^[A-Za-z0-9._/-]+$",
+      "type": "string"
+    },
+    "body_byte_length": {
+      "maximum": 8388608,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "campaign_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$",
+      "type": "string"
+    },
+    "canonical_body_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "cell_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$",
+      "type": "string"
+    },
+    "charset_class": {
+      "enum": [
+        "absent",
+        "utf-8",
+        "other-redacted"
+      ]
+    },
+    "connection_ordinal": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "content_encoding_class": {
+      "enum": [
+        "absent",
+        "identity",
+        "gzip",
+        "other-redacted"
+      ]
+    },
+    "content_type_class": {
+      "enum": [
+        "absent",
+        "application-json",
+        "text-event-stream",
+        "other-redacted"
+      ]
+    },
+    "deterministic_seed": {
+      "enum": [
+        215001,
+        215002,
+        215003,
+        215004,
+        215005
+      ]
+    },
+    "header_multiplicity": {
+      "additionalProperties": {
+        "maximum": 256,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]{1,128}$"
+      },
+      "type": "object"
+    },
+    "header_presence": {
+      "items": {
+        "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]{1,128}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "method": {
+      "pattern": "^[A-Z]{1,16}$",
+      "type": "string"
+    },
+    "ordered_header_names": {
+      "items": {
+        "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]{1,128}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "ordered_query_items": {
+      "items": {
+        "$ref": "#/$defs/queryItem"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "pair_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$",
+      "type": "string"
+    },
+    "path": {
+      "pattern": "^/[^\\r\\n#]*$",
+      "type": "string"
+    },
+    "raw_material_persisted": {
+      "const": false
+    },
+    "receiver_authority": {
+      "const": "wire-leaf-exclusive"
+    },
+    "receiver_process_digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "receiver_source_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "active_static_anchor_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "repetition": {
+      "maximum": 4,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "response_program_ref": {
+      "enum": [
+        "http_400_terminal",
+        "http_401_terminal",
+        "http_403_terminal",
+        "http_429_terminal",
+        "http_500_terminal",
+        "http_529_terminal",
+        "reset_terminal",
+        "partial_sse_then_eof",
+        "complete_sse",
+        "http_429_then_complete",
+        "http_500_then_complete",
+        "reset_before_headers_then_complete",
+        "delayed_headers_boundary"
+      ]
+    },
+    "response_projection": {
+      "$ref": "https://cc-gateway.local/oracle-lab/p3b-es/response-ast.schema.json"
+    },
+    "safe_header_value_classes": {
+      "items": {
+        "pattern": "^[a-z][a-z0-9:._-]{0,127}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "type": "array"
+    },
+    "scenario_action_ordinal": {
+      "maximum": 7,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_id": {
+      "const": "oracle-lab-p3b-es-receiver-observation.v1"
+    },
+    "schema_major": {
+      "const": 1
+    },
+    "schema_revision": {
+      "const": 0
+    },
+    "sequence_index": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "transfer_encoding_class": {
+      "enum": [
+        "absent",
+        "chunked",
+        "other-redacted"
+      ]
+    },
+    "typed_request_ast": {
+      "$ref": "https://cc-gateway.local/oracle-lab/p3b-es/request-ast.schema.json"
+    },
+    "wire_action_completed": {
+      "const": true
+    }
+  },
+  "required": [
+    "schema_id",
+    "schema_major",
+    "schema_revision",
+    "campaign_id",
+    "cell_id",
+    "pair_id",
+    "arm",
+    "repetition",
+    "deterministic_seed",
+    "sequence_index",
+    "receiver_process_digest",
+    "receiver_source_sha256",
+    "active_static_anchor_sha256",
+    "receiver_authority",
+    "authority_class",
+    "base_url_provenance_ref",
+    "method",
+    "path",
+    "ordered_query_items",
+    "ordered_header_names",
+    "header_presence",
+    "header_multiplicity",
+    "safe_header_value_classes",
+    "auth_marker_winner_class",
+    "content_type_class",
+    "charset_class",
+    "content_encoding_class",
+    "transfer_encoding_class",
+    "body_byte_length",
+    "canonical_body_sha256",
+    "typed_request_ast",
+    "connection_ordinal",
+    "attempt_ordinal",
+    "scenario_action_ordinal",
+    "response_program_ref",
+    "response_projection",
+    "wire_action_completed",
+    "raw_material_persisted"
+  ],
+  "type": "object"
+}
