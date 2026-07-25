@@ -1,0 +1,292 @@
+import { fork, type ChildProcess } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import http, { type IncomingMessage, type ServerResponse } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+import {
+  EvidenceSufficiencyError,
+  isLoopbackAddress,
+  sha256Bytes,
+  writeExclusiveEvidence,
+} from './core.js'
+import { normalizeWireRequest, type SyntheticLiteralTable } from './normalize-request.js'
+import {
+  buildScenarioPrograms,
+  materializeScenarioResponse,
+  normalizeScenarioResponse,
+  type FailureProgramId,
+  type ScenarioAction,
+} from './normalize-response.js'
+
+export type ReceiverArm = 'instrumented' | 'uninstrumented' | 'control/instrumented' | 'control/uninstrumented' | 'treatment/instrumented' | 'treatment/uninstrumented'
+
+export type NormalizedSafeReceiverConfig = {
+  evidence_root: string
+  output_relative_prefix: 'capsules/P3B-ES1/observations/receiver' | `${string}/receiver`
+  campaign_id: string
+  cell_id: string
+  pair_id: string
+  arm: ReceiverArm
+  repetition: number
+  deterministic_seed: number
+  sequence_index: number
+  base_url_provenance_ref: string
+  scenario_id: FailureProgramId
+  literal_table: SyntheticLiteralTable
+  synthetic_auth_markers: Record<string, string>
+  limits: { body_bytes: number; headers: number; events: number; attempts: number }
+  max_requests: number
+}
+
+export type NormalizedSafeReceiver = {
+  host: '127.0.0.1'
+  port: number
+  receiver_process_digest: string
+  observation_relative_paths: string[]
+  done: Promise<void>
+  close(): Promise<void>
+}
+
+export type SpawnedNormalizedSafeReceiver = NormalizedSafeReceiver & { child: ChildProcess }
+
+function fail(code: string, message: string): never {
+  throw new EvidenceSufficiencyError(code, message)
+}
+
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise((resolve) => {
+    if (!server.listening) { resolve(); return }
+    server.close(() => resolve())
+  })
+}
+
+function validateConfig(config: NormalizedSafeReceiverConfig): void {
+  if (!config.output_relative_prefix.startsWith('capsules/P3B-ES1/observations/receiver')) fail('writer_namespace_violation', 'receiver output prefix is outside its namespace')
+  for (const [label, value] of Object.entries({
+    campaign_id: config.campaign_id, cell_id: config.cell_id, pair_id: config.pair_id,
+  })) if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/.test(value)) fail('schema_invalid', `${label} is not a safe identifier`)
+  if (!Number.isInteger(config.repetition) || config.repetition < 0 || config.repetition > 4) fail('schema_invalid', 'repetition is outside 0..4')
+  if (!Number.isSafeInteger(config.deterministic_seed) || !Number.isSafeInteger(config.sequence_index) || config.sequence_index < 0) fail('schema_invalid', 'seed or sequence index is invalid')
+  if (!Number.isInteger(config.max_requests) || config.max_requests < 1 || config.max_requests > config.limits.attempts) fail('receiver_attempt_overflow', 'max requests exceeds attempt budget')
+  if (config.limits.body_bytes < 1 || config.limits.headers < 1 || config.limits.events < 1 || config.limits.attempts < 1) fail('schema_invalid', 'receiver limits must be positive')
+}
+
+function actionHeaders(action: ScenarioAction): Record<string, string> {
+  const output: Record<string, string> = {}
+  for (const header of action.ordered_headers) {
+    if (header.name === 'content-type') output['Content-Type'] = header.value_class === 'text-event-stream' ? 'text/event-stream' : 'application/json'
+  }
+  output.Connection = 'close'
+  return output
+}
+
+function respond(res: ServerResponse, req: IncomingMessage, action: ScenarioAction, bytes: Buffer, finish: () => void): void {
+  if (action.kind === 'reset_terminal' || action.kind === 'reset_before_headers') {
+    req.socket.destroy()
+    finish()
+    return
+  }
+  const send = (): void => {
+    res.writeHead(action.status ?? 500, actionHeaders(action))
+    res.end(bytes, finish)
+  }
+  if (action.delay_ms > 0) setTimeout(send, action.delay_ms)
+  else send()
+}
+
+export async function startNormalizedSafeReceiver(config: NormalizedSafeReceiverConfig): Promise<NormalizedSafeReceiver> {
+  validateConfig(config)
+  const source = fileURLToPath(import.meta.url)
+  const receiverProcessDigest = sha256Bytes(readFileSync(source))
+  const scenario = buildScenarioPrograms(config.campaign_id, config.literal_table).failure_programs
+    .find((program) => program.scenario_id === config.scenario_id)
+  if (!scenario) fail('schema_invalid', 'receiver scenario is not in the exact program set')
+
+  let connectionOrdinal = 0
+  let attemptOrdinal = 0
+  let settled = false
+  let doneResolve!: () => void
+  const done = new Promise<void>((resolve) => { doneResolve = resolve })
+  const observationRelativePaths: string[] = []
+  const server = http.createServer((request, response) => {
+    const currentConnection = connectionOrdinal++
+    const currentAttempt = attemptOrdinal++
+    if (!isLoopbackAddress(request.socket.remoteAddress)) {
+      response.writeHead(403, { 'X-Oracle-Deny-Code': 'receiver_non_loopback' })
+      response.end()
+      return
+    }
+    if (currentAttempt >= config.limits.attempts) {
+      response.writeHead(429, { 'X-Oracle-Deny-Code': 'receiver_attempt_overflow' })
+      response.end()
+      return
+    }
+    if (request.rawHeaders.length / 2 > config.limits.headers) {
+      response.writeHead(431, { 'X-Oracle-Deny-Code': 'receiver_header_overflow' })
+      response.end()
+      return
+    }
+    const controlledAction = scenario.actions[currentAttempt]
+    if (!controlledAction) {
+      response.writeHead(409, { 'X-Oracle-Deny-Code': 'attempt_sequence_invalid' })
+      response.end()
+      return
+    }
+    const chunks: Buffer[] = []
+    let total = 0
+    let overflow = false
+    request.on('data', (chunkInput: Buffer | string) => {
+      const chunk = Buffer.isBuffer(chunkInput) ? Buffer.from(chunkInput) : Buffer.from(chunkInput)
+      total += chunk.length
+      if (total > config.limits.body_bytes) {
+        overflow = true
+        chunk.fill(0)
+        for (const buffered of chunks) buffered.fill(0)
+        chunks.length = 0
+        return
+      }
+      chunks.push(chunk)
+    })
+    request.on('end', () => {
+      if (overflow) {
+        response.writeHead(413, { 'X-Oracle-Deny-Code': 'receiver_body_overflow' })
+        response.end()
+        return
+      }
+      const body = Buffer.concat(chunks)
+      for (const chunk of chunks) chunk.fill(0)
+      try {
+        const requestProjection = normalizeWireRequest({
+          method: request.method ?? 'UNKNOWN',
+          request_target: request.url ?? '/',
+          raw_headers: request.rawHeaders,
+          body,
+          literal_table: config.literal_table,
+          synthetic_auth_markers: config.synthetic_auth_markers,
+          limits: { body_bytes: config.limits.body_bytes, headers: config.limits.headers },
+        })
+        body.fill(0)
+        const materializedResponse = materializeScenarioResponse(controlledAction, config.literal_table)
+        const responseProjection = normalizeScenarioResponse(materializedResponse.bytes, controlledAction, config.literal_table)
+        if (responseProjection.event_sequence.length > config.limits.events) fail('receiver_event_overflow', 'receiver event limit exceeded')
+        const relative = `${config.output_relative_prefix}/${config.cell_id}-attempt-${currentAttempt}.json`
+        const observation = {
+          schema_id: 'oracle-lab-p3b-es-receiver-observation.v1',
+          schema_major: 1,
+          schema_revision: 0,
+          campaign_id: config.campaign_id,
+          cell_id: config.cell_id,
+          pair_id: config.pair_id,
+          arm: config.arm,
+          repetition: config.repetition,
+          deterministic_seed: config.deterministic_seed,
+          sequence_index: config.sequence_index,
+          receiver_process_digest: receiverProcessDigest,
+          receiver_authority: 'wire-leaf-exclusive',
+          authority_class: 'synthetic-loopback',
+          base_url_provenance_ref: config.base_url_provenance_ref,
+          ...requestProjection,
+          connection_ordinal: currentConnection,
+          attempt_ordinal: currentAttempt,
+          scenario_action_ordinal: controlledAction.action_ordinal,
+          response_program_ref: config.scenario_id,
+          response_projection: responseProjection,
+          raw_material_persisted: false,
+        }
+        writeExclusiveEvidence(config.evidence_root, relative, observation, 'receiver')
+        observationRelativePaths.push(relative)
+        const finish = (): void => {
+          materializedResponse.bytes.fill(0)
+          if (attemptOrdinal >= config.max_requests) void closeServer(server)
+        }
+        respond(response, request, controlledAction, materializedResponse.bytes, finish)
+      } catch (error) {
+        body.fill(0)
+        const code = error instanceof EvidenceSufficiencyError ? error.code : 'receiver_internal_error'
+        response.writeHead(code === 'leak_detected' ? 400 : 500, { 'X-Oracle-Deny-Code': code })
+        response.end(() => { if (attemptOrdinal >= config.max_requests) void closeServer(server) })
+      }
+    })
+  })
+  server.once('close', () => { if (!settled) { settled = true; doneResolve() } })
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve() })
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') fail('receiver_bind_failed', 'receiver did not bind TCP loopback')
+  return {
+    host: '127.0.0.1',
+    port: address.port,
+    receiver_process_digest: receiverProcessDigest,
+    observation_relative_paths: observationRelativePaths,
+    done,
+    close: async () => { await closeServer(server); if (!settled) { settled = true; doneResolve() } },
+  }
+}
+
+type ChildReady = { kind: 'ready'; host: '127.0.0.1'; port: number; receiver_process_digest: string }
+type ChildDone = { kind: 'done'; observation_relative_paths: string[] }
+type ChildFailure = { kind: 'failure'; code: string }
+
+export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiverConfig): Promise<SpawnedNormalizedSafeReceiver> {
+  validateConfig(config)
+  const child = fork(fileURLToPath(import.meta.url), ['--receiver-child'], {
+    execArgv: ['--import', 'tsx'],
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  })
+  const ready = await new Promise<ChildReady>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new EvidenceSufficiencyError('receiver_start_timeout', 'receiver child did not become ready')), 10_000)
+    child.once('error', reject)
+    child.on('message', (message: ChildReady | ChildFailure) => {
+      if (message.kind === 'ready') { clearTimeout(timer); resolve(message) }
+      if (message.kind === 'failure') { clearTimeout(timer); reject(new EvidenceSufficiencyError(message.code, 'receiver child rejected config')) }
+    })
+    child.send({ kind: 'configure', config })
+  })
+  const observationRelativePaths: string[] = []
+  let doneResolve!: () => void
+  let doneReject!: (error: Error) => void
+  const done = new Promise<void>((resolve, reject) => { doneResolve = resolve; doneReject = reject })
+  child.on('message', (message: ChildDone | ChildFailure) => {
+    if (message.kind === 'done') { observationRelativePaths.push(...message.observation_relative_paths); doneResolve() }
+    if (message.kind === 'failure') doneReject(new EvidenceSufficiencyError(message.code, 'receiver child failed'))
+  })
+  child.once('exit', (status) => { if (status !== 0) doneReject(new EvidenceSufficiencyError('receiver_child_exit', `receiver child exited ${status}`)) })
+  return {
+    child,
+    host: ready.host,
+    port: ready.port,
+    receiver_process_digest: ready.receiver_process_digest,
+    observation_relative_paths: observationRelativePaths,
+    done,
+    close: async () => {
+      if (child.connected) child.send({ kind: 'close' })
+      await new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    },
+  }
+}
+
+if (process.argv[2] === '--receiver-child') {
+  let receiver: NormalizedSafeReceiver | null = null
+  process.on('message', async (message: { kind: string; config?: NormalizedSafeReceiverConfig }) => {
+    try {
+      if (message.kind === 'configure' && message.config && receiver === null) {
+        receiver = await startNormalizedSafeReceiver(message.config)
+        process.send?.({ kind: 'ready', host: receiver.host, port: receiver.port, receiver_process_digest: receiver.receiver_process_digest } satisfies ChildReady)
+        await receiver.done
+        process.send?.({ kind: 'done', observation_relative_paths: receiver.observation_relative_paths } satisfies ChildDone)
+        process.exitCode = 0
+        process.disconnect()
+      } else if (message.kind === 'close' && receiver) {
+        await receiver.close()
+        process.exitCode = 0
+        process.disconnect()
+      }
+    } catch (error) {
+      process.send?.({ kind: 'failure', code: error instanceof EvidenceSufficiencyError ? error.code : 'receiver_internal_error' } satisfies ChildFailure)
+      process.exitCode = 1
+      process.disconnect()
+    }
+  })
+}

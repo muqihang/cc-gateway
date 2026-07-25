@@ -40,14 +40,21 @@ export type EvidenceDecision = { allowed: true; code: 'admission_allow' } | { al
 const contractRoot = path.resolve('contracts/oracle-lab/evidence-sufficiency/v1')
 const ajv = new Ajv2020({ allErrors: true, strict: true })
 const validators = new Map<EvidenceSchemaFile, ValidateFunction>()
+const schemaIds = new Map<EvidenceSchemaFile, string>()
 
 for (const relative of EVIDENCE_SCHEMA_FILES) {
   const schema = JSON.parse(readFileSync(path.join(contractRoot, relative), 'utf8')) as Record<string, unknown>
-  validators.set(relative, ajv.compile(schema))
+  ajv.addSchema(schema)
+  schemaIds.set(relative, schema.$id as string)
+}
+for (const relative of EVIDENCE_SCHEMA_FILES) {
+  const validator = ajv.getSchema(schemaIds.get(relative)!)
+  if (!validator) throw new Error(`evidence schema did not register: ${relative}`)
+  validators.set(relative, validator)
 }
 
 const FORBIDDEN_KEY = /^(?:raw_prompt|raw_body|response_body|credential_value|token|cookie|secret|account_identifier|home_path|unnormalized_transcript)$/i
-const RELATIVE_PATH_KEY = /(?:^|_)(?:relative_)?path$/
+const RELATIVE_PATH_KEY = /^(?:relative_path|source_relative_path|destination_relative|literal_table_relative_path)$/
 
 function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), { code })
