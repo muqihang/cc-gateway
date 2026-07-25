@@ -10,6 +10,8 @@ import {
 } from '../tools/oracle-lab/phase3b-evidence-sufficiency/wire-receiver.js'
 import { validateEvidenceArtifact } from '../tools/oracle-lab/phase3b-evidence-sufficiency/schemas.js'
 
+const ACTIVE_STATIC_ANCHOR_SHA256 = 'd'.repeat(64)
+
 const literals = {
   'model.test': 'claude-synthetic-1',
   'prompt.alpha': 'SYNTHETIC PROMPT ALPHA',
@@ -35,6 +37,7 @@ test('loopback receiver is sole wire leaf writer and emits normalized-safe obser
     output_relative_prefix: 'capsules/P3B-ES1/observations/receiver',
     campaign_id: 'p3b-es1-test', cell_id: 'cell-1', pair_id: 'wire-prompt-only',
     arm: 'uninstrumented', repetition: 0, deterministic_seed: 215001, sequence_index: 0,
+    active_static_anchor_sha256: ACTIVE_STATIC_ANCHOR_SHA256,
     base_url_provenance_ref: 'control/campaign-input.json',
     scenario_id: 'complete_sse', literal_table: literals,
     synthetic_auth_markers: { api_key_a: 'Bearer SYNTHETIC-AUTH-A' },
@@ -82,6 +85,7 @@ test('receiver rejects body and attempt overflow with stable codes', async () =>
     output_relative_prefix: 'capsules/P3B-ES1/observations/receiver',
     campaign_id: 'p3b-es1-test', cell_id: 'cell-limit', pair_id: 'wire-limit', arm: 'uninstrumented',
     repetition: 0, deterministic_seed: 215001, sequence_index: 0,
+    active_static_anchor_sha256: ACTIVE_STATIC_ANCHOR_SHA256,
     base_url_provenance_ref: 'control/campaign-input.json', scenario_id: 'complete_sse', literal_table: literals,
     synthetic_auth_markers: {}, limits: { body_bytes: 8, headers: 256, events: 1024, attempts: 1 }, max_requests: 1,
   })
@@ -101,6 +105,7 @@ test('campaign receiver runs as a separate process and remains the exclusive wri
     output_relative_prefix: 'capsules/P3B-ES1/observations/receiver',
     campaign_id: 'p3b-es1-test', cell_id: 'cell-child', pair_id: 'wire-child', arm: 'instrumented',
     repetition: 0, deterministic_seed: 215001, sequence_index: 1,
+    active_static_anchor_sha256: ACTIVE_STATIC_ANCHOR_SHA256,
     base_url_provenance_ref: 'control/campaign-input.json', scenario_id: 'complete_sse', literal_table: literals,
     synthetic_auth_markers: {}, limits: { body_bytes: 8_388_608, headers: 256, events: 1024, attempts: 8 }, max_requests: 1,
   })

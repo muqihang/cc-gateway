@@ -60,14 +60,16 @@ test('paired comparator detects one mutated normalized leaf', () => {
 
 test('paired observation projection omits identity-only leaves and detects an authorizing mutation', () => {
   const base = {
-    arm: 'uninstrumented', cell_id: 'cell-a', sequence_index: 1, receiver_process_digest: 'a'.repeat(64), connection_ordinal: 0,
+    arm: 'uninstrumented', cell_id: 'cell-a', sequence_index: 1, receiver_process_digest: 'a'.repeat(64), receiver_source_sha256: 'a'.repeat(64), active_static_anchor_sha256: 'd'.repeat(64), connection_ordinal: 0,
     pair_id: 'wire-pair', repetition: 0, deterministic_seed: 215001, authority_class: 'synthetic-loopback',
     method: 'POST', path: '/v1/messages', ordered_header_names: ['content-type'], header_multiplicity: { 'content-type': 1 },
     auth_marker_winner_class: 'absent', canonical_body_sha256: 'b'.repeat(64), typed_request_ast: { safe: true },
     attempt_ordinal: 0, scenario_action_ordinal: 0, response_program_ref: 'complete_sse', response_projection: { terminal_event: 'message_stop' }, wire_action_completed: true, raw_material_persisted: false,
   }
-  const peer = { ...structuredClone(base), arm: 'instrumented', cell_id: 'cell-b', sequence_index: 2, receiver_process_digest: 'c'.repeat(64), connection_ordinal: 5 }
+  const peer = { ...structuredClone(base), arm: 'instrumented', cell_id: 'cell-b', sequence_index: 2, repetition: 4, connection_ordinal: 5 }
   assert.deepEqual(comparePairedObservations(base, peer), { equivalent: true, differing_pointers: [] })
+  assert.throws(() => comparePairedObservations(base, { ...peer, receiver_process_digest: 'c'.repeat(64) }),
+    (error: unknown) => (error as { code?: string }).code === 'paired_perturbation')
   assert.deepEqual(comparePairedObservations(base, { ...peer, path: '/v1/changed' }), { equivalent: false, differing_pointers: ['/path'] })
 })
 

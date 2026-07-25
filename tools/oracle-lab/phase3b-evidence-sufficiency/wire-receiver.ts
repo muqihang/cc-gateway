@@ -31,6 +31,7 @@ export type NormalizedSafeReceiverConfig = {
   repetition: number
   deterministic_seed: number
   sequence_index: number
+  active_static_anchor_sha256: string
   base_url_provenance_ref: string
   scenario_id: FailureProgramId
   literal_table: SyntheticLiteralTable
@@ -43,6 +44,8 @@ export type NormalizedSafeReceiver = {
   host: '127.0.0.1'
   port: number
   receiver_process_digest: string
+  receiver_source_sha256: string
+  active_static_anchor_sha256: string
   observation_relative_paths: string[]
   done: Promise<void>
   close(): Promise<void>
@@ -101,6 +104,7 @@ function validateConfig(config: NormalizedSafeReceiverConfig): void {
   })) if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/.test(value)) fail('schema_invalid', `${label} is not a safe identifier`)
   if (!Number.isInteger(config.repetition) || config.repetition < 0 || config.repetition > 4) fail('schema_invalid', 'repetition is outside 0..4')
   if (!Number.isSafeInteger(config.deterministic_seed) || !Number.isSafeInteger(config.sequence_index) || config.sequence_index < 0) fail('schema_invalid', 'seed or sequence index is invalid')
+  if (!/^[a-f0-9]{64}$/.test(config.active_static_anchor_sha256)) fail('paired_perturbation', 'active static anchor digest is missing or malformed')
   if (!Number.isInteger(config.max_requests) || config.max_requests < 1 || config.max_requests > config.limits.attempts) fail('receiver_attempt_overflow', 'max requests exceeds attempt budget')
   if (config.limits.body_bytes < 1 || config.limits.headers < 1 || config.limits.events < 1 || config.limits.attempts < 1) fail('schema_invalid', 'receiver limits must be positive')
 }
@@ -211,6 +215,8 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
           deterministic_seed: config.deterministic_seed,
           sequence_index: config.sequence_index,
           receiver_process_digest: receiverProcessDigest,
+          receiver_source_sha256: receiverProcessDigest,
+          active_static_anchor_sha256: config.active_static_anchor_sha256,
           receiver_authority: 'wire-leaf-exclusive',
           authority_class: 'synthetic-loopback',
           base_url_provenance_ref: config.base_url_provenance_ref,
@@ -248,18 +254,21 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
     host: '127.0.0.1',
     port: address.port,
     receiver_process_digest: receiverProcessDigest,
+    receiver_source_sha256: receiverProcessDigest,
+    active_static_anchor_sha256: config.active_static_anchor_sha256,
     observation_relative_paths: observationRelativePaths,
     done,
     close: async () => { await closeServer(server); if (!settled) { settled = true; doneResolve() } },
   }
 }
 
-type ChildReady = { kind: 'ready'; host: '127.0.0.1'; port: number; receiver_process_digest: string }
+type ChildReady = { kind: 'ready'; host: '127.0.0.1'; port: number; receiver_process_digest: string; receiver_source_sha256: string; active_static_anchor_sha256: string }
 type ChildDone = { kind: 'done'; observation_relative_paths: string[] }
 type ChildFailure = { kind: 'failure'; code: string }
 
 export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiverConfig): Promise<SpawnedNormalizedSafeReceiver> {
   validateConfig(config)
+  const expectedReceiverSource = sha256Bytes(readFileSync(fileURLToPath(import.meta.url)))
   const child = fork(fileURLToPath(import.meta.url), ['--receiver-child'], {
     execArgv: ['--import', 'tsx'],
     env: { PATH: process.env.PATH, ORACLE_P3B_RECEIVER_CHILD: '1' },
@@ -274,6 +283,10 @@ export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiver
     })
     child.send({ kind: 'configure', config })
   })
+  if (ready.receiver_process_digest !== expectedReceiverSource || ready.receiver_source_sha256 !== expectedReceiverSource || ready.active_static_anchor_sha256 !== config.active_static_anchor_sha256) {
+    child.kill('SIGKILL')
+    fail('paired_perturbation', 'receiver child identity differs from the active source/anchor binding')
+  }
   const observationRelativePaths: string[] = []
   let doneResolve!: () => void
   let doneReject!: (error: Error) => void
@@ -288,6 +301,8 @@ export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiver
     host: ready.host,
     port: ready.port,
     receiver_process_digest: ready.receiver_process_digest,
+    receiver_source_sha256: ready.receiver_source_sha256,
+    active_static_anchor_sha256: ready.active_static_anchor_sha256,
     observation_relative_paths: observationRelativePaths,
     done,
     close: async () => {
@@ -303,7 +318,7 @@ if (process.argv[2] === '--receiver-child') {
     try {
       if (message.kind === 'configure' && message.config && receiver === null) {
         receiver = await runDedicatedReceiver(message.config)
-        process.send?.({ kind: 'ready', host: receiver.host, port: receiver.port, receiver_process_digest: receiver.receiver_process_digest } satisfies ChildReady)
+        process.send?.({ kind: 'ready', host: receiver.host, port: receiver.port, receiver_process_digest: receiver.receiver_process_digest, receiver_source_sha256: receiver.receiver_source_sha256, active_static_anchor_sha256: receiver.active_static_anchor_sha256 } satisfies ChildReady)
         await receiver.done
         process.send?.({ kind: 'done', observation_relative_paths: receiver.observation_relative_paths } satisfies ChildDone)
         process.exitCode = 0

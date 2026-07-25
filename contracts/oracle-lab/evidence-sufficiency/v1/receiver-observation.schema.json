@@ -158,6 +158,14 @@
       "pattern": "^[a-f0-9]{64}$",
       "type": "string"
     },
+    "receiver_source_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "active_static_anchor_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
     "repetition": {
       "maximum": 4,
       "minimum": 0,
@@ -235,6 +243,8 @@
     "deterministic_seed",
     "sequence_index",
     "receiver_process_digest",
+    "receiver_source_sha256",
+    "active_static_anchor_sha256",
     "receiver_authority",
     "authority_class",
     "base_url_provenance_ref",

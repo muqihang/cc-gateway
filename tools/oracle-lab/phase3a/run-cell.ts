@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
+import { closeSync, constants as fsConstants, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, writeSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -161,6 +161,41 @@ export function buildCellSandboxProfile(manifestInput: LaunchManifest, evidenceR
   ].join(' ')
 }
 
+export function validateGuardScratchFile(file: string): void {
+  const parent = path.dirname(file)
+  if (!existsSync(parent)) throw new Phase3AError('mode_mismatch', 'guard scratch parent does not exist')
+  const parentStat = lstatSync(parent)
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Phase3AError('source_binding_invalid', 'guard scratch parent is not a real directory')
+  if ((parentStat.mode & 0o777) !== 0o700) throw new Phase3AError('mode_mismatch', 'guard scratch parent mode must be 0700')
+  const stat = lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Phase3AError('source_binding_invalid', 'guard scratch file is not a regular no-symlink file')
+  if ((stat.mode & 0o777) !== 0o600) throw new Phase3AError('mode_mismatch', 'guard scratch file mode must be 0600')
+}
+
+export function writeGuardScratchExclusive(file: string, bytesInput: Uint8Array): void {
+  const parent = path.dirname(file)
+  if (!existsSync(parent)) throw new Phase3AError('mode_mismatch', 'guard scratch parent does not exist')
+  const parentStat = lstatSync(parent)
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Phase3AError('source_binding_invalid', 'guard scratch parent is not a real directory')
+  if ((parentStat.mode & 0o777) !== 0o700) throw new Phase3AError('mode_mismatch', 'guard scratch parent mode must be 0700')
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) throw new Phase3AError('source_binding_invalid', 'guard scratch destination is a symlink')
+  const bytes = Buffer.from(bytesInput)
+  let descriptor: number | undefined
+  try {
+    descriptor = openSync(file, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o600)
+    let offset = 0
+    while (offset < bytes.length) offset += writeSync(descriptor, bytes, offset, bytes.length - offset)
+    fsyncSync(descriptor)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Phase3AError('evidence_exists', 'guard scratch file already exists')
+    throw error
+  } finally {
+    bytes.fill(0)
+    if (descriptor !== undefined) closeSync(descriptor)
+  }
+  validateGuardScratchFile(file)
+}
+
 export function assertGuardAuthority(manifestInput: LaunchManifest, guard: GuardAuthority, profile: string): void {
   const manifest = validateLaunchManifest(manifestInput)
   if (guard.status !== 'PASS' || !guard.same_scope_probe || guard.external_socket_budget !== 0) throw new Phase3AError('guard_not_green', 'same-scope zero-egress guard is required')
@@ -206,7 +241,7 @@ const net=require('node:net'),dgram=require('node:dgram'),fs=require('node:fs');
 function tcp(host,port){return new Promise(r=>{const s=net.createConnection({host,port});let done=false;const end=v=>{if(done)return;done=true;s.destroy();r(v)};s.setTimeout(500,()=>end(false));s.once('connect',()=>end(true));s.once('error',()=>end(false))})}
 function unix(file){return new Promise(r=>{const s=net.createConnection(file);let done=false;const end=v=>{if(done)return;done=true;s.destroy();r(v)};s.setTimeout(500,()=>end(false));s.once('connect',()=>end(true));s.once('error',()=>end(false))})}
 function udp(){return new Promise(r=>{const s=dgram.createSocket('udp4');let done=false;const end=v=>{if(done)return;done=true;clearTimeout(t);s.close();r(v)};const t=setTimeout(()=>end(false),500);s.once('error',()=>end(false));s.send(Buffer.from([0]),53,'1.1.1.1',e=>end(!e))})}
-function write(file){try{fs.writeFileSync(file,'synthetic',{flag:'wx'});return true}catch{return false}}
+function write(file){let fd;try{const p=require('node:path').dirname(file),ps=fs.lstatSync(p);if(!ps.isDirectory()||ps.isSymbolicLink()||(ps.mode&0o777)!==0o700)return false;if(fs.existsSync(file)&&fs.lstatSync(file).isSymbolicLink())return false;const flags=fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|(fs.constants.O_NOFOLLOW||0);fd=fs.openSync(file,flags,0o600);fs.writeSync(fd,'synthetic');fs.fsyncSync(fd);const s=fs.fstatSync(fd);return s.isFile()&&(s.mode&0o777)===0o600}catch{return false}finally{if(fd!==undefined)fs.closeSync(fd)}}
 (async()=>{const ports=JSON.parse(process.argv[1]);const declared=[];for(const p of ports)declared.push(await tcp('127.0.0.1',p));const alternate=await tcp('127.0.0.1',Number(process.argv[2]));const unixOk=await unix(process.argv[3]);const ipv4=await tcp('1.1.1.1',443),ipv6=await tcp('2606:4700:4700::1111',443),udpOk=await udp();console.log(JSON.stringify({declared,alternate,unixOk,ipv4,ipv6,udpOk,inside:write(process.argv[4]),outside:write(process.argv[5])}))})().catch(()=>process.exit(2));`
   try {
     const probe = await new Promise<{ status: number | null; stdout: string }>((resolve) => {

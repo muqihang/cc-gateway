@@ -90,18 +90,19 @@ test('schema validator rejects unknown fields with a stable code', () => {
 })
 
 test('mutation corpus has one stable expected deny code per planned mutation', () => {
-  const mutations = JSON.parse(readFileSync(path.join(contractRoot, 'mutation-corpus.json'), 'utf8')) as Array<{ id: string; recipe: { domain: string; operation: string } }>
+  const mutations = JSON.parse(readFileSync(path.join(contractRoot, 'mutation-corpus.json'), 'utf8')) as Array<{ id: string; recipe: { subject: string; schema: string; action: { kind: string } } }>
   const expected = JSON.parse(readFileSync(path.join(contractRoot, 'expected-results.json'), 'utf8')) as Record<string, string>
   assert.equal(mutations.length, 48)
   assert.equal(new Set(mutations.map((mutation) => mutation.id)).size, mutations.length)
   assert.deepEqual(expectedMutationResults(), expected)
   assert.deepEqual(Object.keys(expected).sort(), mutations.map((mutation) => mutation.id).sort())
-  assert.ok(mutations.every((mutation) => mutation.recipe.operation === mutation.id && mutation.recipe.domain.length > 0))
+  assert.ok(mutations.every((mutation) => mutation.recipe.subject.length > 0 && mutation.recipe.schema.length > 0 && mutation.recipe.action.kind.length > 0))
   for (const code of Object.values(expected)) assert.match(code, /^[a-z][a-z0-9_]+$/)
   const results = executeEvidenceMutationCorpus()
   assert.equal(results.length, 48)
   for (const result of results) {
     assert.equal(result.actual_code, result.expected_code, result.id)
+    assert.equal(result.agrees, true, result.id)
     assert.equal(result.decision, 'deny', result.id)
   }
 })

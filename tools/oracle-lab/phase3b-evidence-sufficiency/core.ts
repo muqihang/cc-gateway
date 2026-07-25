@@ -324,13 +324,18 @@ export function comparePairedProjection(left: unknown, right: unknown): { equiva
 }
 
 const PAIRED_OBSERVATION_OMIT = new Set([
-  'arm', 'cell_id', 'run_id', 'sequence_index', 'receiver_process_digest', 'connection_ordinal',
+  'arm', 'cell_id', 'run_id', 'sequence_index', 'repetition', 'connection_ordinal',
 ])
 
 export function pairedAuthorizingProjection(observation: Record<string, unknown>): Record<string, unknown> {
+  for (const field of ['receiver_process_digest', 'receiver_source_sha256', 'active_static_anchor_sha256'] as const) {
+    if (typeof observation[field] !== 'string' || !/^[a-f0-9]{64}$/.test(observation[field])) fail('paired_perturbation', `${field} is missing or malformed`)
+  }
+  if (observation.receiver_process_digest !== observation.receiver_source_sha256) fail('paired_perturbation', 'receiver process and source digests disagree')
   const projection = Object.fromEntries(Object.entries(observation).filter(([key]) => !PAIRED_OBSERVATION_OMIT.has(key)))
   for (const required of [
-    'pair_id', 'repetition', 'deterministic_seed', 'authority_class', 'method', 'path', 'ordered_header_names',
+    'receiver_process_digest', 'receiver_source_sha256', 'active_static_anchor_sha256',
+    'pair_id', 'deterministic_seed', 'authority_class', 'method', 'path', 'ordered_header_names',
     'header_multiplicity', 'auth_marker_winner_class', 'canonical_body_sha256', 'typed_request_ast',
     'attempt_ordinal', 'scenario_action_ordinal', 'response_program_ref', 'response_projection', 'wire_action_completed', 'raw_material_persisted',
   ]) if (!(required in projection)) fail('paired_projection_invalid', `paired observation is missing ${required}`)
@@ -338,6 +343,9 @@ export function pairedAuthorizingProjection(observation: Record<string, unknown>
 }
 
 export function comparePairedObservations(left: Record<string, unknown>, right: Record<string, unknown>): { equivalent: boolean; differing_pointers: string[] } {
+  for (const field of ['receiver_process_digest', 'receiver_source_sha256', 'active_static_anchor_sha256'] as const) {
+    if (left[field] !== right[field]) fail('paired_perturbation', `${field} differs across paired arms`)
+  }
   return comparePairedProjection(pairedAuthorizingProjection(left), pairedAuthorizingProjection(right))
 }
 
