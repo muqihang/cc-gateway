@@ -142,8 +142,12 @@ The P3A runners are reference material, not drop-in campaign implementations:
 - `scenario-campaign.ts:199-225,273-280` uses the old two-arm schedule and observer contract;
 - `run-cell.ts:275-287` rejects an unprepared `instrumentation:'probe-copy'` request.
 
-The later implementation must pass the already prepared, anchor-bound probe executable to
-`runCell` with `instrumentation:'none'`; it must not ask `runCell` to create or infer a probe copy.
+The later implementation must not use `runCell` as the Phase 3B spawn boundary. `runCell` performs
+fallible validation internally, exposes neither a pre-spawn commit point nor the target PID, and
+executes a pathname after hashing it. Phase 3B therefore requires its own reviewed spawn adapter
+described in Section 5.4. It may reuse exported pure guard, environment, manifest, sampling, and safe
+classification primitives, but it must not reuse any P3A campaign runner or ask a P3A API to create
+or infer a probe copy.
 
 ## 4. ES3-ES17 Requirement Matrix
 
@@ -152,22 +156,22 @@ The `Disposition` column is closed: `REUSE_PRIMITIVE`, `DO_NOT_REUSE_RUNNER`, `E
 
 | ES | Requirement | Actual symbol/caller at `a718c65` | Focused test/command required | Side effect and authority boundary | Closure requirement | Disposition |
 |---|---|---|---|---|---|---|
-| ES3 | Four config plus four auth pairs, four arms, five repetitions; 160 launches | `buildDeterministicSchedule` exists; P3A config/auth runners use incompatible observer and two-arm schedule; no Phase 3B caller | `oracle-phase3b-evidence-runner`, `launch-authority`, `family-config-auth` | Serial target spawn only after exact row, selection, anchor, selected executable, guard, and receiver group validation | Actual pair leaves, all repetitions, predecessor comparison, and failure record derived from ledger | Runner `MISSING_IMPLEMENTATION`; schedule/guard primitives `REUSE_PRIMITIVE`; P3A runners `DO_NOT_REUSE_RUNNER` |
+| ES3 | Four config plus four auth pairs, four arms, five repetitions; 160 launches | `buildDeterministicSchedule` exists; P3A config/auth runners use incompatible observer and two-arm schedule; no Phase 3B caller | `oracle-phase3b-evidence-runner`, `spawn-adapter`, `launch-authority`, `family-config-auth` | Serial target spawn only after exact row, selection, anchor, private launch image, guard, and receiver group validation | Actual pair leaves, all repetitions, predecessor comparison, and failure record derived from ledger | Runner and spawn adapter `MISSING_IMPLEMENTATION`; schedule/guard primitives `REUSE_PRIMITIVE`; `runCell` and P3A runners `DO_NOT_REUSE_RUNNER` |
 | ES4 | Three request stimuli, two instrumentation arms, five repetitions; 30 launches | Request normalizer and receiver exist; receiver called only by tests | `oracle-phase3b-evidence-family-wire-failure`, request AST, receiver | Receiver is sole request evidence writer; target cannot write observation | Every request E leaf and fixture source binds one immutable observation set | Runner `MISSING_IMPLEMENTATION`; receiver/normalizer `REUSE_PRIMITIVE` |
 | ES5 | Thirteen response/failure programs, two arms, five repetitions; 130 launches | Scenario builder, response normalizer, and retry classifier exist; no launch/attempt aggregator | `oracle-phase3b-evidence-family-wire-failure`, response AST | Bounded loopback response program; each spawned target and every receiver attempt counted | Attempt ordering, owner, terminal, partial, recovery, and overlap set close from actual observations | Runner/aggregator `MISSING_IMPLEMENTATION`; classifier/normalizer `REUSE_PRIMITIVE` |
-| ES3-5 control tranche | Two mandatory target guard/perturbation controls, two arms, five repetitions; 20 launches | Synthetic prelaunch controls exist; no target-control ledger/caller | Runner and launch-authority focused tests | First target tranche; consumes exact rows and stops dependent launches on mismatch | Explicit terminal control records, never inferred from unit tests | `MISSING_IMPLEMENTATION` |
-| ES6 | Observation closure and exact predecessor contradictions | Planned `coverage.ts` and `contradictions.ts` absent | `oracle-phase3b-evidence-curation` | Read-only over sealed ES3-ES5 evidence; no target or receiver | Unique pointer sources, exact nine-family overlap, explicit open/closed contradictions | `MISSING_IMPLEMENTATION` |
+| ES3-5 control tranche | Exact `target-guard-control` and `target-perturbation-control`, two arms, five repetitions; 20 launches | Names exist in blocked closeout; synthetic prelaunch controls exist; no target-control manifest/ledger/caller | Runner, spawn-adapter, target-controls, and launch-authority focused tests | First target tranche; exact Section 5.2 manifests consume rows and any mismatch stops all later target launches | Explicit terminal control records and predicates, never inferred from unit tests | `MISSING_IMPLEMENTATION` |
+| ES6 | Observation closure and exact predecessor contradictions | Planned `coverage.ts` and `contradictions.ts` absent | `oracle-phase3b-evidence-curation` | Read-only over sealed ledger and digest-bound payload manifests; no target, receiver, or ES10 dependency | Unique pointer sources, exact nine-family overlap, explicit open/closed contradictions | `MISSING_IMPLEMENTATION` |
 | ES7 | Fixtures, candidate closure, clock, then three conclusions | Schemas/materializers exist; only blocked candidate/conclusion builders exist | Curation, schema, request/response materialization tests | Writes only after ES6 sealed; clock after last authorizing cell and fixture validation | All three conclusions form one fail-closed set | Success path `MISSING_IMPLEMENTATION`; schema/materializers `REUSE_PRIMITIVE` |
 | ES8 | Independent Go validator and TS byte/decision checker | CC checker absent; Sub2API has no `backend/internal/oracleevidence/**` | Exact dedicated Go regex and CC cross-repo test | No import/test/compile of `internal/service`; no protected path | Byte-identical corpus, canonical bytes, digest, decision, stable code | `MISSING_IMPLEMENTATION` |
 | ES9 | Final one-to-one provenance and coverage | `coverage.ts` absent; `buildUnknownProvenance` is blocked-only | Curation and cross-repo tests | Read-only over validated immutable sources | Every enabled pointer once, blockers once, no D leaf enabled | `MISSING_IMPLEMENTATION` |
-| ES10 | Artifact index after immutable payload | `inventoryPayload` exists only inside blocked closeout | Closeout-blocker and closure tests | O_EXCL write after payload seal | Includes exact payload, excludes closure cycle | Primitive `REUSE_PRIMITIVE`; general caller `MISSING_IMPLEMENTATION` |
+| ES10 | Artifact index after immutable payload | `inventoryPayload` exists only inside blocked closeout | Closeout-blocker and closure tests | O_EXCL write after ES9; verifies and indexes every sealed payload manifest and referenced artifact | Includes exact payload, excludes closure cycle | Primitive `REUSE_PRIMITIVE`; general caller `MISSING_IMPLEMENTATION` |
 | ES11 | Leak report bound to index | Forbidden-key scan exists only inside blocked closeout | Closure tests | Bounded scan of indexed normalized-safe bytes only | Exact indexed set, explicit findings, no unindexed inference | Primitive `REUSE_PRIMITIVE`; general caller `MISSING_IMPLEMENTATION` |
 | ES12 | Exit derived from actual ledger/failure | Hard-coded BLOCKED, target count zero | `oracle-phase3b-evidence-closeout-blocker` | No launch; consumes sealed ledger and optional validated failure | Exact planned/started/terminal counts and failure family | Existing caller `DO_NOT_REUSE_RUNNER` |
 | ES13 | Handoff derived from exit/conclusions | Hard-coded retain-blocked handoff | Closeout-blocker and closure tests | No launch | Actual Gate A/Gate B inputs and remaining Unknowns | Existing caller `DO_NOT_REUSE_RUNNER` |
 | ES14 | Terminal manifest after exact predecessors | Writer exists; blocked caller supplies fixed state | Closure tests | O_EXCL after ES10-ES13 | Exact predecessor path/schema/digest set | Writer `REUSE_PRIMITIVE`; caller `MISSING_IMPLEMENTATION` |
 | ES15 | External digest set binds exactly five predecessors | Binding logic exists at `closeout.ts:510-521` | Closure tests | Last O_EXCL write | Artifact index, leak, exit, handoff, terminal only; no self hash | `REUSE_PRIMITIVE` after general closeout |
-| ES16 | Truthful Gate A | `evaluateTerminalGates` exists; only caller hard-codes terminal state | Curation/closure tests | Pure evaluation | Honest complete, Unknown, or BLOCKED terminal state from ledger and closure | Evaluator `REUSE_PRIMITIVE`; caller `MISSING_IMPLEMENTATION` |
-| ES17 | Gate B plus fresh operator decision | `decideEvidenceAdmission` used only by tests/mutations | Cross-repo/closure tests | Pure evidence resolution; never runtime admission | Gate A plus three Reproduced conclusions and explicit operator decision | Helper `REUSE_PRIMITIVE`; resolver/operator gate `MISSING_IMPLEMENTATION` |
+| ES16 | Truthful Gate A | `evaluateTerminalGates` exists; only caller hard-codes terminal state | Curation, closure, and gate-evaluation tests | Post-ES15 launch-neutral evaluation writes out-of-closure clock/result records | Honest complete, Unknown, or BLOCKED terminal state from ledger, closure, and external set | Evaluator `REUSE_PRIMITIVE`; clock/caller `MISSING_IMPLEMENTATION` |
+| ES17 | Gate B plus later operator decision and evaluation clock | `decideEvidenceAdmission` accepts caller `now_ms` and is used only by tests/mutations | Gate-evaluation and cross-repo tests | Post-Gate-A launch-neutral evaluation; production captures time and writes out-of-closure records | Gate A plus three fresh Reproduced conclusions, exact expiry, and digest-bound operator decision | Helper `REUSE_PRIMITIVE`; production clock/resolver/operator gate `MISSING_IMPLEMENTATION` |
 
 ## 5. Required Production Architecture
 
@@ -183,7 +187,11 @@ these modes:
    validates its complete digest chain, writes the immutable 340-row ledger, executes serial rows,
    seals dynamic observations, and exits;
 3. `closeout-only`: accepts a sealed ledger plus either complete results or one schema-valid terminal
-   campaign failure, performs ES6-ES17 as far as dependencies permit, and never launches a target.
+   campaign failure, performs ES6-ES15 as far as dependencies permit, and never launches a target;
+4. `evaluate-gate-a`: runs once after ES15, creates an out-of-closure evaluation-clock witness and
+   Gate A result, and never launches a target;
+5. `evaluate-gate-b`: runs once after Gate A and a later operator decision, creates a second
+   out-of-closure clock witness and Gate B result, and never launches a target.
 
 The modes do not guess state from directory contents. Each consumes explicit relative paths and
 digests from campaign input. Re-running a completed mode is rejected because its O_EXCL outputs
@@ -213,17 +221,59 @@ the zero-target synthetic prelaunch control. Only a GREEN terminal control tranc
 remaining ES3-ES5 rows. The remaining families are processed in ascending unsigned UTF-8 schedule
 ID order while preserving DAG dependencies.
 
+The two target controls are fully frozen as follows. Each has exact arm labels `instrumented` and
+`uninstrumented`, the five fixed seeds, and therefore ten rows. The ledger expands the exact command
+template below before it derives run IDs; no caller may add, remove, or reorder an argument.
+
+```text
+argv = [
+  "--bare", "--print", "--output-format", "json", "--no-session-persistence",
+  "--session-id", RUN_UUID, "--model", "claude-sonnet-4-6",
+  "--permission-mode", "bypassPermissions"
+]
+stdin = UTF8(synthetic-literals["control_prompt_v1"] + "\n")
+```
+
+`RUN_UUID` is the first 128 bits of the canonical run-ID SHA-256, formatted as lowercase UUID text
+after setting the version nibble to `4` and variant bits to `10`. The run spec binds the expanded
+argv vector, stdin digest, literal-table path/digest, and exact `complete_sse` receiver-program
+path/schema/digest. The literal is synthetic and may be materialized only in target memory and the
+closed synthetic literal table; cell and result records retain only its reference and digest.
+
+The control receiver program is the existing canonical `complete_sse` materializer at `a718c65`:
+one action `{action_ordinal:0,kind:'http',status:200,ordered_headers:[{name:'content-type',
+value_class:'text-event-stream'}],body_kind:'complete_sse',delay_class:'none',delay_ms:0,
+transport_terminal:'http_complete'}`. Its LF-framed event order is exactly `message_start`,
+`content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, and
+`message_stop`; data values materialize only `model.test` and `output.complete` from the frozen
+literal table. The ledger binds the canonical action/program digest and the materialized response
+digest, so a future implementation cannot substitute another nominal `complete_sse` body.
+
+| Schedule ID | Intended variable | Receiver program | GREEN terminal predicate |
+|---|---|---|---|
+| `target-guard-control` | No behavior mutation. Run the exact command in both executable arms under the row's exact sandbox profile to prove the real target stays inside its declared loopback/filesystem/process limits. | `complete_sse` with one connection, one request, one complete terminal response, and no retry | Both rows per seed have expected exit `0`, one sealed request/response observation, identical normalized projections, a PASS exact-profile guard receipt, zero external sockets, and no unlisted file/process/receiver event |
+| `target-perturbation-control` | The only variable is selected executable: verified original versus verified anchor-bound probe copy. Environment, command, stdin, receiver bytes, seed, limits, and guard are identical. | The same digest-bound `complete_sse` program | All five pairs are canonical-projection identical, executable receipts differ only in the closed arm fields, receiver and cell attempt/terminal ordering agree, and both target results satisfy the same expected terminal class |
+
+Any missing control manifest field, command/stimulus drift, extra/missing receiver event, guard
+difference, or paired projection difference seals the first terminal campaign failure. The
+controller writes `not_executed` for all remaining unstarted rows and performs no further target
+launch.
+
 The ledger is immutable. Per-row execution state is represented by separate exclusive records:
 
 - `planned`: present only in the sealed ledger;
 - `started`: written immediately before the controller spawns the target and consumes one launch;
-- `terminal`: written exactly once after target wait and receiver seal;
-- `not_executed`: written during closeout only for rows prevented by a terminal dependency failure.
+- `spawned`: written immediately after successful spawn and binds sandbox PID plus the unique target
+  descendant PID;
+- `terminal`: written exactly once after target wait and receiver seal, or as
+  `failed_after_spawn` when a started target cannot produce a sealed receiver result;
+- `not_executed`: written during closeout for every unstarted row after the first terminal failure.
 
 A `started` row counts as a target launch even if spawn return, signal, timeout, or receiver
 coordination later fails. A pre-spawn authority failure writes no `started` record and consumes no
-launch, but it creates the one terminal campaign-failure record. Counts are derived from records;
-they are never caller assertions.
+launch, but it creates the one terminal campaign-failure record. A spawn exception leaves a
+consumed `started` row without `spawned`, followed by a terminal `spawn_error` row. Counts are
+derived from records; they are never caller assertions.
 
 ### 5.3 Per-launch authority gate
 
@@ -234,9 +284,10 @@ Immediately before each `started` record and target spawn, one `launch-authority
 2. re-resolve the fixed active selection path and selected static anchor;
 3. verify authority, freeze, campaign input, schema bundle, source set, review, and receiver tuple
    bindings;
-4. open and hash the exact original entrypoint or prepared probe executable that this row selects;
-5. for the instrumented arm, verify probe-copy recipe, pre-sign hash, post-sign hash, signature
-   identity, and selected anchor binding;
+4. open and hash both the frozen source artifact and exact campaign-owned launch image that this row
+   selects, then require the static-anchor source/image tuple and live file identity to match;
+5. for the instrumented arm, additionally verify probe-copy recipe, pre-sign hash, post-sign hash,
+   signature identity, and selected anchor binding;
 6. verify the exact ledger row, run ID, family, seed, repetition, arm label, sequence index, receiver
    group, guard profile, remaining budget, and `target_launches < 340`;
 7. verify the receiver group is already bound on loopback, within resource ceilings, and has not
@@ -249,23 +300,60 @@ caller-selected path and never substitutes a source-only digest for executable i
 
 ### 5.4 Serial launch adapter and guard
 
-The adapter wraps the existing `runCell`, `runCellGuardSelfTest`, `buildCellSandboxProfile`,
-`buildIsolatedEnvironment`, launch-manifest validation, and exact zero-egress guard primitives. It
-does not modify their Phase 3A implementations in place.
+Add `phase3b-spawn-adapter.ts`; it does not call or modify `runCell`. It imports only exported pure
+P3A primitives whose inputs and outputs are independently validated: `runCellGuardSelfTest`,
+`buildCellSandboxProfile`, `buildIsolatedEnvironment`, launch-manifest validation, process/socket
+sampling, resource-limit evaluation, and safe diagnostic classification. All spawn ownership,
+started/spawned/terminal records, executable continuity, and receiver coordination are new Phase 3B
+code with focused tests.
 
-For `uninstrumented`, the adapter passes the verified original entrypoint. For `instrumented`, it
-passes the already prepared, verified probe executable. Both call `runCell` with
-`instrumentation:'none'`; the Phase 3B layer owns the semantic arm label and selected-executable
-receipt. This preserves `run-cell.ts`'s rejection of unprepared probe-copy instrumentation.
+Prelaunch creates exactly two campaign-owned launch images, one byte-identical original image and one
+already signed probe image, beneath separate `0700` runtime directories using no-follow input reads
+and `O_EXCL` outputs. It verifies exact size/hash, regular-file/single-link identity, mode, Mach-O
+code-signature binding for the probe, and source dev/inode/ctime before sealing them. It then changes
+each launch image and parent to nonwritable executable/search-only modes, reopens and rehashes the
+images, and adds their path/dev/inode/ctime/size/hash tuples to the static anchor and active
+selection. A row selects one of these two images; it never makes 340 artifact copies and never
+executes the caller's artifact path directly.
 
-The adapter permits one target at a time. It binds process PID, start/terminal monotonic times, exit
-or signal, sandbox manifest digest, guard result, stdout/stderr normalized-safe classification, and
-receiver group identity. Raw stdout, stderr, request, response, credentials, home paths, account
-identifiers, or transcripts are never evidence outputs.
+Each sealed launch-image record binds the source archive, artifact tree, entrypoint source digest,
+selected repository commit/tree, toolchain tuple, image path/size/mode/dev/inode/ctime, actual image
+SHA-256, and probe signature tuple where applicable. Each row's launch-authority receipt then binds
+that launch-image-record digest to the row's exact expanded argv, closed isolated environment-map
+digest, CWD identity, stdin literal reference/digest, launch-manifest digest, and guard-profile
+digest. A valid executable digest without these source/tree/toolchain/command bindings is rejected.
+
+After all other fallible preparation completes, the adapter performs one synchronous critical
+section with no callback or `await`: revalidate the selected sealed launch-image tuple, write `started` by
+O_EXCL, and call `child_process.spawn('/usr/bin/sandbox-exec', ...)` with the private launch-image
+path. On spawn return it writes `spawned`, binding the sandbox PID, then uses the process sampler to
+identify exactly one descendant executable whose resolved path and dev/inode tuple equal the private
+image. That descendant is `target_pid`; zero or multiple matches are terminal. It revalidates the
+launch image immediately after target discovery and at target terminal. Any path, byte, inode,
+ctime, mode, link, signature, or descendant mismatch makes the row non-authorizing and globally
+terminal.
+
+The production adapter exposes no replacement callback. A dependency-injected spawn seam exists
+only in focused tests and is rejected by the production CLI. Tests replace the source before image
+creation, the private image before `started`, during the test-only started-to-spawn seam, and after
+spawn; every case must either stop with zero launch or consume one failed row without authorizing
+evidence. Tests also cover pre-spawn validation failure, spawn exception, missing/multiple target
+descendants, PID binding, and post-spawn image drift.
+
+The adapter permits one target at a time. It binds sandbox and target PIDs, start/terminal monotonic
+times, exit or signal, sandbox manifest digest, guard result, stdout/stderr normalized-safe
+classification, and receiver group identity. Raw stdout, stderr, request, response, credentials,
+home paths, account identifiers, or transcripts are never evidence outputs.
+
+The spawn adapter contains no config, auth, request, SSE, retry, conclusion, or target business
+classifier. It may enforce process/resource invariants and produce safe diagnostics, but family
+modules and the receiver own all behavior semantics. Focused adapter tests use synthetic child
+executables only; they do not duplicate Claude Code behavior.
 
 Any target exit/signal outside the scenario's closed expected terminal class, external socket,
 authority drift, anchor drift, observer disagreement, overflow, leak, or exclusive-write conflict
-creates one terminal campaign failure and stops dependent launches. There is no unchanged retry.
+creates the one terminal campaign failure and stops all later target launches. There is no unchanged
+retry and no continuation of a nominally independent family after any terminal target failure.
 
 ### 5.5 Receiver groups and ownership
 
@@ -292,9 +380,12 @@ The later implementation must extend the evidence schema bundle with closed sche
 
 - `run-ledger` and `run-spec`;
 - `launch-authority-receipt`;
+- `started`, `spawned`, and terminal row results;
 - `receiver-group` and `receiver-instance-result`;
+- per-node `payload-manifest`;
 - `campaign-failure`;
-- generalized closeout input/state.
+- generalized closeout input/state;
+- Gate A/Gate B clock witnesses, operator decision, and evaluation results.
 
 `cell-record` must bind, at minimum, campaign ID, run ID, sequence index, family/schedule ID, seed,
 repetition, arm, selected executable digest, active anchor digest, receiver tuple, receiver group,
@@ -324,8 +415,18 @@ provenance, coverage, or gates. Add separate launch-neutral modules:
 - `curate.ts` for fixture materialization, candidate closure, clock, and conclusions;
 - `check-cross-repo.ts` for the dedicated TS/Go agreement result.
 
-These modules operate only on schema-valid, indexed, immutable normalized-safe records. They do not
-walk unlisted evidence directories, open old raw evidence, launch a process, or contact a socket.
+Before ES6, each completed execution node seals an O_EXCL payload manifest listing its exact
+relative paths, schemas, byte sizes, and SHA-256 digests. These digest-bound manifests plus the
+sealed ledger are the only pre-ES10 payload authority. Curator modules operate only on records named
+by those manifests. They do not require or consult the ES10 artifact index, walk unlisted evidence
+directories, open old raw evidence, launch a process, or contact a socket. ES10 later inventories
+the manifests and every referenced payload into the terminal artifact index.
+
+The manifest graph is one-way and acyclic: an execution/curation payload manifest may reference only
+earlier payload files and earlier payload manifests; it may not reference ES10-ES17, any closure
+record, or any gate record. ES10 references all terminal payload manifests and their files. No
+payload or manifest is rewritten to point back to ES10, and no post-ES10 record can become curator
+input.
 
 ES6 first emits observation closure and contradictions. ES7 then materializes request/response
 fixtures, candidate field closure, clock attestation, and the three conclusions in the supplement's
@@ -336,7 +437,8 @@ default values.
 ### 6.2 General campaign failure
 
 `campaign-failure.json` is optional only for a fully successful 340-row campaign. Otherwise exactly
-one such record is required. It is derived at the first terminal stop and binds:
+one such record is required. The first terminal stop is global: after it, the controller starts no
+other target row, including rows from otherwise independent ES3/ES4/ES5 branches. The record binds:
 
 - stable failure family and action;
 - failing ES node, family, schedule, and run ID when applicable;
@@ -346,6 +448,12 @@ one such record is required. It is derived at the first terminal stop and binds:
 - affected dependency closure and prohibited continuation;
 - safe diagnostic class and digest, never raw output;
 - whether leak quarantine is required.
+
+A failure after `started` always has one terminal row. If the receiver cannot seal, that row is
+`failed_after_spawn` with `receiver_terminal=missing`, an empty observation-binding array, the
+started/spawned receipts that exist, and the safe failure digest. Every remaining unstarted row is
+closed as `not_executed` with the same campaign-failure digest. Thus one immutable failure record is
+sufficient and no later failure can become unrepresentable.
 
 The stable failure-family registry must include `campaign_runner_missing` for historical blocker
 interpretation, but a newly implemented runner cannot emit it merely because execution failed.
@@ -388,6 +496,53 @@ fail-closed unless all original supplement conditions pass. A missing runner bef
 be represented by the historical fresh1 blocker record, but fresh1 itself is not retroactively
 closed by new code.
 
+### 6.4 Post-closure Gate A and Gate B evaluation
+
+ES16 and ES17 are launch-neutral, out-of-closure evaluations after ES15. Their records do not enter
+the ES10-ES15 hash graph and are not referenced by the external digest set.
+
+`evaluate-gate-a` accepts only the exact terminal manifest and external digest set. A dedicated
+`gate-clock.ts` captures wall-clock milliseconds and a monotonic sample in the same synchronous
+operation, binding campaign ID, external-set SHA-256, controller source/executable digest, toolchain
+digest, and every conclusion path/digest. Production denies caller-provided `now_ms`; only focused
+tests may inject a clock through a test-only module that the production CLI cannot load. The clock
+witness and `gate-a-result.json` are O_EXCL out-of-band records. Gate A evaluation verifies the full
+closure graph and derives its result without an operator decision.
+
+Only after Gate A exists may an operator issue a separate immutable
+`successor-amendment-decision.json`. The closed decision schema binds:
+
+- decision ID and `decision='evaluate_successor_amendment_startable'`;
+- campaign ID, Gate A path/digest, external-set path/digest, and all three conclusion path/digests;
+- exact plan and implementation review digests;
+- operator decision issue time and a maximum evaluation delay of `300000` ms;
+- explicit non-resume/synthetic-loopback/Darwin-only scope and all prohibited claims.
+
+`evaluate-gate-b` consumes that decision exactly once and captures a second gate-clock witness. It
+requires `evaluated_at_ms >= decision_issued_at_ms`, delay at most `300000` ms, time not earlier than
+the ES7 clock, conclusion issue times, Gate A clock, or ES15 closeout time, and
+`evaluated_at_ms < expires_at_ms` for every conclusion. It recomputes and requires each
+`expires_at_ms = issued_at_ms + 1,209,600,000`. A clock rollback, stale decision, expired
+conclusion, wrong digest, missing operator scope, or caller time is a stable Gate B denial, never a
+request to rewrite a conclusion.
+
+The Gate B result and second clock are also O_EXCL out-of-band records. Their digests are reported to
+the operator and plan review but do not alter the already sealed closure. A Gate B PASS authorizes
+only the existing supplement's next operator decision to draft a docs-only successor amendment.
+
+The fixed post-closure paths are:
+
+- `capsules/P3B-ES1/gates/gate-a-clock.json`;
+- `capsules/P3B-ES1/gates/gate-a-result.json`;
+- `capsules/P3B-ES1/gates/successor-amendment-decision.json`;
+- `capsules/P3B-ES1/gates/gate-b-clock.json`;
+- `capsules/P3B-ES1/gates/gate-b-result.json`.
+
+They remain outside the ES10 artifact index, ES11 leak report, ES12-ES15 closure, and external digest
+set. Each is independently strict-schema validated, canonicalized, and passed through the same
+bounded forbidden-key/credential scanner before its digest is reported out of band. Any finding
+denies the gate and preserves the offending record without rewriting it.
+
 ## 7. Sub2API ES8 Boundary
 
 The later Sub2API work may create or modify only `backend/internal/oracleevidence/**` and its
@@ -423,10 +578,11 @@ The implementation commit DAG is:
 
 1. CC `test(oracle-evidence): specify ledger authority and honest closeout`.
    Genuine RED for missing run ledger, per-launch gate, receiver groups, observation arrays,
-   campaign failure, and blocker-derived closeout.
+   campaign failure, private launch-image continuity, target controls, blocker-derived closeout,
+   payload manifests, and post-ES15 gate clocks/operator decision.
 2. CC `feat(oracle-evidence): add serial campaign and launch authority`.
-   Implement the 340-row state machine, per-launch authority, receiver group contract, serial spawn
-   adapter, and 20-row control tranche.
+   Implement the 340-row state machine, per-launch authority, private-image spawn adapter,
+   started/spawned/PID accounting, receiver group contract, and exact 20-row control tranche.
 3. CC `feat(oracle-evidence): add config auth wire and failure families`.
    Implement ES3-ES5 family adapters/classifiers without reusing P3A runners.
 4. CC `feat(oracle-evidence): add curator and general closeout`.
@@ -463,27 +619,65 @@ node --import tsx tests/oracle-phase3b-evidence-anchor-provenance.test.ts
 node --import tsx tests/oracle-phase3b-evidence-prelaunch-correction.test.ts
 node --import tsx tests/oracle-phase3b-evidence-closure.test.ts
 node --import tsx tests/oracle-phase3b-evidence-runner.test.ts
+node --import tsx tests/oracle-phase3b-evidence-spawn-adapter.test.ts
 node --import tsx tests/oracle-phase3b-evidence-launch-authority.test.ts
+node --import tsx tests/oracle-phase3b-evidence-target-controls.test.ts
 node --import tsx tests/oracle-phase3b-evidence-family-config-auth.test.ts
 node --import tsx tests/oracle-phase3b-evidence-family-wire-failure.test.ts
 node --import tsx tests/oracle-phase3b-evidence-curation.test.ts
 node --import tsx tests/oracle-phase3b-evidence-closeout-blocker.test.ts
+node --import tsx tests/oracle-phase3b-evidence-gate-evaluation.test.ts
 node --import tsx tests/oracle-phase3b-evidence-cross-repo.test.ts
 npx tsc --noEmit
 git diff --check
 ```
 
-The first eight preserve the reviewed PR #45 behavior. The last seven express the missing
+The first eight preserve the reviewed PR #45 behavior. The remaining files express the missing
 architecture. RED is valid only when it fails for the named missing behavior. No skipped test,
 syntax error, absent fixture, import error, or unsafe test setup counts as RED.
 
-### 9.2 Mandatory negative cases
+### 9.2 Future production CLI contract
+
+These commands are inert plan text until a later implementation authority and `0C/0I` review. Each
+mode runs once, against fixed paths in one newly authorized namespace:
+
+```sh
+node --import tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts \
+  --mode prelaunch-only --operator-authority <authority.json> \
+  --campaign-input <campaign-input.json> --evidence-root <new-empty-root>
+
+node --import tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts \
+  --mode execute-from-sealed-prelaunch --operator-authority <authority.json> \
+  --campaign-input <campaign-input.json> --evidence-root <same-root>
+
+node --import tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts \
+  --mode closeout-only --operator-authority <authority.json> \
+  --campaign-input <campaign-input.json> --evidence-root <same-root>
+
+node --import tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts \
+  --mode evaluate-gate-a --operator-authority <authority.json> \
+  --campaign-input <campaign-input.json> --evidence-root <same-root>
+
+node --import tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts \
+  --mode evaluate-gate-b --operator-authority <authority.json> \
+  --campaign-input <campaign-input.json> --operator-decision \
+  capsules/P3B-ES1/gates/successor-amendment-decision.json --evidence-root <same-root>
+```
+
+The CLI rejects unknown arguments, a nonfixed authority/input/decision path, mode-order drift,
+missing predecessor mode output, repeat invocation, caller time, nonempty new root, fresh1/f045 root,
+and any digest or scope mismatch. Gate modes reject every option capable of spawning a target or
+opening a receiver.
+
+### 9.3 Mandatory negative cases
 
 At minimum, focused tests reject:
 
 - missing, duplicate, reordered, over-ceiling, or replacement ledger rows;
 - wrong fixed permutation/rotation, seed vector, arm count, run ID, or sequence index;
 - `started` count disagreement and any parallel target spawn;
+- private launch-image replacement before/during/after spawn, spawn exception, missing/multiple
+  target descendants, wrong sandbox/target PID, and post-spawn executable drift;
 - stale/replaced/symlinked authority, selection, anchor, original entrypoint, probe copy, receiver,
   schema bundle, or ledger;
 - caller-selected executable/path/digest and source-only executable substitution;
@@ -491,13 +685,20 @@ At minimum, focused tests reject:
   duplicate observation;
 - missing/duplicate/misordered attempt observation bindings;
 - target exit/signal mismatch, external socket, guard drift, overflow, writer conflict, and leak;
+- target-control ID/argv/stdin/literal/receiver-program/predicate drift or any later launch after the
+  first campaign failure;
 - caller-provided launch counts, hard-coded old contradiction IDs, false ES0-ES15 terminal state,
   and campaign failure/action mismatch;
+- curator input outside sealed payload manifests, an ES10 index prerequisite for ES6-ES9, missing
+  payload-manifest members, or manifest/index disagreement;
 - closure hash cycle, wrong order, unindexed payload, external set self-binding, and Gate A promotion
   with unrepresented rows;
+- caller-provided production time, Gate A/Gate B clock rollback, stale operator decision, wrong
+  external/conclusion digest, wrong 14-day delta, expired conclusion, or gate record entering the
+  closure hash graph;
 - cross-repo byte, schema, canonicalization, digest, decision, or stable-code disagreement.
 
-### 9.3 Static and review gates
+### 9.4 Static and review gates
 
 Before implementation review and again before any fresh prelaunch:
 
@@ -529,11 +730,11 @@ signal, timeout, resource overflow, external socket, receiver disagreement, pair
 nondeterminism, attempt overflow/order mismatch, raw-material or leak finding, and exclusive-write
 conflict.
 
-The controller seals one campaign failure and marks every dependent unstarted row `not_executed` at
-closeout. It does not retry unchanged state. Independent ES3/ES4/ES5 branches may continue only when
-the DAG says they do not depend on the failed family and the failure action is not globally terminal.
-External egress, leak, authority drift, anchor drift, writer conflict, or launch-budget disagreement
-is globally terminal.
+The controller seals one campaign failure and marks every unstarted row `not_executed` at closeout.
+The first terminal failure is globally terminal for target execution regardless of DAG independence.
+It does not retry unchanged state, continue another family, replace a row, or open a new namespace
+under the same authority. Curation and closeout may continue only as launch-neutral work over the
+sealed ledger, payload manifests, existing row records, and the one failure record.
 
 ## 11. Namespace and Migration Policy
 
