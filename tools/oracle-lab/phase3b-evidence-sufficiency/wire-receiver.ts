@@ -2,7 +2,7 @@ import { fork, type ChildProcess } from 'node:child_process'
 import { closeSync, constants as fsConstants, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeSync } from 'node:fs'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   EvidenceSufficiencyError,
@@ -18,6 +18,12 @@ import {
   type FailureProgramId,
   type ScenarioAction,
 } from './normalize-response.js'
+import {
+  assertActiveStaticAnchorAuthorityStable,
+  receiverRuntimeFiles,
+  resolveActiveStaticAnchorAuthority,
+  type VerifiedActiveStaticAnchor,
+} from './static-anchor.js'
 
 export type ReceiverArm = 'instrumented' | 'uninstrumented' | 'control/instrumented' | 'control/uninstrumented' | 'treatment/instrumented' | 'treatment/uninstrumented'
 
@@ -38,6 +44,7 @@ export type NormalizedSafeReceiverConfig = {
   synthetic_auth_markers: Record<string, string>
   limits: { body_bytes: number; headers: number; events: number; attempts: number }
   max_requests: number
+  verified_active_static_anchor?: VerifiedActiveStaticAnchor
 }
 
 export type NormalizedSafeReceiver = {
@@ -104,7 +111,7 @@ function validateConfig(config: NormalizedSafeReceiverConfig): void {
   })) if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/.test(value)) fail('schema_invalid', `${label} is not a safe identifier`)
   if (!Number.isInteger(config.repetition) || config.repetition < 0 || config.repetition > 4) fail('schema_invalid', 'repetition is outside 0..4')
   if (!Number.isSafeInteger(config.deterministic_seed) || !Number.isSafeInteger(config.sequence_index) || config.sequence_index < 0) fail('schema_invalid', 'seed or sequence index is invalid')
-  if (!/^[a-f0-9]{64}$/.test(config.active_static_anchor_sha256)) fail('paired_perturbation', 'active static anchor digest is missing or malformed')
+  if (!/^[a-f0-9]{64}$/.test(config.active_static_anchor_sha256)) fail('paired_perturbation', 'expected active static anchor digest is missing or malformed')
   if (!Number.isInteger(config.max_requests) || config.max_requests < 1 || config.max_requests > config.limits.attempts) fail('receiver_attempt_overflow', 'max requests exceeds attempt budget')
   if (config.limits.body_bytes < 1 || config.limits.headers < 1 || config.limits.events < 1 || config.limits.attempts < 1) fail('schema_invalid', 'receiver limits must be positive')
 }
@@ -134,9 +141,15 @@ function respond(res: ServerResponse, req: IncomingMessage, action: ScenarioActi
 
 async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promise<NormalizedSafeReceiver> {
   validateConfig(config)
+  if (!config.verified_active_static_anchor) fail('source_binding_invalid', 'verified active static anchor authority is required')
+  assertActiveStaticAnchorAuthorityStable(config.verified_active_static_anchor)
+  if (config.verified_active_static_anchor.campaign_id !== config.campaign_id
+    || config.verified_active_static_anchor.active_static_anchor_sha256 !== config.active_static_anchor_sha256) {
+    fail('paired_perturbation', 'receiver config differs from verified active static anchor authority')
+  }
   const writeReceiverObservation = createModulePrivateReceiverWriter(config.evidence_root)
-  const source = fileURLToPath(import.meta.url)
-  const receiverProcessDigest = sha256Bytes(readFileSync(source))
+  const receiverIdentity = config.verified_active_static_anchor.receiver_identity
+  const receiverProcessDigest = receiverIdentity.digest
   const scenario = buildScenarioPrograms(config.campaign_id, config.literal_table).failure_programs
     .find((program) => program.scenario_id === config.scenario_id)
   if (!scenario) fail('schema_invalid', 'receiver scenario is not in the exact program set')
@@ -215,8 +228,8 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
           deterministic_seed: config.deterministic_seed,
           sequence_index: config.sequence_index,
           receiver_process_digest: receiverProcessDigest,
-          receiver_source_sha256: receiverProcessDigest,
-          active_static_anchor_sha256: config.active_static_anchor_sha256,
+          receiver_source_sha256: receiverIdentity.source_sha256,
+          active_static_anchor_sha256: config.verified_active_static_anchor.active_static_anchor_sha256,
           receiver_authority: 'wire-leaf-exclusive',
           authority_class: 'synthetic-loopback',
           base_url_provenance_ref: config.base_url_provenance_ref,
@@ -230,6 +243,7 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
           raw_material_persisted: false,
         }
         const finish = (): void => {
+          assertActiveStaticAnchorAuthorityStable(config.verified_active_static_anchor!)
           writeReceiverObservation(relative, observation)
           observationRelativePaths.push(relative)
           materializedResponse.bytes.fill(0)
@@ -244,6 +258,7 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
     })
   })
   server.once('close', () => { if (!settled) { settled = true; doneResolve() } })
+  assertActiveStaticAnchorAuthorityStable(config.verified_active_static_anchor)
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve() })
@@ -254,8 +269,8 @@ async function runDedicatedReceiver(config: NormalizedSafeReceiverConfig): Promi
     host: '127.0.0.1',
     port: address.port,
     receiver_process_digest: receiverProcessDigest,
-    receiver_source_sha256: receiverProcessDigest,
-    active_static_anchor_sha256: config.active_static_anchor_sha256,
+    receiver_source_sha256: receiverIdentity.source_sha256,
+    active_static_anchor_sha256: config.verified_active_static_anchor.active_static_anchor_sha256,
     observation_relative_paths: observationRelativePaths,
     done,
     close: async () => { await closeServer(server); if (!settled) { settled = true; doneResolve() } },
@@ -268,9 +283,16 @@ type ChildFailure = { kind: 'failure'; code: string }
 
 export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiverConfig): Promise<SpawnedNormalizedSafeReceiver> {
   validateConfig(config)
-  const expectedReceiverSource = sha256Bytes(readFileSync(fileURLToPath(import.meta.url)))
+  const verifiedAnchor = resolveActiveStaticAnchorAuthority({
+    evidence_root: config.evidence_root,
+    expected_campaign_id: config.campaign_id,
+    expected_active_static_anchor_sha256: config.active_static_anchor_sha256,
+  })
+  const childConfig: NormalizedSafeReceiverConfig = { ...config, verified_active_static_anchor: verifiedAnchor }
+  const runtimeFiles = receiverRuntimeFiles()
   const child = fork(fileURLToPath(import.meta.url), ['--receiver-child'], {
-    execArgv: ['--import', 'tsx'],
+    execPath: runtimeFiles.launcher_file,
+    execArgv: ['--import', pathToFileURL(runtimeFiles.loader_file).href],
     env: { PATH: process.env.PATH, ORACLE_P3B_RECEIVER_CHILD: '1' },
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
   })
@@ -281,9 +303,12 @@ export async function spawnNormalizedSafeReceiver(config: NormalizedSafeReceiver
       if (message.kind === 'ready') { clearTimeout(timer); resolve(message) }
       if (message.kind === 'failure') { clearTimeout(timer); reject(new EvidenceSufficiencyError(message.code, 'receiver child rejected config')) }
     })
-    child.send({ kind: 'configure', config })
+    child.send({ kind: 'configure', config: childConfig })
   })
-  if (ready.receiver_process_digest !== expectedReceiverSource || ready.receiver_source_sha256 !== expectedReceiverSource || ready.active_static_anchor_sha256 !== config.active_static_anchor_sha256) {
+  assertActiveStaticAnchorAuthorityStable(verifiedAnchor)
+  if (ready.receiver_process_digest !== verifiedAnchor.receiver_identity.digest
+    || ready.receiver_source_sha256 !== verifiedAnchor.receiver_identity.source_sha256
+    || ready.active_static_anchor_sha256 !== verifiedAnchor.active_static_anchor_sha256) {
     child.kill('SIGKILL')
     fail('paired_perturbation', 'receiver child identity differs from the active source/anchor binding')
   }

@@ -21,6 +21,7 @@ export const EVIDENCE_SCHEMA_FILES = [
   'freeze.schema.json',
   'campaign-input.schema.json',
   'static-anchor.schema.json',
+  'static-anchor-selection.schema.json',
   'scenario-program.schema.json',
   'synthetic-literals.schema.json',
   'clock-attestation.schema.json',

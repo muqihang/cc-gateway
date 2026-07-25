@@ -87,7 +87,7 @@ test('static anchor binds regular bytes, schema bundle, and a pure comment probe
   assert.match(region.sha256, /^[a-f0-9]{64}$/)
 
   const bundle = computeSchemaBundleDigest(path.resolve('contracts/oracle-lab/evidence-sufficiency/v1'))
-  assert.equal(bundle.file_count, 27)
+  assert.equal(bundle.file_count, 28)
   assert.match(bundle.sha256, /^[a-f0-9]{64}$/)
 })
 

@@ -331,7 +331,6 @@ export function pairedAuthorizingProjection(observation: Record<string, unknown>
   for (const field of ['receiver_process_digest', 'receiver_source_sha256', 'active_static_anchor_sha256'] as const) {
     if (typeof observation[field] !== 'string' || !/^[a-f0-9]{64}$/.test(observation[field])) fail('paired_perturbation', `${field} is missing or malformed`)
   }
-  if (observation.receiver_process_digest !== observation.receiver_source_sha256) fail('paired_perturbation', 'receiver process and source digests disagree')
   const projection = Object.fromEntries(Object.entries(observation).filter(([key]) => !PAIRED_OBSERVATION_OMIT.has(key)))
   for (const required of [
     'receiver_process_digest', 'receiver_source_sha256', 'active_static_anchor_sha256',

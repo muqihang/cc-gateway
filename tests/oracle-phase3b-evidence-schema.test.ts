@@ -16,7 +16,7 @@ import {
 const contractRoot = path.resolve('contracts/oracle-lab/evidence-sufficiency/v1')
 
 test('evidence contract exposes every planned strict schema', () => {
-  assert.equal(EVIDENCE_SCHEMA_FILES.length, 25)
+  assert.equal(EVIDENCE_SCHEMA_FILES.length, 26)
   for (const relative of EVIDENCE_SCHEMA_FILES) {
     const schema = JSON.parse(readFileSync(path.join(contractRoot, relative), 'utf8')) as Record<string, unknown>
     assert.equal(schema.additionalProperties, false, `${relative} must be closed`)
@@ -44,7 +44,12 @@ test('operator authority rejects a nested unknown field', () => {
   const digest = 'a'.repeat(64)
   const commit = 'b'.repeat(40)
   const repository = { branch: 'codex/test', commit, tree: commit }
+  const receiverIdentity = {
+    schema_id: 'oracle-lab-p3b-es-receiver-executable-identity.v1', algorithm: 'receiver-node-tsx-tuple-jcs-sha256-v1',
+    source_sha256: digest, launcher_sha256: digest, loader_sha256: digest, digest,
+  }
   const authority = {
+    active_static_anchor: { selection_relative_path: 'capsules/P3B-ES1/control/static-anchor-selection.json', receiver_identity: receiverIdentity },
     schema_id: 'oracle-lab-p3b-es-operator-authority.v1', schema_major: 1, schema_revision: 0,
     authority_id: 'operator-decision-test-authority', campaign_id: 'p3b-es1-test-campaign', decision: 'authorized',
     delegated_source_task_id: '019f518f-1a68-71d2-a959-b495302afe80',
