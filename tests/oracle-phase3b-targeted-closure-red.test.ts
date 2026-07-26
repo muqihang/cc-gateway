@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { buildEs9CoverageContract } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
 import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport, validateCoverageContract, validateIndependentGoReceipt, validateIndependentTsAgreement } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
@@ -133,16 +134,20 @@ test('targeted C1 authority: ES8 validates independent raw/internal/C1/repositor
   assert.throws(() => validateIndependentGoReceipt({ ...goForgedUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goForgedUnsigned), Buffer.from('\n', 'utf8')])) }, ledger.c1.review_sha256), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })
 
-test('targeted C1 authority: ES9 accepts only an authority-bound non-overlapping E/D coverage contract', () => {
+test('targeted C1 authority: ES9 accepts only the authority-bound fixed E/C/D coverage contract', () => {
   const ledger = buildCampaignLedger('p3b-targeted-es9-authority', TEST_C1)
-  const unsigned = { schema_id: 'oracle-lab-p3b-es9-coverage-contract.v1', repositories: ledger.authority, fixture_schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', enabled_sources: [{ pointer_suffix: '/request/method', observation_pointer: '/method', source_class: 'request' }, { pointer_suffix: '/response/terminal', observation_pointer: '/response/transport_terminal', source_class: 'response' }], disabled_exclusions: [{ pointer_suffix: '/request/raw_body', reason_code: 'sensitive_raw_bytes' }] }
-  const contract: Record<string, unknown> = { ...unsigned, contract_sha256: sha256Canonical(unsigned) }
+  const contract = buildEs9CoverageContract(ledger) as Record<string, unknown>
   const validated = validateCoverageContract(contract, ledger)
-  assert.equal(validated.enabled.length, 2)
-  assert.equal(validated.disabled.length, 1)
-  const overlapUnsigned = { ...unsigned, disabled_exclusions: [{ pointer_suffix: '/request', reason_code: 'sensitive_raw_bytes' }] }
-  assert.throws(() => validateCoverageContract({ ...overlapUnsigned, contract_sha256: sha256Canonical(overlapUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
-  const driftedUnsigned = { ...unsigned, repositories: { ...ledger.authority, sub: { ...ledger.authority.sub, tree: sha256Bytes(Buffer.from('drift')) } } }
+  assert.equal(validated.enabled.length, 340 * 20)
+  assert.equal(validated.disabled.length, 340 * 2)
+  assert.equal((contract.normative_e_rows as unknown[]).length, 20)
+  assert.equal((contract.normative_c_rows as unknown[]).length, 3)
+  assert.equal((contract.normative_d_rows as unknown[]).length, 3)
+  const subsetUnsigned: Record<string, unknown> = { ...contract, normative_e_rows: (contract.normative_e_rows as unknown[]).slice(1) }
+  delete subsetUnsigned.contract_sha256
+  assert.throws(() => validateCoverageContract({ ...subsetUnsigned, contract_sha256: sha256Canonical(subsetUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+  const driftedUnsigned: Record<string, unknown> = { ...contract, repositories: { ...ledger.authority, sub: { ...ledger.authority.sub, tree: sha256Bytes(Buffer.from('drift')) } } }
+  delete driftedUnsigned.contract_sha256
   assert.throws(() => validateCoverageContract({ ...driftedUnsigned, contract_sha256: sha256Canonical(driftedUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })
 

@@ -62,30 +62,31 @@ export function assertControllerLaunchPrerequisites(controller: ProductionContro
   if (authority.campaign_id !== state.ledger.campaign_id || authority.campaign_input_sha256 !== input.input_sha256 || authority.reviewed_artifact_set_sha256 !== anchor.reviewed_artifact_set_sha256 || authority.dynamic_launch_authorized !== true || authority.critical !== 0 || authority.important !== 0 || authority.campaign_registry_sha256 !== approval.registry_sha256 || sha256Canonical(authority.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(authority.c1) !== sha256Canonical(state.ledger.c1) || Number(authority.created_at_ms) > Date.now() || Number(authority.expires_at_ms) <= Date.now()) throw new Phase3BProductionError('operator_authority_invalid', 'live operator authority drifted')
   if (ledger.ledger_sha256 !== state.ledger.ledger_sha256 || anchor.anchor_sha256 !== state.anchorSha256 || selection.ledger_sha256 !== state.ledger.ledger_sha256 || selection.anchor_sha256 !== state.anchorSha256 || selection.original_image_record_sha256 !== anchor.original_image_record_sha256 || selection.probe_image_record_sha256 !== anchor.probe_image_record_sha256) throw new Phase3BProductionError('active_selection_invalid', 'live ledger/anchor/selection drifted')
   if (anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256()) throw new Phase3BProductionError('controller_identity_invalid', 'controller source or executable identity drifted')
-  for (const field of ['cc_repository', 'sub_repository', 'implementation_review_path', 'cross_repo_review_path', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe']) if (typeof (field === 'implementation_review_path' ? authority[field] : input[field]) !== 'string') throw new Phase3BProductionError('sealed_path_invalid', `${field} is not sealed`)
+  for (const field of ['cc_repository', 'sub_repository', 'implementation_review_path', 'cross_review_artifact_path', 'cross_repo_review_path', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe']) if (typeof (field === 'implementation_review_path' ? authority[field] : input[field]) !== 'string') throw new Phase3BProductionError('sealed_path_invalid', `${field} is not sealed`)
   const cc = String(input.cc_repository); const sub = String(input.sub_repository)
   if (git(cc, ['rev-parse', 'HEAD']) !== approval.approval_commit || git(cc, ['rev-parse', 'HEAD^{tree}']) !== approval.approval_tree || git(cc, ['status', '--porcelain']) !== '' || git(sub, ['rev-parse', 'HEAD']) !== REPOSITORY_AUTHORITY.sub.commit || git(sub, ['rev-parse', 'HEAD^{tree}']) !== REPOSITORY_AUTHORITY.sub.tree || git(sub, ['status', '--porcelain']) !== '') throw new Phase3BProductionError('repository_authority_invalid', 'live repository authority drifted')
   try { git(cc, ['merge-base', '--is-ancestor', REPOSITORY_AUTHORITY.cc.commit, String(authority.reviewed_candidate_commit)]) } catch { throw new Phase3BProductionError('repository_authority_invalid', 'CC authority merge is not candidate ancestor') }
   const exactFiles = [
-    [String(authority.implementation_review_path), String(authority.implementation_review_sha256)],
-    [String(input.cross_repo_review_path), String(input.cross_repo_review_sha256)],
-    [String(input.platform_archive_path), TARGET_PROFILE.platform_archive_sha256],
-    [String(input.source_tree_path), String(input.source_tree_sha256)],
-    [String(input.toolchain_path), String(input.toolchain_sha256)],
-    [String(input.schema_bundle_path), String(input.schema_bundle_sha256)],
-    [String(input.focused_suite_path), String(input.focused_suite_sha256)],
-    [String(input.es7_typed_fixtures_path), String(input.es7_typed_fixtures_sha256)],
-    [String(input.es8_go_receipt_path), String(input.es8_go_receipt_sha256)],
-    [String(input.es8_ts_c1_agreement_path), String(input.es8_ts_c1_agreement_sha256)],
-    [String(input.es9_coverage_contract_path), String(input.es9_coverage_contract_sha256)],
-    [String(input.predecessor_config_auth_path), PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH']],
-    [String(input.predecessor_failure_stream_path), PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM']],
-    [String(input.probe_source), String(input.probe_source_sha256)],
-    [String(input.probe_unsigned_source), String(input.probe_unsigned_source_sha256)],
-    [String(input.original_recipe), String(input.original_recipe_sha256)],
-    [String(input.probe_recipe), String(input.probe_recipe_sha256)],
+    [String(authority.implementation_review_path), String(authority.implementation_review_sha256), 1_048_576],
+    [String(input.cross_review_artifact_path), String(input.cross_review_artifact_sha256), 1_048_576],
+    [String(input.cross_repo_review_path), String(input.cross_repo_review_sha256), 1_048_576],
+    [String(input.platform_archive_path), TARGET_PROFILE.platform_archive_sha256, 134_217_728],
+    [String(input.source_tree_path), String(input.source_tree_sha256), 16_777_216],
+    [String(input.toolchain_path), String(input.toolchain_sha256), 16_777_216],
+    [String(input.schema_bundle_path), String(input.schema_bundle_sha256), 16_777_216],
+    [String(input.focused_suite_path), String(input.focused_suite_sha256), 1_048_576],
+    [String(input.es7_typed_fixtures_path), String(input.es7_typed_fixtures_sha256), 16_777_216],
+    [String(input.es8_go_receipt_path), String(input.es8_go_receipt_sha256), 1_048_576],
+    [String(input.es8_ts_c1_agreement_path), String(input.es8_ts_c1_agreement_sha256), 1_048_576],
+    [String(input.es9_coverage_contract_path), String(input.es9_coverage_contract_sha256), 16_777_216],
+    [String(input.predecessor_config_auth_path), PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'], 1_048_576],
+    [String(input.predecessor_failure_stream_path), PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'], 1_048_576],
+    [String(input.probe_source), String(input.probe_source_sha256), 268_435_456],
+    [String(input.probe_unsigned_source), String(input.probe_unsigned_source_sha256), 268_435_456],
+    [String(input.original_recipe), String(input.original_recipe_sha256), 1_048_576],
+    [String(input.probe_recipe), String(input.probe_recipe_sha256), 1_048_576],
   ] as const
-  for (const [file, digest] of exactFiles) if (stableRead(file, { maximumBytes: 67_108_864 }).identity.sha256 !== digest) throw new Phase3BProductionError('sealed_authority_file_drift', 'live fixed authority file bytes drifted')
+  for (const [file, digest, maximumBytes] of exactFiles) if (stableRead(file, { maximumBytes }).identity.sha256 !== digest) throw new Phase3BProductionError('sealed_authority_file_drift', 'live fixed authority file bytes drifted')
   if (Date.now() >= Date.parse(PREDECESSOR_AUTHORITY.expires_at)) throw new Phase3BProductionError('predecessor_expired', 'predecessor authority expired before launch')
 }
 

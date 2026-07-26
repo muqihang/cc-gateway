@@ -13,6 +13,7 @@ import { sealTargetControlTranche } from './closeout.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
+import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { IMPLEMENTATION_REVIEW_RELATIVE, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
 
@@ -24,6 +25,9 @@ export type CampaignInput = Readonly<{
   evidence_root: string
   cc_repository: string
   sub_repository: string
+  cross_review_task_id: string
+  cross_review_artifact_path: string
+  cross_review_artifact_sha256: string
   cross_repo_review_path: string
   cross_repo_review_sha256: string
   original_source: string
@@ -67,6 +71,10 @@ export type OperatorAuthority = Readonly<{
   c1: CrossRepoAuthority
   reviewed_candidate_commit: string
   reviewed_candidate_tree: string
+  approval_commit: string
+  approval_tree: string
+  attestation_commit: string
+  attestation_tree: string
   campaign_registry_sha256: string
   implementation_review_path: string
   implementation_review_sha256: string
@@ -84,18 +92,22 @@ export type OperatorAuthority = Readonly<{
   authority_sha256: string
 }>
 
-const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'cross_repo_review_sha256', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'es8_go_receipt_path', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
-const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'campaign_registry_sha256', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
+const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_task_id', 'cross_review_artifact_path', 'cross_review_artifact_sha256', 'cross_repo_review_path', 'cross_repo_review_sha256', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'es8_go_receipt_path', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
+const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree', 'campaign_registry_sha256', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
 const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
 
-function parseExternalCanonical(file: string): Record<string, unknown> {
-  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes: 1_048_576 })
+function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
+  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
   if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'authority artifact is not owned by current operator UID')
   if (bytes.at(-1) !== 0x0a) throw new Phase3BProductionError('canonical_record_invalid', 'external authority must be canonical newline JSON')
   let value: unknown
   try { value = JSON.parse(bytes.subarray(0, -1).toString('utf8')) } catch { throw new Phase3BProductionError('canonical_record_invalid', 'external authority JSON is invalid') }
   if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(bytes.subarray(0, -1))) throw new Phase3BProductionError('canonical_record_invalid', 'external authority is not canonical JSON')
-  return value as Record<string, unknown>
+  return { bytes, identity, value: value as Record<string, unknown> }
+}
+
+function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<string, unknown> {
+  return readExternalCanonical(file, maximumBytes).value
 }
 
 function git(repository: string, args: readonly string[]): string {
@@ -106,8 +118,9 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
   assertExactKeys(value, INPUT_KEYS, 'campaign_input_invalid')
   assertDigestField(value, 'input_sha256', 'campaign_input_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-production-input.v2' || typeof value.campaign_id !== 'string') throw new Phase3BProductionError('campaign_input_invalid', 'campaign input schema or ID drifted')
-  for (const field of ['cross_repo_review_sha256', 'probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es7_typed_fixtures_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
-  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
+  for (const field of ['cross_review_artifact_sha256', 'cross_repo_review_sha256', 'probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es7_typed_fixtures_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
+  if (typeof value.cross_review_task_id !== 'string' || !/^[A-Za-z0-9._:-]{3,200}$/.test(value.cross_review_task_id)) throw new Phase3BProductionError('campaign_input_invalid', 'cross review task identity drifted')
+  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_artifact_path', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
   const fixedAuthorityFiles = [
     ['es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'phase3b-es7-typed-fixtures.json'],
     ['es8_go_receipt_path', 'es8_go_receipt_sha256', 'phase3b-es8-go-receipt.json'],
@@ -115,17 +128,27 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
     ['es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'phase3b-es9-coverage-contract.json'],
   ] as const
   for (const [pathField, digestField, basename] of fixedAuthorityFiles) {
-    if (path.basename(String(value[pathField])) !== basename || stableRead(String(value[pathField]), { mode: 0o600, maximumBytes: 16_777_216 }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${pathField} is not the exact reviewed authority artifact`)
-    parseExternalCanonical(String(value[pathField]))
+    const artifact = readExternalCanonical(String(value[pathField]), 16_777_216)
+    if (path.basename(String(value[pathField])) !== basename || artifact.identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${pathField} is not the exact reviewed authority artifact`)
   }
-  const crossRepo = stableRead(value.cross_repo_review_path as string, { mode: 0o600, maximumBytes: 1_048_576 })
+  const crossRepo = readExternalCanonical(String(value.cross_repo_review_path))
   if (crossRepo.identity.sha256 !== value.cross_repo_review_sha256 || sha256Canonical(bindMaterializedCrossRepoAuthority(crossRepo.bytes)) !== sha256Canonical(crossRepoAuthority(String(value.cross_repo_review_sha256)))) throw new Phase3BProductionError('campaign_input_invalid', 'actual materialized C1 CROSS_REPO_PASS record drifted')
-  if (value.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || value.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256 || stableRead(value.original_source as string, { maximumBytes: 67_108_864 }).identity.sha256 !== TARGET_PROFILE.entrypoint_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'target artifact is not exact Claude Code 2.1.215 darwin-arm64')
+  const crossReviewRecord = readExternalCanonical(String(value.cross_review_artifact_path))
+  const crossReview = crossReviewRecord.value
+  assertDigestField(crossReview, 'artifact_sha256', 'campaign_input_invalid')
+  const c1Review = crossRepo.value.review
+  const c1Cross = c1Review && typeof c1Review === 'object' && !Array.isArray(c1Review) ? (c1Review as Record<string, unknown>).cross : undefined
+  const now = Date.now()
+  if (!c1Cross || typeof c1Cross !== 'object' || Array.isArray(c1Cross) || crossReviewRecord.identity.sha256 !== value.cross_review_artifact_sha256 || crossReview.schema_id !== 'oracle-lab-p3b-cross-review.v1' || crossReview.task_id !== value.cross_review_task_id || crossReview.model !== 'gpt-5.6-sol' || crossReview.critical !== 0 || crossReview.important !== 0 || crossReview.verdict !== 'CROSS_REPO_PASS' || !Number.isSafeInteger(crossReview.created_at_ms) || !Number.isSafeInteger(crossReview.expires_at_ms) || Number(crossReview.created_at_ms) > now || Number(crossReview.expires_at_ms) <= now || Number(crossReview.expires_at_ms) - Number(crossReview.created_at_ms) > 86_400_000 || (c1Cross as Record<string, unknown>).task_id !== value.cross_review_task_id || (c1Cross as Record<string, unknown>).artifact_sha256 !== value.cross_review_artifact_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'C1 does not bind the actual current 0C/0I cross-review artifact')
+  const targetIdentity = stableRead(value.original_source as string, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  if (value.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || value.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256 || targetIdentity.sha256 !== TARGET_PROFILE.entrypoint_sha256 || targetIdentity.size !== TARGET_PROFILE.entrypoint_size) throw new Phase3BProductionError('campaign_input_invalid', 'target artifact is not exact Claude Code 2.1.215 darwin-arm64')
   if (stableRead(value.platform_archive_path as string, { maximumBytes: 134_217_728 }).identity.sha256 !== value.platform_archive_sha256 || stableRead(value.source_tree_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.source_tree_sha256 || stableRead(value.toolchain_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.toolchain_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'actual archive, source-tree, or toolchain artifact bytes drifted')
-  for (const [fileField, digestField] of [['probe_source', 'probe_source_sha256'], ['probe_unsigned_source', 'probe_unsigned_source_sha256'], ['original_recipe', 'original_recipe_sha256'], ['probe_recipe', 'probe_recipe_sha256']] as const) if (stableRead(String(value[fileField]), { maximumBytes: 67_108_864 }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${fileField} bytes drifted from its reviewed digest`)
+  for (const [fileField, digestField] of [['probe_source', 'probe_source_sha256'], ['probe_unsigned_source', 'probe_unsigned_source_sha256']] as const) if (stableRead(String(value[fileField]), { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${fileField} bytes drifted from its reviewed digest`)
+  for (const [fileField, digestField] of [['original_recipe', 'original_recipe_sha256'], ['probe_recipe', 'probe_recipe_sha256']] as const) if (stableRead(String(value[fileField]), { maximumBytes: 1_048_576 }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${fileField} bytes drifted from its reviewed digest`)
   if (stableRead(value.schema_bundle_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.schema_bundle_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'schema bundle bytes drifted')
-  const focusedSuite = parseExternalCanonical(value.focused_suite_path as string)
-  if (stableRead(value.focused_suite_path as string, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256 !== value.focused_suite_sha256 || focusedSuite.passed !== true || focusedSuite.strict_typescript !== true || focusedSuite.build !== true || focusedSuite.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'actual cumulative focused suite artifact is not green')
+  const focusedSuiteRecord = readExternalCanonical(value.focused_suite_path as string)
+  const focusedSuite = focusedSuiteRecord.value
+  if (focusedSuiteRecord.identity.sha256 !== value.focused_suite_sha256 || focusedSuite.passed !== true || focusedSuite.strict_typescript !== true || focusedSuite.build !== true || focusedSuite.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'actual cumulative focused suite artifact is not green')
   if (stableRead(value.predecessor_config_auth_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] || stableRead(value.predecessor_failure_stream_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM']) throw new Phase3BProductionError('predecessor_invalid', 'exact Phase 3A conclusion bytes drifted')
   if (Date.now() >= Date.parse(PREDECESSOR_AUTHORITY.expires_at)) throw new Phase3BProductionError('predecessor_expired', 'Phase 3A predecessor authority expired')
   return deepFreeze(value as CampaignInput)
@@ -141,14 +164,16 @@ function validateRepositories(input: CampaignInput, candidateCommit: string, can
 function validateAuthority(value: Record<string, unknown>, input: CampaignInput): OperatorAuthority {
   assertExactKeys(value, AUTHORITY_KEYS, 'operator_authority_invalid')
   assertDigestField(value, 'authority_sha256', 'operator_authority_invalid')
-  for (const field of ['reviewed_candidate_commit', 'reviewed_candidate_tree'] as const) if (typeof value[field] !== 'string' || !/^[a-f0-9]{40}$/.test(value[field] as string)) throw new Phase3BProductionError('operator_authority_invalid', `${field} is invalid`)
+  for (const field of ['reviewed_candidate_commit', 'reviewed_candidate_tree', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree'] as const) if (typeof value[field] !== 'string' || !/^[a-f0-9]{40}$/.test(value[field] as string)) throw new Phase3BProductionError('operator_authority_invalid', `${field} is invalid`)
   const approval = validateApprovalAttestation(input.cc_repository, String(value.reviewed_candidate_commit), String(value.reviewed_candidate_tree))
+  const crossReview = parseExternalCanonical(input.cross_review_artifact_path)
+  if (crossReview.reviewed_candidate_commit !== value.reviewed_candidate_commit || crossReview.reviewed_candidate_tree !== value.reviewed_candidate_tree || crossReview.model !== 'gpt-5.6-sol') throw new Phase3BProductionError('operator_authority_invalid', 'cross review artifact does not bind the approved implementation candidate')
   const materializedC1 = bindMaterializedCrossRepoAuthority(stableRead(input.cross_repo_review_path, { mode: 0o600, maximumBytes: 1_048_576 }).bytes, { cc_repository: input.cc_repository, sub_repository: input.sub_repository, reviewed_candidate_commit: String(value.reviewed_candidate_commit), reviewed_candidate_tree: String(value.reviewed_candidate_tree) })
   if (materializedC1.review_sha256 !== input.cross_repo_review_sha256) throw new Phase3BProductionError('operator_authority_invalid', 'materialized C1 does not bind the exact reviewed candidate')
   verifyTrustedSignature(value, approval.registry, 'requirements', 'authority_sha256', 'operator_authority_invalid')
   const artifactSetSha256 = reviewedArtifactSetSha256(input)
   const c1 = crossRepoAuthority(input.cross_repo_review_sha256)
-  if (value.schema_id !== 'oracle-lab-p3b-production-authority.v2' || value.decision !== 'authorize_fresh_phase3b_production_campaign' || value.campaign_id !== input.campaign_id || value.campaign_input_sha256 !== input.input_sha256 || value.reviewed_artifact_set_sha256 !== artifactSetSha256 || value.critical !== 0 || value.important !== 0 || value.dynamic_launch_authorized !== true || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(c1) || value.campaign_registry_sha256 !== approval.registry_sha256) throw new Phase3BProductionError('operator_authority_invalid', 'operator authority scope/review/source/approval binding drifted')
+  if (value.schema_id !== 'oracle-lab-p3b-production-authority.v2' || value.decision !== 'authorize_fresh_phase3b_production_campaign' || value.campaign_id !== input.campaign_id || value.campaign_input_sha256 !== input.input_sha256 || value.reviewed_artifact_set_sha256 !== artifactSetSha256 || value.critical !== 0 || value.important !== 0 || value.dynamic_launch_authorized !== true || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(c1) || value.approval_commit !== approval.approval_commit || value.approval_tree !== approval.approval_tree || value.attestation_commit !== approval.attestation_commit || value.attestation_tree !== approval.attestation_tree || value.campaign_registry_sha256 !== approval.registry_sha256) throw new Phase3BProductionError('operator_authority_invalid', 'operator authority scope/review/source/approval binding drifted')
   if (!Number.isSafeInteger(value.created_at_ms) || !Number.isSafeInteger(value.expires_at_ms) || Number(value.created_at_ms) > Date.now() || Number(value.expires_at_ms) <= Date.now() || Number(value.expires_at_ms) - Number(value.created_at_ms) > 86_400_000) throw new Phase3BProductionError('operator_authority_stale', 'operator authority is future, stale, or overlong')
   assertSha256(value.implementation_review_sha256, 'operator_authority_invalid', 'implementation review')
   if (value.implementation_review_path !== path.join(input.cc_repository, IMPLEMENTATION_REVIEW_RELATIVE) || value.implementation_review_sha256 !== approval.implementation_review_sha256) throw new Phase3BProductionError('operator_authority_invalid', 'implementation review path/digest is not the approval-commit artifact')
@@ -176,11 +201,12 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
   writeExclusiveCanonical(root, 'control/operator-authority.json', authority)
   writeExclusiveCanonical(root, 'control/focused-suite.json', parseExternalCanonical(input.focused_suite_path))
   writeExclusiveCanonical(root, 'control/implementation-review.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).implementation_review)
+  writeExclusiveCanonical(root, 'control/cross-review-artifact.json', parseExternalCanonical(input.cross_review_artifact_path))
   writeExclusiveCanonical(root, 'control/cross-repo-review.json', parseExternalCanonical(input.cross_repo_review_path))
   writeExclusiveCanonical(root, 'control/es8-go-receipt.json', parseExternalCanonical(input.es8_go_receipt_path))
-  writeExclusiveCanonical(root, 'control/es7-typed-fixtures.json', parseExternalCanonical(input.es7_typed_fixtures_path))
+  writeExclusiveCanonical(root, 'control/es7-typed-fixtures.json', parseExternalCanonical(input.es7_typed_fixtures_path, 16_777_216))
   writeExclusiveCanonical(root, 'control/es8-ts-c1-agreement.json', parseExternalCanonical(input.es8_ts_c1_agreement_path))
-  writeExclusiveCanonical(root, 'control/es9-coverage-contract.json', parseExternalCanonical(input.es9_coverage_contract_path))
+  writeExclusiveCanonical(root, 'control/es9-coverage-contract.json', parseExternalCanonical(input.es9_coverage_contract_path, 16_777_216))
   writeExclusiveCanonical(root, 'control/predecessor-config-auth.json', parseExternalCanonical(input.predecessor_config_auth_path))
   writeExclusiveCanonical(root, 'control/predecessor-failure-stream.json', parseExternalCanonical(input.predecessor_failure_stream_path))
   writeExclusiveCanonical(root, 'control/trusted-reviewers.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).registry)

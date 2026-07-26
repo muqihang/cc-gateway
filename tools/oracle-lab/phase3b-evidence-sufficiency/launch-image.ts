@@ -49,17 +49,20 @@ type Recipe = Readonly<{
   source_tree_sha256: string
   toolchain_sha256: string
   semantics: readonly string[]
-  build_command: readonly string[]
+  build_command: readonly (readonly string[])[]
   build_command_sha256: string
   pre_sign_sha256: string
   post_sign_sha256: string
+  rebuilt_post_sign_sha256: string
+  rebuild_verified: true
+  code_signature_identifier: string | null
   code_signature_identity_sha256: string | null
   recipe_sha256: string
 }>
 
 const images = new WeakSet<object>()
 const anchors = new WeakSet<object>()
-export const TARGET_EXECUTABLE_MAXIMUM_BYTES = 67_108_864
+export const TARGET_EXECUTABLE_MAXIMUM_BYTES = TARGET_PROFILE.maximum_executable_bytes
 const ORIGINAL_SEMANTICS = ['byte-identical-copy', 'no-observer-mutation'] as const
 const PROBE_SEMANTICS = ['request-observation-only', 'response-observation-only', 'no-request-mutation', 'no-response-mutation', 'no-retry-mutation', 'no-config-mutation', 'no-auth-mutation'] as const
 
@@ -68,12 +71,15 @@ function readRecipe(file: string, expectedRecipeSha256: string, kind: Recipe['ki
   const relative = path.basename(file)
   const { value, identity } = readCanonical(root, relative, 32_768)
   if (identity.sha256 !== expectedRecipeSha256) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe bytes differ from the trusted reviewed artifact set')
-  assertExactKeys(value, ['schema_id', 'kind', 'source_sha256', 'source_tree_sha256', 'toolchain_sha256', 'semantics', 'build_command', 'build_command_sha256', 'pre_sign_sha256', 'post_sign_sha256', 'code_signature_identity_sha256', 'recipe_sha256'], 'launch_recipe_invalid')
+  assertExactKeys(value, ['schema_id', 'kind', 'source_sha256', 'source_tree_sha256', 'toolchain_sha256', 'semantics', 'build_command', 'build_command_sha256', 'pre_sign_sha256', 'post_sign_sha256', 'rebuilt_post_sign_sha256', 'rebuild_verified', 'code_signature_identifier', 'code_signature_identity_sha256', 'recipe_sha256'], 'launch_recipe_invalid')
   assertDigestField(value, 'recipe_sha256', 'launch_recipe_invalid')
   const expectedSemantics = kind === 'probe' ? PROBE_SEMANTICS : ORIGINAL_SEMANTICS
-  if (value.schema_id !== 'oracle-lab-p3b-launch-recipe.v3' || value.kind !== kind || value.source_sha256 !== sourceSha256 || value.pre_sign_sha256 !== preSignSha256 || value.post_sign_sha256 !== sourceSha256 || value.source_tree_sha256 !== sourceTreeSha256 || value.toolchain_sha256 !== toolchainSha256 || sha256Canonical(value.semantics) !== sha256Canonical(expectedSemantics) || !Array.isArray(value.build_command) || value.build_command.length < 1 || value.build_command.length > 32 || value.build_command.some((argument) => typeof argument !== 'string' || argument.length === 0 || argument.length > 4096 || /[\u0000\r\n]/.test(argument)) || !String(value.build_command[0]).startsWith('/') || value.build_command_sha256 !== sha256Canonical(value.build_command)) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe command/source/tree/toolchain/probe semantics drifted')
-  if (kind === 'probe') assertSha256(value.code_signature_identity_sha256, 'launch_recipe_invalid', 'code signature identity')
-  else if (value.code_signature_identity_sha256 !== null) throw new Phase3BProductionError('launch_recipe_invalid', 'original recipe must not claim a probe signature')
+  const expectedBuildCommand = kind === 'original' ? [['/bin/cp', '$SOURCE', '$OUTPUT']] : [['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT']]
+  if (value.schema_id !== 'oracle-lab-p3b-launch-recipe.v4' || value.kind !== kind || value.source_sha256 !== sourceSha256 || value.pre_sign_sha256 !== preSignSha256 || value.post_sign_sha256 !== sourceSha256 || value.rebuilt_post_sign_sha256 !== sourceSha256 || value.rebuild_verified !== true || value.source_tree_sha256 !== sourceTreeSha256 || value.toolchain_sha256 !== toolchainSha256 || sha256Canonical(value.semantics) !== sha256Canonical(expectedSemantics) || sha256Canonical(value.build_command) !== sha256Canonical(expectedBuildCommand) || value.build_command_sha256 !== sha256Canonical(expectedBuildCommand)) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe rebuild/source/tree/toolchain/probe semantics drifted')
+  if (kind === 'probe') {
+    assertSha256(value.code_signature_identity_sha256, 'launch_recipe_invalid', 'code signature identity')
+    if (typeof value.code_signature_identifier !== 'string' || !/^[A-Za-z0-9._-]{1,255}$/.test(value.code_signature_identifier)) throw new Phase3BProductionError('launch_recipe_invalid', 'probe signature identifier is invalid')
+  } else if (value.code_signature_identity_sha256 !== null || value.code_signature_identifier !== null) throw new Phase3BProductionError('launch_recipe_invalid', 'original recipe must not claim a probe signature')
   return { recipe: deepFreeze(value as Recipe), identity }
 }
 
@@ -89,7 +95,7 @@ function codeSignatureIdentity(file: string): string {
 }
 
 function recordImage(input: { selectedClass: LaunchImageRecord['selected_executable_class']; imagePath: string; sourceIdentity: StableFileIdentity; sourceTreeSha256: string; toolchainSha256: string; recipe: Recipe; recipeIdentity: StableFileIdentity; reviewedArtifactSetSha256: string }): LaunchImageRecord {
-  const imageIdentity = stableRead(input.imagePath, { mode: 0o500, maximumBytes: 67_108_864 }).identity
+  const imageIdentity = stableRead(input.imagePath, { mode: 0o500, maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   if (imageIdentity.sha256 !== input.sourceIdentity.sha256 || imageIdentity.size !== input.sourceIdentity.size) throw new Phase3BProductionError('launch_image_drift', 'campaign image is not byte-identical to sealed source')
   const signature = input.selectedClass === 'probe_image' ? codeSignatureIdentity(input.imagePath) : null
   if (signature !== input.recipe.code_signature_identity_sha256) throw new Phase3BProductionError('launch_image_signature_invalid', 'probe signature identity does not match recipe')
@@ -115,18 +121,18 @@ function recordImage(input: { selectedClass: LaunchImageRecord['selected_executa
 export function createSealedLaunchImages(input: Readonly<{ runtime_root: string; original_source: string; probe_source: string; probe_source_sha256: string; probe_unsigned_source: string; probe_unsigned_source_sha256: string; original_recipe: string; original_recipe_sha256: string; probe_recipe: string; probe_recipe_sha256: string; source_tree_sha256: string; toolchain_sha256: string; reviewed_artifact_set_sha256: string }>): Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }> {
   assertSha256(input.source_tree_sha256, 'launch_image_input_invalid', 'source tree')
   assertSha256(input.toolchain_sha256, 'launch_image_input_invalid', 'toolchain')
-  const originalSource = stableRead(input.original_source, { maximumBytes: 67_108_864 }).identity
-  if (originalSource.sha256 !== TARGET_PROFILE.entrypoint_sha256 || input.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256) throw new Phase3BProductionError('launch_image_invalid', 'original launch image is not exact Claude Code 2.1.215 darwin-arm64')
-  const probeSource = stableRead(input.probe_source, { maximumBytes: 67_108_864 }).identity
-  const probeUnsignedSource = stableRead(input.probe_unsigned_source, { maximumBytes: 67_108_864 }).identity
+  const originalSource = stableRead(input.original_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  if (originalSource.sha256 !== TARGET_PROFILE.entrypoint_sha256 || originalSource.size !== TARGET_PROFILE.entrypoint_size || input.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256) throw new Phase3BProductionError('launch_image_invalid', 'original launch image is not exact Claude Code 2.1.215 darwin-arm64')
+  const probeSource = stableRead(input.probe_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  const probeUnsignedSource = stableRead(input.probe_unsigned_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   if (probeSource.sha256 !== input.probe_source_sha256 || probeUnsignedSource.sha256 !== input.probe_unsigned_source_sha256) throw new Phase3BProductionError('launch_image_invalid', 'probe pre-sign or post-sign bytes drifted from trusted review')
   const originalRecipe = readRecipe(input.original_recipe, input.original_recipe_sha256, 'original', originalSource.sha256, originalSource.sha256, input.source_tree_sha256, input.toolchain_sha256)
   const probeRecipe = readRecipe(input.probe_recipe, input.probe_recipe_sha256, 'probe', probeSource.sha256, probeUnsignedSource.sha256, input.source_tree_sha256, input.toolchain_sha256)
   const imageRoot = createPrivateDirectory(input.runtime_root, 'launch-images')
   const originalPath = path.join(imageRoot, 'original-image')
   const probePath = path.join(imageRoot, 'probe-image')
-  writeExclusiveBytes(input.runtime_root, 'launch-images/original-image', stableRead(input.original_source, { maximumBytes: 67_108_864 }).bytes, 0o500)
-  writeExclusiveBytes(input.runtime_root, 'launch-images/probe-image', stableRead(input.probe_source, { maximumBytes: 67_108_864 }).bytes, 0o500)
+  writeExclusiveBytes(input.runtime_root, 'launch-images/original-image', stableRead(input.original_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).bytes, 0o500)
+  writeExclusiveBytes(input.runtime_root, 'launch-images/probe-image', stableRead(input.probe_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).bytes, 0o500)
   const result = deepFreeze({
     original: recordImage({ selectedClass: 'original_image', imagePath: originalPath, sourceIdentity: originalSource, sourceTreeSha256: input.source_tree_sha256, toolchainSha256: input.toolchain_sha256, recipe: originalRecipe.recipe, recipeIdentity: originalRecipe.identity, reviewedArtifactSetSha256: input.reviewed_artifact_set_sha256 }),
     probe: recordImage({ selectedClass: 'probe_image', imagePath: probePath, sourceIdentity: probeSource, sourceTreeSha256: input.source_tree_sha256, toolchainSha256: input.toolchain_sha256, recipe: probeRecipe.recipe, recipeIdentity: probeRecipe.identity, reviewedArtifactSetSha256: input.reviewed_artifact_set_sha256 }),
@@ -139,8 +145,8 @@ export function createSealedLaunchImages(input: Readonly<{ runtime_root: string;
 export function verifyLaunchImage(record: unknown): LaunchImageRecord {
   if (!record || typeof record !== 'object' || !images.has(record as object)) throw new Phase3BProductionError('launch_image_invalid', 'opaque campaign-owned launch image is required')
   const value = record as LaunchImageRecord
-  const current = stableRead(value.image_identity.path, { mode: 0o500, maximumBytes: 67_108_864 }).identity
-  const source = stableRead(value.source_identity.path, { maximumBytes: 67_108_864 }).identity
+  const current = stableRead(value.image_identity.path, { mode: 0o500, maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  const source = stableRead(value.source_identity.path, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   const recipe = stableRead(value.recipe_identity.path, { mode: 0o600, maximumBytes: 32_768 }).identity
   if (sha256Canonical(current) !== sha256Canonical(value.image_identity) || sha256Canonical(source) !== sha256Canonical(value.source_identity) || sha256Canonical(recipe) !== sha256Canonical(value.recipe_identity) || sha256Canonical(recipe) !== value.recipe_identity_sha256 || value.record_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'record_sha256')))) throw new Phase3BProductionError('launch_image_drift', 'launch image/source/recipe live identity drifted')
   if (value.selected_executable_class === 'probe_image' && codeSignatureIdentity(value.image_identity.path) !== value.code_signature_identity_sha256) throw new Phase3BProductionError('launch_image_signature_invalid', 'probe signature drifted')

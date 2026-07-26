@@ -487,7 +487,11 @@ function actualRepositoryIdentities(ccGatewayRoot: string, sub2apiRoot: string, 
   if (expectedCcC1) {
     if (!OID.test(expectedCcC1.commit) || !OID.test(expectedCcC1.tree) || gitValue(ccGatewayRoot, `${expectedCcC1.commit}^{tree}`) !== expectedCcC1.tree) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'expected C1 candidate identity is invalid')
     const parents = gitOutput(ccGatewayRoot, ['show', '-s', '--format=%P', liveHead]).split(' ').filter(Boolean)
-    if (parents.length !== 1 || parents[0] !== expectedCcC1.commit) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'live CC approval is not the direct child of expected C1 candidate')
+    if (parents.length !== 2) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'live CC approval is not a two-parent merge')
+    const attestation = parents[1]
+    const attestationParents = gitOutput(ccGatewayRoot, ['show', '-s', '--format=%P', attestation]).split(' ').filter(Boolean)
+    if (attestationParents.length !== 1 || attestationParents[0] !== expectedCcC1.commit || gitValue(ccGatewayRoot, `${attestation}^{tree}`) !== liveTree) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'live CC approval does not merge the direct candidate attestation tree')
+    gitOutput(ccGatewayRoot, ['merge-base', '--is-ancestor', parents[0], expectedCcC1.commit])
     ccHead = expectedCcC1.commit
     ccTree = expectedCcC1.tree
   }

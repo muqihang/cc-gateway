@@ -5,7 +5,7 @@ import { materializeAuthorityArtifacts, type AuthorityMaterializerInput } from '
 import { Phase3BProductionError, assertExactKeys, canonicalBytes } from './core.js'
 import { stableRead } from './sealed-fs.js'
 
-const INPUT_KEYS = ['output_root', 'evidence_root', 'campaign_id', 'cc_repository', 'sub_repository', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'cross_review_task_id', 'cross_review_artifact_sha256', 'original_source', 'probe_source', 'probe_unsigned_source', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const
+const INPUT_KEYS = ['output_root', 'evidence_root', 'campaign_id', 'cc_repository', 'sub_repository', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'cross_review_task_id', 'cross_review_artifact_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const
 
 function parseInput(file: string): AuthorityMaterializerInput {
   const { bytes } = stableRead(path.resolve(file), { mode: 0o600, maximumBytes: 1_048_576 })

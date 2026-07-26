@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalJson, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
+import { stableRead } from './sealed-fs.js'
 
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
 export const FIXED_STDIN_LITERAL = 'Return exactly the synthetic marker output.complete.\n'
@@ -43,6 +45,7 @@ export const TARGET_PROFILE = deepFreeze({
   platform_tree_sha256: '864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6',
   entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58',
   entrypoint_size: 247_124_336,
+  maximum_executable_bytes: 268_435_456,
 })
 
 export type LedgerFamily = 'target_control' | 'config' | 'auth' | 'request_wire' | 'response_failure_recovery'
@@ -180,6 +183,73 @@ export function materializeResponseBody(kind: ResponseAction['body_kind']): stri
   if (kind === 'partial_sse') return COMPLETE_RESPONSE.split('event: content_block_stop', 1)[0]
   if (kind === 'error_json') return ERROR_RESPONSE
   return ''
+}
+
+export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast'] as const)
+export const ES7_RESPONSE_FIELDS = deepFreeze(['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket', 'wire_events', 'wire_event_sha256', 'socket_close_had_error'] as const)
+
+function canonicalLine(value: unknown): Buffer {
+  return Buffer.from(`${canonicalJson(value)}\n`, 'utf8')
+}
+
+export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string, unknown>> {
+  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_base64: Buffer.from(FIXED_STDIN_LITERAL, 'utf8').toString('base64'), literal_table: FIXED_LITERAL_TABLE })
+  const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => ({ ...action, body_base64: Buffer.from(materializeResponseBody(action.body_kind), 'utf8').toString('base64'), body_sha256: sha256Bytes(Buffer.from(materializeResponseBody(action.body_kind), 'utf8')) })), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
+  return deepFreeze({
+    sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, request_stimulus_sha256: row.request_stimulus_sha256, response_program_sha256: row.response_program_sha256, maximum_attempts: row.response_program.maximum_attempts,
+    request_source_base64: requestBytes.toString('base64'), request_source_sha256: sha256Bytes(requestBytes), response_source_base64: responseBytes.toString('base64'), response_source_sha256: sha256Bytes(responseBytes),
+  })
+}
+
+export const NORMATIVE_COVERAGE_PLAN_RELATIVE = 'docs/superpowers/plans/2026-07-24-claude-code-2.1.215-phase-3b-normalized-safe-evidence-sufficiency-supplement.md'
+export const NORMATIVE_COVERAGE_PLAN_SHA256 = '1583dad45085e3dc18941349f323e2342eedd0ff273eb12a7a1a43f5dc736a57'
+const NORMATIVE_COVERAGE_PLAN_PATH = fileURLToPath(new URL(`../../../${NORMATIVE_COVERAGE_PLAN_RELATIVE}`, import.meta.url))
+const COVERAGE_BLOCK_OPEN = '```json coverage-source-bindings\n'
+
+export function normativeCoverageMatrix(ledger: CampaignLedger): Readonly<{ rows: readonly Readonly<Record<string, unknown>>[]; e_rows: readonly Readonly<Record<string, unknown>>[]; c_rows: readonly Readonly<Record<string, unknown>>[]; d_rows: readonly Readonly<Record<string, unknown>>[]; leaf_count: number }> {
+  if (ledger.rows.length !== 340) throw new Phase3BProductionError('conclusion_support_invalid', 'normative coverage requires the exact 340-row campaign ledger')
+  const plan = stableRead(NORMATIVE_COVERAGE_PLAN_PATH, { mode: 0o644, maximumBytes: 262_144 })
+  if (plan.identity.sha256 !== NORMATIVE_COVERAGE_PLAN_SHA256) throw new Phase3BProductionError('conclusion_support_invalid', 'normative E/C/D coverage plan bytes drifted')
+  const text = plan.bytes.toString('utf8')
+  const start = text.indexOf(COVERAGE_BLOCK_OPEN)
+  const end = start < 0 ? -1 : text.indexOf('\n```', start + COVERAGE_BLOCK_OPEN.length)
+  let parsed: unknown
+  try { parsed = JSON.parse(text.slice(start + COVERAGE_BLOCK_OPEN.length, end)) } catch { throw new Phase3BProductionError('conclusion_support_invalid', 'normative E/C/D coverage matrix is not valid JSON') }
+  if (start < 0 || end < 0 || !Array.isArray(parsed) || parsed.length !== 26) throw new Phase3BProductionError('conclusion_support_invalid', 'normative E/C/D coverage matrix is absent or incomplete')
+  const ids = new Set<string>()
+  const leaves = new Set<string>()
+  const rows = parsed.map((entry) => {
+    assertExactKeys(entry, ['id', 'leaves', 'class', 'source_kind', 'source_relative_path', 'source_sha256_binding', 'source_schema', 'scope', 'conclusion_id', 'expiry_binding', 'transform', 'missing_action'], 'conclusion_support_invalid')
+    if (typeof entry.id !== 'string' || ids.has(entry.id) || !Array.isArray(entry.leaves) || entry.leaves.length === 0 || !['E', 'C', 'D'].includes(String(entry.class)) || entry.leaves.some((leaf) => typeof leaf !== 'string' || !leaf.startsWith('/') || leaves.has(leaf))) throw new Phase3BProductionError('conclusion_support_invalid', 'normative coverage row ID, class, or leaf set drifted')
+    ids.add(entry.id)
+    entry.leaves.forEach((leaf) => leaves.add(String(leaf)))
+    const sourceBytes = Buffer.from(`${canonicalJson(entry)}\n`, 'utf8')
+    return deepFreeze({ ...entry, source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) } as Record<string, unknown>)
+  })
+  const byClass = (rowClass: 'E' | 'C' | 'D') => rows.filter((row) => row.class === rowClass)
+  const eRows = byClass('E'); const cRows = byClass('C'); const dRows = byClass('D')
+  if (eRows.length !== 20 || cRows.length !== 3 || dRows.length !== 3 || leaves.size !== 152) throw new Phase3BProductionError('conclusion_support_invalid', 'normative E/C/D coverage class counts drifted')
+  return deepFreeze({ rows, e_rows: eRows, c_rows: cRows, d_rows: dRows, leaf_count: leaves.size })
+}
+
+export function observationCoverageMatrix(ledger: CampaignLedger): Readonly<{ enabled: readonly Readonly<Record<string, unknown>>[]; disabled: readonly Readonly<Record<string, unknown>>[] }> {
+  const enabled: Array<Readonly<Record<string, unknown>>> = []
+  const disabled: Array<Readonly<Record<string, unknown>>> = []
+  for (const row of ledger.rows) {
+    for (const [sourceClass, fields] of [['request', ES7_REQUEST_FIELDS], ['response', ES7_RESPONSE_FIELDS]] as const) {
+      for (const field of fields) {
+        const sourceObject = { schema_id: 'oracle-lab-p3b-es9-source.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field, authority_sha256: sourceClass === 'request' ? row.request_stimulus_sha256 : row.response_program_sha256 }
+        const sourceBytes = canonicalLine(sourceObject)
+        enabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) })
+      }
+    }
+    for (const sourceClass of ['request', 'response'] as const) {
+      const sourceObject = { schema_id: 'oracle-lab-p3b-es9-exclusion.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field: 'raw_body', reason_code: 'sensitive_raw_bytes' }
+      const sourceBytes = canonicalLine(sourceObject)
+      disabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/raw_body`, observation_pointer: sourceClass === 'request' ? '/raw_body' : '/response/raw_body', reason_code: 'sensitive_raw_bytes', source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) })
+    }
+  }
+  return deepFreeze({ enabled, disabled })
 }
 
 const TWO_ARMS = ['instrumented', 'uninstrumented'] as const
