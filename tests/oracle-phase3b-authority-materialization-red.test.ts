@@ -6,14 +6,16 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { bindMaterializedCrossRepoAuthority, buildEs7TypedFixtureContract, buildEs9CoverageContract } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
+import { bindMaterializedCrossRepoAuthority, buildEs7TypedFixtureContract, buildEs9CoverageContract, launchRecipe } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
 import { main as materializerMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer-cli.js'
 import { validateCoverageContract, validateTypedFixtureContract } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { CROSS_REPO_AUTHORITY } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { signEphemeralRecord, signImplementationReviewEphemeral, signOperatorAuthorityEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
-import { validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
+import { createRequirementsSignerSession, signEphemeralRecord, signImplementationReviewEphemeral, signOperatorAuthorityEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
+import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
+import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyGithubWebFlowCommit, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-phase3b-campaign-reviewers.json'
 const REVIEW_PATH = 'docs/superpowers/evidence/phase3b/phase3b-implementation-review.json'
@@ -75,6 +77,17 @@ test('authority RED: exact candidate parent and two-path approval commit validat
   assert.equal(approval.registry.reviewers.length, 2)
 })
 
+test('authority RED: official fixed GitHub web-flow key verifies the known signed merge anchor', () => {
+  assert.equal(GITHUB_WEB_FLOW_FINGERPRINT, '968479A1AFF927E37D1A566BB5690EEEBB952194')
+  assert.equal(GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, '6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84')
+  assert.doesNotThrow(() => verifyGithubWebFlowCommit(realpathSync(path.join(import.meta.dirname, '..')), '56dc4f86a68157709fb529e9ad64d6386365608a'))
+})
+
+test('authority RED: unsigned local approval ancestry cannot substitute for a GitHub merge signature', () => {
+  const fixture = approvalFixture()
+  assert.throws(() => verifyGithubWebFlowCommit(fixture.repository, git(fixture.repository, ['rev-parse', 'HEAD'])), (error: Error & { code?: string }) => error.code === 'github_approval_signature_invalid')
+})
+
 test('authority RED: wrong parent and extra approval paths fail closed', () => {
   const extra = approvalFixture(true)
   assert.throws(() => validateApprovalAttestation(extra.repository, extra.candidate.commit, extra.candidate.tree), (error: Error & { code?: string }) => error.code === 'approval_commit_invalid')
@@ -97,6 +110,34 @@ test('authority RED: registry rejects same identity, same key, and caller replac
   assert.throws(() => validateApprovalAttestation(fixture.repository, fixture.candidate.commit, fixture.candidate.tree), (error: Error & { code?: string }) => error.code === 'approval_commit_invalid')
 })
 
+test('authority RED: approval validation reads committed blobs despite assume-unchanged worktree replacement', () => {
+  const fixture = approvalFixture()
+  const committed = validateApprovalAttestation(fixture.repository, fixture.candidate.commit, fixture.candidate.tree)
+  git(fixture.repository, ['update-index', '--assume-unchanged', REGISTRY_PATH, REVIEW_PATH])
+  const replacementRequirements = reviewer('requirements', 'replacement-requirements')
+  const replacementSecurity = reviewer('security_quality', 'replacement-security')
+  const registryUnsigned = { schema_id: 'oracle-lab-p3b-campaign-reviewers.v1', reviewed_candidate_commit: fixture.candidate.commit, reviewed_candidate_tree: fixture.candidate.tree, reviewers: [replacementRequirements.entry, replacementSecurity.entry] }
+  const replacementRegistry = { ...registryUnsigned, registry_sha256: sha256Canonical(registryUnsigned) }
+  writeFileSync(path.join(fixture.repository, REGISTRY_PATH), `${canonicalJson(replacementRegistry)}\n`, 'utf8')
+  writeFileSync(path.join(fixture.repository, REVIEW_PATH), `${canonicalJson(signedReview(fixture.candidate, replacementSecurity))}\n`, 'utf8')
+  assert.equal(git(fixture.repository, ['status', '--porcelain=v1', '--untracked-files=normal']), '')
+  const validated = validateApprovalAttestation(fixture.repository, fixture.candidate.commit, fixture.candidate.tree)
+  assert.equal(validated.registry_sha256, committed.registry_sha256)
+  assert.equal(validated.registry.reviewers[1]?.key_id, committed.registry.reviewers[1]?.key_id)
+})
+
+test('authority RED: canonical SPKI rejects trailing DER aliases of the same Ed25519 key', () => {
+  const pair = generateKeyPairSync('ed25519')
+  const canonical = pair.publicKey.export({ format: 'der', type: 'spki' })
+  const trailing = Buffer.concat([canonical, Buffer.from([0])])
+  const reviewers = [
+    { key_id: `sha256:${sha256Bytes(canonical)}`, public_key_der_base64: canonical.toString('base64'), reviewer_identity: 'requirements-canonical', reviewer_role: 'requirements' },
+    { key_id: `sha256:${sha256Bytes(trailing)}`, public_key_der_base64: trailing.toString('base64'), reviewer_identity: 'security-alias', reviewer_role: 'security_quality' },
+  ]
+  const unsigned = { schema_id: 'oracle-lab-p3b-campaign-reviewers.v1', reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), reviewers }
+  assert.throws(() => validateCampaignReviewerRegistry({ ...unsigned, registry_sha256: sha256Canonical(unsigned) }), (error: Error & { code?: string }) => error.code === 'trusted_reviewer_registry_invalid')
+})
+
 test('authority RED: unsigned and tampered review signatures cannot pass', () => {
   const fixture = approvalFixture()
   const approval = validateApprovalAttestation(fixture.repository, fixture.candidate.commit, fixture.candidate.tree)
@@ -117,6 +158,40 @@ test('authority GREEN: materialized ES7 and ES9 contracts bind the dynamic C1 le
   const ledger = buildCampaignLedger('p3b-materializer-contracts', crossRepoAuthority(c1))
   assert.doesNotThrow(() => validateTypedFixtureContract(buildEs7TypedFixtureContract(ledger.campaign_id, c1) as Record<string, unknown>, ledger))
   assert.doesNotThrow(() => validateCoverageContract(buildEs9CoverageContract() as Record<string, unknown>, ledger))
+})
+
+test('authority RED: target ceiling admits the exact fixed 247124336-byte executable', () => {
+  assert.equal(TARGET_PROFILE.entrypoint_size, 247_124_336)
+  assert.ok(TARGET_EXECUTABLE_MAXIMUM_BYTES >= TARGET_PROFILE.entrypoint_size)
+})
+
+test('authority RED: ES7 contains literal-bound executable round-trip fixtures', () => {
+  const c1 = sha256Bytes(Buffer.from('fresh-es7-c1'))
+  const ledger = buildCampaignLedger('p3b-es7-round-trip', crossRepoAuthority(c1))
+  const contract = buildEs7TypedFixtureContract(ledger.campaign_id, c1) as Record<string, any>
+  assert.equal(contract.literal_table_sha256, FIXED_LITERAL_TABLE_SHA256)
+  assert.deepEqual(contract.materializer, { algorithm: 'canonical-json-utf8-lf-v1', round_trip: 'receiver-wire-bytes-exact' })
+  assert.equal(contract.rows.length, 340)
+  assert.match(contract.rows[0].request_source_sha256, /^[a-f0-9]{64}$/)
+  assert.match(contract.rows[0].response_source_sha256, /^[a-f0-9]{64}$/)
+  assert.ok(typeof contract.rows[0].request_source_base64 === 'string' && contract.rows[0].request_source_base64.length > 0)
+  assert.ok(typeof contract.rows[0].response_source_base64 === 'string' && contract.rows[0].response_source_base64.length > 0)
+  assert.doesNotThrow(() => validateTypedFixtureContract(contract, ledger))
+  assert.throws(() => validateTypedFixtureContract({ ...contract, literal_table_sha256: 'f'.repeat(64), contract_sha256: sha256Canonical({ ...contract, literal_table_sha256: 'f'.repeat(64), contract_sha256: undefined }) }, ledger))
+})
+
+test('authority RED: ES9 is the exhaustive normative E/D matrix, not a caller-sized set', () => {
+  const c1 = sha256Bytes(Buffer.from('fresh-es9-c1'))
+  const ledger = buildCampaignLedger('p3b-es9-normative', crossRepoAuthority(c1))
+  const contract = buildEs9CoverageContract() as Record<string, any>
+  assert.equal(contract.normative_row_count, 340)
+  assert.equal(contract.enabled_sources.length, 340 * 20)
+  assert.equal(contract.disabled_exclusions.length, 340 * 2)
+  for (const entry of [...contract.enabled_sources, ...contract.disabled_exclusions]) {
+    assert.match(entry.source_pointer, /^\/rows\/\d+\/(request_stimulus|response_program)\//)
+    assert.match(entry.source_sha256, /^[a-f0-9]{64}$/)
+  }
+  assert.doesNotThrow(() => validateCoverageContract(contract, ledger))
 })
 
 test('authority GREEN: materializer CLI rejects caller-selected flags before side effects', () => {
@@ -148,4 +223,26 @@ test('authority GREEN: independent in-memory signers bind exact input, review, r
   assert.doesNotThrow(() => verifyTrustedSignature(security.signed_record as Record<string, unknown>, requirements.registry, 'security_quality', 'review_sha256', 'implementation_review_failed'))
   assert.doesNotThrow(() => verifyTrustedSignature(requirements.signed_authority as Record<string, unknown>, requirements.registry, 'requirements', 'authority_sha256', 'operator_authority_invalid'))
   assert.throws(() => signOperatorAuthorityEphemeral({ identity: 'requirements-isolated-context-2', campaign_input: campaignInput, reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree, security_public_entry: security.public_entry, signed_implementation_review: { ...security.signed_record, reviewed_candidate_tree: 'c'.repeat(40) }, created_at_ms: 11, expires_at_ms: 21 }), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_input_invalid' || error.code === 'implementation_review_failed')
+})
+
+test('authority RED: requirements signer session retains one key for launch authority and later Gate B decision', () => {
+  const digestFields = ['cross_repo_review_sha256', 'probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es7_typed_fixtures_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256']
+  const inputUnsigned: Record<string, unknown> = { schema_id: 'oracle-lab-p3b-production-input.v2', campaign_id: 'p3b-session-test', cc_repository: '/tmp/cc' }
+  digestFields.forEach((field, index) => { inputUnsigned[field] = (index + 1).toString(16).padStart(64, '0') })
+  const campaignInput = { ...inputUnsigned, input_sha256: sha256Canonical(inputUnsigned) }
+  const security = signImplementationReviewEphemeral({ identity: 'security-session-context', campaign_input: campaignInput, reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), created_at_ms: 10, expires_at_ms: 20 })
+  const session = createRequirementsSignerSession({ identity: 'requirements-session-context', campaign_input: campaignInput, reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), security_public_entry: security.public_entry, signed_implementation_review: security.signed_record, created_at_ms: 11, expires_at_ms: 21 })
+  const decision = session.sign_gate_b_decision({ schema_id: 'oracle-lab-p3b-operator-decision.v2', decision_id: 'decision-session-test', decision: 'evaluate_successor_amendment_startable' })
+  assert.equal(decision.signing_key_id, session.public_entry.key_id)
+  assert.doesNotThrow(() => verifyTrustedSignature(decision as Record<string, unknown>, session.registry, 'requirements', 'decision_sha256', 'operator_decision_invalid'))
+})
+
+test('authority RED: probe recipe rebuilds signed output from the unsigned input', () => {
+  const recipe = launchRecipe('probe', 'a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64), 'd'.repeat(64), 'e'.repeat(64)) as Record<string, any>
+  assert.deepEqual(recipe.build_command, [
+    ['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'],
+    ['/usr/bin/codesign', '--force', '--sign', '-', '--timestamp=none', '$OUTPUT'],
+  ])
+  assert.equal(recipe.rebuild_verified, true)
+  assert.equal(recipe.rebuilt_post_sign_sha256, recipe.post_sign_sha256)
 })

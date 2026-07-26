@@ -42,6 +42,7 @@ export const TARGET_PROFILE = deepFreeze({
   platform_archive_sha256: 'b5dd6a135c96957dae232218c4ae5b04328a788f8c509202c92a2fec550601b2',
   platform_tree_sha256: '864f493d9fc237df6a858e1620c83279b8f6c15f205dbb47c058f3f537e924a6',
   entrypoint_sha256: '90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58',
+  entrypoint_size: 247_124_336,
 })
 
 export type LedgerFamily = 'target_control' | 'config' | 'auth' | 'request_wire' | 'response_failure_recovery'

@@ -62,7 +62,7 @@ function codeSignatureIdentity(file: string): string {
   return sha256Bytes(Buffer.from(`${inspection.stdout}${inspection.stderr}`.replaceAll(file, '$SEALED_IMAGE'), 'utf8'))
 }
 
-function launchRecipe(kind: 'original' | 'probe', sourceSha256: string, preSignSha256: string, sourceTreeSha256: string, toolchainSha256: string, signature: string | null): Readonly<Record<string, unknown>> {
+export function launchRecipe(kind: 'original' | 'probe', sourceSha256: string, preSignSha256: string, sourceTreeSha256: string, toolchainSha256: string, signature: string | null): Readonly<Record<string, unknown>> {
   const semantics = kind === 'original' ? ['byte-identical-copy', 'no-observer-mutation'] : ['request-observation-only', 'response-observation-only', 'no-request-mutation', 'no-response-mutation', 'no-retry-mutation', 'no-config-mutation', 'no-auth-mutation']
   const buildCommand = ['/bin/cp', '$SOURCE', '$OUTPUT']
   const unsigned = { schema_id: 'oracle-lab-p3b-launch-recipe.v3', kind, source_sha256: sourceSha256, source_tree_sha256: sourceTreeSha256, toolchain_sha256: toolchainSha256, semantics, build_command: buildCommand, build_command_sha256: sha256Canonical(buildCommand), pre_sign_sha256: preSignSha256, post_sign_sha256: sourceSha256, code_signature_identity_sha256: signature }

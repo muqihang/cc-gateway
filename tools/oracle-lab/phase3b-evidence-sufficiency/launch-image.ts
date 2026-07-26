@@ -59,6 +59,7 @@ type Recipe = Readonly<{
 
 const images = new WeakSet<object>()
 const anchors = new WeakSet<object>()
+export const TARGET_EXECUTABLE_MAXIMUM_BYTES = 67_108_864
 const ORIGINAL_SEMANTICS = ['byte-identical-copy', 'no-observer-mutation'] as const
 const PROBE_SEMANTICS = ['request-observation-only', 'response-observation-only', 'no-request-mutation', 'no-response-mutation', 'no-retry-mutation', 'no-config-mutation', 'no-auth-mutation'] as const
 

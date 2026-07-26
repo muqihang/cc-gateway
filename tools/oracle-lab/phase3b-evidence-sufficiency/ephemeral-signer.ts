@@ -66,3 +66,8 @@ export function signOperatorAuthorityEphemeral(input: Readonly<{ identity: strin
   const authoritySigned = { ...authorityUnsigned, signature }
   return deepFreeze({ public_entry: publicEntry, registry, signed_authority: { ...authoritySigned, authority_sha256: sha256Canonical(authoritySigned) } })
 }
+
+export function createRequirementsSignerSession(input: Parameters<typeof signOperatorAuthorityEphemeral>[0]): ReturnType<typeof signOperatorAuthorityEphemeral> & { sign_gate_b_decision: (payload: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>> } {
+  const authority = signOperatorAuthorityEphemeral(input)
+  return deepFreeze({ ...authority, sign_gate_b_decision: (_payload: Readonly<Record<string, unknown>>) => { throw new Phase3BProductionError('ephemeral_signer_session_unavailable', 'requirements key was destroyed after launch authority signing') } })
+}

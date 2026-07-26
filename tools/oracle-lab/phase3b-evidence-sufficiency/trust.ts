@@ -36,6 +36,12 @@ export type ApprovalAttestation = Readonly<{
 }>
 
 const OID = /^[a-f0-9]{40}$/
+export const GITHUB_WEB_FLOW_FINGERPRINT = '968479A1AFF927E37D1A566BB5690EEEBB952194'
+export const GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256 = '6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84'
+
+export function verifyGithubWebFlowCommit(_repository: string, _commit: string): void {
+  throw new Phase3BProductionError('github_approval_signature_invalid', 'GitHub web-flow merge verification is not implemented')
+}
 
 function git(repository: string, args: readonly string[]): string {
   try {
