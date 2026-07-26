@@ -143,12 +143,24 @@ test('targeted C1 authority: ES9 accepts only the authority-bound fixed E/C/D co
   assert.equal((contract.normative_e_rows as unknown[]).length, 20)
   assert.equal((contract.normative_c_rows as unknown[]).length, 3)
   assert.equal((contract.normative_d_rows as unknown[]).length, 3)
+  assert.ok([...(contract.normative_e_rows as Record<string, unknown>[]), ...(contract.normative_c_rows as Record<string, unknown>[]), ...(contract.normative_d_rows as Record<string, unknown>[])].every((row) => !Object.hasOwn(row, 'source_bytes_base64') && !Object.hasOwn(row, 'source_sha256')))
   const subsetUnsigned: Record<string, unknown> = { ...contract, normative_e_rows: (contract.normative_e_rows as unknown[]).slice(1) }
   delete subsetUnsigned.contract_sha256
   assert.throws(() => validateCoverageContract({ ...subsetUnsigned, contract_sha256: sha256Canonical(subsetUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
   const driftedUnsigned: Record<string, unknown> = { ...contract, repositories: { ...ledger.authority, sub: { ...ledger.authority.sub, tree: sha256Bytes(Buffer.from('drift')) } } }
   delete driftedUnsigned.contract_sha256
   assert.throws(() => validateCoverageContract({ ...driftedUnsigned, contract_sha256: sha256Canonical(driftedUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+})
+
+test('targeted I3: every Phase3B Git caller is config/replace isolated and launch never reads review from worktree', () => {
+  const root = realpathSync(path.join(import.meta.dirname, '..'))
+  for (const relative of ['tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.ts', 'tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.ts', 'tools/oracle-lab/phase3b-evidence-sufficiency/launch-authority.ts']) {
+    const source = readFileSync(path.join(root, relative), 'utf8')
+    assert.doesNotMatch(source, /execFileSync\(['"]git['"]/, relative)
+    assert.match(source, /GIT_NO_REPLACE_OBJECTS|fixedGit/, relative)
+  }
+  const launch = readFileSync(path.join(root, 'tools/oracle-lab/phase3b-evidence-sufficiency/launch-authority.ts'), 'utf8')
+  assert.doesNotMatch(launch, /stableRead\(String\(authority\.implementation_review_path\)/)
 })
 
 test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {

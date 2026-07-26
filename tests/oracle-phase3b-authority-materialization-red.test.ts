@@ -15,7 +15,8 @@ import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/pha
 import { createRequirementsSignerSession, signEphemeralRecord, signImplementationReviewEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
 import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { materializeRequestAst, normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validateAttestationCommit, validateCampaignReviewerRegistry, verifyGithubWebFlowCommit, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-phase3b-campaign-reviewers.json'
@@ -199,13 +200,25 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
   assert.throws(() => validateTypedFixtureContract({ ...tamperedUnsigned, contract_sha256: sha256Canonical(tamperedUnsigned) }, ledger))
 })
 
-test('authority RED: receiver typed AST deterministically reproduces exact wire bytes and rejects tampering', () => {
-  const wire = Buffer.from('{"model":"model.test","messages":[{"role":"user","content":"Return exactly the synthetic marker output.complete."}],"stream":true,"max_tokens":17}', 'utf8')
+test('authority RED: persisted request AST is normalized-safe and contains no raw or encoded secret bytes', () => {
+  const marker = 'sk-SECRET12345678'
+  const wire = Buffer.from(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Return exactly the synthetic marker output.complete."}],"stream":true,"max_tokens":17,"unexpected":"${marker}"}`, 'utf8')
   const ast = normalizeRequestAst(wire) as Record<string, unknown>
   assert.equal(ast.materializer, REQUEST_AST_MATERIALIZER)
-  assert.deepEqual(materializeRequestAst(ast), wire)
-  const changed = { ...ast, wire_sha256: 'f'.repeat(64) }
-  assert.throws(() => materializeRequestAst(changed), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  const persisted = canonicalJson(ast)
+  assert.equal(persisted.includes(marker), false)
+  assert.equal(persisted.includes(Buffer.from(wire).toString('base64')), false)
+  assert.equal(Object.hasOwn(ast, 'wire_bytes_base64'), false)
+  assert.match(persisted, /synthetic-literals\/request_model_v1/)
+})
+
+test('authority RED: sandbox defaults deny host reads and process inspection', () => {
+  const profile = buildSandboxProfile('/private/tmp/p3b-runtime', '/private/tmp/p3b-runtime/run', [43123])
+  assert.match(profile, /\(deny default\)/)
+  assert.doesNotMatch(profile, /\(allow default\)/)
+  assert.match(profile, /deny process-info/)
+  assert.match(profile, /deny file-read.*\.ssh/)
+  assert.match(profile, /deny file-read.*\.claude/)
 })
 
 test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-sized set', () => {
@@ -217,6 +230,7 @@ test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-
   assert.equal(contract.normative_e_rows.length, 20)
   assert.equal(contract.normative_c_rows.length, 3)
   assert.equal(contract.normative_d_rows.length, 3)
+  assert.ok([...contract.normative_e_rows, ...contract.normative_c_rows, ...contract.normative_d_rows].every((row: Record<string, unknown>) => !Object.hasOwn(row, 'source_bytes_base64') && !Object.hasOwn(row, 'source_sha256')))
   assert.equal(contract.observation_enabled_sources.length, 340 * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
   assert.equal(contract.observation_disabled_exclusions.length, 340 * 2)
   for (const entry of [...contract.observation_enabled_sources, ...contract.observation_disabled_exclusions]) {
@@ -280,9 +294,9 @@ test('authority RED: requirements signer session retains one key for launch auth
   assert.equal(decision.signing_key_id, session.public_entry.key_id)
   assert.doesNotThrow(() => verifyTrustedSignature(decision as Record<string, unknown>, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid'))
   const resultUnsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: String(campaignInput.campaign_id), gate_a_sha256: '1'.repeat(64), external_set_sha256: '3'.repeat(64), operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: [], gate_clock_sha256: '4'.repeat(64), phase3b_usable: true }
-  const closure = session.confirm_gate_b_result({ ...resultUnsigned, gate_result_sha256: sha256Canonical(resultUnsigned) })
-  assert.equal(closure.status, 'private_key_destroyed_after_gate_b')
-  assert.throws(() => session.sign_gate_b_decision({}), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_session_closed')
+  assert.throws(() => session.confirm_gate_b_result({ ...resultUnsigned, gate_result_sha256: sha256Canonical(resultUnsigned) }), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_input_invalid')
+  assert.throws(() => session.sign_gate_b_decision({}), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_lifecycle_invalid')
+  session.close()
 })
 
 test('authority GREEN: long-lived signer CLI emits only public material and closes without key persistence', async () => {
