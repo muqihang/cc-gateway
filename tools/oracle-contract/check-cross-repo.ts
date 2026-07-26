@@ -458,11 +458,40 @@ function findGo(): string {
   throw new CrossRepoContractError('contract_command_failed', 'pinned Go executable is unavailable')
 }
 
+function gitOutput(root: string, args: readonly string[]): string {
+  const result = spawnSync('git', [...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 30_000,
+    maxBuffer: 64 * 1024,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', LANG: 'C', LC_ALL: 'C' },
+  })
+  if (result.status !== 0 || result.error) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'Git identity command failed')
+  return result.stdout.trim()
+}
+
 function gitValue(root: string, revision: string): string {
-  const result = spawnSync('git', ['rev-parse', revision], { cwd: root, encoding: 'utf8', timeout: 30_000 })
-  const value = result.stdout.trim()
-  if (result.status !== 0 || !OID.test(value)) throw new CrossRepoContractError('contract_command_failed', 'CC Git identity is unavailable')
+  const value = gitOutput(root, ['rev-parse', revision])
+  if (!OID.test(value)) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'Git object identity is invalid')
   return value
+}
+
+function actualRepositoryIdentities(ccGatewayRoot: string, sub2apiRoot: string): { ccHead: string; ccTree: string } {
+  const ccHead = gitValue(ccGatewayRoot, 'HEAD')
+  const ccTree = gitValue(ccGatewayRoot, 'HEAD^{tree}')
+  if (gitOutput(ccGatewayRoot, ['status', '--porcelain=v1', '--untracked-files=normal']) !== '') {
+    throw new CrossRepoContractError('cross_repo_binding_mismatch', 'CC checkout is not clean')
+  }
+
+  const subHead = gitValue(sub2apiRoot, 'HEAD')
+  const subHeadTree = gitValue(sub2apiRoot, 'HEAD^{tree}')
+  gitOutput(sub2apiRoot, ['cat-file', '-e', `${SUB_RECEIPT_MERGE}^{commit}`])
+  const subMergeTree = gitValue(sub2apiRoot, `${SUB_RECEIPT_MERGE}^{tree}`)
+  const subMergeParents = gitOutput(sub2apiRoot, ['show', '-s', '--format=%P', SUB_RECEIPT_MERGE])
+  if ((subHead !== SUB_RECEIPT_MERGE && subHead !== SUB_RECEIPT_PARENTS[1]) || subHeadTree !== SUB_RECEIPT_TREE || subMergeTree !== SUB_RECEIPT_TREE || subMergeParents !== SUB_RECEIPT_PARENTS.join(' ') || gitOutput(sub2apiRoot, ['status', '--porcelain=v1', '--untracked-files=no']) !== '') {
+    throw new CrossRepoContractError('cross_repo_binding_mismatch', 'Sub checkout or receipt merge identity differs')
+  }
+  return { ccHead, ccTree }
 }
 
 function validateSubReceipt(raw: Uint8Array, expected: {
@@ -743,6 +772,10 @@ export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, 
   const authority = objectValue(parsed.authority, 'authority')
   if (!c1 || !OID.test(String(c1.head)) || !OID.test(String(c1.tree)) || !SAFE_REF.test(String(authority.command_id)) || authority.reviewer_model !== 'gpt-5.6-sol' || !SAFE_REF.test(String(subReview.task_id)) || !SAFE_REF.test(String(crossReview.task_id)) || !SHA256.test(String(subReview.artifact_sha256)) || !SHA256.test(String(crossReview.artifact_sha256))) {
     throw new CrossRepoContractError('contract_schema_invalid', 'record authority or review binding is invalid')
+  }
+  const actual = actualRepositoryIdentities(ccGatewayRoot, sub2apiRoot)
+  if (c1.head !== actual.ccHead || c1.tree !== actual.ccTree) {
+    throw new CrossRepoContractError('cross_repo_binding_mismatch', 'record C1 identity differs from the CC checkout')
   }
   const expected = buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, {
     issuedAtMs: parsed.issued_at_ms as number,

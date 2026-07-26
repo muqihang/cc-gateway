@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -29,6 +30,12 @@ import { resolveSub2apiTestRoot } from './oracle-contract-test-roots.js'
 
 const ccGatewayRoot = process.cwd()
 const sub2apiRoot = resolveSub2apiTestRoot()
+
+function gitValue(root: string, revision: string): string {
+  const result = spawnSync('git', ['rev-parse', revision], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 })
+  assert.equal(result.status, 0)
+  return result.stdout.trim()
+}
 
 function expectCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (error: unknown) => error instanceof CrossRepoContractError && error.code === code)
@@ -115,8 +122,8 @@ test('mutation identities and their exact source bytes are frozen', () => {
 
 const recordInput = {
   issuedAtMs: Date.now(),
-  ccC1Commit: '1234567890abcdef1234567890abcdef12345678',
-  ccC1Tree: 'abcdef1234567890abcdef1234567890abcdef12',
+  ccC1Commit: gitValue(ccGatewayRoot, 'HEAD'),
+  ccC1Tree: gitValue(ccGatewayRoot, 'HEAD^{tree}'),
   crossReviewTaskId: 'task:c1-cross-review',
   crossReviewArtifactSha256: '1'.repeat(64),
 }
@@ -142,6 +149,12 @@ test('cross-repo record is independently computed, JCS framed, and digest bound'
   assert.notEqual(raw.at(-2), 0x0a)
   assert.equal((parsed.result as Record<string, unknown>).decisions_sha256, checkCrossRepoContract({ ccGatewayRoot, sub2apiRoot, runCommands: false }).decisionsDigest)
   assert.throws(() => validateCrossRepoRecord(raw.subarray(0, -1), ccGatewayRoot, sub2apiRoot), (error: unknown) => error instanceof CrossRepoContractError && error.code === 'cross_repo_binding_mismatch')
+
+  const synthetic = buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, { ...recordInput, ccC1Commit: '1234567890abcdef1234567890abcdef12345678' })
+  expectCode(() => validateCrossRepoRecord(encodeCrossRepoRecord(synthetic), ccGatewayRoot, sub2apiRoot), 'cross_repo_binding_mismatch')
+
+  const unboundSub = fixtureCopy()
+  expectCode(() => validateCrossRepoRecord(raw, ccGatewayRoot, unboundSub.sub2apiRoot), 'cross_repo_binding_mismatch')
 })
 
 test('schema, constraint, DAG, diagnostic, and result mutations fail closed', () => {
