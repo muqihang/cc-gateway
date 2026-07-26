@@ -43,10 +43,11 @@ export const GITHUB_WEB_FLOW_FINGERPRINT = '968479A1AFF927E37D1A566BB5690EEEBB95
 export const GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256 = '6e8af687f60cf3f403151c8fb1b26e95e6f9e424ca60cc8f3787bd4466a3ef84'
 const GITHUB_WEB_FLOW_KEY_SOURCE_SHA256 = GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256
 const GITHUB_WEB_FLOW_KEYBOX_SHA256 = 'a0156a662b741340e0e9d2345abaf7a6d7768dec3924e0d58adc8141b626dbd1'
-const GITHUB_WEB_FLOW_WRAPPER_SHA256 = '932185b087e72afbdde31b14e5e5a3906a8b386495b3c6c4688076baf152225d'
+const GITHUB_WEB_FLOW_WRAPPER_SHA256 = 'b701ec886f51a3c6bf034457514ee19f9f1dda89c004dfa6bc94c563e59f3194'
 const GITHUB_GPG_EXECUTABLE = '/opt/homebrew/Cellar/gnupg/2.5.18/bin/gpg'
 const GITHUB_GPG_EXECUTABLE_SHA256 = '324a16d99e84c7931dddd8b465b03a16af3ae2fa5f101d3e9961cc7667e4fe8e'
 const TRUST_ROOT = path.dirname(fileURLToPath(import.meta.url))
+const FIXED_GIT_ENV = { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0' } as const
 
 export function verifyGithubWebFlowCommit(repository: string, commit: string): void {
   if (!path.isAbsolute(repository) || !OID.test(commit)) throw new Phase3BProductionError('github_approval_signature_invalid', 'GitHub approval repository or commit is invalid')
@@ -55,14 +56,14 @@ export function verifyGithubWebFlowCommit(repository: string, commit: string): v
   const wrapper = stableRead(path.join(TRUST_ROOT, 'github-web-flow-gpgv'), { mode: 0o755, maximumBytes: 4096 })
   const gpg = stableRead(GITHUB_GPG_EXECUTABLE, { mode: 0o555, maximumBytes: 8_388_608 })
   if (source.identity.sha256 !== GITHUB_WEB_FLOW_KEY_SOURCE_SHA256 || source.identity.size !== 2483 || source.bytes.at(-1) !== 0x2d || keybox.identity.sha256 !== GITHUB_WEB_FLOW_KEYBOX_SHA256 || wrapper.identity.sha256 !== GITHUB_WEB_FLOW_WRAPPER_SHA256 || gpg.identity.sha256 !== GITHUB_GPG_EXECUTABLE_SHA256) throw new Phase3BProductionError('github_approval_signature_invalid', 'fixed GitHub web-flow key or verifier identity drifted')
-  const result = spawnSync('/usr/bin/git', ['-C', repository, '-c', `gpg.program=${wrapper.identity.path}`, 'verify-commit', '--raw', commit], { encoding: 'utf8', timeout: 30_000, maxBuffer: 1_048_576, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0' } })
+  const result = spawnSync('/usr/bin/git', ['-C', repository, '-c', `gpg.program=${wrapper.identity.path}`, 'verify-commit', '--raw', commit], { encoding: 'utf8', timeout: 30_000, maxBuffer: 1_048_576, env: FIXED_GIT_ENV })
   const status = `${result.stdout}${result.stderr}`
   if (result.status !== 0 || result.error || !status.includes(`[GNUPG:] VALIDSIG ${GITHUB_WEB_FLOW_FINGERPRINT} `) || !status.includes('[GNUPG:] GOODSIG B5690EEEBB952194 GitHub <noreply@github.com>')) throw new Phase3BProductionError('github_approval_signature_invalid', 'approval merge is not signed by the fixed GitHub web-flow key')
 }
 
 function git(repository: string, args: readonly string[]): string {
   try {
-    return execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
+    return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000, env: FIXED_GIT_ENV }).trim()
   } catch {
     throw new Phase3BProductionError('approval_commit_invalid', 'approval Git identity cannot be read')
   }
@@ -70,7 +71,7 @@ function git(repository: string, args: readonly string[]): string {
 
 function gitBytes(repository: string, args: readonly string[], maximumBytes: number): Buffer {
   try {
-    return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'buffer', timeout: 10_000, maxBuffer: maximumBytes })
+    return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'buffer', timeout: 10_000, maxBuffer: maximumBytes, env: FIXED_GIT_ENV })
   } catch { throw new Phase3BProductionError('approval_commit_invalid', 'approval Git blob cannot be read') }
 }
 
@@ -126,6 +127,7 @@ export function validateAttestationCommit(repository: string, attestationCommit:
   const reviewRecord = canonicalRepositoryRecord(repository, attestationCommit, IMPLEMENTATION_REVIEW_RELATIVE)
   assertDigestField(reviewRecord.value, 'review_sha256', 'implementation_review_failed')
   verifyTrustedSignature(reviewRecord.value, registry, 'security_quality', 'review_sha256', 'implementation_review_failed')
+  if (reviewRecord.value.requirements_public_entry_sha256 !== sha256Canonical(registry.reviewers[0])) throw new Phase3BProductionError('implementation_review_failed', 'implementation review does not bind the pre-review requirements public entry')
   return deepFreeze({ attestation_commit: attestationCommit, attestation_tree: attestationTree, reviewed_candidate_commit: reviewedCandidateCommit, reviewed_candidate_tree: reviewedCandidateTree, registry, registry_sha256: registryRecord.sha256, implementation_review: reviewRecord.value, implementation_review_sha256: reviewRecord.sha256 })
 }
 

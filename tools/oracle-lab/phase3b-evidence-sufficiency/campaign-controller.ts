@@ -94,7 +94,7 @@ export type OperatorAuthority = Readonly<{
 
 const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_task_id', 'cross_review_artifact_path', 'cross_review_artifact_sha256', 'cross_repo_review_path', 'cross_repo_review_sha256', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'es8_go_receipt_path', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
 const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree', 'campaign_registry_sha256', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
-const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
+const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'requirements_public_entry_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
 
 function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
   const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
@@ -166,8 +166,9 @@ function validateAuthority(value: Record<string, unknown>, input: CampaignInput)
   assertDigestField(value, 'authority_sha256', 'operator_authority_invalid')
   for (const field of ['reviewed_candidate_commit', 'reviewed_candidate_tree', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree'] as const) if (typeof value[field] !== 'string' || !/^[a-f0-9]{40}$/.test(value[field] as string)) throw new Phase3BProductionError('operator_authority_invalid', `${field} is invalid`)
   const approval = validateApprovalAttestation(input.cc_repository, String(value.reviewed_candidate_commit), String(value.reviewed_candidate_tree))
-  const crossReview = parseExternalCanonical(input.cross_review_artifact_path)
-  if (crossReview.reviewed_candidate_commit !== value.reviewed_candidate_commit || crossReview.reviewed_candidate_tree !== value.reviewed_candidate_tree || crossReview.model !== 'gpt-5.6-sol') throw new Phase3BProductionError('operator_authority_invalid', 'cross review artifact does not bind the approved implementation candidate')
+  const crossReviewRecord = readExternalCanonical(input.cross_review_artifact_path)
+  const crossReview = crossReviewRecord.value
+  if (crossReviewRecord.identity.sha256 !== input.cross_review_artifact_sha256 || crossReview.reviewed_candidate_commit !== value.reviewed_candidate_commit || crossReview.reviewed_candidate_tree !== value.reviewed_candidate_tree || crossReview.model !== 'gpt-5.6-sol') throw new Phase3BProductionError('operator_authority_invalid', 'cross review artifact does not bind the approved implementation candidate')
   const materializedC1 = bindMaterializedCrossRepoAuthority(stableRead(input.cross_repo_review_path, { mode: 0o600, maximumBytes: 1_048_576 }).bytes, { cc_repository: input.cc_repository, sub_repository: input.sub_repository, reviewed_candidate_commit: String(value.reviewed_candidate_commit), reviewed_candidate_tree: String(value.reviewed_candidate_tree) })
   if (materializedC1.review_sha256 !== input.cross_repo_review_sha256) throw new Phase3BProductionError('operator_authority_invalid', 'materialized C1 does not bind the exact reviewed candidate')
   verifyTrustedSignature(value, approval.registry, 'requirements', 'authority_sha256', 'operator_authority_invalid')
@@ -181,7 +182,7 @@ function validateAuthority(value: Record<string, unknown>, input: CampaignInput)
   assertExactKeys(review, REVIEW_KEYS, 'implementation_review_failed')
   assertDigestField(review, 'review_sha256', 'implementation_review_failed')
   verifyTrustedSignature(review, approval.registry, 'security_quality', 'review_sha256', 'implementation_review_failed')
-  if (review.schema_id !== 'oracle-lab-p3b-implementation-review.v3' || review.review_kind !== 'phase3b-production-executor' || review.reviewed_candidate_commit !== value.reviewed_candidate_commit || review.reviewed_candidate_tree !== value.reviewed_candidate_tree || review.reviewed_artifact_set_sha256 !== artifactSetSha256 || review.critical !== 0 || review.important !== 0 || review.verdict !== 'PASS' || sha256Canonical(review.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(review.c1) !== sha256Canonical(c1) || !Number.isSafeInteger(review.created_at_ms) || !Number.isSafeInteger(review.expires_at_ms) || Number(review.created_at_ms) > Date.now() || Number(review.expires_at_ms) <= Date.now() || Number(review.expires_at_ms) - Number(review.created_at_ms) > 86_400_000) throw new Phase3BProductionError('implementation_review_failed', 'trusted exact-candidate implementation review is not current 0C/0I')
+  if (review.schema_id !== 'oracle-lab-p3b-implementation-review.v3' || review.review_kind !== 'phase3b-production-executor' || review.reviewed_candidate_commit !== value.reviewed_candidate_commit || review.reviewed_candidate_tree !== value.reviewed_candidate_tree || review.requirements_public_entry_sha256 !== sha256Canonical(approval.registry.reviewers[0]) || review.reviewed_artifact_set_sha256 !== artifactSetSha256 || review.critical !== 0 || review.important !== 0 || review.verdict !== 'PASS' || sha256Canonical(review.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(review.c1) !== sha256Canonical(c1) || !Number.isSafeInteger(review.created_at_ms) || !Number.isSafeInteger(review.expires_at_ms) || Number(review.created_at_ms) > Date.now() || Number(review.expires_at_ms) <= Date.now() || Number(review.expires_at_ms) - Number(review.created_at_ms) > 86_400_000) throw new Phase3BProductionError('implementation_review_failed', 'trusted exact-candidate implementation review is not current 0C/0I')
   validateRepositories(input, String(value.reviewed_candidate_commit), String(value.reviewed_candidate_tree), approval.approval_commit, approval.approval_tree)
   return deepFreeze(value as OperatorAuthority)
 }
@@ -199,16 +200,23 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
   for (const directory of ['control', 'prelaunch', 'observations', 'receiver-results', 'runs', 'guards', 'cell-results']) createPrivateDirectory(root, directory)
   writeExclusiveCanonical(root, 'control/campaign-input.json', input)
   writeExclusiveCanonical(root, 'control/operator-authority.json', authority)
-  writeExclusiveCanonical(root, 'control/focused-suite.json', parseExternalCanonical(input.focused_suite_path))
   writeExclusiveCanonical(root, 'control/implementation-review.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).implementation_review)
-  writeExclusiveCanonical(root, 'control/cross-review-artifact.json', parseExternalCanonical(input.cross_review_artifact_path))
-  writeExclusiveCanonical(root, 'control/cross-repo-review.json', parseExternalCanonical(input.cross_repo_review_path))
-  writeExclusiveCanonical(root, 'control/es8-go-receipt.json', parseExternalCanonical(input.es8_go_receipt_path))
-  writeExclusiveCanonical(root, 'control/es7-typed-fixtures.json', parseExternalCanonical(input.es7_typed_fixtures_path, 16_777_216))
-  writeExclusiveCanonical(root, 'control/es8-ts-c1-agreement.json', parseExternalCanonical(input.es8_ts_c1_agreement_path))
-  writeExclusiveCanonical(root, 'control/es9-coverage-contract.json', parseExternalCanonical(input.es9_coverage_contract_path, 16_777_216))
-  writeExclusiveCanonical(root, 'control/predecessor-config-auth.json', parseExternalCanonical(input.predecessor_config_auth_path))
-  writeExclusiveCanonical(root, 'control/predecessor-failure-stream.json', parseExternalCanonical(input.predecessor_failure_stream_path))
+  const externalControls = [
+    ['control/focused-suite.json', input.focused_suite_path, input.focused_suite_sha256, 1_048_576],
+    ['control/cross-review-artifact.json', input.cross_review_artifact_path, input.cross_review_artifact_sha256, 1_048_576],
+    ['control/cross-repo-review.json', input.cross_repo_review_path, input.cross_repo_review_sha256, 1_048_576],
+    ['control/es8-go-receipt.json', input.es8_go_receipt_path, input.es8_go_receipt_sha256, 1_048_576],
+    ['control/es7-typed-fixtures.json', input.es7_typed_fixtures_path, input.es7_typed_fixtures_sha256, 16_777_216],
+    ['control/es8-ts-c1-agreement.json', input.es8_ts_c1_agreement_path, input.es8_ts_c1_agreement_sha256, 1_048_576],
+    ['control/es9-coverage-contract.json', input.es9_coverage_contract_path, input.es9_coverage_contract_sha256, 16_777_216],
+    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'], 1_048_576],
+    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'], 1_048_576],
+  ] as const
+  for (const [relative, source, sha256, maximumBytes] of externalControls) {
+    const record = readExternalCanonical(source, maximumBytes)
+    if (record.identity.sha256 !== sha256) throw new Phase3BProductionError('sealed_authority_file_drift', `${relative} changed before sealing`)
+    writeExclusiveCanonical(root, relative, record.value)
+  }
   writeExclusiveCanonical(root, 'control/trusted-reviewers.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).registry)
   createPrivateDirectory(root, 'synthetic-literals')
   writeExclusiveCanonical(root, FIXED_LITERAL_TABLE_PATH, FIXED_LITERAL_TABLE)

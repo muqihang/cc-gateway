@@ -10,11 +10,12 @@ import { bindMaterializedCrossRepoAuthority, buildEs7TypedFixtureContract, build
 import { main as materializerMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer-cli.js'
 import { validateCoverageContract, validateTypedFixtureContract } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
-import { CROSS_REPO_AUTHORITY } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { CROSS_REPO_AUTHORITY, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { createRequirementsSignerSession, signEphemeralRecord, signImplementationReviewEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
 import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { materializeRequestAst, normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validateAttestationCommit, validateCampaignReviewerRegistry, verifyGithubWebFlowCommit, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-phase3b-campaign-reviewers.json'
@@ -33,11 +34,11 @@ function reviewer(role: TrustedReviewer['reviewer_role'], identity: string): { e
   }
 }
 
-function signedReview(candidate: { commit: string; tree: string }, security: ReturnType<typeof reviewer>): Record<string, unknown> {
+function signedReview(candidate: { commit: string; tree: string }, requirements: ReturnType<typeof reviewer>, security: ReturnType<typeof reviewer>): Record<string, unknown> {
   const unsigned = {
     schema_id: 'oracle-lab-p3b-implementation-review.v3', review_kind: 'phase3b-production-executor',
     reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree,
-    reviewed_artifact_set_sha256: 'a'.repeat(64), cross_repo_review_sha256: 'b'.repeat(64),
+    reviewed_artifact_set_sha256: 'a'.repeat(64), cross_repo_review_sha256: 'b'.repeat(64), requirements_public_entry_sha256: sha256Canonical(requirements.entry),
     critical: 0, important: 0, verdict: 'PASS', created_at_ms: 1, expires_at_ms: 2,
     reviewer_identity: security.entry.reviewer_identity, reviewer_role: security.entry.reviewer_role,
     signing_key_id: security.entry.key_id, signature_algorithm: 'ed25519_canonical_json_v1',
@@ -59,7 +60,7 @@ function approvalFixture(extraPath = false): { repository: string; candidate: { 
   const security = reviewer('security_quality', 'security-independent')
   const registryUnsigned = { schema_id: 'oracle-lab-p3b-campaign-reviewers.v1', reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree, reviewers: [requirements.entry, security.entry] }
   const registry = { ...registryUnsigned, registry_sha256: sha256Canonical(registryUnsigned) }
-  const review = signedReview(candidate, security)
+  const review = signedReview(candidate, requirements, security)
   mkdirSync(path.join(repository, path.dirname(REGISTRY_PATH)), { recursive: true })
   mkdirSync(path.join(repository, path.dirname(REVIEW_PATH)), { recursive: true })
   writeFileSync(path.join(repository, REGISTRY_PATH), `${canonicalJson(registry)}\n`, 'utf8')
@@ -120,11 +121,26 @@ test('authority RED: approval validation reads committed blobs despite assume-un
   const registryUnsigned = { schema_id: 'oracle-lab-p3b-campaign-reviewers.v1', reviewed_candidate_commit: fixture.candidate.commit, reviewed_candidate_tree: fixture.candidate.tree, reviewers: [replacementRequirements.entry, replacementSecurity.entry] }
   const replacementRegistry = { ...registryUnsigned, registry_sha256: sha256Canonical(registryUnsigned) }
   writeFileSync(path.join(fixture.repository, REGISTRY_PATH), `${canonicalJson(replacementRegistry)}\n`, 'utf8')
-  writeFileSync(path.join(fixture.repository, REVIEW_PATH), `${canonicalJson(signedReview(fixture.candidate, replacementSecurity))}\n`, 'utf8')
+  writeFileSync(path.join(fixture.repository, REVIEW_PATH), `${canonicalJson(signedReview(fixture.candidate, fixture.requirements, replacementSecurity))}\n`, 'utf8')
   assert.equal(git(fixture.repository, ['status', '--porcelain=v1', '--untracked-files=normal']), '')
   const validated = validateAttestationCommit(fixture.repository, attestation, fixture.candidate.commit, fixture.candidate.tree)
   assert.equal(validated.registry_sha256, committed.registry_sha256)
   assert.equal(validated.registry.reviewers[1]?.key_id, committed.registry.reviewers[1]?.key_id)
+})
+
+test('authority RED: approval topology and blobs ignore caller-controlled Git replace refs', () => {
+  const fixture = approvalFixture()
+  const attestation = git(fixture.repository, ['rev-parse', 'HEAD'])
+  git(fixture.repository, ['switch', '-q', '-c', 'replacement', fixture.candidate.commit])
+  writeFileSync(path.join(fixture.repository, 'replacement.txt'), 'replacement\n', 'utf8')
+  git(fixture.repository, ['add', 'replacement.txt'])
+  execFileSync('/usr/bin/git', ['-C', fixture.repository, '-c', 'user.name=Phase3B', '-c', 'user.email=phase3b@example.invalid', 'commit', '-q', '-m', 'replacement'])
+  const replacement = git(fixture.repository, ['rev-parse', 'HEAD'])
+  git(fixture.repository, ['replace', attestation, replacement])
+  git(fixture.repository, ['switch', '-q', '-'])
+  const validated = validateAttestationCommit(fixture.repository, attestation, fixture.candidate.commit, fixture.candidate.tree)
+  assert.equal(validated.attestation_commit, attestation)
+  assert.equal(validated.registry.reviewed_candidate_commit, fixture.candidate.commit)
 })
 
 test('authority RED: canonical SPKI rejects trailing DER aliases of the same Ed25519 key', () => {
@@ -171,7 +187,7 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
   const ledger = buildCampaignLedger('p3b-es7-round-trip', crossRepoAuthority(c1))
   const contract = buildEs7TypedFixtureContract(ledger.campaign_id, c1) as Record<string, any>
   assert.equal(contract.literal_table_sha256, FIXED_LITERAL_TABLE_SHA256)
-  assert.deepEqual(contract.materializer, { algorithm: 'canonical-json-utf8-lf-v1', round_trip: 'receiver-wire-bytes-exact' })
+  assert.deepEqual(contract.materializer, { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', wire_encoding: 'canonical-base64-v1', round_trip: 'receiver-wire-bytes-exact' })
   assert.equal(contract.rows.length, 340)
   assert.match(contract.rows[0].request_source_sha256, /^[a-f0-9]{64}$/)
   assert.match(contract.rows[0].response_source_sha256, /^[a-f0-9]{64}$/)
@@ -183,6 +199,15 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
   assert.throws(() => validateTypedFixtureContract({ ...tamperedUnsigned, contract_sha256: sha256Canonical(tamperedUnsigned) }, ledger))
 })
 
+test('authority RED: receiver typed AST deterministically reproduces exact wire bytes and rejects tampering', () => {
+  const wire = Buffer.from('{"model":"model.test","messages":[{"role":"user","content":"Return exactly the synthetic marker output.complete."}],"stream":true,"max_tokens":17}', 'utf8')
+  const ast = normalizeRequestAst(wire) as Record<string, unknown>
+  assert.equal(ast.materializer, REQUEST_AST_MATERIALIZER)
+  assert.deepEqual(materializeRequestAst(ast), wire)
+  const changed = { ...ast, wire_sha256: 'f'.repeat(64) }
+  assert.throws(() => materializeRequestAst(changed), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+})
+
 test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-sized set', () => {
   const c1 = sha256Bytes(Buffer.from('fresh-es9-c1'))
   const ledger = buildCampaignLedger('p3b-es9-normative', crossRepoAuthority(c1))
@@ -192,7 +217,7 @@ test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-
   assert.equal(contract.normative_e_rows.length, 20)
   assert.equal(contract.normative_c_rows.length, 3)
   assert.equal(contract.normative_d_rows.length, 3)
-  assert.equal(contract.observation_enabled_sources.length, 340 * 20)
+  assert.equal(contract.observation_enabled_sources.length, 340 * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
   assert.equal(contract.observation_disabled_exclusions.length, 340 * 2)
   for (const entry of [...contract.observation_enabled_sources, ...contract.observation_disabled_exclusions]) {
     assert.match(entry.source_pointer, /^\/rows\/\d+\/(request_stimulus|response_program)\//)
@@ -227,8 +252,9 @@ test('authority GREEN: independent in-memory signers bind exact input, review, r
   digestFields.forEach((field, index) => { inputUnsigned[field] = index.toString(16).padStart(64, '0') })
   const campaignInput: Record<string, unknown> = { ...inputUnsigned, input_sha256: sha256Canonical(inputUnsigned) }
   const candidate = { commit: 'a'.repeat(40), tree: 'b'.repeat(40) }
-  const security = signImplementationReviewEphemeral({ identity: 'security-isolated-context', campaign_input: campaignInput, reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree, created_at_ms: 10, expires_at_ms: 20 })
   const requirements = createRequirementsSignerSession({ identity: 'requirements-isolated-context', reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree })
+  assert.throws(() => signImplementationReviewEphemeral({ identity: requirements.public_entry.reviewer_identity, requirements_public_entry: requirements.public_entry, campaign_input: campaignInput, reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree, created_at_ms: 10, expires_at_ms: 20 }), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_input_invalid')
+  const security = signImplementationReviewEphemeral({ identity: 'security-isolated-context', requirements_public_entry: requirements.public_entry, campaign_input: campaignInput, reviewed_candidate_commit: candidate.commit, reviewed_candidate_tree: candidate.tree, created_at_ms: 10, expires_at_ms: 20 })
   const registry = requirements.bind_security_reviewer(security.public_entry)
   const authority = requirements.sign_operator_authority({ campaign_input: campaignInput, signed_implementation_review: security.signed_record, approval_commit: 'c'.repeat(40), approval_tree: 'd'.repeat(40), attestation_commit: 'e'.repeat(40), attestation_tree: 'f'.repeat(40), created_at_ms: 11, expires_at_ms: 21 })
   assert.notEqual(requirements.public_entry.key_id, security.public_entry.key_id)
@@ -245,14 +271,18 @@ test('authority RED: requirements signer session retains one key for launch auth
   const inputUnsigned: Record<string, unknown> = { schema_id: 'oracle-lab-p3b-production-input.v2', campaign_id: 'p3b-session-test', cc_repository: '/tmp/cc' }
   digestFields.forEach((field, index) => { inputUnsigned[field] = (index + 1).toString(16).padStart(64, '0') })
   const campaignInput: Record<string, unknown> = { ...inputUnsigned, input_sha256: sha256Canonical(inputUnsigned) }
-  const security = signImplementationReviewEphemeral({ identity: 'security-session-context', campaign_input: campaignInput, reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), created_at_ms: 10, expires_at_ms: 20 })
   const session = createRequirementsSignerSession({ identity: 'requirements-session-context', reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40) })
+  const security = signImplementationReviewEphemeral({ identity: 'security-session-context', requirements_public_entry: session.public_entry, campaign_input: campaignInput, reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), created_at_ms: 10, expires_at_ms: 20 })
   const registry = session.bind_security_reviewer(security.public_entry)
   session.sign_operator_authority({ campaign_input: campaignInput, signed_implementation_review: security.signed_record, approval_commit: 'c'.repeat(40), approval_tree: 'd'.repeat(40), attestation_commit: 'e'.repeat(40), attestation_tree: 'f'.repeat(40), created_at_ms: 11, expires_at_ms: 21 })
   const reviewRawSha256 = sha256Bytes(Buffer.concat([canonicalBytes(security.signed_record), Buffer.from('\n')]))
   const decision = session.sign_gate_b_decision({ schema_id: 'oracle-lab-p3b-operator-decision.v2', decision_id: 'decision-session-test', decision: 'evaluate_successor_amendment_startable', campaign_id: String(campaignInput.campaign_id), gate_a_path: 'capsules/P3B-ES1/gates/gate-a-result.json', gate_a_sha256: '1'.repeat(64), gate_a_clock_sha256: '2'.repeat(64), external_set_path: 'capsules/P3B-ES1/closure/external-digest-set.json', external_set_sha256: '3'.repeat(64), conclusion_paths: [], conclusion_sha256s: [], implementation_review_sha256: reviewRawSha256, issued_at_ms: 12, issued_monotonic_ns: '13', maximum_evaluation_delay_ms: 300000, scope: 'successor-amendment-only', prohibited_claims: [] })
   assert.equal(decision.signing_key_id, session.public_entry.key_id)
   assert.doesNotThrow(() => verifyTrustedSignature(decision as Record<string, unknown>, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid'))
+  const resultUnsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: String(campaignInput.campaign_id), gate_a_sha256: '1'.repeat(64), external_set_sha256: '3'.repeat(64), operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: [], gate_clock_sha256: '4'.repeat(64), phase3b_usable: true }
+  const closure = session.confirm_gate_b_result({ ...resultUnsigned, gate_result_sha256: sha256Canonical(resultUnsigned) })
+  assert.equal(closure.status, 'private_key_destroyed_after_gate_b')
+  assert.throws(() => session.sign_gate_b_decision({}), (error: Error & { code?: string }) => error.code === 'ephemeral_signer_session_closed')
 })
 
 test('authority GREEN: long-lived signer CLI emits only public material and closes without key persistence', async () => {

@@ -6,6 +6,7 @@ import { buildCrossRepoRecord, encodeCrossRepoRecord, executeCrossRepoRecord, va
 import { validateIndependentGoReceipt } from './closeout.js'
 import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, materializeEs7Sources, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger } from './ledger.js'
+import { REQUEST_AST_MATERIALIZER } from './receiver.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 
@@ -108,7 +109,7 @@ export function buildEs7TypedFixtureContract(campaignId: string, c1ReviewSha256:
   const ledger = buildCampaignLedger(campaignId, crossRepoAuthority(c1ReviewSha256))
   const unsigned = {
     schema_id: 'oracle-lab-p3b-es7-typed-fixture-contract.v1', campaign_id: campaignId, repositories: ledger.authority, c1: ledger.c1, ledger_sha256: ledger.ledger_sha256,
-    literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, materializer: { algorithm: 'canonical-json-utf8-lf-v1', round_trip: 'receiver-wire-bytes-exact' },
+    literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, materializer: { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', wire_encoding: 'canonical-base64-v1', round_trip: 'receiver-wire-bytes-exact' },
     request_fields: ES7_REQUEST_FIELDS, response_fields: ES7_RESPONSE_FIELDS,
     rows: ledger.rows.map(materializeEs7Sources),
   }

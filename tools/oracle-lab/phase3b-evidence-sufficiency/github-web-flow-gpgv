@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 
-exec /opt/homebrew/bin/gpg --batch --homedir "$(dirname "$0")/github-web-flow-gnupg" --no-auto-check-trustdb --lock-never --trust-model always --auto-key-locate clear --no-auto-key-retrieve "$@"
+exec /opt/homebrew/Cellar/gnupg/2.5.18/bin/gpg --batch --homedir "$(dirname "$0")/github-web-flow-gnupg" --no-auto-check-trustdb --lock-never --trust-model always --auto-key-locate clear --no-auto-key-retrieve "$@"

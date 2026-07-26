@@ -185,7 +185,7 @@ export function materializeResponseBody(kind: ResponseAction['body_kind']): stri
   return ''
 }
 
-export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast'] as const)
+export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_roundtrip_sha256'] as const)
 export const ES7_RESPONSE_FIELDS = deepFreeze(['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket', 'wire_events', 'wire_event_sha256', 'socket_close_had_error'] as const)
 
 function canonicalLine(value: unknown): Buffer {

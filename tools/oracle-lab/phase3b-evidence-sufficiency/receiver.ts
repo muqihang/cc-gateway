@@ -5,10 +5,10 @@ import type { Socket } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
 import { type ProductionController, assertProductionController, controllerState } from './controller.js'
-import { Phase3BProductionError, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical } from './core.js'
+import { Phase3BProductionError, assertExactKeys, canonicalBytes, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical } from './core.js'
 import type { LaunchAuthorityReceipt } from './launch-authority.js'
 import { assertControllerLaunchPrerequisites, assertLaunchAuthority } from './launch-authority.js'
-import { type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
+import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -90,7 +90,8 @@ type ReceiverState = {
 
 const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_persistence: false })
+export const REQUEST_AST_MATERIALIZER = 'typed-json-ast-wire-base64-v2'
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, typed_wire_bytes_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -314,22 +315,40 @@ function verifyPeerOwnership(pid: number, receiverPort: number, executableIdenti
   if (!output.includes(`->127.0.0.1:${receiverPort}`) && !output.includes(`->localhost:${receiverPort}`)) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'receiver connection is not owned by the sealed target PID')
   let textFiles: string[]
   try { textFiles = execFileSync(lsof, ['-nP', '-a', '-p', String(pid), '-d', 'txt', '-Fn'], { encoding: 'utf8', timeout: 3_000 }).split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1)) } catch { throw new Phase3BProductionError('receiver_peer_identity_invalid', 'OS could not revalidate target executable identity') }
-  if (!textFiles.some((file) => { try { return sha256Canonical(stableRead(file, { maximumBytes: 67_108_864 }).identity) === executableIdentitySha256 } catch { return false } })) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request PID no longer owns the sealed target executable')
+  if (!textFiles.some((file) => { try { return sha256Canonical(stableRead(file, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity) === executableIdentitySha256 } catch { return false } })) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request PID no longer owns the sealed target executable')
 }
 
-function normalizeRequestAst(bytes: Buffer): Readonly<Record<string, unknown>> {
-  let value: unknown
-  try { value = JSON.parse(bytes.toString('utf8')) } catch { throw new Phase3BProductionError('receiver_request_invalid', 'request body is not JSON') }
+function semanticRequestAst(value: unknown): unknown {
+  const literals = new Map(Object.entries(FIXED_LITERAL_TABLE).map(([name, literal]) => [literal, `synthetic-literals/${name}`]))
   const visit = (node: unknown): unknown => {
     if (node === null) return { type: 'null' }
     if (Array.isArray(node)) return { type: 'array', length: node.length, items: node.map(visit) }
-    if (typeof node === 'object') return { type: 'object', fields: Object.keys(node as object).sort().map((name) => ({ name, value: visit((node as Record<string, unknown>)[name]) })) }
-    if (typeof node === 'string') return { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')) }
-    if (typeof node === 'number') return { type: 'number' }
-    if (typeof node === 'boolean') return { type: 'boolean' }
-    return { type: 'unknown' }
+    if (typeof node === 'object') return { type: 'object', fields: Object.keys(node as object).map((name) => ({ name, value: visit((node as Record<string, unknown>)[name]) })) }
+    if (typeof node === 'string') {
+      const literalRef = literals.get(node)
+      return { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')), literal_ref: literalRef ?? null }
+    }
+    if (typeof node === 'number') return { type: 'number', finite: Number.isFinite(node), value_text: String(node) }
+    if (typeof node === 'boolean') return { type: 'boolean', value: node }
+    throw new Phase3BProductionError('receiver_request_invalid', 'request body contains a non-JSON value')
   }
-  return deepFreeze(visit(value) as Record<string, unknown>)
+  return visit(value)
+}
+
+export function normalizeRequestAst(bytes: Buffer): Readonly<Record<string, unknown>> {
+  let value: unknown
+  try { value = JSON.parse(bytes.toString('utf8')) } catch { throw new Phase3BProductionError('receiver_request_invalid', 'request body is not JSON') }
+  return deepFreeze({ schema_id: 'oracle-lab-p3b-request-ast.v2', materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, wire_byte_length: bytes.length, wire_sha256: sha256Bytes(bytes), wire_bytes_base64: bytes.toString('base64'), value: semanticRequestAst(value) })
+}
+
+export function materializeRequestAst(ast: Record<string, unknown>): Buffer {
+  assertExactKeys(ast, ['schema_id', 'materializer', 'literal_table_sha256', 'wire_byte_length', 'wire_sha256', 'wire_bytes_base64', 'value'], 'receiver_request_invalid')
+  if (ast.schema_id !== 'oracle-lab-p3b-request-ast.v2' || ast.materializer !== REQUEST_AST_MATERIALIZER || ast.literal_table_sha256 !== FIXED_LITERAL_TABLE_SHA256 || !Number.isSafeInteger(ast.wire_byte_length) || Number(ast.wire_byte_length) <= 0 || typeof ast.wire_bytes_base64 !== 'string') throw new Phase3BProductionError('receiver_request_invalid', 'request AST materializer metadata drifted')
+  const bytes = Buffer.from(ast.wire_bytes_base64, 'base64')
+  if (bytes.toString('base64') !== ast.wire_bytes_base64 || bytes.length !== ast.wire_byte_length || sha256Bytes(bytes) !== ast.wire_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'request AST wire bytes do not match their exact identity')
+  const rebuilt = normalizeRequestAst(bytes)
+  if (!canonicalBytes(rebuilt).equals(canonicalBytes(ast))) throw new Phase3BProductionError('receiver_request_invalid', 'request AST does not deterministically reproduce from its wire bytes and literal bindings')
+  return bytes
 }
 
 function safeHeaderProjection(request: IncomingMessage): Readonly<{ ordered: readonly Readonly<Record<string, unknown>>[]; presence: Readonly<Record<string, number>>; authMarkerClass: string }> {
@@ -387,6 +406,8 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
     const bodySha256 = sha256Bytes(body)
     let bodyAst: Readonly<Record<string, unknown>>
     try { bodyAst = normalizeRequestAst(body) } finally { body.fill(0) }
+    const bodyAstSha256 = sha256Bytes(Buffer.concat([canonicalBytes(bodyAst), Buffer.from('\n', 'utf8')]))
+    const bodyRoundtripSha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast_sha256: bodyAstSha256 })
     const headers = safeHeaderProjection(request)
     if (state.row.family === 'auth' && headers.authMarkerClass !== expectedAuthMarkerClass(state.row)) throw new Phase3BProductionError('receiver_request_invalid', 'synthetic auth marker does not match the sealed arm')
     const responseObservation = await sendAction(response, action)
@@ -397,7 +418,7 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
       target_pid: state.targetPid, target_instance_id: state.targetInstanceId, executable_identity_sha256: state.executableIdentitySha256,
       route_ordinal: routeOrdinal, connection_ordinal: connectionOrdinal, attempt_ordinal: attemptOrdinal, action_ordinal: action.action_ordinal,
       method: 'POST', path: '/v1/messages', query_present: false, ordered_header_classes: headers.ordered, header_presence: headers.presence, auth_marker_winner_class: headers.authMarkerClass,
-      body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast: bodyAst, response_program_sha256: state.row.response_program_sha256,
+      body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast: bodyAst, body_ast_sha256: bodyAstSha256, body_roundtrip_sha256: bodyRoundtripSha256, response_program_sha256: state.row.response_program_sha256,
       response: responseObservation,
     }
     const observation = deepFreeze({ ...requestObservation, observation_sha256: sha256Canonical(requestObservation) })

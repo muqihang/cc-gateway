@@ -27,6 +27,9 @@ function main(): void {
       } else if (command.action === 'sign_gate_b_decision') {
         assertExactKeys(command, ['action', 'payload'], 'requirements_signer_cli_invalid')
         process.stdout.write(`${canonicalJson({ event: 'gate_b_decision', signed_decision: session.sign_gate_b_decision(command.payload as Record<string, unknown>) })}\n`)
+      } else if (command.action === 'confirm_gate_b_result') {
+        assertExactKeys(command, ['action', 'payload'], 'requirements_signer_cli_invalid')
+        process.stdout.write(`${canonicalJson({ event: 'gate_b_confirmed', closure: session.confirm_gate_b_result(command.payload as Record<string, unknown>) })}\n`)
         lines.close()
       } else if (command.action === 'close') {
         assertExactKeys(command, ['action'], 'requirements_signer_cli_invalid')

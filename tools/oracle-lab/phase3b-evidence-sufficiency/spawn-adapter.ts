@@ -8,7 +8,7 @@ import { controllerState } from './controller.js'
 import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { appendSpawned, appendStarted, appendTerminal, type ExecutionStore } from './execution-store.js'
 import { type LaunchAuthorityReceipt, assertLaunchAuthority } from './launch-authority.js'
-import { type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
+import { TARGET_EXECUTABLE_MAXIMUM_BYTES, type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
 import type { RunLedgerRow } from './ledger.js'
 import { type ReceiverAuthority, abortReceiverGroup, assertReceiverAuthority, prepareReceiverLaunch, registerReceiverTarget, sealReceiverGroup } from './receiver.js'
 import { prepareScenarioCell, preparedCellState } from './scenario-input.js'
@@ -121,7 +121,7 @@ async function discoverTargetPid(sandboxPid: number, image: LaunchImageRecord): 
   const deadline = Date.now() + 5_000
   do {
     const matches = descendants(sandboxPid).filter((pid) => executablePaths(pid).some((file) => {
-      try { return sha256Canonical(stableRead(file, { maximumBytes: 67_108_864 }).identity) === sha256Canonical(image.image_identity) } catch { return false }
+      try { return sha256Canonical(stableRead(file, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity) === sha256Canonical(image.image_identity) } catch { return false }
     }))
     if (matches.length === 1) return matches[0]
     if (matches.length > 1) throw new Phase3BProductionError('target_pid_ambiguous', 'multiple target executable identities exist in sandbox tree')

@@ -1,9 +1,10 @@
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalBytes, canonicalJson, deepFreeze, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
-import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
+import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
+import { materializeRequestAst, REQUEST_AST_MATERIALIZER } from './receiver.js'
 
 export const CONCLUSION_IDS = ['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', 'CL-P3B-ES1-NEW-SESSION-WIRE', 'CL-P3B-ES1-FAILURE-RECOVERY'] as const
 export const CONCLUSION_PATHS = {
@@ -17,7 +18,7 @@ const CURATION_ROOT = 'capsules/P3B-ES1/curation'
 const CLOSURE_ROOT = 'capsules/P3B-ES1/closure'
 const SUPPORT_ROOT = 'capsules/P3B-ES1/curation/support'
 export const SUPPORT_PATHS = ['typed-wire-fixtures.json', 'candidate-field-closure.json', 'field-provenance.json', 'cross-repo-result.json', 'predecessor-semantic-comparison.json'].map((name) => `${SUPPORT_ROOT}/${name}`) as readonly string[]
-const OBSERVATION_FIELDS = ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'receiver_group_id', 'receiver_instance_id', 'receiver_authority_sha256', 'target_pid', 'target_instance_id', 'executable_identity_sha256', 'route_ordinal', 'connection_ordinal', 'attempt_ordinal', 'action_ordinal', 'method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'response_program_sha256', 'response', 'observation_sha256'] as const
+const OBSERVATION_FIELDS = ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'receiver_group_id', 'receiver_instance_id', 'receiver_authority_sha256', 'target_pid', 'target_instance_id', 'executable_identity_sha256', 'route_ordinal', 'connection_ordinal', 'attempt_ordinal', 'action_ordinal', 'method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_roundtrip_sha256', 'response_program_sha256', 'response', 'observation_sha256'] as const
 const RESPONSE_FIELDS = ES7_RESPONSE_FIELDS
 const ES7_TYPED_FIXTURE_PATH = 'control/es7-typed-fixtures.json'
 const ES8_GO_RECEIPT_PATH = 'control/es8-go-receipt.json'
@@ -59,9 +60,9 @@ function inventoryNamespace(root: string): readonly ArtifactEntry[] {
       if (stat.isSymbolicLink()) throw new Phase3BProductionError('artifact_index_invalid', 'runtime namespace contains a symlink')
       if (stat.isDirectory()) { walk(relative); continue }
       if (!stat.isFile() || stat.nlink !== 1) throw new Phase3BProductionError('artifact_index_invalid', 'runtime namespace contains a non-regular or hard-linked leaf')
-      const stable = stableRead(file, { maximumBytes: 134_217_728, nonempty: false })
+      const stable = stableRead(file, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes, nonempty: false })
       let schemaId = 'opaque-bytes'
-      try { schemaId = String(readCanonical(root, relative, 134_217_728).value.schema_id ?? 'canonical-json') } catch {}
+      try { schemaId = String(readCanonical(root, relative, TARGET_PROFILE.maximum_executable_bytes).value.schema_id ?? 'canonical-json') } catch {}
       entries.push({ name: relative, relative_path: relative, schema_id: schemaId, size_bytes: stable.identity.size, sha256: stable.identity.sha256 })
     }
   }
@@ -76,7 +77,7 @@ export function validateArtifactIndexCoverage(root: string, artifactIndex: Recor
 }
 
 function validateObservation(value: Record<string, unknown>, row: RunLedgerRow): Readonly<{ sha256: string; projection: Readonly<Record<string, unknown>> }> {
-  assertExactKeys(value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'receiver_group_id', 'receiver_instance_id', 'receiver_authority_sha256', 'target_pid', 'target_instance_id', 'executable_identity_sha256', 'route_ordinal', 'connection_ordinal', 'attempt_ordinal', 'action_ordinal', 'method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'response_program_sha256', 'response', 'observation_sha256'], 'observation_invalid')
+  assertExactKeys(value, OBSERVATION_FIELDS, 'observation_invalid')
   assertDigestField(value, 'observation_sha256', 'observation_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-wire-observation.v1' || value.run_id !== row.run_id || value.sequence_index !== row.sequence_index || value.receiver_group_id !== row.receiver_group_id || value.response_program_sha256 !== row.response_program_sha256 || typeof value.attempt_ordinal !== 'number' || typeof value.connection_ordinal !== 'number' || typeof value.action_ordinal !== 'number') throw new Phase3BProductionError('observation_invalid', 'observation row/program/ordinal binding drifted')
   const attempt = Number(value.attempt_ordinal)
@@ -95,6 +96,11 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   }
   collectAstStringDigests(value.body_ast)
   const requiredLiteralDigests = [FIXED_LITERAL_TABLE['model.test'], FIXED_LITERAL_TABLE.control_prompt_v1].map((literal) => sha256Bytes(Buffer.from(literal, 'utf8')))
+  const astBytes = Buffer.concat([canonicalBytes(value.body_ast), Buffer.from('\n', 'utf8')])
+  let materializedRequest: Buffer
+  try { materializedRequest = materializeRequestAst(value.body_ast as Record<string, unknown>) } catch { throw new Phase3BProductionError('observation_invalid', 'request AST cannot reproduce the receiver wire bytes') }
+  const receiverMatch = materializedRequest.length === value.body_byte_length && sha256Bytes(materializedRequest) === value.body_sha256
+  const expectedRoundtripSha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, body_byte_length: value.body_byte_length, body_sha256: value.body_sha256, body_ast_sha256: value.body_ast_sha256 })
   const wireEvents = response?.wire_events
   if (!Array.isArray(wireEvents) || wireEvents.length === 0 || response?.wire_event_sha256 !== sha256Canonical(wireEvents)) throw new Phase3BProductionError('observation_invalid', 'wire event transcript is missing or has a mismatched digest')
   let previousMonotonic = -1n
@@ -133,7 +139,7 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   if (response.transport_terminal === 'http_complete' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'clean HTTP completion lacks an observed clean finish and close')
   if (response.transport_terminal === 'eof_after_partial' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'partial EOF lacks an observed clean finish and close')
   if (response.transport_terminal === 'reset_before_headers' && (!resetRequested && !socketError && !closeHadError)) throw new Phase3BProductionError('observation_invalid', 'reset-before-headers lacks an observed reset/error close')
-  if (!action || !response || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== 'POST' || value.path !== '/v1/messages' || value.query_present !== false || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route or response bytes/status/headers/events/timing/terminal drifted from sealed program')
+  if (!action || !response || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== 'POST' || value.path !== '/v1/messages' || value.query_present !== false || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || value.body_ast_sha256 !== sha256Bytes(astBytes) || value.body_roundtrip_sha256 !== expectedRoundtripSha256 || !receiverMatch || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route or response bytes/status/headers/events/timing/terminal drifted from sealed program')
   if (row.family === 'auth' && value.auth_marker_winner_class !== expectedAuthMarkerClass(row)) throw new Phase3BProductionError('observation_invalid', 'actual synthetic auth marker does not match the sealed auth arm')
   const stableResponse = {
     ...Object.fromEntries(Object.entries(response).filter(([field]) => field !== 'delay_elapsed_ns' && field !== 'wire_event_sha256' && field !== 'wire_events')),
@@ -155,6 +161,8 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
       body_byte_length: value.body_byte_length,
       body_sha256: value.body_sha256,
       body_ast: value.body_ast,
+      body_ast_sha256: value.body_ast_sha256,
+      body_roundtrip_sha256: value.body_roundtrip_sha256,
       response: stableResponse,
     },
   })
@@ -305,11 +313,13 @@ function deriveFixtureRows(root: string, ledger: CampaignLedger): readonly Reado
     })
     const source = materializeEs7Sources(row)
     const requests = observations.map(({ relativePath, value, identity }) => {
-      const request = { schema_id: 'oracle-lab-p3b-typed-request-fixture.v1', method: value.method, path: value.path, query_present: value.query_present, ordered_header_classes: value.ordered_header_classes, header_presence: value.header_presence, auth_marker_winner_class: value.auth_marker_winner_class, body_byte_length: value.body_byte_length, body_sha256: value.body_sha256, body_ast: value.body_ast }
+      const request = { schema_id: 'oracle-lab-p3b-typed-request-fixture.v1', method: value.method, path: value.path, query_present: value.query_present, ordered_header_classes: value.ordered_header_classes, header_presence: value.header_presence, auth_marker_winner_class: value.auth_marker_winner_class, body_byte_length: value.body_byte_length, body_sha256: value.body_sha256, body_ast: value.body_ast, body_ast_sha256: value.body_ast_sha256, body_roundtrip_sha256: value.body_roundtrip_sha256 }
       const fixtureBytes = Buffer.concat([canonicalBytes(request), Buffer.from('\n', 'utf8')])
       const astBytes = Buffer.concat([canonicalBytes(value.body_ast), Buffer.from('\n', 'utf8')])
-      if (sha256Canonical(JSON.parse(astBytes.subarray(0, -1).toString('utf8'))) !== sha256Canonical(value.body_ast)) throw new Phase3BProductionError('conclusion_support_invalid', 'receiver request AST does not round-trip through canonical UTF-8 bytes')
-      const unsignedRequest = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.request_source_sha256, materializer_algorithm: 'canonical-json-utf8-lf-v1', literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_base64: fixtureBytes.toString('base64'), typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), ast_bytes_base64: astBytes.toString('base64'), ast_bytes_sha256: sha256Bytes(astBytes), receiver_wire_body_sha256: value.body_sha256, receiver_match: true, typed_fixture: request }
+      const materialized = materializeRequestAst(value.body_ast as Record<string, unknown>)
+      const receiverMatch = sha256Bytes(materialized) === value.body_sha256 && materialized.length === value.body_byte_length && sha256Bytes(astBytes) === value.body_ast_sha256
+      if (!receiverMatch) throw new Phase3BProductionError('conclusion_support_invalid', 'receiver request AST/literals do not reproduce the exact captured wire body')
+      const unsignedRequest = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.request_source_sha256, materializer_algorithm: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_base64: fixtureBytes.toString('base64'), typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), ast_bytes_base64: astBytes.toString('base64'), ast_bytes_sha256: sha256Bytes(astBytes), materialized_wire_bytes_sha256: sha256Bytes(materialized), receiver_wire_body_sha256: value.body_sha256, receiver_match: receiverMatch, typed_fixture: request }
       return { ...unsignedRequest, fixture_sha256: sha256Canonical(unsignedRequest) }
     })
     const responses = observations.map(({ relativePath, value, identity }) => {
@@ -358,7 +368,7 @@ export function validateTypedFixtureContract(value: Record<string, unknown>, led
   assertDigestField(value, 'contract_sha256', 'conclusion_support_invalid')
   const expectedRows = ledger.rows.map(materializeEs7Sources)
   const materializer = value.materializer as Record<string, unknown> | undefined
-  if (value.schema_id !== 'oracle-lab-p3b-es7-typed-fixture-contract.v1' || value.campaign_id !== ledger.campaign_id || value.ledger_sha256 !== ledger.ledger_sha256 || value.literal_table_sha256 !== FIXED_LITERAL_TABLE_SHA256 || !materializer || materializer.algorithm !== 'canonical-json-utf8-lf-v1' || materializer.round_trip !== 'receiver-wire-bytes-exact' || sha256Canonical(value.repositories) !== sha256Canonical(ledger.authority) || sha256Canonical(value.c1) !== sha256Canonical(ledger.c1) || sha256Canonical(value.request_fields) !== sha256Canonical(ES7_REQUEST_FIELDS) || sha256Canonical(value.response_fields) !== sha256Canonical(RESPONSE_FIELDS) || sha256Canonical(value.rows) !== sha256Canonical(expectedRows)) throw new Phase3BProductionError('conclusion_support_invalid', 'ES7 typed fixture contract does not bind exact literal/materializer/source bytes and ledger rows')
+  if (value.schema_id !== 'oracle-lab-p3b-es7-typed-fixture-contract.v1' || value.campaign_id !== ledger.campaign_id || value.ledger_sha256 !== ledger.ledger_sha256 || value.literal_table_sha256 !== FIXED_LITERAL_TABLE_SHA256 || !materializer || materializer.algorithm !== REQUEST_AST_MATERIALIZER || materializer.ast_encoding !== 'canonical-json-utf8-lf-v1' || materializer.wire_encoding !== 'canonical-base64-v1' || materializer.round_trip !== 'receiver-wire-bytes-exact' || sha256Canonical(value.repositories) !== sha256Canonical(ledger.authority) || sha256Canonical(value.c1) !== sha256Canonical(ledger.c1) || sha256Canonical(value.request_fields) !== sha256Canonical(ES7_REQUEST_FIELDS) || sha256Canonical(value.response_fields) !== sha256Canonical(RESPONSE_FIELDS) || sha256Canonical(value.rows) !== sha256Canonical(expectedRows)) throw new Phase3BProductionError('conclusion_support_invalid', 'ES7 typed fixture contract does not bind exact literal/materializer/source bytes and ledger rows')
 }
 
 export function validateIndependentGoReceipt(value: Record<string, unknown>, c1ReviewSha256: string): void {
@@ -489,7 +499,7 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
   const fixtureRows = deriveFixtureRows(root, ledger)
   const allReproduced = fixtureRows.every((row) => row.status === 'Reproduced')
   const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: es7Contract?.entry.sha256 ?? null, missing_artifacts: es7Contract ? [] : [ES7_TYPED_FIXTURE_PATH], rows: fixtureRows, status: allReproduced && es7Contract ? 'PASS' : 'INCOMPLETE' })
-  const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_base64', 'typed_fixture_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_base64', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
+  const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_base64', 'typed_fixture_bytes_sha256', 'materialized_wire_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_base64', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
   const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
   const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfig = optionalCanonical(root, 'control/predecessor-config-auth.json')?.entry

@@ -8,7 +8,7 @@ import { buildEs9CoverageContract } from '../tools/oracle-lab/phase3b-evidence-s
 import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport, validateCoverageContract, validateIndependentGoReceipt, validateIndependentTsAgreement } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { buildCampaignLedger, crossRepoAuthority, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { buildCampaignLedger, crossRepoAuthority, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
@@ -138,7 +138,7 @@ test('targeted C1 authority: ES9 accepts only the authority-bound fixed E/C/D co
   const ledger = buildCampaignLedger('p3b-targeted-es9-authority', TEST_C1)
   const contract = buildEs9CoverageContract(ledger) as Record<string, unknown>
   const validated = validateCoverageContract(contract, ledger)
-  assert.equal(validated.enabled.length, 340 * 20)
+  assert.equal(validated.enabled.length, 340 * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
   assert.equal(validated.disabled.length, 340 * 2)
   assert.equal((contract.normative_e_rows as unknown[]).length, 20)
   assert.equal((contract.normative_c_rows as unknown[]).length, 3)
