@@ -9,7 +9,7 @@ import canonicalize from 'canonicalize'
 export const PHASE1_CONTRACT_PATH = 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json'
 export const PHASE1_CONTRACT_DIGEST = '70c26db06e9135db31d08f097573e3fd55bd9a8894614832eefeecabf6b1a3d1'
 export const CC_BUNDLE_PATH = 'contracts/oracle-lab/v1'
-export const SUB_BUNDLE_PATH = 'backend/internal/service/testdata/oracle_lab_contract/v1'
+export const SUB_BUNDLE_PATH = 'backend/internal/oracleevidence/testdata/oracle_lab_contract/v1'
 export const CONTRACT_FILES = [
   'authority-corpus.json',
   'canonicalization-corpus.json',
@@ -22,6 +22,41 @@ export const CONTRACT_FILES = [
   'sidecar-envelope.schema.json',
 ] as const
 export const INDEXED_CONTRACT_FILES = CONTRACT_FILES.filter((file) => file !== 'contract-index.json')
+export const CONTRACT_FILE_SHA256: Readonly<Record<(typeof CONTRACT_FILES)[number], string>> = {
+  'authority-corpus.json': '42e89c1933f7c2b9f71dfd41d739345b3f2253f0217c6ebb2ee77b25ab94d8de',
+  'canonicalization-corpus.json': 'a2925a1c04aa90dbc42eee3045574faf829ccddaa776d75d2497558821c0ab20',
+  'coherence-corpus.json': '85b7209d31370bd56bb4a374cf796ecabd11ee191b30e9e9a485ff65b2d03d82',
+  'contract-index.json': '2545113fb928131ee5a735541b5373a00566b279263aca5b1cc11181aaf78bce',
+  'contract.schema.json': '380c7f3db80baa2d288838f3a550c3588abd19de11627d34ae90f5d3a0add4fe',
+  'expected-results.json': '8671744730e94e88b439f05a0e934539fe5b148b3e3dfdc1243beba9774ced44',
+  'interface-corpus.json': '9c2f0864097911b3b9612ee5bb6a4b62e363b2152abe7bfd5ff07221a6c60dca',
+  'sidecar-envelope.cddl': '7697364dcaa7189449e94305a4df86d8d5476078b3dee78fac2fb34ccc60905d',
+  'sidecar-envelope.schema.json': 'a9256710c040d2a018fbc42f188a59f11fc1dd9dc46ea7be89ca2294aaace003',
+}
+export const STABLE_CODE_SET_SHA256 = 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c'
+
+const PRESERVED_STABLE_CODES = [
+  'admission_allow', 'authority_allow', 'authority_resource_limit', 'authority_signature_invalid',
+  'cbor_frame_length', 'cbor_frame_truncated', 'cbor_integer_unsafe', 'cbor_invalid', 'cbor_invalid_utf8',
+  'cbor_map_key_invalid', 'cbor_not_deterministic', 'cbor_resource_limit', 'cbor_simple_forbidden',
+  'cbor_tag_forbidden', 'cbor_truncated', 'cbor_type_invalid', 'cbor_undefined_forbidden', 'interface_allow',
+  'interface_deadline_expired', 'interface_gateway_retry', 'interface_generation_mismatch', 'interface_owner_mismatch',
+  'interface_state_transition_invalid', 'interface_sub2api_retry', 'interface_terminal_no_retry',
+  'json_canonicalization_failed', 'json_invalid', 'json_number_invalid', 'json_type_invalid', 'replay_committed',
+  'replay_expired', 'replay_reserved', 'replay_revoked', 'sidecar_capability_allow',
+  'sidecar_capability_decode_invalid', 'url_host_invalid', 'url_path_invalid', 'url_port_invalid',
+] as const
+
+const REBASELINE_STABLE_CODES = [
+  'authority_diagnostic_promotion', 'contract_bundle_missing', 'contract_file_digest_mismatch',
+  'contract_file_set_invalid', 'contract_index_not_canonical', 'contract_index_path_invalid',
+  'contract_index_version_invalid', 'contract_json_invalid', 'contract_mirror_mismatch',
+  'contract_predecessor_mismatch', 'contract_required_set_mismatch', 'contract_schema_invalid',
+  'contract_schema_keyword_unsupported', 'contract_schema_range_mismatch', 'contract_symlink',
+  'cross_repo_binding_mismatch', 'cross_repo_record_expired', 'cross_repo_result_mismatch', 'leak_detected',
+  'mutation_descriptor_invalid', 'mutation_executor_unexercised', 'mutation_pointer_invalid',
+  'mutation_source_invalid', 'oracle_not_implemented',
+] as const
 
 type JsonObject = Record<string, unknown>
 
@@ -37,6 +72,9 @@ export type SharedContractCheck = {
   bundleDigest: string
   fileCount: number
   predecessorDigest: string
+  files: Array<{ relative_path: string; sha256: string }>
+  stableCodes: string[]
+  stableCodeSetDigest: string
 }
 
 export function sha256Bytes(value: Uint8Array): string {
@@ -114,6 +152,23 @@ function inspectBundle(bundle: string): Map<string, Buffer> {
   return new Map(entries.map((entry) => [entry.name, readFileSync(path.join(bundle, entry.name))]))
 }
 
+export function stableCodesFromExpectedResults(value: unknown): string[] {
+  const expected = objectValue(value, 'expected-results.json')
+  if (!Array.isArray(expected.stable_error_codes) || expected.stable_error_codes.some((code) => typeof code !== 'string')) {
+    throw new SharedContractError('contract_required_set_mismatch', 'stable_error_codes must be a string array')
+  }
+  const source = expected.stable_error_codes as string[]
+  if (new Set(source).size !== source.length) {
+    throw new SharedContractError('contract_required_set_mismatch', 'stable_error_codes contains duplicates')
+  }
+  const union = [...new Set([...source, ...PRESERVED_STABLE_CODES, ...REBASELINE_STABLE_CODES])].sort()
+  const encoded = canonicalize(union)
+  if (!encoded || union.length !== 119 || sha256Bytes(Buffer.from(encoded)) !== STABLE_CODE_SET_SHA256) {
+    throw new SharedContractError('contract_required_set_mismatch', 'stable code union differs from the frozen 119-code set')
+  }
+  return union
+}
+
 function compareMirrors(ccFiles: Map<string, Buffer>, subFiles: Map<string, Buffer>): void {
   for (const file of CONTRACT_FILES) {
     if (!ccFiles.get(file)?.equals(subFiles.get(file) as Buffer)) {
@@ -161,6 +216,11 @@ function validateIndex(files: Map<string, Buffer>): JsonObject {
       throw new SharedContractError('contract_file_digest_mismatch', `stale digest for ${entry.relative_path}`)
     }
   }
+  for (const file of CONTRACT_FILES) {
+    if (sha256Bytes(files.get(file) as Buffer) !== CONTRACT_FILE_SHA256[file]) {
+      throw new SharedContractError('contract_file_digest_mismatch', `frozen digest differs for ${file}`)
+    }
+  }
   return index
 }
 
@@ -171,6 +231,7 @@ export function checkSharedContract(input: { ccGatewayRoot: string; sub2apiRoot:
   const subFiles = inspectBundle(subBundle)
   compareMirrors(ccFiles, subFiles)
   validateIndex(ccFiles)
+  const stableCodes = stableCodesFromExpectedResults(parseStrictJson(ccFiles.get('expected-results.json') as Buffer, 'expected-results.json'))
   const predecessor = path.resolve(input.sub2apiRoot, PHASE1_CONTRACT_PATH)
   if (!existsSync(predecessor) || lstatSync(predecessor).isSymbolicLink() || sha256File(predecessor) !== PHASE1_CONTRACT_DIGEST) {
     throw new SharedContractError('contract_predecessor_mismatch', 'Phase 1 predecessor file is missing or changed')
@@ -180,6 +241,9 @@ export function checkSharedContract(input: { ccGatewayRoot: string; sub2apiRoot:
     bundleDigest: sha256Bytes(ccFiles.get('contract-index.json') as Buffer),
     fileCount: CONTRACT_FILES.length,
     predecessorDigest: PHASE1_CONTRACT_DIGEST,
+    files: CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: sha256Bytes(ccFiles.get(relative_path) as Buffer) })),
+    stableCodes,
+    stableCodeSetDigest: STABLE_CODE_SET_SHA256,
   }
 }
 
