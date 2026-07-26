@@ -110,7 +110,7 @@ async function runProductionCampaignDryRunAsync(evidenceRoot: string, adapters: 
   const revalidated = evaluateGateB(sealedInput)
   if (sha256Canonical(sealedResult) !== sha256Canonical(revalidated)) throw new Phase3BProductionError('gate_b_result_invalid', 'sealed production Gate B result failed independent re-evaluation')
   trace('gate-b-validate')
-  const signerResult = adapters.signer.destroyAfterVerified({ gate_b_result_sha256: String(sealedResult.gate_result_sha256), gate_b_input_sha256: sha256Canonical(sealedInput), verified: true })
+  const signerResult = adapters.signer.destroyAfterVerified({ gate_b_result_sha256: String(sealedResult.gate_result_sha256), gate_b_input_sha256: sha256Canonical(sealedInput) })
   if (signerResult.destroyed !== true) throw new Phase3BProductionError('signer_lifecycle_invalid', 'signer adapter did not destroy only after sealed Gate B verification')
   trace('signer-destroy')
   const persistedLeakScan = recursiveLeakScan(root)
