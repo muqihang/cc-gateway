@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { runSyntheticProductionDryRun } from '../tools/oracle-lab/phase3b-evidence-sufficiency/production-executor.js'
+import { runProductionCampaignDryRun } from '../tools/oracle-lab/phase3b-evidence-sufficiency/production-executor.js'
 
 function privateRoot(prefix: string): string {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
@@ -12,8 +12,15 @@ function privateRoot(prefix: string): string {
   return root
 }
 
-test('production path: synthetic dry-run traverses materialization through signer destruction without reversible evidence', () => {
-  const result = runSyntheticProductionDryRun(privateRoot('p3b-production-path-'))
+test('production path RED: injected dry-run must traverse the production controller, not a synthetic bypass', async () => {
+  const trace: string[] = []
+  const adapters = {
+    clock: { wallMs: () => 1_700_000_000_000, monotonicNs: () => 1_000_000_000n },
+    targetTransport: { dispatch: async (input: Readonly<Record<string, unknown>>) => ({ ...input, route_index: 1, request_receipt: 'sealed' }) },
+    signer: { destroyAfterVerified: (input: Readonly<Record<string, unknown>>) => ({ ...input, destroyed: true }) },
+    trace: (stage: string) => trace.push(stage),
+  }
+  const result = await runProductionCampaignDryRun(privateRoot('p3b-production-path-'), adapters)
   assert.equal(result.schema_id, 'oracle-lab-p3b-synthetic-dry-run.v1')
   assert.deepEqual(result.stages, ['materialized', 'normative_resolved', 'execution_receipts', 'curation', 'support', 'conclusions', 'gate_b_evaluated', 'gate_b_sealed', 'gate_b_revalidated', 'signer_destruction'])
   assert.equal(result.row_count, 340)
@@ -26,4 +33,5 @@ test('production path: synthetic dry-run traverses materialization through signe
   assert.ok(conclusions.every((conclusion) => conclusion.level === 'Reproduced' && conclusion.enabled === true))
   assert.deepEqual(result.gate_b, { decision: 'PASS', phase3b_usable: true, revalidated: true })
   assert.equal(result.signer_destruction, 'verified')
+  assert.deepEqual(trace, ['materialize', 'execute', 'curation', 'conclusions', 'gate-a', 'gate-b-evaluate', 'gate-b-seal', 'gate-b-validate', 'signer-destroy'])
 })

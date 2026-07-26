@@ -26,6 +26,17 @@ export function evaluateProductionGateB(_input: Readonly<Record<string, unknown>
 
 export type SyntheticProductionDryRunResult = Readonly<Record<string, unknown>>
 
+export type ProductionDryRunAdapters = Readonly<{
+  clock: Readonly<{ wallMs: () => number; monotonicNs: () => bigint }>
+  targetTransport: Readonly<{ dispatch: (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>> }>
+  signer: Readonly<{ destroyAfterVerified: (input: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>> }>
+  trace?: (stage: string) => void
+}>
+
+export function runProductionCampaignDryRun(_evidenceRoot: string, _adapters: ProductionDryRunAdapters): SyntheticProductionDryRunResult {
+  throw new Phase3BProductionError('production_controller_integration_not_implemented', 'dry-run must execute the production campaign controller with injected side effects')
+}
+
 function recursiveLeakScan(root: string): Readonly<Record<string, boolean | number>> {
   const findings: string[] = []
   const visit = (absolute: string, relative: string): void => {
