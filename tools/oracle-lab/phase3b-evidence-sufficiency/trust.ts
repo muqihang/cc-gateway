@@ -8,7 +8,7 @@ export const TRUSTED_REVIEWER_REGISTRY_RELATIVE = 'docs/superpowers/registry/ora
 export const TRUSTED_REVIEWER_REGISTRY_SHA256 = '8116b284cd47217f3a217af7e348bc0a555b79421179aae1ee9cd4010227d87d'
 
 type TrustedRole = 'requirements' | 'security_quality'
-type TrustedReviewer = Readonly<{
+export type TrustedReviewer = Readonly<{
   key_id: string
   public_key_der_base64: string
   reviewer_identity: string
@@ -19,6 +19,25 @@ export type TrustedReviewerRegistry = Readonly<{
   trust_model: 'ed25519_ephemeral_independent_reviewers_v1'
   reviewers: readonly TrustedReviewer[]
 }>
+
+export type ApprovalAttestation = Readonly<{
+  approval_commit: string
+  approval_tree: string
+  reviewed_candidate_commit: string
+  reviewed_candidate_tree: string
+  registry: TrustedReviewerRegistry
+  registry_sha256: string
+  implementation_review: Readonly<Record<string, unknown>>
+  implementation_review_sha256: string
+}>
+
+export function validateCampaignReviewerRegistry(_value: unknown): TrustedReviewerRegistry {
+  throw new Phase3BProductionError('approval_attestation_not_implemented', 'campaign reviewer registry validation is not implemented')
+}
+
+export function validateApprovalAttestation(_repository: string, _reviewedCandidateCommit: string, _reviewedCandidateTree: string): ApprovalAttestation {
+  throw new Phase3BProductionError('approval_attestation_not_implemented', 'approval commit validation is not implemented')
+}
 
 export function loadTrustedReviewerRegistry(repository: string): TrustedReviewerRegistry {
   const file = path.join(repository, TRUSTED_REVIEWER_REGISTRY_RELATIVE)
