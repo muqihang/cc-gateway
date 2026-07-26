@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { SUPPORT_PATHS, validateConclusionSupport } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { buildCampaignLedger, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 
 const SUPPORT_SCHEMAS = [
@@ -77,6 +78,38 @@ test('targeted C1: caller-authored PASS support cannot satisfy Gate B support va
   assert.throws(() => validateConclusionSupport(root, true), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })
 
+test('targeted C1 closure: blocked support names missing independent ES8 and normative ES9 artifacts without projection fixtures', () => {
+  const root = privateRoot('p3b-targeted-support-shape-')
+  createPrivateDirectory(root, 'prelaunch')
+  const ledger = buildCampaignLedger('p3b-targeted-support-shape')
+  writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
+  const store = openExecutionStore(root, ledger)
+  const failureUnsigned = { schema_id: 'oracle-lab-p3b-campaign-failure.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, failing_sequence_index: 0, failure_phase: 'before_spawn', failure_family: 'campaign_execution_failure', action: 'stop_all_target_launches', terminal_receipt_sha256: null }
+  const failure = { ...failureUnsigned, failure_sha256: sha256Canonical(failureUnsigned) }
+  writeExclusiveCanonical(root, 'campaign-failure.json', failure)
+  let previous: string | null = null
+  for (const row of ledger.rows) {
+    const receipt = writeReceipt(root, ledger, row, 'not_executed', previous, receiptFields({ launch_authority_sha256: notExecutedAuthority(ledger, row, failure.failure_sha256, null), failure_sha256: failure.failure_sha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }))
+    previous = String(receipt.receipt_sha256)
+  }
+  assert.equal(readExecutionReceipts(store).length, 340)
+  deriveCuration(root)
+  const fixtures = JSON.parse(Buffer.from(readFileSync(path.join(root, SUPPORT_PATHS[0]))).toString('utf8')) as Record<string, unknown>
+  const first = (fixtures.rows as Array<Record<string, unknown>>)[0]
+  assert.deepEqual(Object.keys(first).sort(), ['family', 'fixture_sha256', 'request_stimulus_sha256', 'requests', 'responses', 'row_sha256', 'run_id', 'schedule_id', 'sequence_index', 'status'].sort())
+  assert.equal('request_projection_sha256' in first, false)
+  assert.equal('response_projection_sha256' in first, false)
+  const es8 = JSON.parse(Buffer.from(readFileSync(path.join(root, SUPPORT_PATHS[3]))).toString('utf8')) as Record<string, unknown>
+  assert.deepEqual(es8.missing_artifacts, ['control/es8-go-receipt.json', 'control/es8-ts-c1-agreement.json'])
+  const es9 = JSON.parse(Buffer.from(readFileSync(path.join(root, SUPPORT_PATHS[2]))).toString('utf8')) as Record<string, unknown>
+  assert.deepEqual(es9.missing_artifacts, ['control/es9-coverage-contract.json'])
+})
+
+test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {
+  const row = buildCampaignLedger('p3b-targeted-route-plan').rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
+  assert.deepEqual(configRoutePlan(row), { user: null, project: null, local: 0, 'process-env': 1, request_route: 0, preflight_route: 1 })
+})
+
 test('targeted I1: wire observation is derived from bytes, EOF, ordering, and monotonic header timing', () => {
   const partial = Buffer.from('event: message_start\ndata: {}\n\nevent: content_block_delta\ndata: {}\n\n', 'utf8')
   const events: readonly ResponseWireEvent[] = [
@@ -110,6 +143,17 @@ test('targeted I1: wire observation is derived from bytes, EOF, ordering, and mo
   assert.throws(() => deriveResponseObservationFromWire(bodyBeforeHeaders, 1_000_000n, 10), (error: Error & { code?: string }) => error.code === 'receiver_wire_invalid')
   const afterTerminal: readonly ResponseWireEvent[] = [...events, { kind: 'body', monotonic_ns: '14000000', bytes: Buffer.from('late') }]
   assert.throws(() => deriveResponseObservationFromWire(afterTerminal, 1_000_000n, 10), (error: Error & { code?: string }) => error.code === 'receiver_wire_invalid')
+})
+
+test('targeted I2 wire close: terminal class waits for close and distinguishes clean EOF from reset/error', () => {
+  const headers = { kind: 'headers', monotonic_ns: '2', bytes: Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 0\r\n\r\n', 'ascii') } as const
+  const clean: readonly ResponseWireEvent[] = [headers, { kind: 'response_finish', monotonic_ns: '3' }, { kind: 'socket_end', monotonic_ns: '4' }, { kind: 'socket_close', monotonic_ns: '5', had_error: false }]
+  assert.equal(deriveResponseObservationFromWire(clean, 1n, 0).transport_terminal, 'eof_after_partial')
+  const errored: readonly ResponseWireEvent[] = [headers, { kind: 'socket_error', monotonic_ns: '3', error_class: 'ECONNRESET' }, { kind: 'socket_close', monotonic_ns: '4', had_error: true }]
+  assert.equal(deriveResponseObservationFromWire(errored, 1n, 0).transport_terminal, 'reset_after_headers')
+  const reset: readonly ResponseWireEvent[] = [{ kind: 'reset_requested', monotonic_ns: '2' }, { kind: 'socket_close', monotonic_ns: '3', had_error: false }]
+  assert.equal(deriveResponseObservationFromWire(reset, 1n, 0).transport_terminal, 'reset_before_headers')
+  assert.throws(() => deriveResponseObservationFromWire([{ kind: 'reset_requested', monotonic_ns: '2' }], 1n, 0), (error: Error & { code?: string }) => error.code === 'receiver_wire_invalid')
 })
 
 test('targeted I2: every post-terminal not_executed receipt retains the exact failure binding', () => {

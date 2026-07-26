@@ -39,6 +39,13 @@ const CONFIG_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record
   'config-precedence-process-env-vs-local': { control: { user: null, project: null, local: 0, 'process-env': null }, treatment: { user: null, project: null, local: 1, 'process-env': 0 } },
 }
 
+export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | null; project: 0 | 1 | null; local: 0 | 1 | null; 'process-env': 0 | 1 | null; request_route: 0; preflight_route: 0 | 1 | null }> {
+  const definition = CONFIG_VALUES[row.schedule_id]
+  if (row.family !== 'config' || !definition) throw new Phase3BProductionError('scenario_input_invalid', 'config schedule is not frozen')
+  const selected = row.arm.startsWith('treatment/') ? definition.treatment : definition.control
+  return deepFreeze({ ...selected, request_route: 0, preflight_route: selected['process-env'] })
+}
+
 const AUTH_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record<string, string>>; treatment: Readonly<Record<string, string>> }>>> = {
   'auth-api-key-rotation': { control: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-a' }, treatment: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-b' } },
   'auth-token-rotation': { control: { ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-a' }, treatment: { ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-b' } },
@@ -76,9 +83,8 @@ export function expectedAuthMarkerClass(row: RunLedgerRow): string {
 }
 
 function materializeConfig(runtimeRoot: string, runRelative: string, row: RunLedgerRow, routeUrls: readonly string[], env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
-  const definition = CONFIG_VALUES[row.schedule_id]
-  if (!definition || routeUrls.length !== 2) throw new Phase3BProductionError('scenario_input_invalid', 'config row does not have exact two-route definition')
-  const values = row.arm.startsWith('treatment/') ? definition.treatment : definition.control
+  if (routeUrls.length !== 2) throw new Phase3BProductionError('scenario_input_invalid', 'config row does not have exact two-route definition')
+  const values = configRoutePlan(row)
   const locations = {
     user: `${runRelative}/home/.claude/settings.json`,
     project: `${runRelative}/cwd/.claude/settings.json`,

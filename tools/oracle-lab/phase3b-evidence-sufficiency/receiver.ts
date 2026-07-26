@@ -96,6 +96,11 @@ export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
   | { kind: 'body'; monotonic_ns: string; bytes: Uint8Array }
   | { kind: 'terminal'; monotonic_ns: string; terminal: 'eof' | 'reset' }
+  | { kind: 'response_finish'; monotonic_ns: string }
+  | { kind: 'socket_end'; monotonic_ns: string }
+  | { kind: 'socket_error'; monotonic_ns: string; error_class: string }
+  | { kind: 'reset_requested'; monotonic_ns: string }
+  | { kind: 'socket_close'; monotonic_ns: string; had_error: boolean }
 >
 
 function monotonicOf(event: ResponseWireEvent): bigint {
@@ -122,7 +127,7 @@ export function deriveResponseObservationFromWire(events: readonly ResponseWireE
       bodyLength += event.bytes.byteLength
       if (bodyLength > 1_048_576) throw new Phase3BProductionError('receiver_wire_invalid', 'observed response body exceeds the fixed limit')
       bodyChunks.push(Buffer.from(event.bytes))
-    } else terminal = event
+    } else if (event.kind === 'terminal') terminal = event
   }
   if (terminal === null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript has no terminal event')
   const firstAt = headers ? monotonicOf(headers) : monotonicOf(terminal)
