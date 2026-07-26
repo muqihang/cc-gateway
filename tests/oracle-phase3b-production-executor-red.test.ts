@@ -7,11 +7,13 @@ import {
   createProductionController,
   evaluateProductionGateB,
 } from '../tools/oracle-lab/phase3b-evidence-sufficiency/production-executor.js'
+import { crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const TEST_C1 = crossRepoAuthority('c'.repeat(64))
 
 test('review C1/I4: production ledger is the exact deterministic 340-row campaign', () => {
-  const ledger = buildCampaignLedger('p3b-production-red')
+  const ledger = buildCampaignLedger('p3b-production-red', TEST_C1)
   assert.equal(ledger.rows.length, 340)
   assert.equal(new Set(ledger.rows.map((row) => row.run_id)).size, 340)
   assert.ok(ledger.rows.every((row, index) => row.sequence_index === index && typeof row.run_id === 'string' && UUID_V4.test(row.run_id)))
@@ -20,7 +22,7 @@ test('review C1/I4: production ledger is the exact deterministic 340-row campaig
 })
 
 test('review C2: launch authority is process-opaque and a structural clone is rejected', () => {
-  const authority = createProductionController({ campaign_id: 'p3b-production-red' })
+  const authority = createProductionController({ campaign_id: 'p3b-production-red', c1: TEST_C1 })
   const forged = JSON.parse(JSON.stringify(authority))
   assert.doesNotThrow(() => assertProductionController(authority))
   assert.throws(() => assertProductionController(forged), (error: Error & { code?: string }) => error.code === 'launch_authority_invalid')

@@ -8,13 +8,14 @@ import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-suffi
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, buildCampaignLedger, buildResponseProgram, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
-import { loadTrustedReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
+import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const TEST_C1 = crossRepoAuthority('c'.repeat(64))
 
 function privateRoot(prefix: string): string {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
@@ -23,7 +24,7 @@ function privateRoot(prefix: string): string {
 }
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
-  const ledger = buildCampaignLedger('p3b-focused-core')
+  const ledger = buildCampaignLedger('p3b-focused-core', TEST_C1)
   assert.equal(ledger.rows.length, 340)
   assert.deepEqual(ledger.counts, { mandatory_target_controls: 20, config: 80, auth: 80, request_wire: 30, response_failure_recovery: 130, total_rows: 340 })
   assert.ok(ledger.rows.every((row, index) => row.sequence_index === index && UUID_V4.test(row.run_id) && row.stdin_literal_ref === FIXED_STDIN_LITERAL_REF))
@@ -39,7 +40,7 @@ test('production ledger freezes order, counts, UUIDv4, stdin reference, and fami
     descriptor_sha256: 'b114f72f558a5c5f8119753e98ec546e785bdee464261ccef448196799acf6f7',
   })
   assert.deepEqual(ledger.rows.slice(0, 4).map((row) => row.run_id), ['08a0a766-70de-46e4-9442-f1a05ca9c993', '833e2bfc-fc51-4046-8f54-352d2295c2df', '8bff393f-5ccc-443f-9083-cf3da0eae3f3', '02061fb0-140c-4a13-8d52-3d4656f6a6e0'])
-  assert.deepEqual(buildCampaignLedger('p3b-focused-core'), ledger)
+  assert.deepEqual(buildCampaignLedger('p3b-focused-core', TEST_C1), ledger)
   assert.throws(() => validateCampaignLedger({ ...ledger, rows: [ledger.rows[1], ledger.rows[0], ...ledger.rows.slice(2)] }), (error: Error & { code?: string }) => error.code === 'launch_ledger_invalid')
 })
 
@@ -55,7 +56,7 @@ test('complete_sse and recovery descriptors are complete, ordered, and attempt-b
 })
 
 test('request-wire schedules carry three distinct real argv stimuli with paired-arm stability', () => {
-  const rows = buildCampaignLedger('p3b-request-stimuli').rows.filter((row) => row.family === 'request_wire')
+  const rows = buildCampaignLedger('p3b-request-stimuli', TEST_C1).rows.filter((row) => row.family === 'request_wire')
   const bySchedule = ['prompt_only', 'safe_tool_catalog', 'tool_disabled'].map((schedule) => rows.filter((row) => row.schedule_id === schedule))
   assert.equal(new Set(bySchedule.map((members) => members[0].request_stimulus_sha256)).size, 3)
   assert.equal(new Set(bySchedule.map((members) => JSON.stringify(members[0].request_stimulus.argv_suffix))).size, 3)
@@ -72,7 +73,7 @@ test('retryable terminal and recovery programs share the trigger then diverge de
 })
 
 test('config route policy keeps process-env on request route zero and uses route one only for file treatments', () => {
-  const rows = buildCampaignLedger('p3b-route-policy').rows
+  const rows = buildCampaignLedger('p3b-route-policy', TEST_C1).rows
   const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
   const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
   const control = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('control/'))!
@@ -82,7 +83,12 @@ test('config route policy keeps process-env on request route zero and uses route
 })
 
 test('fixed reviewer registry rejects a caller-fabricated signature', () => {
-  const registry = loadTrustedReviewerRegistry(process.cwd())
+  const reviewers = [
+    { key_id: 'sha256:e7fe55f8631e08d70e778dece93c7bd37be3f3d9cbe11b56d853687973da1f49', public_key_der_base64: 'MCowBQYDK2VwAyEAHhp4pxf0eD49VtRmab/FEcHwGMO2fRYPEuLp2/WJ/uE=', reviewer_identity: 'requirements-independent', reviewer_role: 'requirements' },
+    { key_id: 'sha256:41415d264a4369befa5b2f8086312184b7c5a20365c5ae3ebb1c19f0f84dfade', public_key_der_base64: 'MCowBQYDK2VwAyEAbABLrzYUMMI3EcBORLDo9f+phMAVVfqorhay9oT56Sg=', reviewer_identity: 'security-independent', reviewer_role: 'security_quality' },
+  ] as const
+  const unsigned = { schema_id: 'oracle-lab-p3b-campaign-reviewers.v1', reviewed_candidate_commit: 'a'.repeat(40), reviewed_candidate_tree: 'b'.repeat(40), reviewers }
+  const registry = validateCampaignReviewerRegistry({ ...unsigned, registry_sha256: sha256Canonical(unsigned) })
   const reviewer = registry.reviewers.find((candidate) => candidate.reviewer_role === 'requirements')!
   assert.throws(() => verifyTrustedSignature({ reviewer_identity: reviewer.reviewer_identity, reviewer_role: reviewer.reviewer_role, signing_key_id: reviewer.key_id, signature_algorithm: 'ed25519_canonical_json_v1', signature: Buffer.alloc(64).toString('base64'), authority_sha256: 'a'.repeat(64) }, registry, 'requirements', 'authority_sha256', 'operator_authority_invalid'), (error: Error & { code?: string }) => error.code === 'operator_authority_invalid')
 })
@@ -101,7 +107,7 @@ test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', 
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
   const root = privateRoot('p3b-receipts-')
-  const ledger = buildCampaignLedger('p3b-focused-receipts')
+  const ledger = buildCampaignLedger('p3b-focused-receipts', TEST_C1)
   const store = openExecutionStore(root, ledger)
   const failure = sealPreSpawnFailure(store, ledger.rows[0], 'authority_drift')
   const receipts = readExecutionReceipts(store)
@@ -128,7 +134,7 @@ test('campaign CLI rejects missing and unknown arguments before side effects', a
 test('curation and exact five-record closeout derive Unknown/disabled only from sealed receipts', () => {
   const root = privateRoot('p3b-closeout-')
   createPrivateDirectory(root, 'prelaunch')
-  const ledger = buildCampaignLedger('p3b-focused-closeout')
+  const ledger = buildCampaignLedger('p3b-focused-closeout', TEST_C1)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
   const store = openExecutionStore(root, ledger)
   sealPreSpawnFailure(store, ledger.rows[0], 'authority_drift')

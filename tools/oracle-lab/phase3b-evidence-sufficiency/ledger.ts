@@ -16,8 +16,14 @@ export const REPOSITORY_AUTHORITY = deepFreeze({
 
 export const CROSS_REPO_AUTHORITY = deepFreeze({
   verdict: 'CROSS_REPO_PASS',
-  review_sha256: '8c4b3f948b727307966f46eaba0914ee479d200ef5b342a0d0afbadeed666621',
 })
+
+export type CrossRepoAuthority = Readonly<typeof CROSS_REPO_AUTHORITY & { review_sha256: string }>
+
+export function crossRepoAuthority(reviewSha256: string): CrossRepoAuthority {
+  assertSha256(reviewSha256, 'cross_repo_authority_invalid', 'cross repo review')
+  return deepFreeze({ ...CROSS_REPO_AUTHORITY, review_sha256: reviewSha256 })
+}
 
 export const PREDECESSOR_AUTHORITY = deepFreeze({
   scope: 'claude-code-2.1.215 darwin-arm64 synthetic loopback',
@@ -101,7 +107,7 @@ export type CampaignLedger = Readonly<{
   schema_id: 'oracle-lab-p3b-production-ledger.v1'
   campaign_id: string
   authority: typeof REPOSITORY_AUTHORITY
-  c1: typeof CROSS_REPO_AUTHORITY
+  c1: CrossRepoAuthority
   predecessor: typeof PREDECESSOR_AUTHORITY
   fixed_seeds: typeof FIXED_SEEDS
   counts: Readonly<{ mandatory_target_controls: 20; config: 80; auth: 80; request_wire: 30; response_failure_recovery: 130; total_rows: 340 }>
@@ -285,8 +291,10 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
   return deepFreeze({ ...unsigned, row_sha256: sha256Canonical(unsigned) })
 }
 
-export function buildCampaignLedger(campaignId: string): CampaignLedger {
+export function buildCampaignLedger(campaignId: string, c1: CrossRepoAuthority): CampaignLedger {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(campaignId)) throw new Phase3BProductionError('launch_ledger_invalid', 'campaign_id is invalid')
+  if (c1.verdict !== 'CROSS_REPO_PASS') throw new Phase3BProductionError('cross_repo_authority_invalid', 'cross repo verdict is not PASS')
+  assertSha256(c1.review_sha256, 'cross_repo_authority_invalid', 'cross repo review')
   const rows: RunLedgerRow[] = []
   const scheduleDescriptors: Readonly<Record<string, unknown>>[] = []
   for (const definition of [...CONTROL_DEFINITIONS, ...DYNAMIC_DEFINITIONS]) {
@@ -301,7 +309,7 @@ export function buildCampaignLedger(campaignId: string): CampaignLedger {
     schema_id: 'oracle-lab-p3b-production-ledger.v1' as const,
     campaign_id: campaignId,
     authority: REPOSITORY_AUTHORITY,
-    c1: CROSS_REPO_AUTHORITY,
+    c1,
     predecessor: PREDECESSOR_AUTHORITY,
     fixed_seeds: FIXED_SEEDS,
     counts: { mandatory_target_controls: 20 as const, config: 80 as const, auth: 80 as const, request_wire: 30 as const, response_failure_recovery: 130 as const, total_rows: 340 as const },
@@ -319,7 +327,8 @@ export function validateCampaignLedger(value: unknown): CampaignLedger {
   assertExactKeys(value, ['schema_id', 'campaign_id', 'authority', 'c1', 'predecessor', 'fixed_seeds', 'counts', 'target_launch_ceiling', 'parallel_target_launches', 'external_socket_budget', 'schedule_descriptors', 'rows', 'ledger_sha256'], 'launch_ledger_invalid')
   assertSha256(value.ledger_sha256, 'launch_ledger_invalid', 'ledger_sha256')
   assertDigestField(value, 'ledger_sha256', 'launch_ledger_invalid')
-  const expected = buildCampaignLedger(String(value.campaign_id))
+  assertExactKeys(value.c1, ['verdict', 'review_sha256'], 'launch_ledger_invalid')
+  const expected = buildCampaignLedger(String(value.campaign_id), crossRepoAuthority(String(value.c1.review_sha256)))
   if (sha256Canonical(value) !== sha256Canonical(expected)) throw new Phase3BProductionError('launch_ledger_invalid', 'ledger bytes, order, programs, or authority drifted')
   return expected
 }

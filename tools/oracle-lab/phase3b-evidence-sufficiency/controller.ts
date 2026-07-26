@@ -1,6 +1,6 @@
 import { Phase3BProductionError, deepFreeze } from './core.js'
 import { type StaticAnchor, assertStaticAnchor } from './launch-image.js'
-import { buildCampaignLedger, type CampaignLedger } from './ledger.js'
+import { buildCampaignLedger, type CampaignLedger, type CrossRepoAuthority } from './ledger.js'
 import { assertPrivateRuntimeRoot } from './sealed-fs.js'
 
 export type ProductionController = Readonly<{
@@ -17,8 +17,8 @@ type ControllerState = {
 
 const controllers = new WeakMap<object, ControllerState>()
 
-export function createProductionController(input: Readonly<{ campaign_id: string }>): ProductionController {
-  const ledger = buildCampaignLedger(input.campaign_id)
+export function createProductionController(input: Readonly<{ campaign_id: string; c1: CrossRepoAuthority }>): ProductionController {
+  const ledger = buildCampaignLedger(input.campaign_id, input.c1)
   const controller = deepFreeze({ campaign_id: ledger.campaign_id, authority_kind: 'opaque-production-controller' as const })
   controllers.set(controller, { ledger, runtimeRoot: null, anchorSha256: null, namespaceSealed: false })
   return controller

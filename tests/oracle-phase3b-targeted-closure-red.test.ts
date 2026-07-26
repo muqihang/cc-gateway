@@ -7,7 +7,7 @@ import test from 'node:test'
 import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport, validateCoverageContract, validateIndependentGoReceipt, validateIndependentTsAgreement } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { buildCampaignLedger, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { buildCampaignLedger, crossRepoAuthority, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
@@ -21,6 +21,7 @@ const SUPPORT_SCHEMAS = [
   'oracle-lab-p3b-independent-go-ts-agreement.v2',
   'oracle-lab-p3b-predecessor-semantic-comparison.v2',
 ] as const
+const TEST_C1 = crossRepoAuthority('c'.repeat(64))
 
 function privateRoot(prefix: string): string {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
@@ -83,7 +84,7 @@ test('targeted C1: caller-authored PASS support cannot satisfy Gate B support va
 test('targeted C1 closure: blocked support names missing independent ES8 and normative ES9 artifacts without projection fixtures', () => {
   const root = privateRoot('p3b-targeted-support-shape-')
   createPrivateDirectory(root, 'prelaunch')
-  const ledger = buildCampaignLedger('p3b-targeted-support-shape')
+  const ledger = buildCampaignLedger('p3b-targeted-support-shape', TEST_C1)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
   const store = openExecutionStore(root, ledger)
   const failureUnsigned = { schema_id: 'oracle-lab-p3b-campaign-failure.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, failing_sequence_index: 0, failure_phase: 'before_spawn', failure_family: 'campaign_execution_failure', action: 'stop_all_target_launches', terminal_receipt_sha256: null }
@@ -109,16 +110,16 @@ test('targeted C1 closure: blocked support names missing independent ES8 and nor
 
 test('targeted C1 authority: ES8 validates independent raw/internal/C1/repository/decision/stable-code agreement', () => {
   const digest = (value: string) => sha256Bytes(Buffer.from(value, 'utf8'))
+  const ledger = buildCampaignLedger('p3b-targeted-es8-authority', TEST_C1)
   const goUnsigned = {
     schema_id: 'oracle.sub_contract_receipt', schema_major: 1, schema_revision: 0,
     bundle_sha256: sha256Bytes(Buffer.concat([canonicalBytes(CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] }))), Buffer.from('\n', 'utf8')])), decisions_sha256: FROZEN_SUB_EXECUTION_DECISIONS_SHA256, mutation_results_sha256: FROZEN_SUB_EXECUTION_MUTATIONS_SHA256, required_set_sha256: FROZEN_REQUIRED_SET_SHA256,
     executed_required_sha256: sha256Bytes(Buffer.concat([canonicalBytes([...SUB_RECEIPT_REQUIRED_TESTS]), Buffer.from('\n', 'utf8')])), declared_decisions_sha256: FROZEN_DECISIONS_SHA256, declared_mutations_sha256: FROZEN_MUTATION_RESULTS_SHA256,
-    stable_code_count: 119, stable_code_set_sha256: 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c', record_input_sha256: '8c4b3f948b727307966f46eaba0914ee479d200ef5b342a0d0afbadeed666621',
+    stable_code_count: 119, stable_code_set_sha256: 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c', record_input_sha256: ledger.c1.review_sha256,
     mirror_validation_code: '', index_validation_code: '', record_validation_code: '', mirror_validation_allowed: true, index_validation_allowed: true, record_validation_allowed: true,
   }
   const goReceipt: Record<string, unknown> = { ...goUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goUnsigned), Buffer.from('\n', 'utf8')])) }
-  validateIndependentGoReceipt(goReceipt)
-  const ledger = buildCampaignLedger('p3b-targeted-es8-authority')
+  validateIndependentGoReceipt(goReceipt, ledger.c1.review_sha256)
   const goRawSha256 = digest('go-raw-bytes')
   const agreementUnsigned = { schema_id: 'oracle-lab-p3b-es8-ts-c1-agreement.v1', repositories: ledger.authority, c1_record_sha256: goUnsigned.record_input_sha256, go_receipt_raw_sha256: goRawSha256, go_receipt_internal_sha256: goReceipt.receipt_digest, decisions_sha256: goReceipt.decisions_sha256, mutation_results_sha256: goReceipt.mutation_results_sha256, required_set_sha256: goReceipt.required_set_sha256, stable_code_count: goReceipt.stable_code_count, stable_code_set_sha256: goReceipt.stable_code_set_sha256, decision: 'PASS' }
   const agreement: Record<string, unknown> = { ...agreementUnsigned, agreement_sha256: sha256Canonical(agreementUnsigned) }
@@ -129,11 +130,11 @@ test('targeted C1 authority: ES8 validates independent raw/internal/C1/repositor
     assert.throws(() => validateIndependentTsAgreement(forged, goReceipt, goRawSha256, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
   }
   const goForgedUnsigned = { ...goUnsigned, declared_decisions_sha256: digest('forged-decisions') }
-  assert.throws(() => validateIndependentGoReceipt({ ...goForgedUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goForgedUnsigned), Buffer.from('\n', 'utf8')])) }), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+  assert.throws(() => validateIndependentGoReceipt({ ...goForgedUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goForgedUnsigned), Buffer.from('\n', 'utf8')])) }, ledger.c1.review_sha256), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })
 
 test('targeted C1 authority: ES9 accepts only an authority-bound non-overlapping E/D coverage contract', () => {
-  const ledger = buildCampaignLedger('p3b-targeted-es9-authority')
+  const ledger = buildCampaignLedger('p3b-targeted-es9-authority', TEST_C1)
   const unsigned = { schema_id: 'oracle-lab-p3b-es9-coverage-contract.v1', repositories: ledger.authority, fixture_schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', enabled_sources: [{ pointer_suffix: '/request/method', observation_pointer: '/method', source_class: 'request' }, { pointer_suffix: '/response/terminal', observation_pointer: '/response/transport_terminal', source_class: 'response' }], disabled_exclusions: [{ pointer_suffix: '/request/raw_body', reason_code: 'sensitive_raw_bytes' }] }
   const contract: Record<string, unknown> = { ...unsigned, contract_sha256: sha256Canonical(unsigned) }
   const validated = validateCoverageContract(contract, ledger)
@@ -146,7 +147,7 @@ test('targeted C1 authority: ES9 accepts only an authority-bound non-overlapping
 })
 
 test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {
-  const rows = buildCampaignLedger('p3b-targeted-route-plan').rows
+  const rows = buildCampaignLedger('p3b-targeted-route-plan', TEST_C1).rows
   const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
   const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
   assert.deepEqual(configRoutePlan(processEnv), { user: null, project: null, local: 0, 'process-env': 1, request_route: 0, preflight_route: 1 })
@@ -203,7 +204,7 @@ test('targeted I2 wire close: terminal class waits for close and distinguishes c
 
 test('targeted I2: every post-terminal not_executed receipt retains the exact failure binding', () => {
   const root = privateRoot('p3b-targeted-receipts-')
-  const ledger = buildCampaignLedger('p3b-targeted-receipts')
+  const ledger = buildCampaignLedger('p3b-targeted-receipts', TEST_C1)
   const store = openExecutionStore(root, ledger)
   const authority = 'a'.repeat(64)
   let previous: string | null = null
