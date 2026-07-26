@@ -15,6 +15,8 @@ export type ExecutionReceipt = Readonly<{
   state: ReceiptState
   previous_receipt_sha256: string | null
   launch_authority_sha256: string | null
+  triggering_terminal_receipt_sha256: string | null
+  failure_sha256: string | null
   sandbox_pid: number | null
   target_pid: number | null
   executable_identity_sha256: string | null
@@ -81,7 +83,7 @@ function relative(row: RunLedgerRow, state: ReceiptState): string {
 }
 
 function validateReceipt(value: Record<string, unknown>, row: RunLedgerRow, ledger: CampaignLedger, state: ReceiptState, previous: string | null): ExecutionReceipt {
-  assertExactKeys(value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'state', 'previous_receipt_sha256', 'launch_authority_sha256', 'sandbox_pid', 'target_pid', 'executable_identity_sha256', 'started_monotonic_ns', 'terminal_monotonic_ns', 'exit_code', 'signal', 'terminal_class', 'cause_code', 'receipt_sha256'], 'execution_receipt_invalid')
+  assertExactKeys(value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'state', 'previous_receipt_sha256', 'launch_authority_sha256', 'triggering_terminal_receipt_sha256', 'failure_sha256', 'sandbox_pid', 'target_pid', 'executable_identity_sha256', 'started_monotonic_ns', 'terminal_monotonic_ns', 'exit_code', 'signal', 'terminal_class', 'cause_code', 'receipt_sha256'], 'execution_receipt_invalid')
   assertDigestField(value, 'receipt_sha256', 'execution_receipt_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-execution-receipt.v1' || value.campaign_id !== ledger.campaign_id || value.ledger_sha256 !== ledger.ledger_sha256 || value.run_id !== row.run_id || value.sequence_index !== row.sequence_index || value.state !== state || value.previous_receipt_sha256 !== previous) throw new Phase3BProductionError('execution_receipt_invalid', 'receipt ledger/order/chain binding drifted')
   return deepFreeze(value as ExecutionReceipt)
@@ -89,6 +91,7 @@ function validateReceipt(value: Record<string, unknown>, row: RunLedgerRow, ledg
 
 export function readExecutionReceipts(store: ExecutionStore): readonly ExecutionReceipt[] {
   const { runtimeRoot, ledger } = stateOf(store)
+  const failure = readCampaignFailure(store)
   const receipts: ExecutionReceipt[] = []
   let previous: string | null = null
   let inFlight: number | null = null
@@ -103,19 +106,19 @@ export function readExecutionReceipts(store: ExecutionStore): readonly Execution
       try { raw = readCanonical(runtimeRoot, relative(row, receiptState), 32_768).value } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error }
       const receipt = validateReceipt(raw, row, ledger, receiptState, previous)
       if (receiptState === 'started') {
-        if (globallyStopped || inFlight !== null || row.sequence_index !== nextSequence || receipt.launch_authority_sha256 === null || receipt.started_monotonic_ns === null || !/^\d+$/.test(receipt.started_monotonic_ns) || receipt.sandbox_pid !== null || receipt.target_pid !== null || receipt.executable_identity_sha256 !== null || receipt.terminal_monotonic_ns !== null || receipt.exit_code !== null || receipt.signal !== null || receipt.terminal_class !== null || receipt.cause_code !== null) throw new Phase3BProductionError('execution_not_serial', 'started receipt violates one-in-flight order or field closure')
+        if (globallyStopped || inFlight !== null || row.sequence_index !== nextSequence || receipt.launch_authority_sha256 === null || receipt.triggering_terminal_receipt_sha256 !== null || receipt.failure_sha256 !== null || receipt.started_monotonic_ns === null || !/^\d+$/.test(receipt.started_monotonic_ns) || receipt.sandbox_pid !== null || receipt.target_pid !== null || receipt.executable_identity_sha256 !== null || receipt.terminal_monotonic_ns !== null || receipt.exit_code !== null || receipt.signal !== null || receipt.terminal_class !== null || receipt.cause_code !== null) throw new Phase3BProductionError('execution_not_serial', 'started receipt violates one-in-flight order or field closure')
         assertSha256(receipt.launch_authority_sha256, 'execution_receipt_invalid', 'launch_authority_sha256')
         inFlight = row.sequence_index
         inFlightAuthority = receipt.launch_authority_sha256
         inFlightStarted = receipt.started_monotonic_ns
         inFlightSpawned = false
       } else if (receiptState === 'spawned') {
-        if (inFlight !== row.sequence_index || inFlightSpawned || receipt.launch_authority_sha256 !== inFlightAuthority || receipt.started_monotonic_ns !== inFlightStarted || !Number.isSafeInteger(receipt.sandbox_pid) || Number(receipt.sandbox_pid) <= 0 || !Number.isSafeInteger(receipt.target_pid) || Number(receipt.target_pid) <= 0 || receipt.executable_identity_sha256 === null || receipt.terminal_monotonic_ns !== null || receipt.exit_code !== null || receipt.signal !== null || receipt.terminal_class !== null || receipt.cause_code !== null) throw new Phase3BProductionError('execution_receipt_invalid', 'spawned receipt has no exact owned start/PID identity or field closure')
+        if (inFlight !== row.sequence_index || inFlightSpawned || receipt.launch_authority_sha256 !== inFlightAuthority || receipt.triggering_terminal_receipt_sha256 !== null || receipt.failure_sha256 !== null || receipt.started_monotonic_ns !== inFlightStarted || !Number.isSafeInteger(receipt.sandbox_pid) || Number(receipt.sandbox_pid) <= 0 || !Number.isSafeInteger(receipt.target_pid) || Number(receipt.target_pid) <= 0 || receipt.executable_identity_sha256 === null || receipt.terminal_monotonic_ns !== null || receipt.exit_code !== null || receipt.signal !== null || receipt.terminal_class !== null || receipt.cause_code !== null) throw new Phase3BProductionError('execution_receipt_invalid', 'spawned receipt has no exact owned start/PID identity or field closure')
         assertSha256(receipt.executable_identity_sha256, 'execution_receipt_invalid', 'executable_identity_sha256')
         inFlightSpawned = true
       } else if (receiptState === 'terminal') {
         const terminalClass = String(receipt.terminal_class)
-        if (inFlight !== row.sequence_index || receipt.launch_authority_sha256 !== inFlightAuthority || receipt.started_monotonic_ns !== inFlightStarted || !['success', 'spawn_error', 'failed_after_spawn'].includes(terminalClass) || receipt.terminal_monotonic_ns === null || !/^\d+$/.test(receipt.terminal_monotonic_ns) || BigInt(receipt.terminal_monotonic_ns) < BigInt(inFlightStarted!) || ((terminalClass === 'success' || terminalClass === 'failed_after_spawn') && !inFlightSpawned) || (terminalClass === 'success' ? receipt.cause_code !== null : typeof receipt.cause_code !== 'string') || receipt.sandbox_pid !== null || receipt.target_pid !== null || receipt.executable_identity_sha256 !== null) throw new Phase3BProductionError('execution_receipt_invalid', 'terminal receipt has no exact in-flight transition or field closure')
+        if (inFlight !== row.sequence_index || receipt.launch_authority_sha256 !== inFlightAuthority || receipt.triggering_terminal_receipt_sha256 !== null || receipt.failure_sha256 !== null || receipt.started_monotonic_ns !== inFlightStarted || !['success', 'spawn_error', 'failed_after_spawn'].includes(terminalClass) || receipt.terminal_monotonic_ns === null || !/^\d+$/.test(receipt.terminal_monotonic_ns) || BigInt(receipt.terminal_monotonic_ns) < BigInt(inFlightStarted!) || ((terminalClass === 'success' || terminalClass === 'failed_after_spawn') && !inFlightSpawned) || (terminalClass === 'success' ? receipt.cause_code !== null : typeof receipt.cause_code !== 'string') || receipt.sandbox_pid !== null || receipt.target_pid !== null || receipt.executable_identity_sha256 !== null) throw new Phase3BProductionError('execution_receipt_invalid', 'terminal receipt has no exact in-flight transition or field closure')
         inFlight = null
         inFlightAuthority = null
         inFlightStarted = null
@@ -123,11 +126,16 @@ export function readExecutionReceipts(store: ExecutionStore): readonly Execution
         nextSequence += 1
         if (receipt.terminal_class !== 'success') globallyStopped = true
       } else {
-        if (!globallyStopped) {
-          const failure = readCampaignFailure(store)
-          if (!failure || row.sequence_index !== failure.failing_sequence_index || receipt.launch_authority_sha256 !== failure.failure_sha256) throw new Phase3BProductionError('execution_receipt_invalid', 'not_executed has no sealed first failure')
-          globallyStopped = true
+        const firstNotExecuted = failure?.failure_phase === 'before_spawn' ? failure.failing_sequence_index : Number(failure?.failing_sequence_index) + 1
+        const expectedTrigger = failure?.terminal_receipt_sha256 ?? null
+        const expectedAuthority = failure ? notExecutedLaunchAuthoritySha256(ledger, row, failure.failure_sha256, expectedTrigger) : null
+        if (!failure || row.sequence_index < firstNotExecuted || receipt.failure_sha256 !== failure.failure_sha256 || receipt.triggering_terminal_receipt_sha256 !== expectedTrigger || receipt.launch_authority_sha256 !== expectedAuthority) throw new Phase3BProductionError('execution_receipt_invalid', 'not_executed does not bind the sealed failure, trigger, and exact ledger row authority')
+        if (failure.failure_phase === 'after_spawn') {
+          const trigger = receipts.find((candidate) => candidate.receipt_sha256 === expectedTrigger)
+          const postTerminalArtifactFailure = failure.failure_family === 'post_terminal_artifact_failure' && trigger?.terminal_class === 'success'
+          if (!trigger || trigger.state !== 'terminal' || trigger.sequence_index !== failure.failing_sequence_index || (trigger.terminal_class === 'success' && !postTerminalArtifactFailure)) throw new Phase3BProductionError('execution_receipt_invalid', 'not_executed trigger is not the exact first terminal failure boundary')
         }
+        if (!globallyStopped) globallyStopped = true
         if (inFlight !== null || row.sequence_index !== nextSequence || receipt.terminal_class !== 'not_executed' || receipt.started_monotonic_ns !== null || receipt.terminal_monotonic_ns !== null || receipt.sandbox_pid !== null || receipt.target_pid !== null || receipt.executable_identity_sha256 !== null || receipt.exit_code !== null || receipt.signal !== null || receipt.cause_code !== 'first_terminal_global_stop') throw new Phase3BProductionError('execution_receipt_invalid', 'not_executed must follow the first terminal failure with closed fields')
         nextSequence += 1
       }
@@ -144,6 +152,7 @@ export function readCampaignFailure(store: ExecutionStore): CampaignFailure | nu
   try { value = readCanonical(runtimeRoot, 'campaign-failure.json', 32_768).value } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
   assertExactKeys(value, ['schema_id', 'campaign_id', 'ledger_sha256', 'failing_sequence_index', 'failure_phase', 'failure_family', 'action', 'terminal_receipt_sha256', 'failure_sha256'], 'campaign_failure_invalid')
   assertDigestField(value, 'failure_sha256', 'campaign_failure_invalid')
+  if (value.failure_phase === 'after_spawn') assertSha256(value.terminal_receipt_sha256, 'campaign_failure_invalid', 'terminal_receipt_sha256')
   if (value.schema_id !== 'oracle-lab-p3b-campaign-failure.v1' || value.campaign_id !== ledger.campaign_id || value.ledger_sha256 !== ledger.ledger_sha256 || !['before_spawn', 'after_spawn'].includes(String(value.failure_phase)) || value.action !== 'stop_all_target_launches' || !Number.isSafeInteger(value.failing_sequence_index) || Number(value.failing_sequence_index) < 0 || Number(value.failing_sequence_index) >= 340 || typeof value.failure_family !== 'string' || !/^[a-z0-9_]{3,64}$/.test(value.failure_family) || (value.failure_phase === 'before_spawn' ? value.terminal_receipt_sha256 !== null : typeof value.terminal_receipt_sha256 !== 'string')) throw new Phase3BProductionError('campaign_failure_invalid', 'campaign failure fields drifted')
   return deepFreeze(value as CampaignFailure)
 }
@@ -157,7 +166,7 @@ export function sealPreSpawnFailure(store: ExecutionStore, row: RunLedgerRow, ca
   writeExclusiveCanonical(runtimeRoot, 'campaign-failure.json', failure)
   let previous = readExecutionReceipts(store).at(-1)?.receipt_sha256 ?? null
   for (const remaining of ledger.rows.slice(row.sequence_index)) {
-    previous = appendAfter(store, remaining, 'not_executed', { ...blankFields(), launch_authority_sha256: failure.failure_sha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
+    previous = appendAfter(store, remaining, 'not_executed', { ...blankFields(), launch_authority_sha256: notExecutedLaunchAuthoritySha256(ledger, remaining, failure.failure_sha256, null), failure_sha256: failure.failure_sha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
   }
   return failure
 }
@@ -185,8 +194,12 @@ function append(store: ExecutionStore, row: RunLedgerRow, state: ReceiptState, f
   return appendAfter(store, row, state, fields, readExecutionReceipts(store).at(-1)?.receipt_sha256 ?? null)
 }
 
-function blankFields(): Pick<ExecutionReceipt, 'sandbox_pid' | 'target_pid' | 'executable_identity_sha256' | 'started_monotonic_ns' | 'terminal_monotonic_ns' | 'exit_code' | 'signal' | 'terminal_class' | 'cause_code'> {
-  return { sandbox_pid: null, target_pid: null, executable_identity_sha256: null, started_monotonic_ns: null, terminal_monotonic_ns: null, exit_code: null, signal: null, terminal_class: null, cause_code: null }
+function blankFields(): Pick<ExecutionReceipt, 'triggering_terminal_receipt_sha256' | 'failure_sha256' | 'sandbox_pid' | 'target_pid' | 'executable_identity_sha256' | 'started_monotonic_ns' | 'terminal_monotonic_ns' | 'exit_code' | 'signal' | 'terminal_class' | 'cause_code'> {
+  return { triggering_terminal_receipt_sha256: null, failure_sha256: null, sandbox_pid: null, target_pid: null, executable_identity_sha256: null, started_monotonic_ns: null, terminal_monotonic_ns: null, exit_code: null, signal: null, terminal_class: null, cause_code: null }
+}
+
+function notExecutedLaunchAuthoritySha256(ledger: CampaignLedger, row: RunLedgerRow, failureSha256: string, triggeringTerminalReceiptSha256: string | null): string {
+  return sha256Canonical({ schema_id: 'oracle-lab-p3b-not-executed-launch-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, failure_sha256: failureSha256, triggering_terminal_receipt_sha256: triggeringTerminalReceiptSha256 })
 }
 
 export function appendStarted(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt): ExecutionReceipt {
@@ -245,7 +258,7 @@ function appendNotExecuted(store: ExecutionStore, failingIndex: number, failureR
   const { ledger } = stateOf(store)
   let previous: string | null = failureReceiptSha256
   for (const row of ledger.rows.slice(failingIndex + 1)) {
-    previous = appendAfter(store, row, 'not_executed', { ...blankFields(), launch_authority_sha256: failureBindingSha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
+    previous = appendAfter(store, row, 'not_executed', { ...blankFields(), launch_authority_sha256: notExecutedLaunchAuthoritySha256(ledger, row, failureBindingSha256, failureReceiptSha256), triggering_terminal_receipt_sha256: failureReceiptSha256, failure_sha256: failureBindingSha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
   }
 }
 

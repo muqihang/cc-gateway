@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, buildCampaignLedger, buildResponseProgram, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
@@ -146,4 +147,10 @@ test('curation and exact five-record closeout derive Unknown/disabled only from 
   createPrivateDirectory(root, 'runs')
   writeExclusiveCanonical(root, 'runs/unindexed-extra.json', { schema_id: 'unexpected.v1', value: 'caller-leftover' })
   assert.throws(() => validateArtifactIndexCoverage(root, readCanonical(root, 'capsules/P3B-ES1/closure/artifact-index.json', 16_777_216).value), (error: Error & { code?: string }) => error.code === 'artifact_index_invalid')
+  const provenance = readCanonical(root, SUPPORT_PATHS[2], 16_777_216).value
+  const unsigned: Record<string, unknown> = { ...provenance, coverage: { ...(provenance.coverage as Record<string, unknown>), represented_pointer_count: 339 } }
+  delete unsigned.support_sha256
+  const drifted = { ...unsigned, support_sha256: sha256Canonical(unsigned) }
+  writeFileSync(path.join(root, SUPPORT_PATHS[2]), `${canonicalJson(drifted)}\n`, 'utf8')
+  assert.throws(() => validateConclusionSupport(root, false), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })

@@ -98,10 +98,58 @@ export type ResponseWireEvent = Readonly<
   | { kind: 'terminal'; monotonic_ns: string; terminal: 'eof' | 'reset' }
 >
 
-// Behavioral seam for the focused RED. GREEN replaces this placeholder with the
-// receiver's strict parser over bytes and monotonic events captured at writes.
-export function deriveResponseObservationFromWire(_events: readonly ResponseWireEvent[], _startedMonotonicNs: bigint, _delayBoundaryMs: number): Readonly<Record<string, unknown>> {
-  return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_failed', delay_elapsed_ns: '0', timing_bucket: 'not_delayed' })
+function monotonicOf(event: ResponseWireEvent): bigint {
+  if (!/^\d+$/.test(event.monotonic_ns)) throw new Phase3BProductionError('receiver_wire_invalid', 'wire event monotonic time is invalid')
+  return BigInt(event.monotonic_ns)
+}
+
+export function deriveResponseObservationFromWire(events: readonly ResponseWireEvent[], startedMonotonicNs: bigint, delayBoundaryMs: number): Readonly<Record<string, unknown>> {
+  if (events.length === 0 || startedMonotonicNs < 0n || !Number.isSafeInteger(delayBoundaryMs) || delayBoundaryMs < 0) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript boundary is invalid')
+  let previous = startedMonotonicNs
+  let headers: Extract<ResponseWireEvent, { kind: 'headers' }> | null = null
+  let terminal: Extract<ResponseWireEvent, { kind: 'terminal' }> | null = null
+  const bodyChunks: Buffer[] = []
+  let bodyLength = 0
+  for (const event of events) {
+    const at = monotonicOf(event)
+    if (at < previous || terminal !== null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire events are reordered or continue after terminal')
+    previous = at
+    if (event.kind === 'headers') {
+      if (headers !== null || bodyChunks.length !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'headers must be the first and only header event')
+      headers = event
+    } else if (event.kind === 'body') {
+      if (headers === null || event.bytes.byteLength === 0) throw new Phase3BProductionError('receiver_wire_invalid', 'body bytes must follow observed headers')
+      bodyLength += event.bytes.byteLength
+      if (bodyLength > 1_048_576) throw new Phase3BProductionError('receiver_wire_invalid', 'observed response body exceeds the fixed limit')
+      bodyChunks.push(Buffer.from(event.bytes))
+    } else terminal = event
+  }
+  if (terminal === null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript has no terminal event')
+  const firstAt = headers ? monotonicOf(headers) : monotonicOf(terminal)
+  const elapsed = firstAt - startedMonotonicNs
+  const timingBucket = delayBoundaryMs === 0 ? 'not_delayed' : elapsed >= BigInt(delayBoundaryMs) * 1_000_000n ? 'at_or_after_boundary' : 'before_boundary'
+  if (terminal.terminal === 'reset') {
+    if (headers !== null || bodyLength !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'reset-before-headers transcript contains response bytes')
+    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_before_headers', delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket })
+  }
+  if (headers === null) throw new Phase3BProductionError('receiver_wire_invalid', 'EOF transcript has no observed headers')
+  const headerBytes = Buffer.from(headers.bytes)
+  if (headerBytes.length > 65_536 || !headerBytes.subarray(-4).equals(Buffer.from('\r\n\r\n', 'ascii'))) throw new Phase3BProductionError('receiver_wire_invalid', 'observed header block is malformed or oversized')
+  const lines = headerBytes.subarray(0, -4).toString('latin1').split('\r\n')
+  const statusMatch = /^HTTP\/1\.[01] ([1-5][0-9]{2})(?: |$)/.exec(lines.shift() ?? '')
+  if (!statusMatch) throw new Phase3BProductionError('receiver_wire_invalid', 'observed status line is invalid')
+  const orderedHeaderClasses: Array<Readonly<{ name: string; value_class: string }>> = []
+  for (const line of lines) {
+    const separator = line.indexOf(':')
+    if (separator <= 0 || /^[ \t]/.test(line)) throw new Phase3BProductionError('receiver_wire_invalid', 'observed header line is invalid')
+    const name = line.slice(0, separator).toLowerCase()
+    const value = line.slice(separator + 1).trim().toLowerCase()
+    if (name === 'content-type') orderedHeaderClasses.push({ name, value_class: value.startsWith('text/event-stream') ? 'text/event-stream' : value.startsWith('application/json') ? 'application/json' : 'other' })
+  }
+  const body = Buffer.concat(bodyChunks, bodyLength)
+  const sseEventOrder = [...body.toString('utf8').matchAll(/^event: ([a-z_]+)$/gm)].map((match) => match[1])
+  const partialSse = orderedHeaderClasses.some((header) => header.name === 'content-type' && header.value_class === 'text/event-stream') && !sseEventOrder.includes('message_stop')
+  return deepFreeze({ status: Number(statusMatch[1]), ordered_header_classes: orderedHeaderClasses, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: sseEventOrder, transport_terminal: partialSse ? 'eof_after_partial' : 'http_complete', delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket })
 }
 
 function executableIdentity(): string {
@@ -341,21 +389,53 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
 async function sendAction(response: ServerResponse, action: ResponseAction): Promise<Readonly<Record<string, unknown>>> {
   const started = process.hrtime.bigint()
   if (action.delay_ms > 0) await new Promise((resolve) => setTimeout(resolve, action.delay_ms))
+  const socket = response.socket
+  if (!socket) throw new Phase3BProductionError('receiver_wire_invalid', 'response has no owned socket')
   if (action.kind === 'reset') {
-    response.socket?.destroy()
-    const elapsed = process.hrtime.bigint() - started
-    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: response.socket?.destroyed === true ? 'reset_before_headers' : 'reset_failed', delay_elapsed_ns: elapsed.toString(), timing_bucket: action.delay_ms > 0 && elapsed >= BigInt(action.delay_ms) * 1_000_000n ? 'at_or_after_boundary' : action.delay_ms > 0 ? 'before_boundary' : 'not_delayed' })
+    socket.destroy()
+    return deriveResponseObservationFromWire([{ kind: 'terminal', monotonic_ns: process.hrtime.bigint().toString(), terminal: 'reset' }], started, action.delay_ms)
   }
   const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8')
-  response.sendDate = false
-  response.statusCode = action.status!
-  for (const header of action.ordered_headers) response.setHeader(header.name, header.value_class === 'text/event-stream' ? 'text/event-stream' : 'application/json')
-  const actualHeaders = response.getHeaderNames().map((name) => ({ name: name.toLowerCase(), value_class: String(response.getHeader(name)).toLowerCase().startsWith('text/event-stream') ? 'text/event-stream' : String(response.getHeader(name)).toLowerCase().startsWith('application/json') ? 'application/json' : 'other' }))
-  await new Promise<void>((resolve) => response.end(body, () => resolve()))
-  const elapsed = process.hrtime.bigint() - started
-  const eventOrder = [...body.toString('utf8').matchAll(/^event: ([a-z_]+)$/gm)].map((match) => match[1])
-  const transportTerminal = action.body_kind === 'partial_sse' && !eventOrder.includes('message_stop') ? 'eof_after_partial' : response.writableEnded ? 'http_complete' : 'http_incomplete'
-  return deepFreeze({ status: response.statusCode, ordered_header_classes: actualHeaders, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: eventOrder, transport_terminal: transportTerminal, delay_elapsed_ns: elapsed.toString(), timing_bucket: action.delay_class === 'bounded_before_headers' ? elapsed >= BigInt(action.delay_ms) * 1_000_000n ? 'at_or_after_boundary' : 'before_boundary' : 'not_delayed' })
+  const events: ResponseWireEvent[] = []
+  let pendingHeaders = Buffer.alloc(0)
+  let headersCaptured = false
+  const originalWrite = socket.write
+  socket.write = function (this: Socket, chunk: Uint8Array | string, ...args: unknown[]): boolean {
+    const encoding = typeof args[0] === 'string' && Buffer.isEncoding(args[0]) ? args[0] : 'utf8'
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Buffer.from(chunk)
+    if (bytes.length !== 0) {
+      const at = process.hrtime.bigint().toString()
+      if (!headersCaptured) {
+        pendingHeaders = Buffer.concat([pendingHeaders, bytes])
+        const boundary = pendingHeaders.indexOf('\r\n\r\n')
+        if (boundary >= 0) {
+          const end = boundary + 4
+          events.push({ kind: 'headers', monotonic_ns: at, bytes: Buffer.from(pendingHeaders.subarray(0, end)) })
+          if (pendingHeaders.length > end) events.push({ kind: 'body', monotonic_ns: at, bytes: Buffer.from(pendingHeaders.subarray(end)) })
+          pendingHeaders = Buffer.alloc(0)
+          headersCaptured = true
+        }
+      } else events.push({ kind: 'body', monotonic_ns: at, bytes: Buffer.from(bytes) })
+    }
+    return Reflect.apply(originalWrite, this, [chunk, ...args]) as boolean
+  } as typeof socket.write
+  try {
+    response.sendDate = false
+    response.shouldKeepAlive = false
+    response.statusCode = action.status!
+    for (const header of action.ordered_headers) response.setHeader(header.name, header.value_class === 'text/event-stream' ? 'text/event-stream' : 'application/json')
+    response.setHeader('content-length', String(body.length))
+    response.setHeader('connection', 'close')
+    const closed = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Phase3BProductionError('receiver_wire_invalid', 'response socket did not reach observed EOF')), 5_000)
+      socket.once('close', () => { clearTimeout(timer); resolve() })
+    })
+    response.end(body)
+    await closed
+    events.push({ kind: 'terminal', monotonic_ns: process.hrtime.bigint().toString(), terminal: 'eof' })
+  } finally { socket.write = originalWrite }
+  if (!headersCaptured || pendingHeaders.length !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'response header bytes were not completely observed')
+  return deriveResponseObservationFromWire(events, started, action.delay_ms)
 }
 
 export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<ReceiverResult> {

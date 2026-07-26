@@ -12,11 +12,11 @@ import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../to
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 
 const SUPPORT_SCHEMAS = [
-  'oracle-lab-p3b-typed-wire-fixtures.v1',
-  'oracle-lab-p3b-candidate-field-closure.v1',
-  'oracle-lab-p3b-field-provenance.v1',
-  'oracle-lab-p3b-cross-repo-result.v1',
-  'oracle-lab-p3b-predecessor-semantic-comparison.v1',
+  'oracle-lab-p3b-typed-wire-fixtures.v2',
+  'oracle-lab-p3b-candidate-field-closure.v2',
+  'oracle-lab-p3b-pointer-source-coverage.v1',
+  'oracle-lab-p3b-independent-go-ts-agreement.v1',
+  'oracle-lab-p3b-predecessor-semantic-comparison.v2',
 ] as const
 
 function privateRoot(prefix: string): string {
@@ -32,6 +32,8 @@ function sealedRecord(unsigned: Readonly<Record<string, unknown>>): Readonly<Rec
 function receiptFields(overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
   return {
     launch_authority_sha256: null,
+    triggering_terminal_receipt_sha256: null,
+    failure_sha256: null,
     sandbox_pid: null,
     target_pid: null,
     executable_identity_sha256: null,
@@ -43,6 +45,10 @@ function receiptFields(overrides: Readonly<Record<string, unknown>> = {}): Reado
     cause_code: null,
     ...overrides,
   }
+}
+
+function notExecutedAuthority(ledger: ReturnType<typeof buildCampaignLedger>, row: RunLedgerRow, failureSha256: string, triggeringTerminalReceiptSha256: string | null): string {
+  return sha256Canonical({ schema_id: 'oracle-lab-p3b-not-executed-launch-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, failure_sha256: failureSha256, triggering_terminal_receipt_sha256: triggeringTerminalReceiptSha256 })
 }
 
 function writeReceipt(root: string, ledger: ReturnType<typeof buildCampaignLedger>, row: RunLedgerRow, state: string, previous: string | null, fields: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
@@ -88,6 +94,18 @@ test('targeted I1: wire observation is derived from bytes, EOF, ordering, and mo
   assert.equal(observed.delay_elapsed_ns, '10000000')
   assert.equal(observed.timing_bucket, 'at_or_after_boundary')
 
+  const beforeBoundary = deriveResponseObservationFromWire(events.map((event) => ({ ...event, monotonic_ns: String(BigInt(event.monotonic_ns) - 1_000_000n) })) as readonly ResponseWireEvent[], 1_000_000n, 10)
+  assert.equal(beforeBoundary.delay_elapsed_ns, '9000000')
+  assert.equal(beforeBoundary.timing_bucket, 'before_boundary')
+  const completeBody = Buffer.from('event: message_start\ndata: {}\n\nevent: message_stop\ndata: {}\n\n', 'utf8')
+  const complete = deriveResponseObservationFromWire([
+    { kind: 'headers', monotonic_ns: '20000000', bytes: Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: ${completeBody.length}\r\n\r\n`, 'ascii') },
+    { kind: 'body', monotonic_ns: '21000000', bytes: completeBody },
+    { kind: 'terminal', monotonic_ns: '22000000', terminal: 'eof' },
+  ], 19_000_000n, 0)
+  assert.equal(complete.transport_terminal, 'http_complete')
+  assert.deepEqual(complete.sse_event_order, ['message_start', 'message_stop'])
+
   const bodyBeforeHeaders: readonly ResponseWireEvent[] = [events[1], events[0], events[2]]
   assert.throws(() => deriveResponseObservationFromWire(bodyBeforeHeaders, 1_000_000n, 10), (error: Error & { code?: string }) => error.code === 'receiver_wire_invalid')
   const afterTerminal: readonly ResponseWireEvent[] = [...events, { kind: 'body', monotonic_ns: '14000000', bytes: Buffer.from('late') }]
@@ -110,7 +128,7 @@ test('targeted I2: every post-terminal not_executed receipt retains the exact fa
   const failure = { ...failureUnsigned, failure_sha256: sha256Canonical(failureUnsigned) }
   writeExclusiveCanonical(root, 'campaign-failure.json', failure)
   for (const row of ledger.rows.slice(1)) {
-    const receipt = writeReceipt(root, ledger, row, 'not_executed', previous, receiptFields({ launch_authority_sha256: failure.failure_sha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }))
+    const receipt = writeReceipt(root, ledger, row, 'not_executed', previous, receiptFields({ launch_authority_sha256: notExecutedAuthority(ledger, row, failure.failure_sha256, String(terminal.receipt_sha256)), triggering_terminal_receipt_sha256: terminal.receipt_sha256, failure_sha256: failure.failure_sha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }))
     previous = String(receipt.receipt_sha256)
   }
   assert.equal(readExecutionReceipts(store).length, 342)
@@ -118,9 +136,20 @@ test('targeted I2: every post-terminal not_executed receipt retains the exact fa
   const lastRow = ledger.rows.at(-1)!
   const relative = `execution-records/${String(lastRow.sequence_index).padStart(3, '0')}-${lastRow.run_id}-not_executed.json`
   const last = readExecutionReceipts(store).at(-1)!
-  const forgedUnsigned = { ...last, launch_authority_sha256: 'c'.repeat(64) } as Record<string, unknown>
-  delete forgedUnsigned.receipt_sha256
-  const forged = { ...forgedUnsigned, receipt_sha256: sha256Canonical(forgedUnsigned) }
-  writeFileSync(path.join(root, relative), `${canonicalJson(forged)}\n`, { encoding: 'utf8' })
-  assert.throws(() => readExecutionReceipts(store), (error: Error & { code?: string }) => error.code === 'execution_receipt_invalid')
+  const original = `${canonicalJson(last)}\n`
+  const mutations: ReadonlyArray<Readonly<Record<string, unknown>>> = [
+    { launch_authority_sha256: 'c'.repeat(64) },
+    { triggering_terminal_receipt_sha256: 'd'.repeat(64), launch_authority_sha256: notExecutedAuthority(ledger, lastRow, failure.failure_sha256, 'd'.repeat(64)) },
+    { failure_sha256: 'e'.repeat(64), launch_authority_sha256: notExecutedAuthority(ledger, lastRow, 'e'.repeat(64), String(terminal.receipt_sha256)) },
+    { previous_receipt_sha256: 'f'.repeat(64) },
+  ]
+  for (const mutation of mutations) {
+    const forgedUnsigned = { ...last, ...mutation } as Record<string, unknown>
+    delete forgedUnsigned.receipt_sha256
+    const forged = { ...forgedUnsigned, receipt_sha256: sha256Canonical(forgedUnsigned) }
+    writeFileSync(path.join(root, relative), `${canonicalJson(forged)}\n`, { encoding: 'utf8' })
+    assert.throws(() => readExecutionReceipts(store), (error: Error & { code?: string }) => error.code === 'execution_receipt_invalid')
+    writeFileSync(path.join(root, relative), original, { encoding: 'utf8' })
+  }
+  assert.equal(readExecutionReceipts(store).at(-1)?.receipt_sha256, last.receipt_sha256)
 })
