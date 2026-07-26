@@ -66,8 +66,9 @@ async function runProductionCampaignDryRunAsync(evidenceRoot: string, adapters: 
     for (const row of ledger.rows) {
       const launchAuthority = deriveAdapterLaunchAuthority(controller, row)
       const transition = appendAdapterRowStartedSpawned(store, row, launchAuthority, previousReceiptSha256)
-      const route = row.schedule_id === 'config-precedence-process-env-vs-local' ? materializeRouteDispatch(row, routeUrls) : null
+      const route = row.schedule_id === 'config-precedence-process-env-vs-local' && row.arm.startsWith('treatment/') ? materializeRouteDispatch(row, routeUrls) : null
       const response = await adapters.targetTransport.dispatch({ sequence_index: row.sequence_index, run_id: row.run_id, schedule_id: row.schedule_id, request_route: route?.request_route ?? 0, preflight_route: route?.preflight_route ?? null, selected_url: route?.selected_url ?? routeUrls[0] })
+      if (route && response.route_index !== route.actual_route) throw new Phase3BProductionError('scenario_input_invalid', 'synthetic transport peer did not observe the sealed process-env route')
       const dispatchDigest = sha256Canonical(response)
       dispatchDigests.push(dispatchDigest)
       const terminal = appendAdapterRowTerminal(store, row, launchAuthority, transition.started, transition.spawned)
