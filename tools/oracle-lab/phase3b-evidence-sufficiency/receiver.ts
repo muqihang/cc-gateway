@@ -90,8 +90,8 @@ type ReceiverState = {
 
 const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
-export const REQUEST_AST_MATERIALIZER = 'typed-json-ast-wire-base64-v2'
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, typed_wire_bytes_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+export const REQUEST_AST_MATERIALIZER = 'typed-json-ast-normalized-safe-v3'
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -326,7 +326,7 @@ function semanticRequestAst(value: unknown): unknown {
     if (typeof node === 'object') return { type: 'object', fields: Object.keys(node as object).map((name) => ({ name, value: visit((node as Record<string, unknown>)[name]) })) }
     if (typeof node === 'string') {
       const literalRef = literals.get(node)
-      return { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')), literal_ref: literalRef ?? null }
+      return literalRef ? { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')), literal_ref: literalRef } : { type: 'redacted_string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')) }
     }
     if (typeof node === 'number') return { type: 'number', finite: Number.isFinite(node), value_text: String(node) }
     if (typeof node === 'boolean') return { type: 'boolean', value: node }
@@ -338,17 +338,43 @@ function semanticRequestAst(value: unknown): unknown {
 export function normalizeRequestAst(bytes: Buffer): Readonly<Record<string, unknown>> {
   let value: unknown
   try { value = JSON.parse(bytes.toString('utf8')) } catch { throw new Phase3BProductionError('receiver_request_invalid', 'request body is not JSON') }
-  return deepFreeze({ schema_id: 'oracle-lab-p3b-request-ast.v2', materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, wire_byte_length: bytes.length, wire_sha256: sha256Bytes(bytes), wire_bytes_base64: bytes.toString('base64'), value: semanticRequestAst(value) })
+  const valueAst = semanticRequestAst(value)
+  const normalized = materializeSemanticAst(valueAst)
+  const normalizedBytes = Buffer.concat([canonicalBytes(normalized), Buffer.from('\n', 'utf8')])
+  return deepFreeze({ schema_id: 'oracle-lab-p3b-request-ast.v3', materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, wire_byte_length: bytes.length, wire_sha256: sha256Bytes(bytes), normalized_byte_length: normalizedBytes.length, normalized_sha256: sha256Bytes(normalizedBytes), value: valueAst })
 }
 
 export function materializeRequestAst(ast: Record<string, unknown>): Buffer {
-  assertExactKeys(ast, ['schema_id', 'materializer', 'literal_table_sha256', 'wire_byte_length', 'wire_sha256', 'wire_bytes_base64', 'value'], 'receiver_request_invalid')
-  if (ast.schema_id !== 'oracle-lab-p3b-request-ast.v2' || ast.materializer !== REQUEST_AST_MATERIALIZER || ast.literal_table_sha256 !== FIXED_LITERAL_TABLE_SHA256 || !Number.isSafeInteger(ast.wire_byte_length) || Number(ast.wire_byte_length) <= 0 || typeof ast.wire_bytes_base64 !== 'string') throw new Phase3BProductionError('receiver_request_invalid', 'request AST materializer metadata drifted')
-  const bytes = Buffer.from(ast.wire_bytes_base64, 'base64')
-  if (bytes.toString('base64') !== ast.wire_bytes_base64 || bytes.length !== ast.wire_byte_length || sha256Bytes(bytes) !== ast.wire_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'request AST wire bytes do not match their exact identity')
-  const rebuilt = normalizeRequestAst(bytes)
-  if (!canonicalBytes(rebuilt).equals(canonicalBytes(ast))) throw new Phase3BProductionError('receiver_request_invalid', 'request AST does not deterministically reproduce from its wire bytes and literal bindings')
+  assertExactKeys(ast, ['schema_id', 'materializer', 'literal_table_sha256', 'wire_byte_length', 'wire_sha256', 'normalized_byte_length', 'normalized_sha256', 'value'], 'receiver_request_invalid')
+  if (ast.schema_id !== 'oracle-lab-p3b-request-ast.v3' || ast.materializer !== REQUEST_AST_MATERIALIZER || ast.literal_table_sha256 !== FIXED_LITERAL_TABLE_SHA256 || !Number.isSafeInteger(ast.wire_byte_length) || Number(ast.wire_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(ast.wire_sha256))) throw new Phase3BProductionError('receiver_request_invalid', 'request AST materializer metadata drifted')
+  const bytes = Buffer.concat([canonicalBytes(materializeSemanticAst(ast.value)), Buffer.from('\n', 'utf8')])
+  if (bytes.length !== ast.normalized_byte_length || sha256Bytes(bytes) !== ast.normalized_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'normalized request AST bytes do not match their exact identity')
   return bytes
+}
+
+function materializeSemanticAst(node: unknown): unknown {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) throw new Phase3BProductionError('receiver_request_invalid', 'typed request AST node is not closed')
+  const value = node as Record<string, unknown>
+  if (value.type === 'null') return null
+  if (value.type === 'array' && Array.isArray(value.items)) return value.items.map(materializeSemanticAst)
+  if (value.type === 'object' && Array.isArray(value.fields)) {
+    const result: Record<string, unknown> = {}
+    for (const field of value.fields) {
+      if (!field || typeof field !== 'object' || Array.isArray(field) || typeof (field as Record<string, unknown>).name !== 'string') throw new Phase3BProductionError('receiver_request_invalid', 'typed object field is invalid')
+      result[(field as Record<string, unknown>).name as string] = materializeSemanticAst((field as Record<string, unknown>).value)
+    }
+    return result
+  }
+  if (value.type === 'string' && typeof value.literal_ref === 'string') {
+    const name = value.literal_ref.slice('synthetic-literals/'.length)
+    const literal = (FIXED_LITERAL_TABLE as Record<string, string>)[name]
+    if (value.literal_ref !== `synthetic-literals/${name}` || literal === undefined || sha256Bytes(Buffer.from(literal, 'utf8')) !== value.value_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'typed literal reference is invalid')
+    return literal
+  }
+  if (value.type === 'redacted_string' && typeof value.value_sha256 === 'string' && Number.isSafeInteger(value.byte_length)) return `<redacted:${value.value_sha256}>`
+  if (value.type === 'number' && typeof value.value_text === 'string' && /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value.value_text)) return Number(value.value_text)
+  if (value.type === 'boolean' && typeof value.value === 'boolean') return value.value
+  throw new Phase3BProductionError('receiver_request_invalid', 'typed request AST node is invalid')
 }
 
 function safeHeaderProjection(request: IncomingMessage): Readonly<{ ordered: readonly Readonly<Record<string, unknown>>[]; presence: Readonly<Record<string, number>>; authMarkerClass: string }> {
@@ -407,7 +433,8 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
     let bodyAst: Readonly<Record<string, unknown>>
     try { bodyAst = normalizeRequestAst(body) } finally { body.fill(0) }
     const bodyAstSha256 = sha256Bytes(Buffer.concat([canonicalBytes(bodyAst), Buffer.from('\n', 'utf8')]))
-    const bodyRoundtripSha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast_sha256: bodyAstSha256 })
+    const normalized = materializeRequestAst(bodyAst as Record<string, unknown>)
+    const bodyRoundtripSha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast_sha256: bodyAstSha256, normalized_byte_length: normalized.length, normalized_sha256: sha256Bytes(normalized) })
     const headers = safeHeaderProjection(request)
     if (state.row.family === 'auth' && headers.authMarkerClass !== expectedAuthMarkerClass(state.row)) throw new Phase3BProductionError('receiver_request_invalid', 'synthetic auth marker does not match the sealed arm')
     const responseObservation = await sendAction(response, action)
@@ -418,7 +445,7 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
       target_pid: state.targetPid, target_instance_id: state.targetInstanceId, executable_identity_sha256: state.executableIdentitySha256,
       route_ordinal: routeOrdinal, connection_ordinal: connectionOrdinal, attempt_ordinal: attemptOrdinal, action_ordinal: action.action_ordinal,
       method: 'POST', path: '/v1/messages', query_present: false, ordered_header_classes: headers.ordered, header_presence: headers.presence, auth_marker_winner_class: headers.authMarkerClass,
-      body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast: bodyAst, body_ast_sha256: bodyAstSha256, body_roundtrip_sha256: bodyRoundtripSha256, response_program_sha256: state.row.response_program_sha256,
+      body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast: bodyAst, body_ast_sha256: bodyAstSha256, body_normalized_byte_length: normalized.length, body_normalized_sha256: sha256Bytes(normalized), body_roundtrip_sha256: bodyRoundtripSha256, response_program_sha256: state.row.response_program_sha256,
       response: responseObservation,
     }
     const observation = deepFreeze({ ...requestObservation, observation_sha256: sha256Canonical(requestObservation) })

@@ -56,12 +56,14 @@ async function runExactGuard(controller: ProductionController, row: RunLedgerRow
   if (process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync('/usr/bin/sandbox-exec')) throw new Phase3BProductionError('isolation_unavailable', 'darwin-arm64 sandbox-exec is required')
   const alternate = createServer((socket) => socket.end())
   const alternatePort = await listen(alternate)
-  const script = String.raw`
-const net=require('node:net'),dgram=require('node:dgram'),fs=require('node:fs');
+const script = String.raw`
+const net=require('node:net'),dgram=require('node:dgram'),fs=require('node:fs'),cp=require('node:child_process');
 function tcp(host,port){return new Promise(r=>{const s=net.createConnection({host,port});let d=false;const end=v=>{if(d)return;d=true;s.destroy();r(v)};s.setTimeout(600,()=>end(false));s.once('connect',()=>end(true));s.once('error',()=>end(false))})}
 function udp(){return new Promise(r=>{const s=dgram.createSocket('udp4');let d=false;const end=v=>{if(d)return;d=true;s.close();r(v)};s.once('error',()=>end(false));s.send(Buffer.from([0]),53,'1.1.1.1',e=>end(!e));setTimeout(()=>end(false),600)})}
 function write(file){try{fs.writeFileSync(file,'{"schema_id":"oracle-lab-p3b-guard-write.v1","value":"synthetic"}\n',{flag:'wx',mode:0o600});return true}catch{return false}}
-(async()=>{const ports=JSON.parse(process.argv[1]),declared=[];for(const p of ports)declared.push(await tcp('127.0.0.1',p));const alt=await tcp('127.0.0.1',Number(process.argv[2]));const v4=await tcp('1.1.1.1',443),v6=await tcp('2606:4700:4700::1111',443),u=await udp();console.log(JSON.stringify({declared,alternate:alt,ipv4:v4,ipv6:v6,udp:u,inside:write(process.argv[3]),outside:write(process.argv[4])}))})().catch(()=>process.exit(2));`
+function read(file){try{fs.readFileSync(file);return true}catch{return false}}
+function processInfo(){try{cp.execFileSync('/bin/ps',['-p',String(process.pid)],{stdio:'ignore'});return true}catch{return false}}
+(async()=>{const ports=JSON.parse(process.argv[1]),declared=[];for(const p of ports)declared.push(await tcp('127.0.0.1',p));const alt=await tcp('127.0.0.1',Number(process.argv[2]));const v4=await tcp('1.1.1.1',443),v6=await tcp('2606:4700:4700::1111',443),u=await udp();console.log(JSON.stringify({declared,alternate:alt,ipv4:v4,ipv6:v6,udp:u,inside:write(process.argv[3]),outside:write(process.argv[4]),host_read:read('/etc/passwd'),credential_read:read('/Users/muqihang/.ssh/config'),process_info:processInfo()}))})().catch(()=>process.exit(2));`
   const state = controllerState(controller)
   const runRoot = path.join(state.runtimeRoot!, 'runs', `${String(row.sequence_index).padStart(3, '0')}-${row.run_id}`)
   const inside = path.join(runRoot, 'guard-allowed.tmp')
@@ -75,12 +77,12 @@ function write(file){try{fs.writeFileSync(file,'{"schema_id":"oracle-lab-p3b-gua
       child.once('close', (code) => { clearTimeout(timer); resolve({ code, stdout }) })
       child.once('error', () => { clearTimeout(timer); resolve({ code: null, stdout }) })
     })
-    let probe: { declared: boolean[]; alternate: boolean; ipv4: boolean; ipv6: boolean; udp: boolean; inside: boolean; outside: boolean }
+    let probe: { declared: boolean[]; alternate: boolean; ipv4: boolean; ipv6: boolean; udp: boolean; inside: boolean; outside: boolean; host_read: boolean; credential_read: boolean; process_info: boolean }
     try { probe = JSON.parse(result.stdout.trim()) } catch { throw new Phase3BProductionError('guard_probe_failed', 'guard probe returned invalid output') }
-    if (result.code !== 0 || probe.declared.length !== routePorts.length || !probe.declared.every(Boolean) || probe.alternate || probe.ipv4 || probe.ipv6 || probe.udp || !probe.inside || probe.outside) throw new Phase3BProductionError('guard_probe_failed', 'exact sandbox profile failed loopback/no-egress/write guard')
+    if (result.code !== 0 || probe.declared.length !== routePorts.length || !probe.declared.every(Boolean) || probe.alternate || probe.ipv4 || probe.ipv6 || probe.udp || !probe.inside || probe.outside || probe.host_read || probe.credential_read || probe.process_info) throw new Phase3BProductionError('guard_probe_failed', 'exact sandbox profile failed loopback/no-egress/read/process/write guard')
     const allowedWrite = readCanonical(state.runtimeRoot!, `${runRelativeFromRoot(runRoot, state.runtimeRoot!)}/guard-allowed.tmp`)
     if (allowedWrite.value.schema_id !== 'oracle-lab-p3b-guard-write.v1' || allowedWrite.value.value !== 'synthetic') throw new Phase3BProductionError('guard_probe_failed', 'guard allowed-write artifact drifted')
-    const unsigned = { schema_id: 'oracle-lab-p3b-guard-receipt.v1', run_id: row.run_id, sequence_index: row.sequence_index, profile_sha256: sha256Bytes(Buffer.from(profile, 'utf8')), allowed_loopback_ports: [...routePorts].sort((a, b) => a - b), allowed_write_sha256: allowedWrite.identity.sha256, external_socket_budget: 0, same_scope_probe: true, status: 'PASS' }
+    const unsigned = { schema_id: 'oracle-lab-p3b-guard-receipt.v1', run_id: row.run_id, sequence_index: row.sequence_index, profile_sha256: sha256Bytes(Buffer.from(profile, 'utf8')), allowed_loopback_ports: [...routePorts].sort((a, b) => a - b), allowed_write_sha256: allowedWrite.identity.sha256, denied_host_read: probe.host_read === false, denied_credential_read: probe.credential_read === false, denied_process_info: probe.process_info === false, external_socket_budget: 0, same_scope_probe: true, status: 'PASS' }
     const digest = sha256Canonical(unsigned)
     writeExclusiveCanonical(state.runtimeRoot!, `guards/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}.json`, { ...unsigned, guard_receipt_sha256: digest })
     return digest

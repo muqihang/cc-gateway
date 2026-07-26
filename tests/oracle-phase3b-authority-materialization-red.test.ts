@@ -15,7 +15,7 @@ import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/pha
 import { createRequirementsSignerSession, signEphemeralRecord, signImplementationReviewEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
 import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { materializeRequestAst, normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validateAttestationCommit, validateCampaignReviewerRegistry, verifyGithubWebFlowCommit, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
@@ -188,7 +188,7 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
   const ledger = buildCampaignLedger('p3b-es7-round-trip', crossRepoAuthority(c1))
   const contract = buildEs7TypedFixtureContract(ledger.campaign_id, c1) as Record<string, any>
   assert.equal(contract.literal_table_sha256, FIXED_LITERAL_TABLE_SHA256)
-  assert.deepEqual(contract.materializer, { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', wire_encoding: 'canonical-base64-v1', round_trip: 'receiver-wire-bytes-exact' })
+  assert.deepEqual(contract.materializer, { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', normalized_encoding: 'canonical-json-utf8-lf-v1', raw_persistence: false, round_trip: 'receiver-capture-verified-normalized' })
   assert.equal(contract.rows.length, 340)
   assert.match(contract.rows[0].request_source_sha256, /^[a-f0-9]{64}$/)
   assert.match(contract.rows[0].response_source_sha256, /^[a-f0-9]{64}$/)
@@ -210,6 +210,8 @@ test('authority RED: persisted request AST is normalized-safe and contains no ra
   assert.equal(persisted.includes(Buffer.from(wire).toString('base64')), false)
   assert.equal(Object.hasOwn(ast, 'wire_bytes_base64'), false)
   assert.match(persisted, /synthetic-literals\/request_model_v1/)
+  const normalized = materializeRequestAst(ast)
+  assert.equal(normalized.includes(Buffer.from(marker)), false)
 })
 
 test('authority RED: sandbox defaults deny host reads and process inspection', () => {

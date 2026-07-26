@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 import { type ProductionController, assertProductionController, controllerState } from './controller.js'
@@ -9,7 +8,7 @@ import { PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, type RunLe
 import { type ReceiverAuthority, assertReceiverAuthority } from './receiver.js'
 import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
-import { validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
+import { fixedGit, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
 
 export type LaunchAuthorityReceipt = Readonly<{
@@ -43,9 +42,7 @@ export type LaunchAuthorityReceipt = Readonly<{
 
 const launchAuthorities = new WeakSet<object>()
 
-function git(repository: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
-}
+function git(repository: string, args: readonly string[]): string { return fixedGit(repository, args, 16_777_216) }
 
 export function assertControllerLaunchPrerequisites(controller: ProductionController): void {
   assertProductionController(controller)
@@ -62,12 +59,13 @@ export function assertControllerLaunchPrerequisites(controller: ProductionContro
   if (authority.campaign_id !== state.ledger.campaign_id || authority.campaign_input_sha256 !== input.input_sha256 || authority.reviewed_artifact_set_sha256 !== anchor.reviewed_artifact_set_sha256 || authority.dynamic_launch_authorized !== true || authority.critical !== 0 || authority.important !== 0 || authority.campaign_registry_sha256 !== approval.registry_sha256 || sha256Canonical(authority.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(authority.c1) !== sha256Canonical(state.ledger.c1) || Number(authority.created_at_ms) > Date.now() || Number(authority.expires_at_ms) <= Date.now()) throw new Phase3BProductionError('operator_authority_invalid', 'live operator authority drifted')
   if (ledger.ledger_sha256 !== state.ledger.ledger_sha256 || anchor.anchor_sha256 !== state.anchorSha256 || selection.ledger_sha256 !== state.ledger.ledger_sha256 || selection.anchor_sha256 !== state.anchorSha256 || selection.original_image_record_sha256 !== anchor.original_image_record_sha256 || selection.probe_image_record_sha256 !== anchor.probe_image_record_sha256) throw new Phase3BProductionError('active_selection_invalid', 'live ledger/anchor/selection drifted')
   if (anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256()) throw new Phase3BProductionError('controller_identity_invalid', 'controller source or executable identity drifted')
-  for (const field of ['cc_repository', 'sub_repository', 'implementation_review_path', 'cross_review_artifact_path', 'cross_repo_review_path', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe']) if (typeof (field === 'implementation_review_path' ? authority[field] : input[field]) !== 'string') throw new Phase3BProductionError('sealed_path_invalid', `${field} is not sealed`)
+  for (const field of ['cc_repository', 'sub_repository', 'cross_review_artifact_path', 'cross_repo_review_path', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe']) if (typeof input[field] !== 'string') throw new Phase3BProductionError('sealed_path_invalid', `${field} is not sealed`)
   const cc = String(input.cc_repository); const sub = String(input.sub_repository)
   if (git(cc, ['rev-parse', 'HEAD']) !== approval.approval_commit || git(cc, ['rev-parse', 'HEAD^{tree}']) !== approval.approval_tree || git(cc, ['status', '--porcelain']) !== '' || git(sub, ['rev-parse', 'HEAD']) !== REPOSITORY_AUTHORITY.sub.commit || git(sub, ['rev-parse', 'HEAD^{tree}']) !== REPOSITORY_AUTHORITY.sub.tree || git(sub, ['status', '--porcelain']) !== '') throw new Phase3BProductionError('repository_authority_invalid', 'live repository authority drifted')
   try { git(cc, ['merge-base', '--is-ancestor', REPOSITORY_AUTHORITY.cc.commit, String(authority.reviewed_candidate_commit)]) } catch { throw new Phase3BProductionError('repository_authority_invalid', 'CC authority merge is not candidate ancestor') }
+  const committedReview = readCanonical(root, 'control/implementation-review.json', 1_048_576)
+  if (committedReview.identity.sha256 !== approval.implementation_review_sha256 || sha256Canonical(committedReview.value) !== sha256Canonical(approval.implementation_review)) throw new Phase3BProductionError('sealed_authority_file_drift', 'sealed implementation review does not equal the approval Git blob')
   const exactFiles = [
-    [String(authority.implementation_review_path), String(authority.implementation_review_sha256), 1_048_576],
     [String(input.cross_review_artifact_path), String(input.cross_review_artifact_sha256), 1_048_576],
     [String(input.cross_repo_review_path), String(input.cross_repo_review_sha256), 1_048_576],
     [String(input.platform_archive_path), TARGET_PROFILE.platform_archive_sha256, 134_217_728],

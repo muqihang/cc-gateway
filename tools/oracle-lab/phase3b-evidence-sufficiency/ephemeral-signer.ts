@@ -6,6 +6,7 @@ import { reviewedArtifactSetSha256 } from './authority-materializer.js'
 import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { REPOSITORY_AUTHORITY, crossRepoAuthority } from './ledger.js'
 import { IMPLEMENTATION_REVIEW_RELATIVE, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewer, type TrustedReviewerRegistry } from './trust.js'
+import { validateSealedGateBResult } from './gates.js'
 
 const RESERVED = new Set(['reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature'])
 
@@ -57,7 +58,7 @@ export function createRequirementsSignerSession(input: Readonly<{ identity: stri
   bind_security_reviewer: (securityPublicEntry: TrustedReviewer) => TrustedReviewerRegistry
   sign_operator_authority: (authorityInput: Readonly<{ campaign_input: Readonly<Record<string, unknown>>; signed_implementation_review: Readonly<Record<string, unknown>>; approval_commit: string; approval_tree: string; attestation_commit: string; attestation_tree: string; created_at_ms: number; expires_at_ms: number }>) => Readonly<{ registry: TrustedReviewerRegistry; signed_authority: Readonly<Record<string, unknown>> }>
   sign_gate_b_decision: (payload: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>
-  confirm_gate_b_result: (payload: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>
+  confirm_gate_b_result: (input: Readonly<{ evidence_root?: string; result_path?: string } & Record<string, unknown>>) => Readonly<Record<string, unknown>>
   close: () => void
 }> {
   if (!/^[A-Za-z0-9._@-]{3,128}$/.test(input.identity) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_commit) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_tree)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'requirements signer identity or candidate is invalid')
@@ -124,13 +125,16 @@ export function createRequirementsSignerSession(input: Readonly<{ identity: stri
     return gateBDecision
   }
 
-  function confirmGateBResult(payload: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  function confirmGateBResult(input: Readonly<{ evidence_root?: string; result_path?: string } & Record<string, unknown>>): Readonly<Record<string, unknown>> {
     requireKey()
     if (!gateBDecision || !campaignId) throw new Phase3BProductionError('ephemeral_signer_lifecycle_invalid', 'Gate B result confirmation requires the retained signed decision')
-    assertExactKeys(payload, ['schema_id', 'gate', 'decision', 'campaign_id', 'gate_a_sha256', 'external_set_sha256', 'operator_decision_sha256', 'conclusion_sha256s', 'gate_clock_sha256', 'phase3b_usable', 'gate_result_sha256'], 'ephemeral_signer_input_invalid')
+    if (!input || typeof input.evidence_root !== 'string' || typeof input.result_path !== 'string') throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'Gate B confirmation accepts only the fixed sealed result path')
+    const sealed = validateSealedGateBResult(input.evidence_root, input.result_path)
+    const payload = sealed.value
+    assertExactKeys(payload, ['schema_id', 'gate', 'decision', 'campaign_id', 'gate_a_sha256', 'external_set_sha256', 'operator_decision_sha256', 'conclusion_sha256s', 'gate_clock_sha256', 'evaluation_input_sha256', 'phase3b_usable', 'gate_result_sha256'], 'ephemeral_signer_input_invalid')
     assertDigestField(payload as Record<string, unknown>, 'gate_result_sha256', 'ephemeral_signer_input_invalid')
     if (payload.schema_id !== 'oracle-lab-p3b-gate-result.v1' || payload.gate !== 'B' || payload.decision !== 'PASS' || payload.phase3b_usable !== true || payload.campaign_id !== campaignId || payload.gate_a_sha256 !== gateBDecision.gate_a_sha256 || payload.external_set_sha256 !== gateBDecision.external_set_sha256 || payload.operator_decision_sha256 !== gateBDecision.decision_sha256 || sha256Canonical(payload.conclusion_sha256s) !== sha256Canonical(gateBDecision.conclusion_sha256s) || typeof payload.gate_clock_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(payload.gate_clock_sha256)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'Gate B result does not bind the retained decision and Gate A support')
-    const unsigned = { schema_id: 'oracle-lab-p3b-requirements-signer-closure.v1', campaign_id: campaignId, operator_decision_sha256: gateBDecision.decision_sha256, gate_b_result_sha256: payload.gate_result_sha256, status: 'private_key_destroyed_after_gate_b' }
+    const unsigned = { schema_id: 'oracle-lab-p3b-requirements-signer-closure.v1', campaign_id: campaignId, operator_decision_sha256: gateBDecision.decision_sha256, gate_b_result_sha256: payload.gate_result_sha256, gate_b_result_raw_sha256: sealed.identity.sha256, gate_b_result_dev: sealed.identity.dev, gate_b_result_ino: sealed.identity.ino, gate_b_result_size: sealed.identity.size, evaluation_input_sha256: payload.evaluation_input_sha256, evidence_root: path.resolve(input.evidence_root), result_path: path.resolve(input.result_path), status: 'private_key_destroyed_after_gate_b' }
     livePrivateKey = null
     return deepFreeze({ ...unsigned, closure_sha256: sha256Canonical(unsigned) })
   }

@@ -61,22 +61,24 @@ export function verifyGithubWebFlowCommit(repository: string, commit: string): v
   if (result.status !== 0 || result.error || !status.includes(`[GNUPG:] VALIDSIG ${GITHUB_WEB_FLOW_FINGERPRINT} `) || !status.includes('[GNUPG:] GOODSIG B5690EEEBB952194 GitHub <noreply@github.com>')) throw new Phase3BProductionError('github_approval_signature_invalid', 'approval merge is not signed by the fixed GitHub web-flow key')
 }
 
-function git(repository: string, args: readonly string[]): string {
+export function fixedGit(repository: string, args: readonly string[], maximumBytes = 1_048_576): string {
   try {
-    return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000, env: FIXED_GIT_ENV }).trim()
+    return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000, maxBuffer: maximumBytes, env: FIXED_GIT_ENV }).trim()
   } catch {
     throw new Phase3BProductionError('approval_commit_invalid', 'approval Git identity cannot be read')
   }
 }
 
-function gitBytes(repository: string, args: readonly string[], maximumBytes: number): Buffer {
+const git = fixedGit
+
+export function fixedGitBytes(repository: string, args: readonly string[], maximumBytes: number): Buffer {
   try {
     return execFileSync('/usr/bin/git', ['-C', repository, ...args], { encoding: 'buffer', timeout: 10_000, maxBuffer: maximumBytes, env: FIXED_GIT_ENV })
   } catch { throw new Phase3BProductionError('approval_commit_invalid', 'approval Git blob cannot be read') }
 }
 
 function canonicalRepositoryRecord(repository: string, commit: string, relative: string, maximumBytes = 1_048_576): { value: Record<string, unknown>; sha256: string } {
-  const bytes = gitBytes(repository, ['cat-file', 'blob', `${commit}:${relative}`], maximumBytes)
+  const bytes = fixedGitBytes(repository, ['cat-file', 'blob', `${commit}:${relative}`], maximumBytes)
   if (bytes.length > maximumBytes) throw new Phase3BProductionError('approval_commit_invalid', `${relative} exceeds its fixed blob boundary`)
   if (bytes.at(-1) !== 0x0a) throw new Phase3BProductionError('approval_commit_invalid', `${relative} must be canonical JSON plus LF`)
   let value: unknown

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { chmodSync } from 'node:fs'
 import path from 'node:path'
 
@@ -9,6 +9,7 @@ import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE_SHA256, NO
 import { REQUEST_AST_MATERIALIZER } from './receiver.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
+import { fixedGit } from './trust.js'
 
 export type MaterializedCrossRepoAuthority = Readonly<{
   verdict: 'CROSS_REPO_PASS'
@@ -53,9 +54,7 @@ export function reviewedArtifactSetSha256(input: Readonly<Record<string, unknown
   return sha256Canonical({ schema_id: 'oracle-lab-p3b-reviewed-artifact-set.v3', target_profile: TARGET_PROFILE, ...projection })
 }
 
-function git(repository: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 30_000 }).trim()
-}
+function git(repository: string, args: readonly string[]): string { return fixedGit(repository, args, 16_777_216) }
 
 function codeSignatureDetails(file: string): Readonly<{ identity_sha256: string; identifier: string }> {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Phase3BProductionError('authority_materialization_invalid', 'probe signing identity supports only darwin-arm64')
@@ -109,7 +108,7 @@ export function buildEs7TypedFixtureContract(campaignId: string, c1ReviewSha256:
   const ledger = buildCampaignLedger(campaignId, crossRepoAuthority(c1ReviewSha256))
   const unsigned = {
     schema_id: 'oracle-lab-p3b-es7-typed-fixture-contract.v1', campaign_id: campaignId, repositories: ledger.authority, c1: ledger.c1, ledger_sha256: ledger.ledger_sha256,
-    literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, materializer: { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', wire_encoding: 'canonical-base64-v1', round_trip: 'receiver-wire-bytes-exact' },
+    literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, materializer: { algorithm: REQUEST_AST_MATERIALIZER, ast_encoding: 'canonical-json-utf8-lf-v1', normalized_encoding: 'canonical-json-utf8-lf-v1', raw_persistence: false, round_trip: 'receiver-capture-verified-normalized' },
     request_fields: ES7_REQUEST_FIELDS, response_fields: ES7_RESPONSE_FIELDS,
     rows: ledger.rows.map(materializeEs7Sources),
   }

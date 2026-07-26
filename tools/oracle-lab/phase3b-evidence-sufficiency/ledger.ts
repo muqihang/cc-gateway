@@ -8,7 +8,7 @@ export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
 export const FIXED_STDIN_LITERAL = 'Return exactly the synthetic marker output.complete.\n'
 export const FIXED_STDIN_LITERAL_REF = 'synthetic-literals/control_prompt_v1'
 export const FIXED_LITERAL_TABLE_PATH = 'synthetic-literals/phase3b-v1.json'
-export const FIXED_LITERAL_TABLE = deepFreeze({ schema_id: 'oracle-lab-p3b-synthetic-literals.v1', control_prompt_v1: FIXED_STDIN_LITERAL.trimEnd(), 'model.test': 'model.test', 'output.complete': 'output.complete' })
+export const FIXED_LITERAL_TABLE = deepFreeze({ schema_id: 'oracle-lab-p3b-synthetic-literals.v1', control_prompt_v1: FIXED_STDIN_LITERAL.trimEnd(), request_model_v1: 'claude-sonnet-4-6', 'model.test': 'model.test', 'output.complete': 'output.complete' })
 export const FIXED_LITERAL_TABLE_SHA256 = sha256Bytes(Buffer.from(`${canonicalJson(FIXED_LITERAL_TABLE)}\n`, 'utf8'))
 
 export const REPOSITORY_AUTHORITY = deepFreeze({
@@ -185,7 +185,7 @@ export function materializeResponseBody(kind: ResponseAction['body_kind']): stri
   return ''
 }
 
-export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_roundtrip_sha256'] as const)
+export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_normalized_byte_length', 'body_normalized_sha256', 'body_roundtrip_sha256'] as const)
 export const ES7_RESPONSE_FIELDS = deepFreeze(['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket', 'wire_events', 'wire_event_sha256', 'socket_close_had_error'] as const)
 
 function canonicalLine(value: unknown): Buffer {
@@ -223,8 +223,7 @@ export function normativeCoverageMatrix(ledger: CampaignLedger): Readonly<{ rows
     if (typeof entry.id !== 'string' || ids.has(entry.id) || !Array.isArray(entry.leaves) || entry.leaves.length === 0 || !['E', 'C', 'D'].includes(String(entry.class)) || entry.leaves.some((leaf) => typeof leaf !== 'string' || !leaf.startsWith('/') || leaves.has(leaf))) throw new Phase3BProductionError('conclusion_support_invalid', 'normative coverage row ID, class, or leaf set drifted')
     ids.add(entry.id)
     entry.leaves.forEach((leaf) => leaves.add(String(leaf)))
-    const sourceBytes = Buffer.from(`${canonicalJson(entry)}\n`, 'utf8')
-    return deepFreeze({ ...entry, source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) } as Record<string, unknown>)
+    return deepFreeze(entry as Record<string, unknown>)
   })
   const byClass = (rowClass: 'E' | 'C' | 'D') => rows.filter((row) => row.class === rowClass)
   const eRows = byClass('E'); const cRows = byClass('C'); const dRows = byClass('D')

@@ -1,6 +1,6 @@
 import { loadSealedControl } from './campaign-controller.js'
 import { CONCLUSION_IDS, CONCLUSION_PATHS, SUCCESSOR_TTL_MS, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from './closeout.js'
-import { Phase3BProductionError, assertDigestField, assertExactKeys, deepFreeze, sha256Canonical } from './core.js'
+import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Canonical } from './core.js'
 import { deriveExecutionCounts, openExecutionStore, readExecutionReceipts } from './execution-store.js'
 import { validateCampaignLedger } from './ledger.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
@@ -194,10 +194,38 @@ export function evaluateGateB(evidenceRoot: string): Readonly<Record<string, unk
   const clock = captureClock(root, 'B', { sha256: String(gateAClock.clock_sha256), wall: Number(gateAClock.wall_clock_ms), monotonic: String(gateAClock.monotonic_ns) }, String(external.external_set_sha256), expectedDigests.map(String), input.toolchain_sha256)
   if (clock.wall_clock_ms < issued) throw new Phase3BProductionError('gate_clock_rollback', 'Gate B clock predates operator decision')
   writeGate(root, `${GATE_ROOT}/gate-b-clock.json`, clock)
-  const unsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: gateA.campaign_id, gate_a_sha256: gateA.gate_result_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: expectedDigests, gate_clock_sha256: clock.clock_sha256, phase3b_usable: true }
+  const evaluationInput = { gate_a_sha256: gateA.gate_result_sha256, gate_a_clock_sha256: gateAClock.clock_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: expectedDigests, gate_clock_sha256: clock.clock_sha256, controller_source_set_sha256: clock.controller_source_set_sha256, controller_executable_sha256: clock.controller_executable_sha256, toolchain_sha256: clock.toolchain_sha256 }
+  const unsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: gateA.campaign_id, gate_a_sha256: gateA.gate_result_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: expectedDigests, gate_clock_sha256: clock.clock_sha256, evaluation_input_sha256: sha256Canonical(evaluationInput), phase3b_usable: true }
   const result = deepFreeze({ ...unsigned, gate_result_sha256: sha256Canonical(unsigned) })
   writeGate(root, `${GATE_ROOT}/gate-b-result.json`, result)
   return result
+}
+
+export function validateSealedGateBResult(evidenceRoot: string, resultPath: string): Readonly<{ value: Record<string, unknown>; identity: { dev: number; ino: number; size: number; sha256: string } }> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const expectedPath = path.join(root, GATE_ROOT, 'gate-b-result.json')
+  if (path.normalize(resultPath) !== expectedPath) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result path is not the fixed sealed path')
+  const record = stableRead(expectedPath, { mode: 0o600, maximumBytes: 1_048_576 })
+  let value: unknown
+  try {
+    if (record.bytes.at(-1) !== 0x0a) throw new Error('missing newline')
+    value = JSON.parse(record.bytes.subarray(0, -1).toString('utf8'))
+    if (!canonicalBytes(value).equals(record.bytes.subarray(0, -1))) throw new Error('noncanonical')
+  } catch { throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result is not canonical sealed JSON') }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result shape is invalid')
+  const result = value as Record<string, unknown>
+  assertExactKeys(result, ['schema_id', 'gate', 'decision', 'campaign_id', 'gate_a_sha256', 'external_set_sha256', 'operator_decision_sha256', 'conclusion_sha256s', 'gate_clock_sha256', 'evaluation_input_sha256', 'phase3b_usable', 'gate_result_sha256'], 'gate_b_result_invalid')
+  assertDigestField(result, 'gate_result_sha256', 'gate_b_result_invalid')
+  if (sha256Canonical(Object.fromEntries(Object.entries(result).filter(([key]) => key !== 'gate_result_sha256'))) !== result.gate_result_sha256 || result.schema_id !== 'oracle-lab-p3b-gate-result.v1' || result.gate !== 'B' || result.decision !== 'PASS' || result.phase3b_usable !== true) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result self digest or fixed decision drifted')
+  const gateA = readCanonical(root, `${GATE_ROOT}/gate-a-result.json`).value
+  const gateAClock = readCanonical(root, `${GATE_ROOT}/gate-a-clock.json`).value
+  const decision = readCanonical(root, `${GATE_ROOT}/successor-amendment-decision.json`).value
+  const gateBClock = readCanonical(root, `${GATE_ROOT}/gate-b-clock.json`).value
+  const external = validateExternalSet(root)
+  const { input } = loadSealedControl(root)
+  const expectedInput = { gate_a_sha256: gateA.gate_result_sha256, gate_a_clock_sha256: gateAClock.clock_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: result.conclusion_sha256s, gate_clock_sha256: gateBClock.clock_sha256, controller_source_set_sha256: gateBClock.controller_source_set_sha256, controller_executable_sha256: gateBClock.controller_executable_sha256, toolchain_sha256: input.toolchain_sha256 }
+  if (result.campaign_id !== gateA.campaign_id || result.gate_a_sha256 !== gateA.gate_result_sha256 || result.external_set_sha256 !== external.external_set_sha256 || result.operator_decision_sha256 !== decision.decision_sha256 || result.gate_clock_sha256 !== gateBClock.clock_sha256 || result.evaluation_input_sha256 !== sha256Canonical(expectedInput)) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result is not the sealed evaluateGateB output')
+  return deepFreeze({ value: result, identity: { dev: record.identity.dev, ino: record.identity.ino, size: record.identity.size, sha256: record.identity.sha256 } })
 }
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'

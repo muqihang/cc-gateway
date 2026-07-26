@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process'
 import { chmodSync } from 'node:fs'
 import path from 'node:path'
 
@@ -14,7 +13,7 @@ import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory,
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
-import { IMPLEMENTATION_REVIEW_RELATIVE, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
+import { IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
 
 export type CampaignInput = Readonly<{
@@ -110,9 +109,7 @@ function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<
   return readExternalCanonical(file, maximumBytes).value
 }
 
-function git(repository: string, args: readonly string[]): string {
-  return execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8', timeout: 10_000 }).trim()
-}
+function git(repository: string, args: readonly string[]): string { return fixedGit(repository, args, 16_777_216) }
 
 function validateInput(value: Record<string, unknown>): CampaignInput {
   assertExactKeys(value, INPUT_KEYS, 'campaign_input_invalid')
