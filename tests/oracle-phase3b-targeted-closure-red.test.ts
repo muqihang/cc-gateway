@@ -146,8 +146,11 @@ test('targeted C1 authority: ES9 accepts only an authority-bound non-overlapping
 })
 
 test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {
-  const row = buildCampaignLedger('p3b-targeted-route-plan').rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
-  assert.deepEqual(configRoutePlan(row), { user: null, project: null, local: 0, 'process-env': 1, request_route: 0, preflight_route: 1 })
+  const rows = buildCampaignLedger('p3b-targeted-route-plan').rows
+  const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
+  const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
+  assert.deepEqual(configRoutePlan(processEnv), { user: null, project: null, local: 0, 'process-env': 1, request_route: 0, preflight_route: 1 })
+  assert.deepEqual(configRoutePlan(localFile), { user: null, project: 0, local: 1, 'process-env': null, request_route: 1, preflight_route: null })
 })
 
 test('targeted I1: wire observation is derived from bytes, EOF, ordering, and monotonic header timing', () => {

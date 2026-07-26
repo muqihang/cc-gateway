@@ -4,6 +4,7 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { FIXED_STDIN_LITERAL, FIXED_LITERAL_TABLE_SHA256, type RunLedgerRow } from './ledger.js'
 import type { ReceiverTargetBootstrap } from './receiver.js'
+import { expectedSelectedRoute } from './route-policy.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
 
@@ -39,11 +40,11 @@ const CONFIG_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record
   'config-precedence-process-env-vs-local': { control: { user: null, project: null, local: 0, 'process-env': null }, treatment: { user: null, project: null, local: 0, 'process-env': 1 } },
 }
 
-export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | null; project: 0 | 1 | null; local: 0 | 1 | null; 'process-env': 0 | 1 | null; request_route: 0; preflight_route: 0 | 1 | null }> {
+export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | null; project: 0 | 1 | null; local: 0 | 1 | null; 'process-env': 0 | 1 | null; request_route: 0 | 1; preflight_route: 0 | 1 | null }> {
   const definition = CONFIG_VALUES[row.schedule_id]
   if (row.family !== 'config' || !definition) throw new Phase3BProductionError('scenario_input_invalid', 'config schedule is not frozen')
   const selected = row.arm.startsWith('treatment/') ? definition.treatment : definition.control
-  return deepFreeze({ ...selected, request_route: 0, preflight_route: selected['process-env'] })
+  return deepFreeze({ ...selected, request_route: expectedSelectedRoute(row), preflight_route: selected['process-env'] })
 }
 
 const AUTH_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record<string, string>>; treatment: Readonly<Record<string, string>> }>>> = {
