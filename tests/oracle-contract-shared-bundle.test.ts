@@ -7,11 +7,13 @@ import test from 'node:test'
 import canonicalize from 'canonicalize'
 
 import {
+  CONTRACT_FILE_SHA256,
   CONTRACT_FILES,
   PHASE1_CONTRACT_DIGEST,
   SharedContractError,
   checkSharedContract,
   sha256File,
+  stableCodesFromExpectedResults,
 } from '../tools/oracle-contract/check-shared-contract.js'
 import { resolveSub2apiTestRoot } from './oracle-contract-test-roots.js'
 
@@ -19,7 +21,7 @@ const ccGatewayRoot = process.cwd()
 const sub2apiRoot = resolveSub2apiTestRoot()
 
 const ccBundle = path.join(ccGatewayRoot, 'contracts/oracle-lab/v1')
-const subBundle = path.join(sub2apiRoot, 'backend/internal/service/testdata/oracle_lab_contract/v1')
+const subBundle = path.join(sub2apiRoot, 'backend/internal/oracleevidence/testdata/oracle_lab_contract/v1')
 
 function expectCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (error: unknown) => error instanceof SharedContractError && error.code === code)
@@ -30,7 +32,7 @@ function fixtureCopy(): { ccGatewayRoot: string; sub2apiRoot: string; ccBundle: 
   const ccRoot = path.join(root, 'cc')
   const subRoot = path.join(root, 'sub')
   const ccCopy = path.join(ccRoot, 'contracts/oracle-lab/v1')
-  const subCopy = path.join(subRoot, 'backend/internal/service/testdata/oracle_lab_contract/v1')
+  const subCopy = path.join(subRoot, 'backend/internal/oracleevidence/testdata/oracle_lab_contract/v1')
   mkdirSync(path.dirname(ccCopy), { recursive: true })
   mkdirSync(path.dirname(subCopy), { recursive: true })
   cpSync(ccBundle, ccCopy, { recursive: true })
@@ -52,10 +54,28 @@ test('shared Phase 2 contract mirrors and Phase 1 predecessor are exact', () => 
   assert.equal(result.ok, true)
   assert.equal(result.fileCount, CONTRACT_FILES.length)
   assert.match(result.bundleDigest, /^[0-9a-f]{64}$/)
+  assert.deepEqual(result.files, CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] })))
+  assert.equal(result.stableCodes.length, 119)
+  assert.equal(result.stableCodeSetDigest, 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c')
   assert.equal(
     sha256File(path.join(sub2apiRoot, 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json')),
     PHASE1_CONTRACT_DIGEST,
   )
+})
+
+test('stable-code projection rejects missing, duplicate, or renamed codes', () => {
+  const expected = JSON.parse(readFileSync(path.join(ccBundle, 'expected-results.json'), 'utf8')) as { stable_error_codes: string[] }
+  const missing = structuredClone(expected)
+  missing.stable_error_codes = missing.stable_error_codes.slice(1)
+  expectCode(() => stableCodesFromExpectedResults(missing), 'contract_required_set_mismatch')
+
+  const duplicate = structuredClone(expected)
+  duplicate.stable_error_codes.push(duplicate.stable_error_codes[0])
+  expectCode(() => stableCodesFromExpectedResults(duplicate), 'contract_required_set_mismatch')
+
+  const renamed = structuredClone(expected)
+  renamed.stable_error_codes[0] = 'admission_gate_renamed'
+  expectCode(() => stableCodesFromExpectedResults(renamed), 'contract_required_set_mismatch')
 })
 
 test('missing bundles fail closed', () => {
