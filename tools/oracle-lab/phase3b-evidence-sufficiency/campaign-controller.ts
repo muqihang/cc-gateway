@@ -43,6 +43,12 @@ export type CampaignInput = Readonly<{
   schema_bundle_sha256: string
   focused_suite_path: string
   focused_suite_sha256: string
+  es8_go_receipt_path: string
+  es8_go_receipt_sha256: string
+  es8_ts_c1_agreement_path: string
+  es8_ts_c1_agreement_sha256: string
+  es9_coverage_contract_path: string
+  es9_coverage_contract_sha256: string
   predecessor_config_auth_path: string
   predecessor_failure_stream_path: string
   input_sha256: string
@@ -73,7 +79,7 @@ export type OperatorAuthority = Readonly<{
   authority_sha256: string
 }>
 
-const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
+const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'es8_go_receipt_path', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
 const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
 const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
 
@@ -95,8 +101,17 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
   assertExactKeys(value, INPUT_KEYS, 'campaign_input_invalid')
   assertDigestField(value, 'input_sha256', 'campaign_input_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-production-input.v1' || typeof value.campaign_id !== 'string') throw new Phase3BProductionError('campaign_input_invalid', 'campaign input schema or ID drifted')
-  for (const field of ['probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
-  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
+  for (const field of ['probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
+  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
+  const fixedAuthorityFiles = [
+    ['es8_go_receipt_path', 'es8_go_receipt_sha256', 'phase3b-es8-go-receipt.json'],
+    ['es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'phase3b-es8-ts-c1-agreement.json'],
+    ['es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'phase3b-es9-coverage-contract.json'],
+  ] as const
+  for (const [pathField, digestField, basename] of fixedAuthorityFiles) {
+    if (path.basename(String(value[pathField])) !== basename || stableRead(String(value[pathField]), { mode: 0o600, maximumBytes: 16_777_216 }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${pathField} is not the exact reviewed authority artifact`)
+    parseExternalCanonical(String(value[pathField]))
+  }
   if (stableRead(value.cross_repo_review_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== CROSS_REPO_AUTHORITY.review_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'actual C1 CROSS_REPO_PASS review bytes drifted')
   if (stableRead(path.join(String(value.cc_repository), TRUSTED_REVIEWER_REGISTRY_RELATIVE), { maximumBytes: 32_768 }).identity.sha256 !== TRUSTED_REVIEWER_REGISTRY_SHA256) throw new Phase3BProductionError('campaign_input_invalid', 'trusted reviewer root is not the immutable base registry')
   if (value.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || value.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256 || stableRead(value.original_source as string, { maximumBytes: 67_108_864 }).identity.sha256 !== TARGET_PROFILE.entrypoint_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'target artifact is not exact Claude Code 2.1.215 darwin-arm64')
@@ -111,7 +126,7 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
 }
 
 function reviewedArtifactSetSha256(input: CampaignInput): string {
-  return sha256Canonical({ schema_id: 'oracle-lab-p3b-reviewed-artifact-set.v1', target_profile: TARGET_PROFILE, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe_sha256: input.original_recipe_sha256, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, schema_bundle_sha256: input.schema_bundle_sha256, focused_suite_sha256: input.focused_suite_sha256 })
+  return sha256Canonical({ schema_id: 'oracle-lab-p3b-reviewed-artifact-set.v2', target_profile: TARGET_PROFILE, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe_sha256: input.original_recipe_sha256, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, schema_bundle_sha256: input.schema_bundle_sha256, focused_suite_sha256: input.focused_suite_sha256, es8_go_receipt_sha256: input.es8_go_receipt_sha256, es8_ts_c1_agreement_sha256: input.es8_ts_c1_agreement_sha256, es9_coverage_contract_sha256: input.es9_coverage_contract_sha256 })
 }
 
 function validateRepositories(input: CampaignInput, candidateCommit: string, candidateTree: string): void {
@@ -159,6 +174,9 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
   writeExclusiveCanonical(root, 'control/focused-suite.json', parseExternalCanonical(input.focused_suite_path))
   writeExclusiveCanonical(root, 'control/implementation-review.json', parseExternalCanonical(authority.implementation_review_path))
   writeExclusiveCanonical(root, 'control/cross-repo-review.json', parseExternalCanonical(input.cross_repo_review_path))
+  writeExclusiveCanonical(root, 'control/es8-go-receipt.json', parseExternalCanonical(input.es8_go_receipt_path))
+  writeExclusiveCanonical(root, 'control/es8-ts-c1-agreement.json', parseExternalCanonical(input.es8_ts_c1_agreement_path))
+  writeExclusiveCanonical(root, 'control/es9-coverage-contract.json', parseExternalCanonical(input.es9_coverage_contract_path))
   writeExclusiveCanonical(root, 'control/predecessor-config-auth.json', parseExternalCanonical(input.predecessor_config_auth_path))
   writeExclusiveCanonical(root, 'control/predecessor-failure-stream.json', parseExternalCanonical(input.predecessor_failure_stream_path))
   writeExclusiveCanonical(root, 'control/trusted-reviewers.json', loadTrustedReviewerRegistry(input.cc_repository))

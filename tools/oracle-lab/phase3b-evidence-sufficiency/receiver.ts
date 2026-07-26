@@ -95,7 +95,6 @@ const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-rece
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
   | { kind: 'body'; monotonic_ns: string; bytes: Uint8Array }
-  | { kind: 'terminal'; monotonic_ns: string; terminal: 'eof' | 'reset' }
   | { kind: 'response_finish'; monotonic_ns: string }
   | { kind: 'socket_end'; monotonic_ns: string }
   | { kind: 'socket_error'; monotonic_ns: string; error_class: string }
@@ -112,32 +111,52 @@ export function deriveResponseObservationFromWire(events: readonly ResponseWireE
   if (events.length === 0 || startedMonotonicNs < 0n || !Number.isSafeInteger(delayBoundaryMs) || delayBoundaryMs < 0) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript boundary is invalid')
   let previous = startedMonotonicNs
   let headers: Extract<ResponseWireEvent, { kind: 'headers' }> | null = null
-  let terminal: Extract<ResponseWireEvent, { kind: 'terminal' }> | null = null
+  let responseFinished = false
+  let socketEnded = false
+  let socketError: string | null = null
+  let resetRequested = false
+  let closed: Extract<ResponseWireEvent, { kind: 'socket_close' }> | null = null
   const bodyChunks: Buffer[] = []
   let bodyLength = 0
   for (const event of events) {
     const at = monotonicOf(event)
-    if (at < previous || terminal !== null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire events are reordered or continue after terminal')
+    if (at < previous || closed !== null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire events are reordered or continue after socket close')
     previous = at
     if (event.kind === 'headers') {
-      if (headers !== null || bodyChunks.length !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'headers must be the first and only header event')
+      if (headers !== null || bodyChunks.length !== 0 || responseFinished || resetRequested) throw new Phase3BProductionError('receiver_wire_invalid', 'headers must be the first and only header event')
       headers = event
     } else if (event.kind === 'body') {
-      if (headers === null || event.bytes.byteLength === 0) throw new Phase3BProductionError('receiver_wire_invalid', 'body bytes must follow observed headers')
+      if (headers === null || responseFinished || event.bytes.byteLength === 0) throw new Phase3BProductionError('receiver_wire_invalid', 'body bytes must follow headers and precede finish')
       bodyLength += event.bytes.byteLength
       if (bodyLength > 1_048_576) throw new Phase3BProductionError('receiver_wire_invalid', 'observed response body exceeds the fixed limit')
       bodyChunks.push(Buffer.from(event.bytes))
-    } else if (event.kind === 'terminal') terminal = event
+    } else if (event.kind === 'response_finish') {
+      if (headers === null || responseFinished || resetRequested) throw new Phase3BProductionError('receiver_wire_invalid', 'response finish has no exact response boundary')
+      responseFinished = true
+    } else if (event.kind === 'socket_end') {
+      if (socketEnded) throw new Phase3BProductionError('receiver_wire_invalid', 'socket end is duplicated')
+      socketEnded = true
+    } else if (event.kind === 'socket_error') {
+      if (socketError !== null || !/^[A-Za-z0-9_.-]{1,64}$/.test(event.error_class)) throw new Phase3BProductionError('receiver_wire_invalid', 'socket error class is invalid or duplicated')
+      socketError = event.error_class
+    } else if (event.kind === 'reset_requested') {
+      if (resetRequested || responseFinished) throw new Phase3BProductionError('receiver_wire_invalid', 'reset request is duplicated or follows finish')
+      resetRequested = true
+    } else closed = event
   }
-  if (terminal === null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript has no terminal event')
-  const firstAt = headers ? monotonicOf(headers) : monotonicOf(terminal)
+  if (closed === null) throw new Phase3BProductionError('receiver_wire_invalid', 'wire transcript has no observed socket close')
+  const firstAt = headers ? monotonicOf(headers) : monotonicOf(events[0])
   const elapsed = firstAt - startedMonotonicNs
   const timingBucket = delayBoundaryMs === 0 ? 'not_delayed' : elapsed >= BigInt(delayBoundaryMs) * 1_000_000n ? 'at_or_after_boundary' : 'before_boundary'
-  if (terminal.terminal === 'reset') {
-    if (headers !== null || bodyLength !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'reset-before-headers transcript contains response bytes')
-    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_before_headers', delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket })
+  const wireEvents = events.map((event) => event.kind === 'headers' || event.kind === 'body'
+    ? { kind: event.kind, monotonic_ns: event.monotonic_ns, byte_length: event.bytes.byteLength, bytes_sha256: sha256Bytes(event.bytes) }
+    : event)
+  const wireEventSha256 = sha256Canonical(wireEvents)
+  const errored = closed.had_error || socketError !== null
+  if (headers === null) {
+    if (!resetRequested && !errored) throw new Phase3BProductionError('receiver_wire_invalid', 'close before headers has no reset or error cause')
+    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_before_headers', delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket, wire_events: wireEvents, wire_event_sha256: wireEventSha256, socket_close_had_error: closed.had_error })
   }
-  if (headers === null) throw new Phase3BProductionError('receiver_wire_invalid', 'EOF transcript has no observed headers')
   const headerBytes = Buffer.from(headers.bytes)
   if (headerBytes.length > 65_536 || !headerBytes.subarray(-4).equals(Buffer.from('\r\n\r\n', 'ascii'))) throw new Phase3BProductionError('receiver_wire_invalid', 'observed header block is malformed or oversized')
   const lines = headerBytes.subarray(0, -4).toString('latin1').split('\r\n')
@@ -154,7 +173,8 @@ export function deriveResponseObservationFromWire(events: readonly ResponseWireE
   const body = Buffer.concat(bodyChunks, bodyLength)
   const sseEventOrder = [...body.toString('utf8').matchAll(/^event: ([a-z_]+)$/gm)].map((match) => match[1])
   const partialSse = orderedHeaderClasses.some((header) => header.name === 'content-type' && header.value_class === 'text/event-stream') && !sseEventOrder.includes('message_stop')
-  return deepFreeze({ status: Number(statusMatch[1]), ordered_header_classes: orderedHeaderClasses, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: sseEventOrder, transport_terminal: partialSse ? 'eof_after_partial' : 'http_complete', delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket })
+  const transportTerminal = errored || resetRequested ? 'reset_after_headers' : responseFinished ? partialSse ? 'eof_after_partial' : 'http_complete' : 'truncated_after_headers'
+  return deepFreeze({ status: Number(statusMatch[1]), ordered_header_classes: orderedHeaderClasses, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: sseEventOrder, transport_terminal: transportTerminal, delay_elapsed_ns: elapsed.toString(), timing_bucket: timingBucket, wire_events: wireEvents, wire_event_sha256: wireEventSha256, socket_close_had_error: closed.had_error })
 }
 
 function executableIdentity(): string {
@@ -391,20 +411,41 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
   } finally { state.activeRequests -= 1 }
 }
 
+function observeResponseLifecycle(response: ServerResponse, socket: Socket, events: ResponseWireEvent[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Phase3BProductionError('receiver_wire_invalid', 'response socket did not reach observed close')), 5_000)
+    response.once('finish', () => events.push({ kind: 'response_finish', monotonic_ns: process.hrtime.bigint().toString() }))
+    socket.once('end', () => events.push({ kind: 'socket_end', monotonic_ns: process.hrtime.bigint().toString() }))
+    socket.once('error', (error: Error & { code?: string }) => {
+      const errorClass = String(error.code ?? error.name ?? 'socket_error').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 64) || 'socket_error'
+      events.push({ kind: 'socket_error', monotonic_ns: process.hrtime.bigint().toString(), error_class: errorClass })
+    })
+    socket.once('close', (hadError: boolean) => {
+      clearTimeout(timer)
+      events.push({ kind: 'socket_close', monotonic_ns: process.hrtime.bigint().toString(), had_error: hadError })
+      resolve()
+    })
+  })
+}
+
 async function sendAction(response: ServerResponse, action: ResponseAction): Promise<Readonly<Record<string, unknown>>> {
   const started = process.hrtime.bigint()
   if (action.delay_ms > 0) await new Promise((resolve) => setTimeout(resolve, action.delay_ms))
   const socket = response.socket
   if (!socket) throw new Phase3BProductionError('receiver_wire_invalid', 'response has no owned socket')
   if (action.kind === 'reset') {
+    const events: ResponseWireEvent[] = [{ kind: 'reset_requested', monotonic_ns: process.hrtime.bigint().toString() }]
+    const closed = observeResponseLifecycle(response, socket, events)
     socket.destroy()
-    return deriveResponseObservationFromWire([{ kind: 'terminal', monotonic_ns: process.hrtime.bigint().toString(), terminal: 'reset' }], started, action.delay_ms)
+    await closed
+    return deriveResponseObservationFromWire(events, started, action.delay_ms)
   }
   const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8')
   const events: ResponseWireEvent[] = []
   let pendingHeaders = Buffer.alloc(0)
   let headersCaptured = false
   const originalWrite = socket.write
+  const closed = observeResponseLifecycle(response, socket, events)
   socket.write = function (this: Socket, chunk: Uint8Array | string, ...args: unknown[]): boolean {
     const encoding = typeof args[0] === 'string' && Buffer.isEncoding(args[0]) ? args[0] : 'utf8'
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Buffer.from(chunk)
@@ -431,13 +472,8 @@ async function sendAction(response: ServerResponse, action: ResponseAction): Pro
     for (const header of action.ordered_headers) response.setHeader(header.name, header.value_class === 'text/event-stream' ? 'text/event-stream' : 'application/json')
     response.setHeader('content-length', String(body.length))
     response.setHeader('connection', 'close')
-    const closed = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Phase3BProductionError('receiver_wire_invalid', 'response socket did not reach observed EOF')), 5_000)
-      socket.once('close', () => { clearTimeout(timer); resolve() })
-    })
     response.end(body)
     await closed
-    events.push({ kind: 'terminal', monotonic_ns: process.hrtime.bigint().toString(), terminal: 'eof' })
   } finally { socket.write = originalWrite }
   if (!headersCaptured || pendingHeaders.length !== 0) throw new Phase3BProductionError('receiver_wire_invalid', 'response header bytes were not completely observed')
   return deriveResponseObservationFromWire(events, started, action.delay_ms)

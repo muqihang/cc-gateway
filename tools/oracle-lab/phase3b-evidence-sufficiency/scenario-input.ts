@@ -36,7 +36,7 @@ const CONFIG_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record
   'config-precedence-user-vs-default': { control: { user: 0, project: null, local: null, 'process-env': null }, treatment: { user: 1, project: null, local: null, 'process-env': null } },
   'config-precedence-project-vs-user': { control: { user: 0, project: null, local: null, 'process-env': null }, treatment: { user: 0, project: 1, local: null, 'process-env': null } },
   'config-precedence-local-vs-project': { control: { user: null, project: 0, local: null, 'process-env': null }, treatment: { user: null, project: 0, local: 1, 'process-env': null } },
-  'config-precedence-process-env-vs-local': { control: { user: null, project: null, local: 0, 'process-env': null }, treatment: { user: null, project: null, local: 1, 'process-env': 0 } },
+  'config-precedence-process-env-vs-local': { control: { user: null, project: null, local: 0, 'process-env': null }, treatment: { user: null, project: null, local: 0, 'process-env': 1 } },
 }
 
 export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | null; project: 0 | 1 | null; local: 0 | 1 | null; 'process-env': 0 | 1 | null; request_route: 0; preflight_route: 0 | 1 | null }> {

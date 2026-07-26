@@ -4,19 +4,21 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
-import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport, validateCoverageContract, validateIndependentGoReceipt, validateIndependentTsAgreement } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { buildCampaignLedger, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
+import { FROZEN_DECISIONS_SHA256, FROZEN_MUTATION_RESULTS_SHA256, FROZEN_REQUIRED_SET_SHA256, FROZEN_SUB_EXECUTION_DECISIONS_SHA256, FROZEN_SUB_EXECUTION_MUTATIONS_SHA256, SUB_RECEIPT_REQUIRED_TESTS } from '../tools/oracle-contract/check-cross-repo.js'
+import { CONTRACT_FILES, CONTRACT_FILE_SHA256 } from '../tools/oracle-contract/check-shared-contract.js'
 
 const SUPPORT_SCHEMAS = [
-  'oracle-lab-p3b-typed-wire-fixtures.v2',
-  'oracle-lab-p3b-candidate-field-closure.v2',
-  'oracle-lab-p3b-pointer-source-coverage.v1',
-  'oracle-lab-p3b-independent-go-ts-agreement.v1',
+  'oracle-lab-p3b-typed-wire-fixtures.v3',
+  'oracle-lab-p3b-candidate-field-closure.v3',
+  'oracle-lab-p3b-pointer-source-coverage.v2',
+  'oracle-lab-p3b-independent-go-ts-agreement.v2',
   'oracle-lab-p3b-predecessor-semantic-comparison.v2',
 ] as const
 
@@ -100,9 +102,47 @@ test('targeted C1 closure: blocked support names missing independent ES8 and nor
   assert.equal('request_projection_sha256' in first, false)
   assert.equal('response_projection_sha256' in first, false)
   const es8 = JSON.parse(Buffer.from(readFileSync(path.join(root, SUPPORT_PATHS[3]))).toString('utf8')) as Record<string, unknown>
-  assert.deepEqual(es8.missing_artifacts, ['control/es8-go-receipt.json', 'control/es8-ts-c1-agreement.json'])
+  assert.deepEqual(es8.missing_artifacts, ['control/cross-repo-review.json', 'control/es8-go-receipt.json', 'control/es8-ts-c1-agreement.json'])
   const es9 = JSON.parse(Buffer.from(readFileSync(path.join(root, SUPPORT_PATHS[2]))).toString('utf8')) as Record<string, unknown>
   assert.deepEqual(es9.missing_artifacts, ['control/es9-coverage-contract.json'])
+})
+
+test('targeted C1 authority: ES8 validates independent raw/internal/C1/repository/decision/stable-code agreement', () => {
+  const digest = (value: string) => sha256Bytes(Buffer.from(value, 'utf8'))
+  const goUnsigned = {
+    schema_id: 'oracle.sub_contract_receipt', schema_major: 1, schema_revision: 0,
+    bundle_sha256: sha256Bytes(Buffer.concat([canonicalBytes(CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] }))), Buffer.from('\n', 'utf8')])), decisions_sha256: FROZEN_SUB_EXECUTION_DECISIONS_SHA256, mutation_results_sha256: FROZEN_SUB_EXECUTION_MUTATIONS_SHA256, required_set_sha256: FROZEN_REQUIRED_SET_SHA256,
+    executed_required_sha256: sha256Bytes(Buffer.concat([canonicalBytes([...SUB_RECEIPT_REQUIRED_TESTS]), Buffer.from('\n', 'utf8')])), declared_decisions_sha256: FROZEN_DECISIONS_SHA256, declared_mutations_sha256: FROZEN_MUTATION_RESULTS_SHA256,
+    stable_code_count: 119, stable_code_set_sha256: 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c', record_input_sha256: '8c4b3f948b727307966f46eaba0914ee479d200ef5b342a0d0afbadeed666621',
+    mirror_validation_code: '', index_validation_code: '', record_validation_code: '', mirror_validation_allowed: true, index_validation_allowed: true, record_validation_allowed: true,
+  }
+  const goReceipt: Record<string, unknown> = { ...goUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goUnsigned), Buffer.from('\n', 'utf8')])) }
+  validateIndependentGoReceipt(goReceipt)
+  const ledger = buildCampaignLedger('p3b-targeted-es8-authority')
+  const goRawSha256 = digest('go-raw-bytes')
+  const agreementUnsigned = { schema_id: 'oracle-lab-p3b-es8-ts-c1-agreement.v1', repositories: ledger.authority, c1_record_sha256: goUnsigned.record_input_sha256, go_receipt_raw_sha256: goRawSha256, go_receipt_internal_sha256: goReceipt.receipt_digest, decisions_sha256: goReceipt.decisions_sha256, mutation_results_sha256: goReceipt.mutation_results_sha256, required_set_sha256: goReceipt.required_set_sha256, stable_code_count: goReceipt.stable_code_count, stable_code_set_sha256: goReceipt.stable_code_set_sha256, decision: 'PASS' }
+  const agreement: Record<string, unknown> = { ...agreementUnsigned, agreement_sha256: sha256Canonical(agreementUnsigned) }
+  validateIndependentTsAgreement(agreement, goReceipt, goRawSha256, ledger)
+  for (const mutation of [{ stable_code_count: 118 }, { decision: 'READY' }, { go_receipt_raw_sha256: digest('forged') }, { repositories: { ...ledger.authority, cc: { ...ledger.authority.cc, tree: digest('forged-tree') } } }]) {
+    const unsigned = { ...agreementUnsigned, ...mutation }
+    const forged: Record<string, unknown> = { ...unsigned, agreement_sha256: sha256Canonical(unsigned) }
+    assert.throws(() => validateIndependentTsAgreement(forged, goReceipt, goRawSha256, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+  }
+  const goForgedUnsigned = { ...goUnsigned, declared_decisions_sha256: digest('forged-decisions') }
+  assert.throws(() => validateIndependentGoReceipt({ ...goForgedUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goForgedUnsigned), Buffer.from('\n', 'utf8')])) }), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+})
+
+test('targeted C1 authority: ES9 accepts only an authority-bound non-overlapping E/D coverage contract', () => {
+  const ledger = buildCampaignLedger('p3b-targeted-es9-authority')
+  const unsigned = { schema_id: 'oracle-lab-p3b-es9-coverage-contract.v1', repositories: ledger.authority, fixture_schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', enabled_sources: [{ pointer_suffix: '/request/method', observation_pointer: '/method', source_class: 'request' }, { pointer_suffix: '/response/terminal', observation_pointer: '/response/transport_terminal', source_class: 'response' }], disabled_exclusions: [{ pointer_suffix: '/request/raw_body', reason_code: 'sensitive_raw_bytes' }] }
+  const contract: Record<string, unknown> = { ...unsigned, contract_sha256: sha256Canonical(unsigned) }
+  const validated = validateCoverageContract(contract, ledger)
+  assert.equal(validated.enabled.length, 2)
+  assert.equal(validated.disabled.length, 1)
+  const overlapUnsigned = { ...unsigned, disabled_exclusions: [{ pointer_suffix: '/request', reason_code: 'sensitive_raw_bytes' }] }
+  assert.throws(() => validateCoverageContract({ ...overlapUnsigned, contract_sha256: sha256Canonical(overlapUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+  const driftedUnsigned = { ...unsigned, repositories: { ...ledger.authority, sub: { ...ledger.authority.sub, tree: sha256Bytes(Buffer.from('drift')) } } }
+  assert.throws(() => validateCoverageContract({ ...driftedUnsigned, contract_sha256: sha256Canonical(driftedUnsigned) }, ledger), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 })
 
 test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {
@@ -115,7 +155,8 @@ test('targeted I1: wire observation is derived from bytes, EOF, ordering, and mo
   const events: readonly ResponseWireEvent[] = [
     { kind: 'headers', monotonic_ns: '11000000', bytes: Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 68\r\n\r\n', 'ascii') },
     { kind: 'body', monotonic_ns: '12000000', bytes: partial },
-    { kind: 'terminal', monotonic_ns: '13000000', terminal: 'eof' },
+    { kind: 'response_finish', monotonic_ns: '12500000' },
+    { kind: 'socket_close', monotonic_ns: '13000000', had_error: false },
   ]
   const observed = deriveResponseObservationFromWire(events, 1_000_000n, 10)
   assert.equal(observed.status, 200)
@@ -134,7 +175,8 @@ test('targeted I1: wire observation is derived from bytes, EOF, ordering, and mo
   const complete = deriveResponseObservationFromWire([
     { kind: 'headers', monotonic_ns: '20000000', bytes: Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: ${completeBody.length}\r\n\r\n`, 'ascii') },
     { kind: 'body', monotonic_ns: '21000000', bytes: completeBody },
-    { kind: 'terminal', monotonic_ns: '22000000', terminal: 'eof' },
+    { kind: 'response_finish', monotonic_ns: '21500000' },
+    { kind: 'socket_close', monotonic_ns: '22000000', had_error: false },
   ], 19_000_000n, 0)
   assert.equal(complete.transport_terminal, 'http_complete')
   assert.deepEqual(complete.sse_event_order, ['message_start', 'message_stop'])

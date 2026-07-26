@@ -1,10 +1,9 @@
-import { Phase3BProductionError, assertDigestField, assertExactKeys, deepFreeze, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
+import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
 import { CROSS_REPO_AUTHORITY, materializeResponseBody, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
-import { controllerSourceSetSha256 } from './source-identity.js'
 
 export const CONCLUSION_IDS = ['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', 'CL-P3B-ES1-NEW-SESSION-WIRE', 'CL-P3B-ES1-FAILURE-RECOVERY'] as const
 export const CONCLUSION_PATHS = {
@@ -19,7 +18,21 @@ const CLOSURE_ROOT = 'capsules/P3B-ES1/closure'
 const SUPPORT_ROOT = 'capsules/P3B-ES1/curation/support'
 export const SUPPORT_PATHS = ['typed-wire-fixtures.json', 'candidate-field-closure.json', 'field-provenance.json', 'cross-repo-result.json', 'predecessor-semantic-comparison.json'].map((name) => `${SUPPORT_ROOT}/${name}`) as readonly string[]
 const OBSERVATION_FIELDS = ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'receiver_group_id', 'receiver_instance_id', 'receiver_authority_sha256', 'target_pid', 'target_instance_id', 'executable_identity_sha256', 'route_ordinal', 'connection_ordinal', 'attempt_ordinal', 'action_ordinal', 'method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'response_program_sha256', 'response', 'observation_sha256'] as const
-const RESPONSE_FIELDS = ['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket'] as const
+const RESPONSE_FIELDS = ['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket', 'wire_events', 'wire_event_sha256', 'socket_close_had_error'] as const
+const ES8_GO_RECEIPT_PATH = 'control/es8-go-receipt.json'
+const ES8_TS_AGREEMENT_PATH = 'control/es8-ts-c1-agreement.json'
+const ES9_COVERAGE_CONTRACT_PATH = 'control/es9-coverage-contract.json'
+const STABLE_CODE_COUNT = 119
+const STABLE_CODE_SET_SHA256 = 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c'
+const GO_RECEIPT_EXPECTED = deepFreeze({
+  bundle_sha256: '5a79c1314332f5228e2865e6eeabc1b7597e863b56f8ec2079448ea2db37df9b',
+  decisions_sha256: '62223a099e6dff9e96b99b4264472f6c8ab5d91c204686e0eb579a8c2585083c',
+  mutation_results_sha256: '0757f6827786fa5fafc73e8beebe5852819bd913f4da45017ca9cdfd63c2d5ad',
+  required_set_sha256: 'f6eee94d9b1d80e0437474f0db65b35ce874e14edd9cf7f8314b4c38e9970d05',
+  executed_required_sha256: '780f7d865a7c56e761856bae9b2f5f6c1743b322817b570355c5f41eab2b4f1a',
+  declared_decisions_sha256: 'a88805a573742cda40de5648cccb9735cf966d5aba32827a47f326d31477a7e4',
+  declared_mutations_sha256: 'b0cbf903c93378a8148e74f29564524ba9c6971f19d697c595aca3448606f797',
+})
 
 type ArtifactEntry = Readonly<{ name: string; relative_path: string; schema_id: string; size_bytes: number; sha256: string }>
 
@@ -68,13 +81,55 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   const attempt = Number(value.attempt_ordinal)
   const action = row.response_program.actions[attempt]
   const response = value.response as Record<string, unknown> | undefined
-  if (response) assertExactKeys(response, ['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket'], 'observation_invalid')
+  if (response) assertExactKeys(response, RESPONSE_FIELDS, 'observation_invalid')
   const expectedBody = Buffer.from(materializeResponseBody(action?.body_kind ?? 'empty'), 'utf8')
   const expectedEvents = action.body_kind === 'complete_sse' ? ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'] : action.body_kind === 'partial_sse' ? ['message_start', 'content_block_start', 'content_block_delta'] : []
   const elapsed = response && /^\d+$/.test(String(response.delay_elapsed_ns)) ? BigInt(String(response.delay_elapsed_ns)) : -1n
   const expectedTimingBucket = action.delay_class === 'bounded_before_headers' ? elapsed >= BigInt(action.delay_ms) * 1_000_000n ? 'at_or_after_boundary' : 'before_boundary' : 'not_delayed'
+  const wireEvents = response?.wire_events
+  if (!Array.isArray(wireEvents) || wireEvents.length === 0 || response?.wire_event_sha256 !== sha256Canonical(wireEvents)) throw new Phase3BProductionError('observation_invalid', 'wire event transcript is missing or has a mismatched digest')
+  let previousMonotonic = -1n
+  let bodyEventLength = 0
+  let closeHadError: boolean | null = null
+  let responseFinished = false
+  let resetRequested = false
+  let socketError = false
+  wireEvents.forEach((wireEvent, index) => {
+    if (!wireEvent || typeof wireEvent !== 'object' || Array.isArray(wireEvent)) throw new Phase3BProductionError('observation_invalid', 'wire event is not a closed object')
+    const event = wireEvent as Record<string, unknown>
+    const kind = String(event.kind)
+    const fields = kind === 'headers' || kind === 'body' ? ['kind', 'monotonic_ns', 'byte_length', 'bytes_sha256']
+      : kind === 'socket_error' ? ['kind', 'monotonic_ns', 'error_class']
+        : kind === 'socket_close' ? ['kind', 'monotonic_ns', 'had_error']
+          : ['kind', 'monotonic_ns']
+    if (!['headers', 'body', 'response_finish', 'socket_end', 'socket_error', 'reset_requested', 'socket_close'].includes(kind)) throw new Phase3BProductionError('observation_invalid', 'wire event kind is unknown')
+    assertExactKeys(event, fields, 'observation_invalid')
+    if (!/^\d+$/.test(String(event.monotonic_ns)) || BigInt(String(event.monotonic_ns)) < previousMonotonic) throw new Phase3BProductionError('observation_invalid', 'wire event monotonic order drifted')
+    previousMonotonic = BigInt(String(event.monotonic_ns))
+    if (kind === 'headers' || kind === 'body') {
+      if (!Number.isSafeInteger(event.byte_length) || Number(event.byte_length) <= 0) throw new Phase3BProductionError('observation_invalid', 'wire byte event length is invalid')
+      assertSha256(event.bytes_sha256, 'observation_invalid', 'bytes_sha256')
+      if (kind === 'body') bodyEventLength += Number(event.byte_length)
+    } else if (kind === 'response_finish') responseFinished = true
+    else if (kind === 'reset_requested') resetRequested = true
+    else if (kind === 'socket_error') {
+      if (!/^[A-Za-z0-9_.-]{1,64}$/.test(String(event.error_class))) throw new Phase3BProductionError('observation_invalid', 'wire socket error class is invalid')
+      socketError = true
+    } else if (kind === 'socket_close') {
+      if (index !== wireEvents.length - 1 || typeof event.had_error !== 'boolean') throw new Phase3BProductionError('observation_invalid', 'socket close must be the final observed wire event')
+      closeHadError = event.had_error
+    }
+  })
+  if (closeHadError === null || closeHadError !== response.socket_close_had_error || bodyEventLength !== response.body_byte_length) throw new Phase3BProductionError('observation_invalid', 'wire close/body binding drifted')
+  if (response.transport_terminal === 'http_complete' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'clean HTTP completion lacks an observed clean finish and close')
+  if (response.transport_terminal === 'eof_after_partial' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'partial EOF lacks an observed clean finish and close')
+  if (response.transport_terminal === 'reset_before_headers' && (!resetRequested && !socketError && !closeHadError)) throw new Phase3BProductionError('observation_invalid', 'reset-before-headers lacks an observed reset/error close')
   if (!action || !response || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured response bytes/status/headers/events/timing/terminal drifted from sealed program')
   if (row.family === 'auth' && value.auth_marker_winner_class !== expectedAuthMarkerClass(row)) throw new Phase3BProductionError('observation_invalid', 'actual synthetic auth marker does not match the sealed auth arm')
+  const stableResponse = {
+    ...Object.fromEntries(Object.entries(response).filter(([field]) => field !== 'delay_elapsed_ns' && field !== 'wire_event_sha256' && field !== 'wire_events')),
+    wire_events: wireEvents.map((wireEvent) => Object.fromEntries(Object.entries(wireEvent as Record<string, unknown>).filter(([field]) => field !== 'monotonic_ns'))),
+  }
   return deepFreeze({
     sha256: String(value.observation_sha256),
     projection: {
@@ -91,7 +146,7 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
       body_byte_length: value.body_byte_length,
       body_sha256: value.body_sha256,
       body_ast: value.body_ast,
-      response,
+      response: stableResponse,
     },
   })
 }
@@ -223,7 +278,7 @@ function supportRecord(unsigned: Readonly<Record<string, unknown>>): Readonly<Re
 }
 
 function unknownFixture(row: RunLedgerRow): Readonly<Record<string, unknown>> {
-  const unsigned = { sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, family: row.family, schedule_id: row.schedule_id, request_stimulus_sha256: row.request_stimulus_sha256, status: 'Unknown', request_projection_sha256: null, response_projection_sha256: null, observation_sha256s: [] }
+  const unsigned = { sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, family: row.family, schedule_id: row.schedule_id, request_stimulus_sha256: row.request_stimulus_sha256, status: 'Unknown', requests: [], responses: [] }
   return deepFreeze({ ...unsigned, fixture_sha256: sha256Canonical(unsigned) })
 }
 
@@ -234,9 +289,20 @@ function deriveFixtureRows(root: string, ledger: CampaignLedger): readonly Reado
     const classified = classifyRow(root, row, terminalByRow.get(row.sequence_index) ?? null)
     if (classified.status !== 'Reproduced') return unknownFixture(row)
     const observations = row.response_program.actions.map((_, attempt) => {
-      const value = readCanonical(root, `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`).value
-      validateObservation(value, row)
-      return value
+      const relativePath = `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`
+      const record = readCanonical(root, relativePath)
+      validateObservation(record.value, row)
+      return { relativePath, ...record }
+    })
+    const requests = observations.map(({ relativePath, value, identity }) => {
+      const request = { schema_id: 'oracle-lab-p3b-typed-request-fixture.v1', method: value.method, path: value.path, query_present: value.query_present, ordered_header_classes: value.ordered_header_classes, header_presence: value.header_presence, auth_marker_winner_class: value.auth_marker_winner_class, body_byte_length: value.body_byte_length, body_sha256: value.body_sha256, body_ast: value.body_ast }
+      const unsignedRequest = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, typed_fixture: request }
+      return { ...unsignedRequest, fixture_sha256: sha256Canonical(unsignedRequest) }
+    })
+    const responses = observations.map(({ relativePath, value, identity }) => {
+      const response = { schema_id: 'oracle-lab-p3b-typed-response-fixture.v1', ...(value.response as Record<string, unknown>) }
+      const unsignedResponse = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, typed_fixture: response }
+      return { ...unsignedResponse, fixture_sha256: sha256Canonical(unsignedResponse) }
     })
     const unsigned = {
       sequence_index: row.sequence_index,
@@ -246,45 +312,150 @@ function deriveFixtureRows(root: string, ledger: CampaignLedger): readonly Reado
       schedule_id: row.schedule_id,
       request_stimulus_sha256: row.request_stimulus_sha256,
       status: 'Reproduced',
-      request_projection_sha256: sha256Canonical(observations.map((value) => ({ method: value.method, path: value.path, query_present: value.query_present, ordered_header_classes: value.ordered_header_classes, header_presence: value.header_presence, auth_marker_winner_class: value.auth_marker_winner_class, body_byte_length: value.body_byte_length, body_sha256: value.body_sha256, body_ast: value.body_ast }))),
-      response_projection_sha256: sha256Canonical(observations.map((value) => value.response)),
-      observation_sha256s: observations.map((value) => value.observation_sha256),
+      requests,
+      responses,
     }
     return deepFreeze({ ...unsigned, fixture_sha256: sha256Canonical(unsigned) })
   }))
 }
 
+const GO_RECEIPT_FIELDS = ['schema_id', 'schema_major', 'schema_revision', 'bundle_sha256', 'decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'executed_required_sha256', 'declared_decisions_sha256', 'declared_mutations_sha256', 'stable_code_count', 'stable_code_set_sha256', 'record_input_sha256', 'mirror_validation_code', 'index_validation_code', 'record_validation_code', 'mirror_validation_allowed', 'index_validation_allowed', 'record_validation_allowed', 'receipt_digest'] as const
+const TS_AGREEMENT_FIELDS = ['schema_id', 'repositories', 'c1_record_sha256', 'go_receipt_raw_sha256', 'go_receipt_internal_sha256', 'decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'stable_code_count', 'stable_code_set_sha256', 'decision', 'agreement_sha256'] as const
+const COVERAGE_CONTRACT_FIELDS = ['schema_id', 'repositories', 'fixture_schema_id', 'enabled_sources', 'disabled_exclusions', 'contract_sha256'] as const
+
+function internalLineDigest(value: Record<string, unknown>, digestField: string): string {
+  const unsigned = Object.fromEntries(Object.entries(value).filter(([key]) => key !== digestField))
+  return sha256Bytes(Buffer.concat([canonicalBytes(unsigned), Buffer.from('\n', 'utf8')]))
+}
+
+function assertReviewedControlArtifact(root: string, artifact: ArtifactEntry, digestField: string): void {
+  const input = optionalCanonical(root, 'control/campaign-input.json')
+  const authority = optionalCanonical(root, 'control/operator-authority.json')
+  if (!input || !authority) throw new Phase3BProductionError('conclusion_support_invalid', 'reviewed campaign input or operator authority is missing')
+  assertDigestField(input.value, 'input_sha256', 'conclusion_support_invalid')
+  assertDigestField(authority.value, 'authority_sha256', 'conclusion_support_invalid')
+  if (input.value[digestField] !== artifact.sha256 || authority.value.campaign_input_sha256 !== input.value.input_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed support artifact is not bound by the reviewed campaign input and operator authority')
+}
+
+export function validateIndependentGoReceipt(value: Record<string, unknown>): void {
+  assertExactKeys(value, GO_RECEIPT_FIELDS, 'conclusion_support_invalid')
+  for (const field of ['bundle_sha256', 'decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'executed_required_sha256', 'declared_decisions_sha256', 'declared_mutations_sha256', 'stable_code_set_sha256', 'record_input_sha256', 'receipt_digest']) assertSha256(value[field], 'conclusion_support_invalid', field)
+  if (value.schema_id !== 'oracle.sub_contract_receipt' || value.schema_major !== 1 || value.schema_revision !== 0 || value.stable_code_count !== STABLE_CODE_COUNT || value.stable_code_set_sha256 !== STABLE_CODE_SET_SHA256 || value.record_input_sha256 !== CROSS_REPO_AUTHORITY.review_sha256 || value.receipt_digest !== internalLineDigest(value, 'receipt_digest') || Object.entries(GO_RECEIPT_EXPECTED).some(([field, digest]) => value[field] !== digest)) throw new Phase3BProductionError('conclusion_support_invalid', 'independent Go receipt schema, C1 input, frozen execution/fixture digests, stable-code set, or internal digest drifted')
+  if (value.mirror_validation_allowed !== true || value.index_validation_allowed !== true || value.record_validation_allowed !== true || value.mirror_validation_code !== '' || value.index_validation_code !== '' || value.record_validation_code !== '') throw new Phase3BProductionError('conclusion_support_invalid', 'independent Go receipt decision is not an exact PASS')
+}
+
+export function validateIndependentTsAgreement(value: Record<string, unknown>, goValue: Record<string, unknown>, goRawSha256: string, ledger: CampaignLedger): void {
+  assertExactKeys(value, TS_AGREEMENT_FIELDS, 'conclusion_support_invalid')
+  assertDigestField(value, 'agreement_sha256', 'conclusion_support_invalid')
+  for (const field of ['c1_record_sha256', 'go_receipt_raw_sha256', 'go_receipt_internal_sha256', 'decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'stable_code_set_sha256']) assertSha256(value[field], 'conclusion_support_invalid', field)
+  if (value.schema_id !== 'oracle-lab-p3b-es8-ts-c1-agreement.v1' || sha256Canonical(value.repositories) !== sha256Canonical(ledger.authority) || value.c1_record_sha256 !== CROSS_REPO_AUTHORITY.review_sha256 || value.go_receipt_raw_sha256 !== goRawSha256 || value.go_receipt_internal_sha256 !== goValue.receipt_digest || value.decisions_sha256 !== goValue.decisions_sha256 || value.mutation_results_sha256 !== goValue.mutation_results_sha256 || value.required_set_sha256 !== goValue.required_set_sha256 || value.stable_code_count !== STABLE_CODE_COUNT || value.stable_code_set_sha256 !== STABLE_CODE_SET_SHA256 || value.decision !== 'PASS') throw new Phase3BProductionError('conclusion_support_invalid', 'TypeScript/C1 agreement does not independently bind the exact Go receipt, repositories, decision, and stable-code set')
+}
+
+type CoverageSource = Readonly<{ pointer_suffix: string; observation_pointer: string; source_class: 'request' | 'response' }>
+type CoverageExclusion = Readonly<{ pointer_suffix: string; reason_code: string }>
+
+function assertPointer(pointer: unknown, field: string): asserts pointer is string {
+  if (typeof pointer !== 'string' || !pointer.startsWith('/') || pointer.includes('//') || /~(?![01])/.test(pointer)) throw new Phase3BProductionError('conclusion_support_invalid', `${field} is not a canonical JSON pointer`)
+}
+
+export function validateCoverageContract(value: Record<string, unknown>, ledger: CampaignLedger): Readonly<{ enabled: readonly CoverageSource[]; disabled: readonly CoverageExclusion[] }> {
+  assertExactKeys(value, COVERAGE_CONTRACT_FIELDS, 'conclusion_support_invalid')
+  assertDigestField(value, 'contract_sha256', 'conclusion_support_invalid')
+  if (value.schema_id !== 'oracle-lab-p3b-es9-coverage-contract.v1' || sha256Canonical(value.repositories) !== sha256Canonical(ledger.authority) || value.fixture_schema_id !== 'oracle-lab-p3b-typed-wire-fixtures.v3' || !Array.isArray(value.enabled_sources) || value.enabled_sources.length === 0 || !Array.isArray(value.disabled_exclusions) || value.disabled_exclusions.length === 0) throw new Phase3BProductionError('conclusion_support_invalid', 'ES9 coverage contract authority/schema/source sets drifted')
+  const enabled = value.enabled_sources.map((source) => {
+    assertExactKeys(source, ['pointer_suffix', 'observation_pointer', 'source_class'], 'conclusion_support_invalid')
+    assertPointer(source.pointer_suffix, 'pointer_suffix')
+    assertPointer(source.observation_pointer, 'observation_pointer')
+    if (source.source_class !== 'request' && source.source_class !== 'response') throw new Phase3BProductionError('conclusion_support_invalid', 'coverage source class is invalid')
+    if (source.source_class === 'request' ? (!source.pointer_suffix.startsWith('/request/') || source.observation_pointer.startsWith('/response/')) : (!source.pointer_suffix.startsWith('/response/') || !source.observation_pointer.startsWith('/response/'))) throw new Phase3BProductionError('conclusion_support_invalid', 'coverage source pointer does not match its request/response class')
+    return source as CoverageSource
+  })
+  const disabled = value.disabled_exclusions.map((exclusion) => {
+    assertExactKeys(exclusion, ['pointer_suffix', 'reason_code'], 'conclusion_support_invalid')
+    assertPointer(exclusion.pointer_suffix, 'pointer_suffix')
+    if ((!exclusion.pointer_suffix.startsWith('/request/') && !exclusion.pointer_suffix.startsWith('/response/')) || typeof exclusion.reason_code !== 'string' || !/^[a-z][a-z0-9_]{2,63}$/.test(exclusion.reason_code)) throw new Phase3BProductionError('conclusion_support_invalid', 'coverage exclusion pointer/reason is invalid')
+    return exclusion as CoverageExclusion
+  })
+  const suffixes = [...enabled.map((entry) => entry.pointer_suffix), ...disabled.map((entry) => entry.pointer_suffix)]
+  if (sha256Canonical(enabled.map((entry) => entry.pointer_suffix)) !== sha256Canonical(enabled.map((entry) => entry.pointer_suffix).sort(utf8Compare)) || sha256Canonical(disabled.map((entry) => entry.pointer_suffix)) !== sha256Canonical(disabled.map((entry) => entry.pointer_suffix).sort(utf8Compare)) || new Set(suffixes).size !== suffixes.length || suffixes.some((left, index) => suffixes.some((right, other) => index !== other && (left.startsWith(`${right}/`) || right.startsWith(`${left}/`))))) throw new Phase3BProductionError('conclusion_support_invalid', 'coverage contract pointers are unordered, overlapping, or duplicated')
+  return deepFreeze({ enabled, disabled })
+}
+
+function resolveJsonPointer(value: unknown, pointer: string): unknown {
+  let current = value
+  for (const encoded of pointer.slice(1).split('/')) {
+    const segment = encoded.replace(/~1/g, '/').replace(/~0/g, '~')
+    if (Array.isArray(current)) {
+      if (!/^(?:0|[1-9][0-9]*)$/.test(segment) || Number(segment) >= current.length) throw new Phase3BProductionError('conclusion_support_invalid', 'coverage observation pointer is absent')
+      current = current[Number(segment)]
+    } else if (current && typeof current === 'object' && Object.prototype.hasOwnProperty.call(current, segment)) current = (current as Record<string, unknown>)[segment]
+    else throw new Phase3BProductionError('conclusion_support_invalid', 'coverage observation pointer is absent')
+  }
+  return current
+}
+
+function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], fixturesSha256: unknown, closureSha256: unknown): Readonly<Record<string, unknown>> {
+  const contractArtifact = optionalCanonical(root, ES9_COVERAGE_CONTRACT_PATH)
+  if (!contractArtifact) return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: null, missing_artifacts: [ES9_COVERAGE_CONTRACT_PATH], sources: [], coverage: { planned_pointer_count: 0, represented_pointer_count: 0, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'BLOCKED' })
+  assertReviewedControlArtifact(root, contractArtifact.entry, 'es9_coverage_contract_sha256')
+  const contract = validateCoverageContract(contractArtifact.value, ledger)
+  const sources: Array<Readonly<Record<string, unknown>>> = []
+  for (const row of ledger.rows) {
+    const fixture = fixtureRows[row.sequence_index]
+    for (let attempt = 0; attempt < row.response_program.maximum_attempts; attempt += 1) {
+      const observationRelative = `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`
+      const observation = optionalCanonical(root, observationRelative)
+      for (const descriptor of contract.enabled) {
+        const pointer = `/rows/${row.sequence_index}/attempts/${attempt}${descriptor.pointer_suffix}`
+        if (!observation || fixture.status !== 'Reproduced') {
+          const unsigned = { json_pointer: pointer, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: descriptor.source_class, enabled: false, reason_code: 'source_observation_missing', source_relative_path: null, source_raw_sha256: null, source_observation_sha256: null, source_value_sha256: null }
+          sources.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
+          continue
+        }
+        validateObservation(observation.value, row)
+        const sourceValue = resolveJsonPointer(observation.value, descriptor.observation_pointer)
+        const unsigned = { json_pointer: pointer, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: descriptor.source_class, enabled: true, reason_code: null, source_relative_path: observationRelative, source_raw_sha256: observation.entry.sha256, source_observation_sha256: observation.value.observation_sha256, source_value_sha256: sha256Canonical(sourceValue) }
+        sources.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
+      }
+      for (const exclusion of contract.disabled) {
+        const unsigned = { json_pointer: `/rows/${row.sequence_index}/attempts/${attempt}${exclusion.pointer_suffix}`, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: 'excluded', enabled: false, reason_code: exclusion.reason_code, source_relative_path: null, source_raw_sha256: null, source_observation_sha256: null, source_value_sha256: null }
+        sources.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
+      }
+    }
+  }
+  const planned = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * (contract.enabled.length + contract.disabled.length), 0)
+  const represented = new Set(sources.map((source) => source.json_pointer)).size
+  const enabledCount = sources.filter((source) => source.enabled).length
+  const disabledCount = sources.filter((source) => !source.enabled).length
+  const dEnabledCount = sources.filter((source) => source.source_class === 'excluded' && source.enabled).length
+  const expectedEnabled = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * contract.enabled.length, 0)
+  const pass = fixtureRows.every((row) => row.status === 'Reproduced') && planned === represented && enabledCount === expectedEnabled && disabledCount === ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * contract.disabled.length, 0) && dEnabledCount === 0
+  return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: contractArtifact.entry.sha256, missing_artifacts: [], sources, coverage: { planned_pointer_count: planned, represented_pointer_count: represented, enabled_pointer_count: enabledCount, disabled_pointer_count: disabledCount, omitted_pointer_count: planned - represented, d_leaf_enabled_count: dEnabledCount, unknown_or_omitted: 'disabled' }, status: pass ? 'PASS' : 'INCOMPLETE' })
+}
+
+function deriveCrossRepoSupport(root: string, ledger: CampaignLedger): Readonly<Record<string, unknown>> {
+  const c1 = optionalCanonical(root, 'control/cross-repo-review.json')
+  const goReceipt = optionalCanonical(root, ES8_GO_RECEIPT_PATH)
+  const tsAgreement = optionalCanonical(root, ES8_TS_AGREEMENT_PATH)
+  if (!c1 || !goReceipt || !tsAgreement) {
+    const missing = [!c1 ? 'control/cross-repo-review.json' : null, !goReceipt ? ES8_GO_RECEIPT_PATH : null, !tsAgreement ? ES8_TS_AGREEMENT_PATH : null].filter((value): value is string => value !== null)
+    return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1?.entry.sha256 ?? null, go_receipt_raw_sha256: goReceipt?.entry.sha256 ?? null, go_receipt_internal_sha256: null, ts_agreement_raw_sha256: tsAgreement?.entry.sha256 ?? null, ts_agreement_internal_sha256: null, missing_artifacts: missing, agreement: null, status: 'BLOCKED' })
+  }
+  if (c1.entry.sha256 !== CROSS_REPO_AUTHORITY.review_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'actual C1 record raw digest drifted')
+  assertReviewedControlArtifact(root, goReceipt.entry, 'es8_go_receipt_sha256')
+  assertReviewedControlArtifact(root, tsAgreement.entry, 'es8_ts_c1_agreement_sha256')
+  validateIndependentGoReceipt(goReceipt.value)
+  validateIndependentTsAgreement(tsAgreement.value, goReceipt.value, goReceipt.entry.sha256, ledger)
+  return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.entry.sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
+}
+
 function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
   const fixtureRows = deriveFixtureRows(root, ledger)
   const allReproduced = fixtureRows.every((row) => row.status === 'Reproduced')
-  const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, rows: fixtureRows, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
-  const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'request_projection_sha256', 'response_projection_sha256', 'observation_sha256s', 'fixture_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
-  const sources = ledger.rows.map((row) => {
-    const fixture = fixtureRows[row.sequence_index]
-    return {
-      json_pointer: `/rows/${row.sequence_index}`,
-      sequence_index: row.sequence_index,
-      run_id: row.run_id,
-      row_sha256: row.row_sha256,
-      fixture_sha256: fixture.fixture_sha256,
-      enabled: fixture.status === 'Reproduced',
-      observation_paths: row.response_program.actions.map((_, attempt) => `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`),
-      observation_sha256s: Array.isArray(fixture.observation_sha256s) ? fixture.observation_sha256s : [],
-    }
-  })
-  const conclusionSources = Object.fromEntries(CONCLUSION_IDS.map((id) => [id, ledger.rows.filter((row) => conclusionFamily(id).includes(row.family)).map((row) => `/rows/${row.sequence_index}`)]))
-  const sourceControls = ['control/campaign-input.json', 'control/operator-authority.json', 'control/implementation-review.json'].map((relativePath) => ({ relative_path: relativePath, sha256: optionalCanonical(root, relativePath)?.entry.sha256 ?? null }))
-  const pointerSet = new Set(sources.map((source) => source.json_pointer))
-  const provenancePass = allReproduced && pointerSet.size === ledger.rows.length && sourceControls.every((value) => value.sha256 !== null) && sources.every((source) => source.observation_paths.length === source.observation_sha256s.length)
-  const provenance = supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, candidate_field_closure_sha256: fieldClosure.support_sha256, sources, conclusion_sources: conclusionSources, source_controls: sourceControls, coverage: { planned_pointer_count: 340, represented_pointer_count: pointerSet.size, enabled_pointer_count: sources.filter((source) => source.enabled).length, disabled_pointer_count: sources.filter((source) => !source.enabled).length, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: provenancePass ? 'PASS' : 'INCOMPLETE' })
-  const crossRepoIdentity = optionalCanonical(root, 'control/cross-repo-review.json')?.entry
-  const implementationReviewIdentity = optionalCanonical(root, 'control/implementation-review.json')?.entry
-  const agreementInputSha256 = sha256Canonical({ typed_wire_fixtures_sha256: fixtures.support_sha256, candidate_field_closure_sha256: fieldClosure.support_sha256 })
-  const goResult = { language: 'go', repository: ledger.authority.sub, command_id: 'sub2api-independent-oracleevidence-v1', agreement_input_sha256: agreementInputSha256, c1_record_path: 'control/cross-repo-review.json', c1_record_sha256: crossRepoIdentity?.sha256 ?? null, verdict: crossRepoIdentity?.sha256 === CROSS_REPO_AUTHORITY.review_sha256 ? 'PASS' : 'MISSING' }
-  const tsUnsigned = { language: 'typescript', repository: ledger.authority.cc, command_id: 'cc-independent-byte-decision-checker-v1', agreement_input_sha256: agreementInputSha256, controller_source_set_sha256: controllerSourceSetSha256(), verdict: allReproduced ? 'PASS' : 'INCOMPLETE' }
-  const tsResult = { ...tsUnsigned, result_sha256: sha256Canonical(tsUnsigned) }
-  const crossRepoPass = goResult.verdict === 'PASS' && tsResult.verdict === 'PASS' && implementationReviewIdentity !== undefined
-  const crossRepo = supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, agreement_input_sha256: agreementInputSha256, go_result: goResult, ts_result: tsResult, trusted_implementation_review_sha256: implementationReviewIdentity?.sha256 ?? null, agreement_sha256: sha256Canonical({ agreement_input_sha256: agreementInputSha256, go_result: goResult, ts_result: tsResult }), status: crossRepoPass ? 'PASS' : 'BLOCKED' })
+  const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, rows: fixtureRows, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
+  const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', 'method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast'], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'typed_fixture', 'fixture_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
+  const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
+  const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfig = optionalCanonical(root, 'control/predecessor-config-auth.json')?.entry
   const predecessorFailure = optionalCanonical(root, 'control/predecessor-failure-stream.json')?.entry
   const mappings = [
