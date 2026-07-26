@@ -214,6 +214,25 @@ test('authority RED: persisted request AST is normalized-safe and contains no ra
   assert.equal(normalized.includes(Buffer.from(marker)), false)
 })
 
+test('authority RED: typed request schema rejects sensitive field names and response-only literals', () => {
+  const sensitiveKey = Buffer.from('{"model":"claude-sonnet-4-6","messages":[],"secret":"safe"}', 'utf8')
+  assert.throws(() => normalizeRequestAst(sensitiveKey), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  const responseLiteral = Buffer.from('{"model":"model.test","messages":[],"stream":true}', 'utf8')
+  assert.throws(() => normalizeRequestAst(responseLiteral), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  const forged = { schema_id: 'oracle-lab-p3b-request-ast.v3', materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, wire_byte_length: 1, wire_sha256: 'a'.repeat(64), normalized_byte_length: 1, normalized_sha256: 'b'.repeat(64), value: { type: 'redacted_string', byte_length: 999, value_sha256: 'c'.repeat(64) } }
+  assert.throws(() => materializeRequestAst(forged), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+})
+
+test('authority RED: normative provenance and sealed Gate B cannot use synthetic fallback or self-hashed clock output', () => {
+  const closeout = readFileSync(path.join(realpathSync(path.join(import.meta.dirname, '..')), 'tools/oracle-lab/phase3b-evidence-sufficiency/closeout.ts'), 'utf8')
+  const gates = readFileSync(path.join(realpathSync(path.join(import.meta.dirname, '..')), 'tools/oracle-lab/phase3b-evidence-sufficiency/gates.ts'), 'utf8')
+  assert.doesNotMatch(closeout, /return \{ derived_from: 'sealed_source_and_observations'/)
+  assert.match(closeout, /source_value_sha256/)
+  assert.match(gates, /validateCurationClock\(/)
+  assert.match(gates, /verifyTrustedSignature\(/)
+  assert.match(gates, /validateConclusionSupport\(/)
+})
+
 test('authority RED: sandbox defaults deny host reads and process inspection', () => {
   const profile = buildSandboxProfile('/private/tmp/p3b-runtime', '/private/tmp/p3b-runtime/run', [43123])
   assert.match(profile, /\(deny default\)/)
