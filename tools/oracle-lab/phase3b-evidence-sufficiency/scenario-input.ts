@@ -47,6 +47,16 @@ export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | nul
   return deepFreeze({ ...selected, request_route: expectedSelectedRoute(row), preflight_route: selected['process-env'] })
 }
 
+export function materializeRouteDispatch(row: RunLedgerRow, routeUrls: readonly string[]): Readonly<{ request_route: 0 | 1; preflight_route: 0 | 1 | null; actual_route: 0 | 1; selected_url: string }> {
+  if (routeUrls.length !== 2 || routeUrls.some((value) => !/^http:\/\/127\.0\.0\.1:\d+$/.test(value))) throw new Phase3BProductionError('scenario_input_invalid', 'synthetic route dispatch requires the exact two loopback URLs')
+  const plan = configRoutePlan(row)
+  const sourceRoute = plan['process-env'] ?? plan.request_route
+  const selectedUrl = routeUrls[sourceRoute]
+  const actualRoute = routeUrls.indexOf(selectedUrl)
+  if (actualRoute !== 0 && actualRoute !== 1) throw new Phase3BProductionError('scenario_input_invalid', 'materialized route URL is not in the sealed route set')
+  return deepFreeze({ request_route: plan.request_route, preflight_route: plan.preflight_route, actual_route: actualRoute as 0 | 1, selected_url: selectedUrl })
+}
+
 const AUTH_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record<string, string>>; treatment: Readonly<Record<string, string>> }>>> = {
   'auth-api-key-rotation': { control: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-a' }, treatment: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-b' } },
   'auth-token-rotation': { control: { ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-a' }, treatment: { ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-b' } },

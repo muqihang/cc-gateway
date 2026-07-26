@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -96,6 +97,7 @@ const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name,
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
 const REDACTION_PROOF_SCHEMA = 'opaque-redaction-proof-v1'
+const REDACTION_MAC_KEY = Buffer.from('phase3b-opaque-request-redaction-v1', 'utf8')
 const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
@@ -329,7 +331,9 @@ function semanticRequestAst(value: unknown): unknown {
     const bytes = Buffer.from(text, 'utf8')
     const byteLength = bytes.byteLength
     const valueSha256 = sha256Bytes(bytes)
-    return { type: 'redacted_string', byte_length: byteLength, value_sha256: valueSha256, redaction_proof: sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: byteLength, value_sha256: valueSha256 }) }
+    const proof = sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: byteLength, value_sha256: valueSha256 })
+    const redactionMac = createHmac('sha256', REDACTION_MAC_KEY).update(`${proof}:${byteLength}:${valueSha256}`, 'utf8').digest('hex')
+    return { type: 'redacted_string', byte_length: byteLength, value_sha256: valueSha256, redaction_proof: proof, redaction_mac: redactionMac }
   }
   const visit = (node: unknown): unknown => {
     if (node === null) return { type: 'null' }
@@ -355,6 +359,9 @@ export function normalizeRequestAst(bytes: Buffer): Readonly<Record<string, unkn
   let value: unknown
   try { value = JSON.parse(bytes.toString('utf8')) } catch { throw new Phase3BProductionError('receiver_request_invalid', 'request body is not JSON') }
   const valueAst = semanticRequestAst(value)
+  if (!valueAst || typeof valueAst !== 'object' || Array.isArray(valueAst) || (valueAst as Record<string, unknown>).type !== 'object' || !Array.isArray((valueAst as Record<string, unknown>).fields)) throw new Phase3BProductionError('receiver_request_invalid', 'request root must be a typed object')
+  const modelFields = ((valueAst as Record<string, unknown>).fields as unknown[]).filter((field) => field && typeof field === 'object' && !Array.isArray(field) && (field as Record<string, unknown>).field_ref === 'field_00')
+  if (modelFields.length !== 1 || ((modelFields[0] as Record<string, unknown>).value as Record<string, unknown> | undefined)?.literal_ref !== 'synthetic-literals/request_model_v1') throw new Phase3BProductionError('receiver_request_invalid', 'request root model must be exactly claude-sonnet-4-6')
   const normalized = materializeSemanticAst(valueAst)
   const normalizedBytes = Buffer.concat([canonicalBytes(normalized), Buffer.from('\n', 'utf8')])
   return deepFreeze({ schema_id: 'oracle-lab-p3b-request-ast.v3', materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, wire_byte_length: bytes.length, wire_sha256: sha256Bytes(bytes), normalized_byte_length: normalizedBytes.length, normalized_sha256: sha256Bytes(normalizedBytes), value: valueAst })
@@ -391,8 +398,10 @@ function materializeSemanticAst(node: unknown): unknown {
     return literal
   }
   if (value.type === 'redacted_string') {
-    assertExactKeys(value, ['type', 'byte_length', 'value_sha256', 'redaction_proof'], 'receiver_request_invalid')
-    if (/^[a-f0-9]{64}$/.test(String(value.value_sha256)) && Number.isSafeInteger(value.byte_length) && Number(value.byte_length) >= 0 && Number(value.byte_length) <= 1_048_576 && value.redaction_proof === sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: value.byte_length, value_sha256: value.value_sha256 })) return `<redacted:${value.value_sha256}>`
+    assertExactKeys(value, ['type', 'byte_length', 'value_sha256', 'redaction_proof', 'redaction_mac'], 'receiver_request_invalid')
+    const expectedProof = sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: value.byte_length, value_sha256: value.value_sha256 })
+    const expectedMac = createHmac('sha256', REDACTION_MAC_KEY).update(`${expectedProof}:${value.byte_length}:${value.value_sha256}`, 'utf8').digest('hex')
+    if (/^[a-f0-9]{64}$/.test(String(value.value_sha256)) && Number.isSafeInteger(value.byte_length) && Number(value.byte_length) >= 0 && Number(value.byte_length) <= 1_048_576 && value.redaction_proof === expectedProof && value.redaction_mac === expectedMac) return `<redacted:${value.value_sha256}>`
   }
   if (value.type === 'number' && typeof value.value_text === 'string' && /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value.value_text)) return Number(value.value_text)
   if (value.type === 'boolean' && typeof value.value === 'boolean') return value.value

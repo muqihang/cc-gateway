@@ -72,12 +72,12 @@ test('retryable terminal and recovery programs share the trigger then diverge de
   assert.deepEqual(buildResponseProgram('reset_terminal').actions.map((action) => [action.kind, action.status]), [['reset', null], ['http', 400]])
 })
 
-test('config route policy keeps process-env on request route zero and uses route one only for file treatments', () => {
+test('config route policy keeps process-env and file treatments on request route one', () => {
   const rows = buildCampaignLedger('p3b-route-policy', TEST_C1).rows
   const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
   const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
   const control = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('control/'))!
-  assert.equal(expectedSelectedRoute(processEnv), 0)
+  assert.equal(expectedSelectedRoute(processEnv), 1)
   assert.equal(expectedSelectedRoute(localFile), 1)
   assert.equal(expectedSelectedRoute(control), 0)
 })

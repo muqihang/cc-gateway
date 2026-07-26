@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { runExecuteFromSealedPrelaunch, runPrelaunchOnly } from './campaign-controller.js'
 import { deriveCuration, runCloseout } from './closeout.js'
 import { Phase3BProductionError, canonicalJson } from './core.js'
-import { evaluateGateA, evaluateGateB } from './gates.js'
+import { evaluateGateA, writeGateB } from './gates.js'
 import { assertPrivateRuntimeRoot, readCanonical, stableRead } from './sealed-fs.js'
 
 const MODES = ['prelaunch-only', 'execute-from-sealed-prelaunch', 'closeout-only', 'evaluate-gate-a', 'evaluate-gate-b'] as const
@@ -61,7 +61,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     else {
       const expected = path.join(evidenceRoot, 'capsules/P3B-ES1/gates/successor-amendment-decision.json')
       if (path.resolve(args['operator-decision']) !== expected) throw new Phase3BProductionError('fixed_path_invalid', 'Gate B operator decision path is fixed')
-      result = evaluateGateB(evidenceRoot)
+      result = writeGateB(evidenceRoot)
     }
   }
   process.stdout.write(`${canonicalJson(result)}\n`)

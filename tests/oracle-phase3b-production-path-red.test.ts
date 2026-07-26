@@ -12,14 +12,14 @@ function privateRoot(prefix: string): string {
   return root
 }
 
-test('production path RED: synthetic dry-run traverses materialization through signer destruction without reversible evidence', () => {
+test('production path: synthetic dry-run traverses materialization through signer destruction without reversible evidence', () => {
   const result = runSyntheticProductionDryRun(privateRoot('p3b-production-path-'))
   assert.equal(result.schema_id, 'oracle-lab-p3b-synthetic-dry-run.v1')
   assert.deepEqual(result.stages, ['materialized', 'normative_resolved', 'execution_receipts', 'curation', 'support', 'conclusions', 'gate_b_evaluated', 'gate_b_sealed', 'gate_b_revalidated', 'signer_destruction'])
   assert.equal(result.row_count, 340)
   assert.equal(result.normative_leaf_count, 152)
   const route = result.route_dispatch as Record<string, unknown>
-  assert.deepEqual(route, { schedule_id: 'config-precedence-process-env-vs-local', request_route: 1, preflight_route: 1, actual_route: 1 })
+  assert.deepEqual(route, { schedule_id: 'config-precedence-process-env-vs-local', request_route: 1, preflight_route: 1, actual_route: 1, selected_url: 'http://127.0.0.1:41001' })
   assert.deepEqual(result.persisted_leak_scan, { raw: false, base64: false, hex: false, url_encoded: false, secret_field_names: false })
   const conclusions = result.conclusions as Array<Record<string, unknown>>
   assert.equal(conclusions.length, 3)

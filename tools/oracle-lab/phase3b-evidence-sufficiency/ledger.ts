@@ -193,11 +193,11 @@ function canonicalLine(value: unknown): Buffer {
 }
 
 export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string, unknown>> {
-  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_base64: Buffer.from(FIXED_STDIN_LITERAL, 'utf8').toString('base64'), literal_table: FIXED_LITERAL_TABLE })
-  const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => ({ ...action, body_base64: Buffer.from(materializeResponseBody(action.body_kind), 'utf8').toString('base64'), body_sha256: sha256Bytes(Buffer.from(materializeResponseBody(action.body_kind), 'utf8')) })), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
+  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
+  const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => { const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8'); return { ...action, body_byte_length: body.byteLength, body_sha256: sha256Bytes(body) } }), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
   return deepFreeze({
     sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, request_stimulus_sha256: row.request_stimulus_sha256, response_program_sha256: row.response_program_sha256, maximum_attempts: row.response_program.maximum_attempts,
-    request_source_base64: requestBytes.toString('base64'), request_source_sha256: sha256Bytes(requestBytes), response_source_base64: responseBytes.toString('base64'), response_source_sha256: sha256Bytes(responseBytes),
+    request_source_byte_length: requestBytes.byteLength, request_source_sha256: sha256Bytes(requestBytes), response_source_byte_length: responseBytes.byteLength, response_source_sha256: sha256Bytes(responseBytes),
   })
 }
 
@@ -239,13 +239,13 @@ export function observationCoverageMatrix(ledger: CampaignLedger): Readonly<{ en
       for (const field of fields) {
         const sourceObject = { schema_id: 'oracle-lab-p3b-es9-source.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field, authority_sha256: sourceClass === 'request' ? row.request_stimulus_sha256 : row.response_program_sha256 }
         const sourceBytes = canonicalLine(sourceObject)
-        enabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) })
+        enabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_byte_length: sourceBytes.byteLength, source_sha256: sha256Bytes(sourceBytes) })
       }
     }
     for (const sourceClass of ['request', 'response'] as const) {
       const sourceObject = { schema_id: 'oracle-lab-p3b-es9-exclusion.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field: 'raw_body', reason_code: 'sensitive_raw_bytes' }
       const sourceBytes = canonicalLine(sourceObject)
-      disabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/raw_body`, observation_pointer: sourceClass === 'request' ? '/raw_body' : '/response/raw_body', reason_code: 'sensitive_raw_bytes', source_bytes_base64: sourceBytes.toString('base64'), source_sha256: sha256Bytes(sourceBytes) })
+      disabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/raw_body`, observation_pointer: sourceClass === 'request' ? '/raw_body' : '/response/raw_body', reason_code: 'sensitive_raw_bytes', source_byte_length: sourceBytes.byteLength, source_sha256: sha256Bytes(sourceBytes) })
     }
   }
   return deepFreeze({ enabled, disabled })

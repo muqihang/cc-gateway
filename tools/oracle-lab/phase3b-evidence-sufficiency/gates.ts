@@ -1,5 +1,4 @@
 import { loadSealedControl } from './campaign-controller.js'
-import { randomUUID } from 'node:crypto'
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { CONCLUSION_IDS, CONCLUSION_PATHS, SUCCESSOR_TTL_MS, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from './closeout.js'
@@ -37,7 +36,7 @@ type GateClock = Readonly<{
 function conclusions(root: string): Array<Record<string, unknown>> {
   return CONCLUSION_IDS.map((id) => {
     const value = readCanonical(root, CONCLUSION_PATHS[id]).value
-    assertExactKeys(value, ['schema_id', 'source_schema', 'conclusion_id', 'campaign_id', 'ledger_sha256', 'level', 'enabled', 'created_at_ms', 'issued_at_ms', 'expires_at_ms', 'clock_attestation_sha256', 'contradiction_ids', 'source_row_set_sha256', 'supporting_evidence_sha256s', 'unknown_or_omitted', 'source_projection', 'conclusion_sha256'], 'conclusion_invalid')
+    assertExactKeys(value, ['schema_id', 'source_schema', 'conclusion_id', 'campaign_id', 'ledger_sha256', 'level', 'enabled', 'created_at_ms', 'issued_at_ms', 'expires_at_ms', 'clock_attestation_sha256', 'contradiction_ids', 'source_row_set_sha256', 'source_document_sha256', 'normative_resolution_sha256', 'supporting_evidence_sha256s', 'unknown_or_omitted', 'conclusion_sha256'], 'conclusion_invalid')
     assertDigestField(value, 'conclusion_sha256', 'conclusion_invalid')
     if (value.schema_id !== 'oracle-lab-p3b-successor-conclusion.v1' || value.conclusion_id !== id || value.unknown_or_omitted !== 'disabled') throw new Phase3BProductionError('conclusion_invalid', 'conclusion fixed ID/path/schema drifted')
     return value
@@ -163,7 +162,27 @@ export function importSignedOperatorDecision(evidenceRoot: string, signedDecisio
   return decision
 }
 
-export function evaluateGateB(evidenceRoot: string): Readonly<Record<string, unknown>> {
+export type GateBEvaluationInput = Readonly<{
+  campaign_id: string
+  gate_a_sha256: string
+  gate_a_clock_sha256: string
+  external_set_sha256: string
+  operator_decision_sha256: string
+  conclusion_sha256s: readonly string[]
+  gate_clock_sha256: string
+  controller_source_set_sha256: string
+  controller_executable_sha256: string
+  toolchain_sha256: string
+}>
+
+export function evaluateGateB(input: GateBEvaluationInput): Readonly<Record<string, unknown>> {
+  if (!input || typeof input.campaign_id !== 'string' || !/^[a-f0-9]{64}$/.test(input.gate_a_sha256) || !/^[a-f0-9]{64}$/.test(input.gate_a_clock_sha256) || !/^[a-f0-9]{64}$/.test(input.external_set_sha256) || !/^[a-f0-9]{64}$/.test(input.operator_decision_sha256) || !Array.isArray(input.conclusion_sha256s) || input.conclusion_sha256s.some((value) => !/^[a-f0-9]{64}$/.test(value)) || !/^[a-f0-9]{64}$/.test(input.gate_clock_sha256) || !/^[a-f0-9]{64}$/.test(input.controller_source_set_sha256) || !/^[a-f0-9]{64}$/.test(input.controller_executable_sha256) || !/^[a-f0-9]{64}$/.test(input.toolchain_sha256)) throw new Phase3BProductionError('gate_input_invalid', 'Gate B evaluator input is not the exact sealed digest tuple')
+  const evaluationInput = { gate_a_sha256: input.gate_a_sha256, gate_a_clock_sha256: input.gate_a_clock_sha256, external_set_sha256: input.external_set_sha256, operator_decision_sha256: input.operator_decision_sha256, conclusion_sha256s: [...input.conclusion_sha256s], gate_clock_sha256: input.gate_clock_sha256, controller_source_set_sha256: input.controller_source_set_sha256, controller_executable_sha256: input.controller_executable_sha256, toolchain_sha256: input.toolchain_sha256 }
+  const unsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: input.campaign_id, gate_a_sha256: input.gate_a_sha256, external_set_sha256: input.external_set_sha256, operator_decision_sha256: input.operator_decision_sha256, conclusion_sha256s: [...input.conclusion_sha256s], gate_clock_sha256: input.gate_clock_sha256, evaluation_input_sha256: sha256Canonical(evaluationInput), phase3b_usable: true }
+  return deepFreeze({ ...unsigned, gate_result_sha256: sha256Canonical(unsigned) })
+}
+
+export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknown>> {
   if (typeof evidenceRoot !== 'string') throw new Phase3BProductionError('gate_input_invalid', 'Gate B accepts only a sealed evidence root')
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   assertFixedDirectory(root, GATE_ROOT, ['gate-a-clock.json', 'gate-a-result.json', 'successor-amendment-decision.json'])
@@ -197,11 +216,9 @@ export function evaluateGateB(evidenceRoot: string): Readonly<Record<string, unk
   const clock = captureClock(root, 'B', { sha256: String(gateAClock.clock_sha256), wall: Number(gateAClock.wall_clock_ms), monotonic: String(gateAClock.monotonic_ns) }, String(external.external_set_sha256), expectedDigests.map(String), input.toolchain_sha256)
   if (clock.wall_clock_ms < issued) throw new Phase3BProductionError('gate_clock_rollback', 'Gate B clock predates operator decision')
   writeGate(root, `${GATE_ROOT}/gate-b-clock.json`, clock)
-  const evaluationInput = { gate_a_sha256: gateA.gate_result_sha256, gate_a_clock_sha256: gateAClock.clock_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: expectedDigests, gate_clock_sha256: clock.clock_sha256, controller_source_set_sha256: clock.controller_source_set_sha256, controller_executable_sha256: clock.controller_executable_sha256, toolchain_sha256: clock.toolchain_sha256 }
-  const unsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: gateA.campaign_id, gate_a_sha256: gateA.gate_result_sha256, external_set_sha256: external.external_set_sha256, operator_decision_sha256: decision.decision_sha256, conclusion_sha256s: expectedDigests, gate_clock_sha256: clock.clock_sha256, evaluation_input_sha256: sha256Canonical(evaluationInput), phase3b_usable: true }
-  const result = deepFreeze({ ...unsigned, gate_result_sha256: sha256Canonical(unsigned) })
+  const result = evaluateGateB({ campaign_id: String(gateA.campaign_id), gate_a_sha256: String(gateA.gate_result_sha256), gate_a_clock_sha256: String(gateAClock.clock_sha256), external_set_sha256: String(external.external_set_sha256), operator_decision_sha256: String(decision.decision_sha256), conclusion_sha256s: expectedDigests.map(String), gate_clock_sha256: String(clock.clock_sha256), controller_source_set_sha256: String(clock.controller_source_set_sha256), controller_executable_sha256: String(clock.controller_executable_sha256), toolchain_sha256: String(clock.toolchain_sha256) })
   const resultIdentity = writeGate(root, `${GATE_ROOT}/gate-b-result.json`, result)
-  const evaluationReceiptUnsigned = { schema_id: 'oracle-lab-p3b-gate-b-evaluation-receipt.v1', campaign_id: gateA.campaign_id, result_raw_sha256: resultIdentity.sha256, result_canonical_sha256: result.gate_result_sha256, evaluation_input_sha256: result.evaluation_input_sha256, evaluator_nonce: randomUUID() }
+  const evaluationReceiptUnsigned = { schema_id: 'oracle-lab-p3b-gate-b-evaluation-receipt.v1', campaign_id: gateA.campaign_id, result_raw_sha256: resultIdentity.sha256, result_canonical_sha256: result.gate_result_sha256, evaluation_input_sha256: result.evaluation_input_sha256, evaluator_nonce: sha256Canonical({ result_raw_sha256: resultIdentity.sha256, evaluation_input_sha256: result.evaluation_input_sha256 }) }
   writeGate(root, `${GATE_ROOT}/gate-b-evaluation-receipt.json`, { ...evaluationReceiptUnsigned, receipt_sha256: sha256Canonical(evaluationReceiptUnsigned) })
   return result
 }
@@ -224,6 +241,13 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   assertExactKeys(gateBClock, ['schema_id', 'gate', 'campaign_id', 'external_set_sha256', 'conclusion_sha256s', 'controller_source_set_sha256', 'controller_executable_sha256', 'toolchain_sha256', 'predecessor_clock_sha256', 'predecessor_wall_clock_ms', 'predecessor_monotonic_ns', 'wall_clock_ms', 'monotonic_ns', 'clock_sha256'], 'gate_clock_invalid')
   for (const [value, digest, code] of [[gateA, 'gate_result_sha256', 'gate_a_invalid'], [gateAClock, 'clock_sha256', 'gate_clock_invalid'], [decision, 'decision_sha256', 'operator_decision_invalid'], [gateBClock, 'clock_sha256', 'gate_clock_invalid']] as const) assertDigestField(value, digest, code)
   if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || gateA.external_set_sha256 !== external.external_set_sha256 || gateA.gate_clock_sha256 !== gateAClock.clock_sha256 || gateAClock.gate !== 'A' || gateAClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.gate !== 'B' || gateBClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.predecessor_clock_sha256 !== gateAClock.clock_sha256 || Number(gateBClock.wall_clock_ms) < Number(gateAClock.wall_clock_ms) || BigInt(String(gateBClock.monotonic_ns)) < BigInt(String(gateAClock.monotonic_ns))) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate A/B clock provenance or verdict is not the exact evaluator chain')
+  const validationNow = Date.now()
+  const validationMonotonic = process.hrtime.bigint()
+  const gateBWall = Number(gateBClock.wall_clock_ms)
+  const gateBMonotonic = BigInt(String(gateBClock.monotonic_ns))
+  const decisionIssuedAt = Number(decision.issued_at_ms)
+  const decisionIssuedMonotonic = BigInt(String(decision.issued_monotonic_ns))
+  if (!Number.isSafeInteger(gateBWall) || gateBWall > validationNow || validationNow - gateBWall > OPERATOR_MAX_DELAY_MS || gateBMonotonic > validationMonotonic || !Number.isSafeInteger(decisionIssuedAt) || decisionIssuedAt > validationNow || validationNow - decisionIssuedAt > OPERATOR_MAX_DELAY_MS || decisionIssuedMonotonic > validationMonotonic || decisionIssuedAt > gateBWall || decisionIssuedMonotonic > gateBMonotonic) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B clock or operator decision is future, stale, or not ordered against trusted current time')
   const conclusionRows = conclusions(root)
   validateCurationClock(root, conclusionRows)
   const supportSha256s = validateConclusionSupport(root, true)

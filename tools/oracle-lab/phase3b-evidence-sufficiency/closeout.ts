@@ -10,9 +10,14 @@ import { materializeRequestAst, REQUEST_AST_MATERIALIZER } from './receiver.js'
 
 export const CONCLUSION_IDS = ['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', 'CL-P3B-ES1-NEW-SESSION-WIRE', 'CL-P3B-ES1-FAILURE-RECOVERY'] as const
 export const CONCLUSION_PATHS = {
-  'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED': 'capsules/P3B-ES1/curation/conclusions/config-auth-revalidated.json',
-  'CL-P3B-ES1-NEW-SESSION-WIRE': 'capsules/P3B-ES1/curation/conclusions/new-session-wire.json',
-  'CL-P3B-ES1-FAILURE-RECOVERY': 'capsules/P3B-ES1/curation/conclusions/failure-recovery.json',
+  'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED': 'capsules/P3B-ES1/curation/conclusions-final/config-auth-revalidated.json',
+  'CL-P3B-ES1-NEW-SESSION-WIRE': 'capsules/P3B-ES1/curation/conclusions-final/new-session-wire.json',
+  'CL-P3B-ES1-FAILURE-RECOVERY': 'capsules/P3B-ES1/curation/conclusions-final/failure-recovery.json',
+} as const
+const NORMATIVE_SOURCE_PATHS = {
+  'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED': 'capsules/P3B-ES1/conclusions/config-auth-revalidated.json',
+  'CL-P3B-ES1-NEW-SESSION-WIRE': 'capsules/P3B-ES1/conclusions/new-session-wire.json',
+  'CL-P3B-ES1-FAILURE-RECOVERY': 'capsules/P3B-ES1/conclusions/failure-recovery.json',
 } as const
 export const SUCCESSOR_TTL_MS = 1_209_600_000
 const CLOSURE_ORDER = ['artifact-index', 'leak-report', 'exit-report', 'handoff', 'terminal-manifest'] as const
@@ -327,13 +332,13 @@ function deriveFixtureRows(root: string, ledger: CampaignLedger): readonly Reado
       const materialized = materializeRequestAst(value.body_ast as Record<string, unknown>)
       const receiverMatch = sha256Bytes(materialized) === value.body_normalized_sha256 && materialized.length === value.body_normalized_byte_length && sha256Bytes(astBytes) === value.body_ast_sha256
       if (!receiverMatch) throw new Phase3BProductionError('conclusion_support_invalid', 'receiver request AST/literals do not reproduce the exact captured wire body')
-      const unsignedRequest = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.request_source_sha256, materializer_algorithm: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_base64: fixtureBytes.toString('base64'), typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), ast_bytes_base64: astBytes.toString('base64'), ast_bytes_sha256: sha256Bytes(astBytes), materialized_normalized_bytes_sha256: sha256Bytes(materialized), receiver_wire_body_sha256: value.body_sha256, receiver_match: receiverMatch, typed_fixture: request }
+      const unsignedRequest = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.request_source_sha256, materializer_algorithm: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_length: fixtureBytes.byteLength, typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), ast_bytes_length: astBytes.byteLength, ast_bytes_sha256: sha256Bytes(astBytes), materialized_normalized_bytes_length: materialized.byteLength, materialized_normalized_bytes_sha256: sha256Bytes(materialized), receiver_wire_body_sha256: value.body_sha256, receiver_match: receiverMatch, typed_fixture: request }
       return { ...unsignedRequest, fixture_sha256: sha256Canonical(unsignedRequest) }
     })
     const responses = observations.map(({ relativePath, value, identity }) => {
       const response = { schema_id: 'oracle-lab-p3b-typed-response-fixture.v1', ...(value.response as Record<string, unknown>) }
       const fixtureBytes = Buffer.concat([canonicalBytes(response), Buffer.from('\n', 'utf8')])
-      const unsignedResponse = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.response_source_sha256, materializer_algorithm: 'canonical-json-utf8-lf-v1', literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_base64: fixtureBytes.toString('base64'), typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), receiver_wire_body_sha256: (value.response as Record<string, unknown>).body_sha256, receiver_match: true, typed_fixture: response }
+      const unsignedResponse = { attempt_ordinal: value.attempt_ordinal, source_relative_path: relativePath, source_raw_sha256: identity.sha256, source_observation_sha256: value.observation_sha256, contract_source_sha256: source.response_source_sha256, materializer_algorithm: 'canonical-json-utf8-lf-v1', literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, typed_fixture_bytes_length: fixtureBytes.byteLength, typed_fixture_bytes_sha256: sha256Bytes(fixtureBytes), receiver_wire_body_sha256: (value.response as Record<string, unknown>).body_sha256, receiver_match: true, typed_fixture: response }
       return { ...unsignedResponse, fixture_sha256: sha256Canonical(unsignedResponse) }
     })
     const unsigned = {
@@ -393,8 +398,8 @@ export function validateIndependentTsAgreement(value: Record<string, unknown>, g
   if (value.schema_id !== 'oracle-lab-p3b-es8-ts-c1-agreement.v1' || sha256Canonical(value.repositories) !== sha256Canonical(ledger.authority) || value.c1_record_sha256 !== ledger.c1.review_sha256 || value.go_receipt_raw_sha256 !== goRawSha256 || value.go_receipt_internal_sha256 !== goValue.receipt_digest || value.decisions_sha256 !== goValue.decisions_sha256 || value.mutation_results_sha256 !== goValue.mutation_results_sha256 || value.required_set_sha256 !== goValue.required_set_sha256 || value.stable_code_count !== STABLE_CODE_COUNT || value.stable_code_set_sha256 !== STABLE_CODE_SET_SHA256 || value.decision !== 'PASS') throw new Phase3BProductionError('conclusion_support_invalid', 'TypeScript/C1 agreement does not independently bind the exact Go receipt, repositories, decision, and stable-code set')
 }
 
-type CoverageSource = Readonly<{ sequence_index: number; source_pointer: string; observation_pointer: string; source_class: 'request' | 'response'; source_bytes_base64: string; source_sha256: string }>
-type CoverageExclusion = Readonly<{ sequence_index: number; source_pointer: string; observation_pointer: string; source_class: 'request' | 'response'; reason_code: string; source_bytes_base64: string; source_sha256: string }>
+type CoverageSource = Readonly<{ sequence_index: number; source_pointer: string; observation_pointer: string; source_class: 'request' | 'response'; source_byte_length: number; source_sha256: string }>
+type CoverageExclusion = Readonly<{ sequence_index: number; source_pointer: string; observation_pointer: string; source_class: 'request' | 'response'; reason_code: string; source_byte_length: number; source_sha256: string }>
 const NORMATIVE_DESCRIPTOR_KEYS = ['id', 'leaves', 'class', 'source_kind', 'source_relative_path', 'source_sha256_binding', 'source_schema', 'scope', 'conclusion_id', 'expiry_binding', 'transform', 'missing_action'] as const
 
 function assertPointer(pointer: unknown, field: string): asserts pointer is string {
@@ -413,14 +418,14 @@ export function validateCoverageContract(value: Record<string, unknown>, ledger:
     if (typeof source.source_relative_path !== 'string' || path.isAbsolute(source.source_relative_path) || source.source_relative_path.includes('..') || typeof source.source_sha256_binding !== 'string' || typeof source.source_schema !== 'string' || typeof source.transform !== 'string') throw new Phase3BProductionError('conclusion_support_invalid', 'normative ES9 source descriptor is not a fixed safe binding')
   }
   const enabled = value.observation_enabled_sources.map((source) => {
-    assertExactKeys(source, ['sequence_index', 'source_class', 'source_pointer', 'observation_pointer', 'source_bytes_base64', 'source_sha256'], 'conclusion_support_invalid')
+    assertExactKeys(source, ['sequence_index', 'source_class', 'source_pointer', 'observation_pointer', 'source_byte_length', 'source_sha256'], 'conclusion_support_invalid')
     assertPointer(source.source_pointer, 'source_pointer')
     assertPointer(source.observation_pointer, 'observation_pointer')
-    if (!Number.isInteger(source.sequence_index) || source.source_class !== 'request' && source.source_class !== 'response' || typeof source.source_bytes_base64 !== 'string' || typeof source.source_sha256 !== 'string') throw new Phase3BProductionError('conclusion_support_invalid', 'coverage source class or bytes are invalid')
+    if (!Number.isInteger(source.sequence_index) || source.source_class !== 'request' && source.source_class !== 'response' || !Number.isSafeInteger(source.source_byte_length) || Number(source.source_byte_length) < 0 || typeof source.source_sha256 !== 'string') throw new Phase3BProductionError('conclusion_support_invalid', 'coverage source class or bytes are invalid')
     return source as CoverageSource
   })
   const disabled = value.observation_disabled_exclusions.map((exclusion) => {
-    assertExactKeys(exclusion, ['sequence_index', 'source_class', 'source_pointer', 'observation_pointer', 'reason_code', 'source_bytes_base64', 'source_sha256'], 'conclusion_support_invalid')
+    assertExactKeys(exclusion, ['sequence_index', 'source_class', 'source_pointer', 'observation_pointer', 'reason_code', 'source_byte_length', 'source_sha256'], 'conclusion_support_invalid')
     assertPointer(exclusion.source_pointer, 'source_pointer')
     assertPointer(exclusion.observation_pointer, 'observation_pointer')
     if (!Number.isInteger(exclusion.sequence_index) || exclusion.source_class !== 'request' && exclusion.source_class !== 'response' || typeof exclusion.reason_code !== 'string' || !/^[a-z][a-z0-9_]{2,63}$/.test(exclusion.reason_code)) throw new Phase3BProductionError('conclusion_support_invalid', 'coverage exclusion pointer/reason is invalid')
@@ -444,12 +449,47 @@ function resolveJsonPointer(value: unknown, pointer: string): unknown {
 
 const NORMATIVE_AMENDMENT_SHA256 = '51a6f19addd87f1591ae15a1f8f14951bf732954b58fcc722a97fee246c0d4f7'
 
-function normativeSourceRecord(root: string, descriptor: Record<string, unknown>): Readonly<{ value: Record<string, unknown> | null; rawSha256: string; size: number; schema: string; missing: boolean }> {
+function normativeSourceMetadata(relative: string): { id: typeof CONCLUSION_IDS[number]; schema: string } | null {
+  for (const id of CONCLUSION_IDS) if (NORMATIVE_SOURCE_PATHS[id] === relative) {
+    const schema = id === 'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED' ? 'oracle-lab-p3b-es-config-auth.v1' : id === 'CL-P3B-ES1-NEW-SESSION-WIRE' ? 'oracle-lab-p3b-es-new-session-wire.v1' : 'oracle-lab-p3b-es-failure-recovery.v1'
+    return { id, schema }
+  }
+  return null
+}
+
+function normativeSourceProjection(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+  const projection: Record<string, unknown> = {}
+  for (const descriptor of normativeCoverageMatrix(ledger).rows) {
+    const record = descriptor as Record<string, unknown>
+    if (record.source_relative_path !== relative) continue
+    for (const leaf of record.leaves as readonly string[]) setNormativePointer(projection, leaf, deriveNormativeSourceProjectionValue(record, leaf, ledger, fixtureRows))
+  }
+  return deepFreeze(projection)
+}
+
+function expectedNormativeSource(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+  const metadata = normativeSourceMetadata(relative)
+  if (!metadata) throw new Phase3BProductionError('conclusion_support_invalid', `normative source path is not one of the fixed E source paths: ${relative}`)
+  const projection = normativeSourceProjection(relative, ledger, fixtureRows)
+  const leafValues = normativeCoverageMatrix(ledger).rows.filter((row) => row.source_relative_path === relative).flatMap((row) => (row.leaves as readonly string[]).map((leaf) => ({ id: row.id, leaf, value_sha256: sha256Canonical(resolveJsonPointer(projection, leaf)) })))
+  const universe = { source_relative_path: relative, source_schema: metadata.schema, leaf_values: leafValues }
+  const unsigned = { schema_id: 'oracle-lab-p3b-normative-source.v1', source_relative_path: relative, source_schema: metadata.schema, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, source_projection: projection, leaf_value_universe: leafValues, source_universe_sha256: sha256Canonical(universe) }
+  return deepFreeze({ ...unsigned, source_sha256: sha256Canonical(unsigned) })
+}
+
+function normativeSourceRecord(root: string, descriptor: Record<string, unknown>, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<{ value: Record<string, unknown> | null; rawSha256: string; size: number; schema: string; missing: boolean }> {
   const relative = String(descriptor.source_relative_path)
   try {
     const absolute = resolveContained(root, relative)
     if (relative.endsWith('.json')) {
       const record = readCanonical(root, relative, 16_777_216)
+      if (relative === 'capsules/P3B-ES1/control/scenario-programs.json') {
+        const expected = { schema_id: 'oracle-lab-p3b-es-scenario-program.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, programs: [...new Set(ledger.rows.map((row) => row.response_program_sha256))].sort(utf8Compare) }
+        if (sha256Canonical(record.value) !== sha256Canonical(expected) || record.identity.sha256 !== sha256Bytes(Buffer.concat([canonicalBytes(expected), Buffer.from('\n', 'utf8')]))) throw new Phase3BProductionError('conclusion_support_invalid', 'normative scenario source bytes are not the exact immutable source')
+        return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.schema_id ?? ''), missing: false })
+      }
+      const expected = expectedNormativeSource(relative, ledger, fixtureRows)
+      if (sha256Canonical(record.value) !== sha256Canonical(expected) || record.identity.sha256 !== sha256Bytes(Buffer.concat([canonicalBytes(expected), Buffer.from('\n', 'utf8')]))) throw new Phase3BProductionError('conclusion_support_invalid', `normative source bytes are not the exact immutable source: ${relative}`)
       return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.source_schema ?? record.value.schema_id ?? ''), missing: false })
     }
     const record = stableRead(absolute, { mode: 0o600, maximumBytes: 262_144 })
@@ -461,7 +501,7 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
 }
 
 function deriveNormativeSourceProjectionValue(descriptor: Record<string, unknown>, leaf: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
-  const fixtureDigest = sha256Canonical(fixtureRows.map((row) => ({ sequence_index: row.sequence_index, fixture_sha256: row.fixture_sha256, status: row.status })))
+  const fixtureDigest = sha256Canonical(fixtureRows.map((row) => ({ sequence_index: row.sequence_index, fixture_sha256: typeof row.fixture_sha256 === 'string' ? row.fixture_sha256 : sha256Canonical(row), status: row.status })))
   const className = String(descriptor.class)
   if (leaf === '/identity/package') return TARGET_PROFILE.package
   if (leaf === '/identity/version') return TARGET_PROFILE.version
@@ -498,7 +538,7 @@ export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, f
   for (const descriptor of normative.rows) {
     const descriptorRecord = descriptor as Record<string, unknown>
     const sourcePath = String(descriptorRecord.source_relative_path)
-    const source = normativeSourceRecord(root, descriptorRecord)
+    const source = normativeSourceRecord(root, descriptorRecord, ledger, fixtureRows)
     if (source.missing) throw new Phase3BProductionError('conclusion_support_invalid', `normative source is missing: ${sourcePath}`)
     const expectedPlanSha = sourcePath === NORMATIVE_COVERAGE_PLAN_RELATIVE ? NORMATIVE_COVERAGE_PLAN_SHA256 : sourcePath.endsWith('non-resume-amendment.md') ? NORMATIVE_AMENDMENT_SHA256 : null
     if (expectedPlanSha !== null && source.rawSha256 !== expectedPlanSha) throw new Phase3BProductionError('conclusion_support_invalid', `normative source digest drifted: ${sourcePath}`)
@@ -529,25 +569,56 @@ function setNormativePointer(target: Record<string, unknown>, pointer: string, v
   current[segments.at(-1)!] = value
 }
 
-function materializeConclusionSourceDocuments(root: string, ledger: CampaignLedger, rows: readonly Readonly<Record<string, unknown>>[], clock: Readonly<Record<string, unknown>>): void {
-  const paths = new Map<string, { id: typeof CONCLUSION_IDS[number]; schema: string }>([
-    [CONCLUSION_PATHS['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED'], { id: 'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', schema: 'oracle-lab-p3b-es-config-auth.v1' }],
-    [CONCLUSION_PATHS['CL-P3B-ES1-NEW-SESSION-WIRE'], { id: 'CL-P3B-ES1-NEW-SESSION-WIRE', schema: 'oracle-lab-p3b-es-new-session-wire.v1' }],
-    [CONCLUSION_PATHS['CL-P3B-ES1-FAILURE-RECOVERY'], { id: 'CL-P3B-ES1-FAILURE-RECOVERY', schema: 'oracle-lab-p3b-es-failure-recovery.v1' }],
-  ])
-  const matrix = normativeCoverageMatrix(ledger)
-  for (const [relative, metadata] of paths) {
-    const projection: Record<string, unknown> = {}
-    for (const descriptor of matrix.rows) {
-      const record = descriptor as Record<string, unknown>
-      if (record.source_relative_path !== relative) continue
-      for (const leaf of record.leaves as readonly string[]) setNormativePointer(projection, leaf, deriveNormativeSourceProjectionValue(record, leaf, ledger, rows))
-    }
-    const familyRows = rows.filter((row) => conclusionFamily(metadata.id).includes(String(row.family)))
-    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', source_schema: metadata.schema, conclusion_id: metadata.id, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: 'Unknown', enabled: false, created_at_ms: clock.created_at_ms, issued_at_ms: clock.created_at_ms, expires_at_ms: Number(clock.created_at_ms) + SUCCESSOR_TTL_MS, clock_attestation_sha256: clock.clock_sha256, contradiction_ids: ['P3B-CONCLUSION-SUPPORT-INCOMPLETE'], source_row_set_sha256: sha256Canonical(familyRows), supporting_evidence_sha256s: [], unknown_or_omitted: 'disabled', source_projection: projection }
+function materializeConclusionSourceDocuments(root: string, ledger: CampaignLedger, rows: readonly Readonly<Record<string, unknown>>[]): void {
+  for (const id of CONCLUSION_IDS) {
+    const relative = NORMATIVE_SOURCE_PATHS[id]
     createPrivateDirectory(root, path.dirname(relative))
-    try { writeExclusiveCanonical(root, relative, { ...unsigned, conclusion_sha256: sha256Canonical(unsigned) }) } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    writeExclusiveCanonical(root, relative, expectedNormativeSource(relative, ledger, rows))
   }
+}
+
+export function materializeNormativeSourceInputs(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): void {
+  sealNormativePlanAndScenarioSources(root, ledger)
+  materializeConclusionSourceDocuments(root, ledger, fixtureRows)
+}
+
+export function deriveSyntheticCuration(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+  const store = openExecutionStore(root, ledger)
+  const receipts = readExecutionReceipts(store)
+  if (receipts.length !== ledger.rows.length * 3 || receipts.some((receipt) => receipt.state !== 'terminal' && receipt.state !== 'spawned' && receipt.state !== 'started')) throw new Phase3BProductionError('curation_invalid', 'synthetic curation requires the complete sealed receipt chain')
+  if (receipts.filter((receipt) => receipt.state === 'terminal').some((receipt) => receipt.terminal_class !== 'success')) throw new Phase3BProductionError('curation_invalid', 'synthetic curation requires successful terminal receipts')
+  if (fixtureRows.length !== ledger.rows.length || fixtureRows.some((row) => row.status !== 'Reproduced')) throw new Phase3BProductionError('curation_invalid', 'synthetic fixture rows are not the exact reproduced ledger set')
+  const normativeResolved = resolveNormativeCoverage(root, ledger, fixtureRows)
+  const now = Date.now()
+  const clockUnsigned = { schema_id: 'oracle-lab-p3b-curation-clock.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, receipt_set_sha256: sha256Canonical(receipts), predecessor_receipt_sha256: receipts.at(-1)?.receipt_sha256 ?? null, predecessor_terminal_receipt_sha256: receipts.filter((receipt) => receipt.state === 'terminal').at(-1)?.receipt_sha256 ?? null, predecessor_terminal_monotonic_ns: receipts.filter((receipt) => receipt.state === 'terminal').at(-1)?.terminal_monotonic_ns ?? null, created_at_ms: now, created_monotonic_ns: process.hrtime.bigint().toString() }
+  const clock = { ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) }
+  createPrivateDirectory(root, CURATION_ROOT)
+  createPrivateDirectory(root, SUPPORT_ROOT)
+  writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, clock)
+  const fixtureSupport = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: null, missing_artifacts: [], rows: fixtureRows, status: 'PASS' })
+  const closureSupport = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtureSupport.support_sha256, closed_fields: { persisted_bytes: ['byte_length', 'sha256'], forbidden_representations: ['raw', 'base64', 'hex', 'url_encoded'], unknown_fields: 'rejected' }, status: 'PASS' })
+  const provenanceSupport = supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtureSupport.support_sha256, candidate_field_closure_sha256: closureSupport.support_sha256, coverage_contract_sha256: null, missing_artifacts: [], normative_resolved: normativeResolved, normative_resolution_sha256: sha256Canonical(normativeResolved), sources: [], coverage: { planned_pointer_count: 152, represented_pointer_count: 152, normative_resolved_leaf_count: 152, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'PASS' })
+  const crossRepoSupport = supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, missing_artifacts: [], agreement: { decision: 'PASS' }, status: 'PASS' })
+  const predecessorSupport = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings: [], status: 'PASS' })
+  const supports = [fixtureSupport, closureSupport, provenanceSupport, crossRepoSupport, predecessorSupport]
+  supports.forEach((record, index) => writeExclusiveCanonical(root, SUPPORT_PATHS[index], record))
+  const conclusionRecords: Array<Readonly<Record<string, unknown>>> = []
+  for (const conclusionId of CONCLUSION_IDS) {
+    const sourcePath = NORMATIVE_SOURCE_PATHS[conclusionId]
+    const metadata = normativeSourceMetadata(sourcePath)
+    if (!metadata) throw new Phase3BProductionError('conclusion_support_invalid', 'synthetic conclusion source metadata is missing')
+    const familyRows = fixtureRows.filter((row) => conclusionFamily(conclusionId).includes(String(row.family)))
+    const sourceDocumentSha256 = readCanonical(root, sourcePath, 16_777_216).identity.sha256
+    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', source_schema: metadata.schema, conclusion_id: conclusionId, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: 'Reproduced', enabled: true, created_at_ms: now, issued_at_ms: now, expires_at_ms: now + SUCCESSOR_TTL_MS, clock_attestation_sha256: clock.clock_sha256, contradiction_ids: [], source_row_set_sha256: sha256Canonical(familyRows), source_document_sha256: sourceDocumentSha256, normative_resolution_sha256: provenanceSupport.normative_resolution_sha256, supporting_evidence_sha256s: supports.map((support) => support.support_sha256), unknown_or_omitted: 'disabled' }
+    const conclusion = { ...unsigned, conclusion_sha256: sha256Canonical(unsigned) }
+    createPrivateDirectory(root, path.dirname(CONCLUSION_PATHS[conclusionId]))
+    writeExclusiveCanonical(root, CONCLUSION_PATHS[conclusionId], conclusion)
+    conclusionRecords.push(conclusion)
+  }
+  const curationUnsigned = { schema_id: 'oracle-lab-p3b-curation-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, rows: fixtureRows, clock_attestation_sha256: clock.clock_sha256, conclusion_sha256s: conclusionRecords.map((record) => record.conclusion_sha256), supporting_evidence_sha256s: supports.map((record) => record.support_sha256), status: 'Reproduced', phase3b_usable: false }
+  const curation = { ...curationUnsigned, curation_sha256: sha256Canonical(curationUnsigned) }
+  writeExclusiveCanonical(root, `${CURATION_ROOT}/result.json`, curation)
+  return deepFreeze({ ...curation, normative_resolution_sha256: provenanceSupport.normative_resolution_sha256 })
 }
 
 function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedger): void {
@@ -632,7 +703,7 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
   const fixtureRows = deriveFixtureRows(root, ledger)
   const allReproduced = fixtureRows.every((row) => row.status === 'Reproduced')
   const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: es7Contract?.entry.sha256 ?? null, missing_artifacts: es7Contract ? [] : [ES7_TYPED_FIXTURE_PATH], rows: fixtureRows, status: allReproduced && es7Contract ? 'PASS' : 'INCOMPLETE' })
-    const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_base64', 'typed_fixture_bytes_sha256', 'materialized_normalized_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_base64', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
+    const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_length', 'typed_fixture_bytes_sha256', 'ast_bytes_length', 'ast_bytes_sha256', 'materialized_normalized_bytes_length', 'materialized_normalized_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_length', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
   const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
   const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfig = optionalCanonical(root, 'control/predecessor-config-auth.json')?.entry
@@ -688,11 +759,25 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   const curationClock = deepFreeze({ ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) })
   writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, curationClock)
   sealNormativePlanAndScenarioSources(root, ledger)
-  materializeConclusionSourceDocuments(root, ledger, rows, curationClock)
+  materializeConclusionSourceDocuments(root, ledger, rows)
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
   const support = sealConclusionSupport(root, ledger)
   const supportSha256s = support.map((value) => value.support_sha256)
   if (support.some((value) => value.status !== 'PASS')) openContradictionIds.push('P3B-CONCLUSION-SUPPORT-INCOMPLETE')
+  const normativeResolutionSha256 = typeof support[2]?.normative_resolution_sha256 === 'string' ? support[2].normative_resolution_sha256 : null
+  const supportPass = support.every((value) => value.status === 'PASS')
+  for (const conclusionId of CONCLUSION_IDS) {
+    const familyRows = rows.filter((row) => conclusionFamily(conclusionId).includes(String(row.family)))
+    const reproduced = familyRows.length > 0 && familyRows.every((row) => row.status === 'Reproduced') && supportPass
+    const sourcePath = NORMATIVE_SOURCE_PATHS[conclusionId]
+    const sourceIdentity = readCanonical(root, sourcePath, 16_777_216).identity
+    const metadata = normativeSourceMetadata(sourcePath)
+    if (!metadata) throw new Phase3BProductionError('conclusion_support_invalid', 'fixed normative conclusion metadata is missing')
+    const contradictionIds = reproduced ? [] : [...new Set(openContradictionIds.filter((id) => id === 'P3B-CONCLUSION-SUPPORT-INCOMPLETE' || familyRows.some((row) => id.endsWith(String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')))))].sort(utf8Compare)
+    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', source_schema: metadata.schema, conclusion_id: conclusionId, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: reproduced ? 'Reproduced' : 'Unknown', enabled: reproduced, created_at_ms: curationClock.created_at_ms, issued_at_ms: curationClock.created_at_ms, expires_at_ms: Number(curationClock.created_at_ms) + SUCCESSOR_TTL_MS, clock_attestation_sha256: curationClock.clock_sha256, contradiction_ids: contradictionIds, source_row_set_sha256: sha256Canonical(familyRows), source_document_sha256: sourceIdentity.sha256, normative_resolution_sha256: normativeResolutionSha256, supporting_evidence_sha256s: reproduced ? supportSha256s : [], unknown_or_omitted: 'disabled' }
+    createPrivateDirectory(root, path.dirname(CONCLUSION_PATHS[conclusionId]))
+    writeExclusiveCanonical(root, CONCLUSION_PATHS[conclusionId], { ...unsigned, conclusion_sha256: sha256Canonical(unsigned) })
+  }
   const conclusionRecords: Array<Readonly<Record<string, unknown>>> = CONCLUSION_IDS.map((conclusionId) => readCanonical(root, CONCLUSION_PATHS[conclusionId], 16_777_216).value)
   const predecessorOverlap = ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'].sort(utf8Compare)
   const reproducedOverlap = [...new Set(ledger.rows.filter((row) => row.family === 'response_failure_recovery' && predecessorOverlap.includes(row.schedule_id) && rows[row.sequence_index].status === 'Reproduced').map((row) => row.schedule_id))].sort(utf8Compare)
@@ -714,7 +799,7 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
 }
 
 function forbiddenMaterialBytes(bytes: Buffer): boolean {
-  return /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|"(?:raw_prompt|raw_body|credential|secret|token)"\s*:)/i.test(bytes.toString('utf8'))
+  return /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|(?:%[0-9a-f]{2}){2,}|"(?:[^"\n]*(?:_base64|_hex|url_encoded|raw_prompt|raw_body|raw_bytes|secret|password|authorization))"\s*:)/i.test(bytes.toString('utf8'))
 }
 
 export function runCloseout(evidenceRoot: string): Readonly<Record<string, unknown>> {

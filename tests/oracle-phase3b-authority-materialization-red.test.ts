@@ -192,8 +192,8 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
   assert.equal(contract.rows.length, 340)
   assert.match(contract.rows[0].request_source_sha256, /^[a-f0-9]{64}$/)
   assert.match(contract.rows[0].response_source_sha256, /^[a-f0-9]{64}$/)
-  assert.ok(typeof contract.rows[0].request_source_base64 === 'string' && contract.rows[0].request_source_base64.length > 0)
-  assert.ok(typeof contract.rows[0].response_source_base64 === 'string' && contract.rows[0].response_source_base64.length > 0)
+  assert.ok(Number.isSafeInteger(contract.rows[0].request_source_byte_length) && contract.rows[0].request_source_byte_length > 0)
+  assert.ok(Number.isSafeInteger(contract.rows[0].response_source_byte_length) && contract.rows[0].response_source_byte_length > 0)
   assert.doesNotThrow(() => validateTypedFixtureContract(contract, ledger))
   const tamperedUnsigned: Record<string, any> = { ...contract, literal_table_sha256: 'f'.repeat(64) }
   delete tamperedUnsigned.contract_sha256
