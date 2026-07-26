@@ -13,6 +13,12 @@ import {
   CROSS_REPO_RECORD_SCHEMA_PROJECTION,
   CrossRepoContractError,
   DIAGNOSTIC_FORBIDDEN_KEYS,
+  FROZEN_DECISIONS_SHA256,
+  FROZEN_MUTATION_CASE_IDS,
+  FROZEN_MUTATION_RESULTS_SHA256,
+  FROZEN_REQUIRED_SET_SHA256,
+  FROZEN_SUB_EXECUTION_DECISIONS_SHA256,
+  FROZEN_SUB_EXECUTION_MUTATIONS_SHA256,
   SUB_TEST_ARGS,
   buildCrossRepoRecord,
   checkCrossRepoContract,
@@ -66,6 +72,7 @@ test('joint Phase 2 contract gate passes the real clean pair', () => {
   assert.equal(result.mutationRows, 1)
   assert.equal(result.commandsRun, 1)
   assert.equal(result.stableCodeSetDigest, 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c')
+  assert.match(result.subReceiptDigest ?? '', /^[0-9a-f]{64}$/)
 })
 
 test('joint gate rejects mirror, schema-range, and decision drift before commands', () => {
@@ -89,6 +96,21 @@ test('joint gate rejects mirror, schema-range, and decision drift before command
   writeFileSync(interfacePath, JSON.stringify(corpus))
   refreshIndex(decision)
   expectCode(() => checkCrossRepoContract({ ...decision, runCommands: false }), 'contract_file_digest_mismatch')
+})
+
+test('mutation identities and their exact source bytes are frozen', () => {
+  for (const file of ['mutation-corpus.json', 'source-manifest.json', 'synthetic/control.json']) {
+    const fixture = fixtureCopy()
+    const target = path.join(fixture.sub2apiRoot, 'backend/internal/oracleevidence/testdata/rebaseline/v1', file)
+    if (file === 'mutation-corpus.json') {
+      const corpus = JSON.parse(readFileSync(target, 'utf8')) as { cases: Array<{ case_id: string }> }
+      corpus.cases[0].case_id = 'renamed-positive-admission-noop'
+      writeFileSync(target, JSON.stringify(corpus))
+    } else {
+      writeFileSync(target, `${readFileSync(target, 'utf8')} `)
+    }
+    expectCode(() => checkCrossRepoContract({ ...fixture, runCommands: false }), 'mutation_source_invalid')
+  }
 })
 
 const recordInput = {
@@ -144,11 +166,75 @@ test('schema, constraint, DAG, diagnostic, and result mutations fail closed', ()
   assert.throws(() => validateCrossRepoRecord(rebind(leak), ccGatewayRoot, sub2apiRoot), (error: unknown) => error instanceof CrossRepoContractError && error.code === 'leak_detected')
 })
 
+test('both selection branches and every Stage1B negative fail closed', () => {
+  const artifact = Buffer.from('{"decision":"synthetic-controller-override"}\n')
+  const override = buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, {
+    ...recordInput,
+    selectionOverride: { artifact, controllerId: 'controller:master', taskId: 'task:boundary-a', issuedAtMs: recordInput.issuedAtMs },
+  })
+  assert.equal(validateCrossRepoRecord(encodeCrossRepoRecord(override), ccGatewayRoot, sub2apiRoot, { selectionOverrideArtifact: artifact }).record_digest, override.record_digest)
+  expectCode(() => validateCrossRepoRecord(encodeCrossRepoRecord(override), ccGatewayRoot, sub2apiRoot), 'contract_schema_invalid')
+  expectCode(() => validateCrossRepoRecord(encodeCrossRepoRecord(override), ccGatewayRoot, sub2apiRoot, { selectionOverrideArtifact: Buffer.from('wrong') }), 'cross_repo_binding_mismatch')
+
+  const mutations: Array<(record: Record<string, unknown>) => void> = [
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).commit = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).tree = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).go_mod_sha256 = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).go_sum_sha256 = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).predecessor_sha256 = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).selected_local_ref = 'refs/heads/main' },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).selection = { mode: 'total_controller_local_override', selection_override_sha256: null, selection_override_controller_id: 'controller:master', selection_override_task_id: 'task:boundary-a', selection_override_issued_at_ms: recordInput.issuedAtMs, selection_override_decision: 'authorize_refs/heads/codex/native-search-gateway_at_3ac410ea02edc53c3925f28eddcbc22b51c0a137' } },
+    (record) => { (((record.authority as Record<string, unknown>).sub as Record<string, unknown>).selection as Record<string, unknown>).selection_override_sha256 = 'a'.repeat(64) },
+    (record) => { ((record.authority as Record<string, unknown>).sub as Record<string, unknown>).unexpected = true },
+  ]
+  for (const mutate of mutations) {
+    const record = structuredClone(buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, recordInput)) as Record<string, unknown>
+    mutate(record)
+    expectCode(() => validateCrossRepoRecord(rebind(record), ccGatewayRoot, sub2apiRoot), 'contract_schema_invalid')
+  }
+})
+
+test('nested closed schemas and bounded leak/path families fail without echoing material', () => {
+  const nestedMutations: Array<(record: Record<string, unknown>) => void> = [
+    (record) => { ((record.authority as Record<string, unknown>).cc as Record<string, unknown>).unexpected = true },
+    (record) => { (((record.bundle as Record<string, unknown>).files as Array<Record<string, unknown>>)[0]).unexpected = true },
+    (record) => { (((record.commit_dag as Record<string, unknown>).nodes as Array<Record<string, unknown>>)[0]).unexpected = true },
+    (record) => { (((record.result as Record<string, unknown>).case_rows as Array<Record<string, unknown>>)[0]).unexpected = true },
+    (record) => { ((record.review as Record<string, unknown>).sub as Record<string, unknown>).unexpected = true },
+  ]
+  for (const mutate of nestedMutations) {
+    const record = structuredClone(buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, recordInput)) as Record<string, unknown>
+    mutate(record)
+    expectCode(() => validateCrossRepoRecord(rebind(record), ccGatewayRoot, sub2apiRoot), 'contract_schema_invalid')
+  }
+
+  const leaks = [
+    ['note', 'prefix Bearer synthetic-secret'], ['note', 'x Basic dXNlcjpwYXNz'],
+    ['note', '-----BEGIN RSA PRIVATE KEY-----'], ['note', 'api_key=synthetic-secret'],
+    ['note', 'task:/Users/synthetic/review'], ['note', 'prefix /home/synthetic/review'],
+    ['note', 'prefix /private/tmp/review'], ['note', 'prefix /var/folders/review'],
+    ['note', 'prefix C:\\synthetic\\review'], ['note', 'prefix \\\\server\\share\\review'],
+    ['prompt', 'synthetic material'], ['session-id', 'synthetic-session'],
+  ] as const
+  for (const [key, value] of leaks) {
+    const record = structuredClone(buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, recordInput)) as Record<string, unknown>
+    record[key] = value
+    assert.throws(() => validateCrossRepoRecord(rebind(record), ccGatewayRoot, sub2apiRoot), (error: unknown) => {
+      assert.ok(error instanceof CrossRepoContractError)
+      assert.equal(String(error).includes('synthetic-secret'), false)
+      return error.code === 'leak_detected' || error.code === 'authority_diagnostic_promotion'
+    })
+  }
+})
+
 test('frozen projection and Sub command contain no service or broad selectors', () => {
-  assert.deepEqual(SUB_TEST_ARGS, ['test', './internal/oracleevidence', '-run', '^TestOracleContract(Scaffold|StrictJSON|JCS|Normalization|CBOR|Schema|Admission|ManifestAuthority|Interface|Replay|Sidecar|Mutation|CrossRepo)$', '-count=1'])
+  assert.deepEqual(SUB_TEST_ARGS, ['test', './internal/oracleevidence', '-run', '^TestOracleContract(Scaffold|StrictJSON|JCS|Normalization|CBOR|Schema|Admission|ManifestAuthority|Interface|Replay|Sidecar|Mutation|CrossRepo|Receipt)$', '-count=1'])
   assert.equal(JSON.stringify(SUB_TEST_ARGS).includes('./internal/service'), false)
   assert.equal(JSON.stringify(SUB_TEST_ARGS).includes('./...'), false)
   assert.equal(CROSS_REPO_RECORD_SCHEMA_PROJECTION.mirror_root, 'backend/internal/oracleevidence/testdata/oracle_lab_contract/v1')
   assert.deepEqual(CROSS_REPO_RECORD_CONSTRAINTS.serial_node_order, ['C0', 'S0', 'S1', 'R1', 'I1', 'SR', 'C1', 'CR'])
   assert.deepEqual(CROSS_REPO_RECORD_CONSTRAINTS.command_ids, ['cc-focused-contract-suite-v1', 'sub-focused-oracleevidence-v1'])
+  assert.deepEqual(FROZEN_MUTATION_CASE_IDS, ['positive-admission-noop'])
+  for (const digest of [FROZEN_DECISIONS_SHA256, FROZEN_MUTATION_RESULTS_SHA256, FROZEN_REQUIRED_SET_SHA256, FROZEN_SUB_EXECUTION_DECISIONS_SHA256, FROZEN_SUB_EXECUTION_MUTATIONS_SHA256]) assert.match(digest, /^[0-9a-f]{64}$/)
+  assert.deepEqual(CROSS_REPO_RECORD_CONSTRAINTS.stage1b_negative_vectors.map((row) => row.id), ['wrong-sub-commit', 'wrong-sub-tree', 'wrong-go-mod', 'wrong-go-sum', 'wrong-predecessor-blob', 'wrong-selected-ref', 'enabled-null-override-digest', 'disabled-present-override-digest', 'unknown-sub-field'])
 })

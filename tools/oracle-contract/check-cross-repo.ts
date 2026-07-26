@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants as fsConstants, lstatSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { accessSync, constants as fsConstants, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,10 @@ import canonicalize from 'canonicalize'
 
 import {
   CC_BUNDLE_PATH,
+  CONTRACT_FILES,
+  CONTRACT_FILE_SHA256,
   PHASE1_CONTRACT_DIGEST,
+  PHASE1_CONTRACT_PATH,
   STABLE_CODE_SET_SHA256,
   SUB_BUNDLE_PATH,
   SharedContractError,
@@ -37,6 +40,7 @@ export type CrossRepoContractResult = {
   mutationResultsDigest: string
   requiredSetDigest: string
   stableCodeSetDigest: string
+  subReceiptDigest?: string
 }
 
 type JsonObject = Record<string, unknown>
@@ -51,13 +55,32 @@ export type DecisionRow = {
 
 export type CrossRepoRecord = JsonObject & { record_digest: string }
 
-export const SUB_TEST_SELECTOR = '^TestOracleContract(Scaffold|StrictJSON|JCS|Normalization|CBOR|Schema|Admission|ManifestAuthority|Interface|Replay|Sidecar|Mutation|CrossRepo)$'
+export const SUB_TEST_SELECTOR = '^TestOracleContract(Scaffold|StrictJSON|JCS|Normalization|CBOR|Schema|Admission|ManifestAuthority|Interface|Replay|Sidecar|Mutation|CrossRepo|Receipt)$'
 export const SUB_TEST_ARGS = ['test', './internal/oracleevidence', '-run', SUB_TEST_SELECTOR, '-count=1'] as const
 export const COMMAND_IDS = ['cc-focused-contract-suite-v1', 'sub-focused-oracleevidence-v1'] as const
 export const SEMANTIC_SURFACES = ['strict_json', 'jcs', 'normalization', 'cbor', 'schema', 'admission', 'authority', 'interface', 'replay', 'sidecar'] as const
 export const DIAGNOSTIC_FORBIDDEN_KEYS = [
   'absolute_worktree_path', 'db_mtime', 'db_size_bytes', 'divergence', 'edge_count', 'file_count',
   'full_remote_config_digest', 'last_indexed', 'node_count', 'remote_projection_digest', 'worktree_directory_mtime',
+] as const
+export const MUTATION_CORPUS_SHA256 = '87a7e37f07086a7536c6a3e41b7c87cb00e1f6b1e31f13047c8cccf447dc90e6'
+export const MUTATION_SOURCE_MANIFEST_SHA256 = 'd648dd801dc608cb99b68e088e8c7b6ccbd637339cffd86c0a70ef365c464d7c'
+export const MUTATION_CONTROL_SHA256 = '217ea37747bd4f42836b90b081988f51af3a1b70e62d38aa69d33abbe747af53'
+export const FROZEN_DECISIONS_SHA256 = 'a88805a573742cda40de5648cccb9735cf966d5aba32827a47f326d31477a7e4'
+export const FROZEN_MUTATION_RESULTS_SHA256 = 'b0cbf903c93378a8148e74f29564524ba9c6971f19d697c595aca3448606f797'
+export const FROZEN_REQUIRED_SET_SHA256 = 'f6eee94d9b1d80e0437474f0db65b35ce874e14edd9cf7f8314b4c38e9970d05'
+export const FROZEN_SUB_EXECUTION_DECISIONS_SHA256 = '62223a099e6dff9e96b99b4264472f6c8ab5d91c204686e0eb579a8c2585083c'
+export const FROZEN_SUB_EXECUTION_MUTATIONS_SHA256 = '0757f6827786fa5fafc73e8beebe5852819bd913f4da45017ca9cdfd63c2d5ad'
+export const FROZEN_MUTATION_CASE_IDS = ['positive-admission-noop'] as const
+export const SUB_RECEIPT_MERGE = '910a8fb3caa317409be48af31af699932be1f2a7'
+export const SUB_RECEIPT_TREE = 'e6a788c98c9b529a47e88f97ae82fb489cff15cd'
+export const SUB_RECEIPT_PARENTS = ['a4ce6e375a5b6ac46d4605bc3be2da1f9a2351a8', 'd2ff3956d3841b51c22de0db95c27dbc47378fcd'] as const
+export const SUB_RECEIPT_REQUIRED_TESTS = [
+  'TestOracleContractAdmission', 'TestOracleContractCBOR', 'TestOracleContractCrossRepo',
+  'TestOracleContractInterface', 'TestOracleContractJCS', 'TestOracleContractManifestAuthority',
+  'TestOracleContractMutation', 'TestOracleContractNormalization', 'TestOracleContractReplay',
+  'TestOracleContractScaffold', 'TestOracleContractSchema', 'TestOracleContractSidecar',
+  'TestOracleContractStrictJSON',
 ] as const
 export const SERIAL_NODE_IDS = ['C0', 'S0', 'S1', 'R1', 'I1', 'SR', 'C1', 'CR'] as const
 const SERIAL_ROLES = [
@@ -83,15 +106,48 @@ export const CROSS_REPO_RECORD_SCHEMA_PROJECTION = {
   schema_range: '1:0-0',
   lease_ms: 86_400_000,
   reviewer_model: 'gpt-5.6-sol',
+  closed_required: {
+    authority: ['cc', 'sub', 'command_id', 'reviewer_model'],
+    cc: ['repository_url', 'selected_remote_name', 'selected_remote_ref', 'selected_remote_oid', 'commit', 'tree', 'amendment_sha256'],
+    sub: ['repository_url', 'selected_local_ref', 'selected_local_oid', 'commit', 'tree', 'parent', 'ancestor', 'go_mod_sha256', 'go_sum_sha256', 'go_directive', 'predecessor_relative_path', 'predecessor_sha256', 'codegraph_config_sha256', 'codegraph_version', 'codegraph_extraction_revision', 'selection', 'sub_plan_commit', 'sub_plan_tree', 'sub_plan_sha256', 'r1_commit', 'r1_tree', 'i1_commit', 'i1_tree'],
+    bundle: ['files', 'contract_index_sha256', 'predecessor_sha256', 'schema_range', 'mirror_root', 'framing'],
+    commit_dag: ['nodes', 'edges'],
+    decision_row: ['case_id', 'allowed', 'code', 'next_state_digest', 'canonical_hex'],
+    result: ['case_rows', 'mutation_rows', 'decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'stable_code_count', 'stable_code_set_sha256', 'semantic_surfaces', 'protected_file_count', 'protected_node_count', 'egress_count', 'command_ids'],
+    review_item: ['task_id', 'model', 'artifact_sha256', 'critical', 'important', 'verdict'],
+  },
+} as const
+
+export const SUB_IMMUTABLE_BINDINGS = {
+  repository_url: 'https://github.com/Wei-Shaw/sub2api.git', selected_local_ref: 'refs/heads/codex/native-search-gateway', selected_local_oid: '3ac410ea02edc53c3925f28eddcbc22b51c0a137',
+  commit: '3ac410ea02edc53c3925f28eddcbc22b51c0a137', tree: 'f7d51fb57c64fbaf6e2db3a7a2d423a491d5788d', parent: '04e42ae0f6c556daad21ac393eb284585092e805', ancestor: 'fc0b1989d7ba9ce06ff151b17c94b50df4170a93',
+  go_mod_sha256: 'e637999a38f974c9172c8f69c8fbb9c0d727bacf257558307e97e927cbb468de', go_sum_sha256: 'd3e1fd1510b41f218136b719fdf2c4ef239b05650d3b575fb93c18f25f3dc981', go_directive: '1.26.5',
+  predecessor_relative_path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', predecessor_sha256: PHASE1_CONTRACT_DIGEST,
+  codegraph_config_sha256: 'a7f3ad7c17d655f9d2494b5b05e55ceb4ea9c7667456ff785c5f2a9291c3783a', codegraph_version: '1.1.6', codegraph_extraction_revision: 24,
 } as const
 
 export const CROSS_REPO_RECORD_CONSTRAINTS = {
+  bundle_files: CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] })),
   command_ids: COMMAND_IDS,
   diagnostic_forbidden_keys: DIAGNOSTIC_FORBIDDEN_KEYS,
   serial_node_order: SERIAL_NODE_IDS,
   serial_edges: SERIAL_NODE_IDS.slice(0, -1).map((id, index) => [id, SERIAL_NODE_IDS[index + 1]]),
   semantic_surfaces: SEMANTIC_SURFACES,
   verdict_by_review_role: { sub: 'PLAN_REVIEW_PASS', cross: 'CROSS_REPO_PASS' },
+  sub_immutable_bindings: SUB_IMMUTABLE_BINDINGS,
+  stable_code_binding: { count: 119, union_jcs_sha256: STABLE_CODE_SET_SHA256 },
+  selection_branches: {
+    remote_ref: { required: ['mode', 'selected_remote_name', 'selected_remote_url', 'selected_remote_ref', 'selected_remote_oid'], forbidden: ['selection_override_sha256', 'selection_override_controller_id', 'selection_override_task_id', 'selection_override_issued_at_ms', 'selection_override_decision'] },
+    total_controller_local_override: { required: ['mode', 'selection_override_sha256', 'selection_override_controller_id', 'selection_override_task_id', 'selection_override_issued_at_ms', 'selection_override_decision'], forbidden: ['selected_remote_name', 'selected_remote_url', 'selected_remote_ref', 'selected_remote_oid'] },
+  },
+  stage1b_negative_vectors: [
+    { id: 'wrong-sub-commit', pointer: '/authority/sub/commit' }, { id: 'wrong-sub-tree', pointer: '/authority/sub/tree' },
+    { id: 'wrong-go-mod', pointer: '/authority/sub/go_mod_sha256' }, { id: 'wrong-go-sum', pointer: '/authority/sub/go_sum_sha256' },
+    { id: 'wrong-predecessor-blob', pointer: '/authority/sub/predecessor_sha256' }, { id: 'wrong-selected-ref', pointer: '/authority/sub/selected_local_ref' },
+    { id: 'enabled-null-override-digest', pointer: '/authority/sub/selection/selection_override_sha256' },
+    { id: 'disabled-present-override-digest', pointer: '/authority/sub/selection/selection_override_sha256' },
+    { id: 'unknown-sub-field', pointer: '/authority/sub/unexpected' },
+  ],
 } as const
 
 export const DIGEST_DAG = {
@@ -138,6 +194,18 @@ function exactKeys(value: JsonObject, expected: readonly string[], label: string
   if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', `${label} has an invalid field set`)
   }
+}
+
+function schemaKeys(value: JsonObject, expected: readonly string[], label: string): void {
+  const actual = Object.keys(value).sort()
+  const wanted = [...expected].sort()
+  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
+    throw new CrossRepoContractError('contract_schema_invalid', `${label} has an invalid field set`)
+  }
+}
+
+function requireSchema(condition: boolean, label: string): void {
+  if (!condition) throw new CrossRepoContractError('contract_schema_invalid', `${label} is invalid`)
 }
 
 function readJson(file: string): unknown {
@@ -190,7 +258,9 @@ function buildDecisionRows(ccGatewayRoot: string): DecisionRow[] {
   for (const [index, raw] of arrayValue(canonical.json_cases, 'json_cases').entries()) {
     const row = objectValue(raw, `json_cases[${index}]`)
     if (typeof row.id !== 'string' || typeof row.valid !== 'boolean') throw new CrossRepoContractError('contract_schema_invalid', 'invalid JSON case')
-    rows.push(decisionRow(row.id, row.valid, row.valid ? 'authority_allow' : String(row.expected_code), null, row.valid ? row.expected_canonical_hex : null))
+    const input = typeof row.input_hex === 'string' ? Buffer.from(row.input_hex, 'hex') : Buffer.from(String(row.input_json))
+    const canonicalHex = row.valid ? canonicalBytes(parseStrictJson(input, String(row.id))).toString('hex') : null
+    rows.push(decisionRow(row.id, row.valid, row.valid ? 'authority_allow' : String(row.expected_code), null, canonicalHex))
   }
   for (const [index, raw] of arrayValue(canonical.cbor_cases, 'cbor_cases').entries()) {
     const row = objectValue(raw, `cbor_cases[${index}]`)
@@ -219,8 +289,14 @@ function buildDecisionRows(ccGatewayRoot: string): DecisionRow[] {
 
 function buildMutationRows(sub2apiRoot: string): DecisionRow[] {
   const root = path.join(sub2apiRoot, 'backend/internal/oracleevidence/testdata/rebaseline/v1')
-  const corpus = objectValue(readJson(path.join(root, 'mutation-corpus.json')), 'mutation-corpus.json')
-  const manifest = objectValue(readJson(path.join(root, 'source-manifest.json')), 'source-manifest.json')
+  const corpusPath = path.join(root, 'mutation-corpus.json')
+  const manifestPath = path.join(root, 'source-manifest.json')
+  const controlPath = path.join(root, 'synthetic/control.json')
+  if (sha256File(corpusPath) !== MUTATION_CORPUS_SHA256 || sha256File(manifestPath) !== MUTATION_SOURCE_MANIFEST_SHA256 || sha256File(controlPath) !== MUTATION_CONTROL_SHA256) {
+    throw new CrossRepoContractError('mutation_source_invalid', 'frozen mutation inputs differ')
+  }
+  const corpus = objectValue(readJson(corpusPath), 'mutation-corpus.json')
+  const manifest = objectValue(readJson(manifestPath), 'source-manifest.json')
   const sources = arrayValue(manifest.sources, 'source manifest')
   const sourceByPath = new Map(sources.map((raw) => {
     const source = objectValue(raw, 'source binding')
@@ -247,7 +323,7 @@ function buildMutationRows(sub2apiRoot: string): DecisionRow[] {
     if (typeof expected.allowed !== 'boolean' || typeof expected.code !== 'string') throw new CrossRepoContractError('mutation_descriptor_invalid', 'mutation result is invalid')
     return decisionRow(item.case_id, expected.allowed, expected.code)
   })
-  if (rows.length < 1 || new Set(rows.map((row) => row.case_id)).size !== rows.length) {
+  if (rows.length !== FROZEN_MUTATION_CASE_IDS.length || rows.some((row, index) => row.case_id !== FROZEN_MUTATION_CASE_IDS[index])) {
     throw new CrossRepoContractError('contract_required_set_mismatch', 'mutation result set is incomplete')
   }
   return rows
@@ -279,21 +355,42 @@ function validateDigestDAG(): void {
   if (consumed !== core.length) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'digest DAG contains a hash cycle')
 }
 
-function scanRecord(value: unknown, key = ''): void {
+const SENSITIVE_KEYS = new Set([
+  'authorization', 'proxy_authorization', 'cookie', 'set_cookie', 'credentials', 'credential', 'password',
+  'passwd', 'secret', 'token', 'access_token', 'refresh_token', 'api_key', 'x_api_key', 'anthropic_api_key',
+  'private_key', 'certificate', 'raw_certificate', 'raw_private_key', 'raw_payload', 'raw_material',
+  'raw_request_body', 'raw_response_body', 'raw_clienthello', 'prompt', 'body', 'request_body',
+  'response_body', 'raw', 'raw_bytes', 'client_hello', 'cch', 'session_id', 'conversation_id',
+  'message_id', 'pcap',
+])
+
+type ScanBudget = { members: number }
+
+function scanRecord(value: unknown, key = '', depth = 0, budget: ScanBudget = { members: 0 }): void {
+  if (depth > 256) throw new CrossRepoContractError('leak_detected', 'record nesting exceeds the bounded scanner limit')
+  const normalizedKey = key.toLowerCase().replaceAll('-', '_')
   if (DIAGNOSTIC_FORBIDDEN_KEYS.includes(key as typeof DIAGNOSTIC_FORBIDDEN_KEYS[number])) {
     throw new CrossRepoContractError('authority_diagnostic_promotion', `diagnostic field ${key} is forbidden`)
   }
+  if (SENSITIVE_KEYS.has(normalizedKey) || /(?:^|_)(?:credential|password|passwd|secret|token|api_key|private_key)(?:_|$)/.test(normalizedKey)) {
+    throw new CrossRepoContractError('leak_detected', 'record contains a sensitive field')
+  }
   if (typeof value === 'string') {
-    if (/^(?:Bearer|Basic)\s+/i.test(value) || /-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)-----/i.test(value) || /(?:password|api[_-]?key|access[_-]?token)\s*[:=]/i.test(value)) {
+    if (/(?:Bearer|Basic)\s+\S+/i.test(value) || /-----BEGIN (?:ENCRYPTED |RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/i.test(value) || /(?:authorization|proxy[_-]?authorization|credentials?|password|passwd|secret|api[_-]?key|anthropic[_-]?api[_-]?key|access[_-]?token|refresh[_-]?token|cookie|set[_-]?cookie|private[_-]?key)\s*[:=]\s*\S+/i.test(value)) {
       throw new CrossRepoContractError('leak_detected', 'record contains credential-shaped material')
     }
-    if (key.includes('absolute') || (/^(?:\/|[A-Za-z]:[\\/])/.test(value) && key !== 'repository_url')) {
+    if (normalizedKey.includes('absolute') || /(?:^|[\s"'=:(])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:[\\/]|\\\\[^\\\s]+\\)/.test(value)) {
       throw new CrossRepoContractError('authority_diagnostic_promotion', 'record contains an absolute diagnostic path')
     }
   } else if (Array.isArray(value)) {
-    for (const item of value) scanRecord(item)
+    budget.members += value.length
+    if (budget.members > 65_536) throw new CrossRepoContractError('leak_detected', 'record exceeds the bounded scanner member limit')
+    for (const item of value) scanRecord(item, '', depth + 1, budget)
   } else if (value && typeof value === 'object') {
-    for (const [childKey, child] of Object.entries(value)) scanRecord(child, childKey)
+    const entries = Object.entries(value)
+    budget.members += entries.length
+    if (budget.members > 65_536) throw new CrossRepoContractError('leak_detected', 'record exceeds the bounded scanner member limit')
+    for (const [childKey, child] of entries) scanRecord(child, childKey, depth + 1, budget)
   }
 }
 
@@ -311,7 +408,7 @@ function buildResult(ccGatewayRoot: string, sub2apiRoot: string) {
     command_ids: [...COMMAND_IDS],
     semantic_surfaces: [...SEMANTIC_SURFACES],
   }
-  return {
+  const result = {
     case_rows: caseRows,
     mutation_rows: mutationRows,
     decisions_sha256: digestWithLF(caseRows),
@@ -325,6 +422,10 @@ function buildResult(ccGatewayRoot: string, sub2apiRoot: string) {
     egress_count: 0,
     command_ids: [...COMMAND_IDS],
   }
+  if (result.decisions_sha256 !== FROZEN_DECISIONS_SHA256 || result.mutation_results_sha256 !== FROZEN_MUTATION_RESULTS_SHA256 || result.required_set_sha256 !== FROZEN_REQUIRED_SET_SHA256) {
+    throw new CrossRepoContractError('contract_required_set_mismatch', 'frozen decision or required-set digest differs')
+  }
+  return result
 }
 
 function validateStaticContract(ccGatewayRoot: string, sub2apiRoot: string): { schemaRange: string; fixtureCases: number; result: ReturnType<typeof buildResult> } {
@@ -357,9 +458,75 @@ function findGo(): string {
   throw new CrossRepoContractError('contract_command_failed', 'pinned Go executable is unavailable')
 }
 
-function runExactSubCommand(sub2apiRoot: string): void {
-  const runRoot = mkdtempSync(path.join(tmpdir(), 'oracle-c1-sub-focused-'))
+function gitValue(root: string, revision: string): string {
+  const result = spawnSync('git', ['rev-parse', revision], { cwd: root, encoding: 'utf8', timeout: 30_000 })
+  const value = result.stdout.trim()
+  if (result.status !== 0 || !OID.test(value)) throw new CrossRepoContractError('contract_command_failed', 'CC Git identity is unavailable')
+  return value
+}
+
+function validateSubReceipt(raw: Uint8Array, expected: {
+  bundle_sha256: string
+  decisions_sha256: string
+  mutation_results_sha256: string
+  required_set_sha256: string
+  executed_required_sha256: string
+  declared_decisions_sha256: string
+  declared_mutations_sha256: string
+  stable_code_count: number
+  stable_code_set_sha256: string
+  record_input_sha256: string
+}): string {
+  const bytes = Buffer.from(raw)
+  if (bytes.length < 2 || bytes.length > 1 << 20 || bytes.at(-1) !== 0x0a || bytes.at(-2) === 0x0a || bytes.at(-2) === 0x0d || bytes.at(-2) === 0x20 || bytes.at(-2) === 0x09) {
+    throw new CrossRepoContractError('contract_command_failed', 'Sub receipt framing is invalid')
+  }
+  let receipt: JsonObject
+  try {
+    receipt = objectValue(parseStrictJson(bytes.subarray(0, -1), 'Sub receipt'), 'Sub receipt')
+  } catch {
+    throw new CrossRepoContractError('contract_command_failed', 'Sub receipt is not strict JSON')
+  }
+  if (!canonicalBytes(receipt).equals(bytes.subarray(0, -1))) throw new CrossRepoContractError('contract_command_failed', 'Sub receipt is not canonical JCS')
+  exactKeys(receipt, [
+    'schema_id', 'schema_major', 'schema_revision', 'bundle_sha256', 'decisions_sha256',
+    'mutation_results_sha256', 'required_set_sha256', 'executed_required_sha256',
+    'declared_decisions_sha256', 'declared_mutations_sha256', 'stable_code_count',
+    'stable_code_set_sha256', 'record_input_sha256', 'mirror_validation_code',
+    'index_validation_code', 'record_validation_code', 'mirror_validation_allowed',
+    'index_validation_allowed', 'record_validation_allowed', 'receipt_digest',
+  ], 'Sub receipt')
+  if (receipt.schema_id !== 'oracle.sub_contract_receipt' || receipt.schema_major !== 1 || receipt.schema_revision !== 0 ||
+      receipt.mirror_validation_code !== '' || receipt.index_validation_code !== '' || receipt.record_validation_code !== '' ||
+      receipt.mirror_validation_allowed !== true || receipt.index_validation_allowed !== true || receipt.record_validation_allowed !== true) {
+    throw new CrossRepoContractError('contract_command_failed', 'Sub receipt validation decision differs')
+  }
+  for (const [field, value] of Object.entries(expected)) {
+    if (receipt[field] !== value) throw new CrossRepoContractError('contract_command_failed', `Sub receipt ${field} differs`)
+  }
+  const digest = receipt.receipt_digest
+  const unsigned = { ...receipt }
+  delete unsigned.receipt_digest
+  if (typeof digest !== 'string' || !SHA256.test(digest) || digest !== digestWithLF(unsigned)) {
+    throw new CrossRepoContractError('contract_command_failed', 'Sub receipt digest differs')
+  }
+  return digest
+}
+
+function runExactSubCommand(ccGatewayRoot: string, sub2apiRoot: string, staticResult: ReturnType<typeof buildResult>, recordBytes?: Uint8Array): string {
+  const runRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'oracle-c1-sub-focused-')))
   for (const directory of ['home', 'tmp', 'go-build', 'go-mod-empty', 'go-tmp']) mkdirSync(path.join(runRoot, directory))
+  const boundRecord = Buffer.from(recordBytes ?? encodeCrossRepoRecord(buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, {
+    issuedAtMs: Date.now(),
+    ccC1Commit: gitValue(ccGatewayRoot, 'HEAD'),
+    ccC1Tree: gitValue(ccGatewayRoot, 'HEAD^{tree}'),
+    crossReviewTaskId: 'task:c1-receipt-validation',
+    crossReviewArtifactSha256: '1'.repeat(64),
+  })))
+  validateCrossRepoRecord(boundRecord, ccGatewayRoot, sub2apiRoot)
+  const recordPath = path.join(runRoot, 'cross-repo-record.json')
+  const receiptPath = path.join(runRoot, 'sub-receipt.json')
+  writeFileSync(recordPath, boundRecord, { flag: 'wx', mode: 0o600 })
   const go = findGo()
   const env: NodeJS.ProcessEnv = {
     HOME: path.join(runRoot, 'home'),
@@ -369,11 +536,32 @@ function runExactSubCommand(sub2apiRoot: string): void {
     GOMODCACHE: path.join(runRoot, 'go-mod-empty'),
     GOTMPDIR: path.join(runRoot, 'go-tmp'),
     GOENV: 'off', GOTOOLCHAIN: 'local', CGO_ENABLED: '0', GOPROXY: 'off', GOSUMDB: 'off',
+    ORACLE_CONTRACT_RECEIPT_OUTPUT: receiptPath,
+    ORACLE_CONTRACT_RECEIPT_RECORD: recordPath,
+    ORACLE_CONTRACT_RECEIPT_CC_MIRROR: path.join(ccGatewayRoot, CC_BUNDLE_PATH),
+    ORACLE_CONTRACT_RECEIPT_SUB_MIRROR: path.join(sub2apiRoot, SUB_BUNDLE_PATH),
+    ORACLE_CONTRACT_RECEIPT_PREDECESSOR: path.join(sub2apiRoot, PHASE1_CONTRACT_PATH),
   }
-  const result = spawnSync(go, [...SUB_TEST_ARGS], { cwd: path.join(sub2apiRoot, 'backend'), env, encoding: 'utf8', timeout: 600_000 })
+  const result = spawnSync(go, [...SUB_TEST_ARGS], { cwd: path.join(sub2apiRoot, 'backend'), env, encoding: 'utf8', timeout: 600_000, maxBuffer: 2 << 20 })
   if (result.status !== 0) {
-    throw new CrossRepoContractError('contract_command_failed', `exact Sub oracleevidence command failed: ${(result.stderr || result.stdout).trim()}`)
+    throw new CrossRepoContractError('contract_command_failed', 'exact Sub oracleevidence command failed')
   }
+  const receiptInfo = lstatSync(receiptPath)
+  if (!receiptInfo.isFile() || receiptInfo.isSymbolicLink() || (receiptInfo.mode & 0o777) !== 0o600) {
+    throw new CrossRepoContractError('contract_command_failed', 'Sub receipt type or mode differs')
+  }
+  return validateSubReceipt(readFileSync(receiptPath), {
+    bundle_sha256: digestWithLF(CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] }))),
+    decisions_sha256: FROZEN_SUB_EXECUTION_DECISIONS_SHA256,
+    mutation_results_sha256: FROZEN_SUB_EXECUTION_MUTATIONS_SHA256,
+    required_set_sha256: staticResult.required_set_sha256,
+    executed_required_sha256: digestWithLF([...SUB_RECEIPT_REQUIRED_TESTS]),
+    declared_decisions_sha256: staticResult.decisions_sha256,
+    declared_mutations_sha256: staticResult.mutation_results_sha256,
+    stable_code_count: staticResult.stable_code_count,
+    stable_code_set_sha256: staticResult.stable_code_set_sha256,
+    record_input_sha256: sha256Bytes(boundRecord),
+  })
 }
 
 export type CrossRepoRecordInput = {
@@ -385,6 +573,12 @@ export type CrossRepoRecordInput = {
   subReviewTaskId?: string
   subReviewArtifactSha256?: string
   commandId?: string
+  selectionOverride?: {
+    artifact: Uint8Array
+    controllerId: string
+    taskId: string
+    issuedAtMs: number
+  }
 }
 
 function recordCore(ccGatewayRoot: string, sub2apiRoot: string, input: CrossRepoRecordInput): JsonObject {
@@ -395,13 +589,26 @@ function recordCore(ccGatewayRoot: string, sub2apiRoot: string, input: CrossRepo
   const subReviewTaskId = input.subReviewTaskId ?? 'task:true-sub-review'
   const subReviewArtifact = input.subReviewArtifactSha256 ?? '0b61d7affdb8b7c867a47c82f2d34cf7a58ecce88c71ffa5ac52a7abb3852869'
   if (!SAFE_REF.test(commandId) || !SAFE_REF.test(subReviewTaskId) || !SHA256.test(subReviewArtifact)) throw new CrossRepoContractError('contract_schema_invalid', 'record review bindings are invalid')
+  const selection = input.selectionOverride
+    ? {
+        mode: 'total_controller_local_override',
+        selection_override_sha256: sha256Bytes(input.selectionOverride.artifact),
+        selection_override_controller_id: input.selectionOverride.controllerId,
+        selection_override_task_id: input.selectionOverride.taskId,
+        selection_override_issued_at_ms: input.selectionOverride.issuedAtMs,
+        selection_override_decision: 'authorize_refs/heads/codex/native-search-gateway_at_3ac410ea02edc53c3925f28eddcbc22b51c0a137',
+      }
+    : { mode: 'remote_ref', selected_remote_name: 'muqihang', selected_remote_url: 'https://github.com/muqihang/sub2api.git', selected_remote_ref: 'refs/remotes/muqihang/codex/native-search-gateway', selected_remote_oid: '3ac410ea02edc53c3925f28eddcbc22b51c0a137' }
+  if (input.selectionOverride && (!SAFE_REF.test(input.selectionOverride.controllerId) || !SAFE_REF.test(input.selectionOverride.taskId) || !Number.isSafeInteger(input.selectionOverride.issuedAtMs) || input.selectionOverride.issuedAtMs < 0)) {
+    throw new CrossRepoContractError('contract_schema_invalid', 'selection override provenance is invalid')
+  }
 
   const shared = checkSharedContract({ ccGatewayRoot, sub2apiRoot })
   const result = buildResult(ccGatewayRoot, sub2apiRoot)
   const heads = [
     ['debe0360384132d6e66c0296219ea6066193e187', 'ffca2a0a892b2292b486533089f3276f28b39d4e'],
     ['3ac410ea02edc53c3925f28eddcbc22b51c0a137', 'f7d51fb57c64fbaf6e2db3a7a2d423a491d5788d'],
-    ['a4ce6e375a5b6ac46d4605bc3be2da1f9a2351a8', '512e1adadba3f8832292872ebf9c6d2ed8619200'],
+    [SUB_RECEIPT_MERGE, SUB_RECEIPT_TREE],
     ['795c1f810b5647840fec508951cfc3272066d8b6', 'efb99a079e76817a38a9a48b053cdc6504e37025'],
     ['ab861d91100354569969335ecf10081b74070e21', '512e1adadba3f8832292872ebf9c6d2ed8619200'],
     ['ab861d91100354569969335ecf10081b74070e21', '512e1adadba3f8832292872ebf9c6d2ed8619200'],
@@ -422,8 +629,8 @@ function recordCore(ccGatewayRoot: string, sub2apiRoot: string, input: CrossRepo
         go_mod_sha256: 'e637999a38f974c9172c8f69c8fbb9c0d727bacf257558307e97e927cbb468de', go_sum_sha256: 'd3e1fd1510b41f218136b719fdf2c4ef239b05650d3b575fb93c18f25f3dc981', go_directive: '1.26.5',
         predecessor_relative_path: 'backend/internal/service/testdata/cc_gateway_formal_pool_contract/vectors.json', predecessor_sha256: PHASE1_CONTRACT_DIGEST,
         codegraph_config_sha256: 'a7f3ad7c17d655f9d2494b5b05e55ceb4ea9c7667456ff785c5f2a9291c3783a', codegraph_version: '1.1.6', codegraph_extraction_revision: 24,
-        selection: { mode: 'remote_ref', selected_remote_name: 'muqihang', selected_remote_url: 'https://github.com/muqihang/sub2api.git', selected_remote_ref: 'refs/remotes/muqihang/codex/native-search-gateway', selected_remote_oid: '3ac410ea02edc53c3925f28eddcbc22b51c0a137' },
-        sub_plan_commit: 'a4ce6e375a5b6ac46d4605bc3be2da1f9a2351a8', sub_plan_tree: '512e1adadba3f8832292872ebf9c6d2ed8619200', sub_plan_sha256: 'eeaefeddbfe740003288f9d8ec8ba4673b57cca91f4fc3bf5cea5db02feaefaf',
+        selection,
+        sub_plan_commit: SUB_RECEIPT_MERGE, sub_plan_tree: SUB_RECEIPT_TREE, sub_plan_sha256: 'eeaefeddbfe740003288f9d8ec8ba4673b57cca91f4fc3bf5cea5db02feaefaf',
         r1_commit: '795c1f810b5647840fec508951cfc3272066d8b6', r1_tree: 'efb99a079e76817a38a9a48b053cdc6504e37025', i1_commit: 'ab861d91100354569969335ecf10081b74070e21', i1_tree: '512e1adadba3f8832292872ebf9c6d2ed8619200',
       },
       command_id: commandId, reviewer_model: 'gpt-5.6-sol',
@@ -448,9 +655,71 @@ export function encodeCrossRepoRecord(record: CrossRepoRecord): Buffer {
   return canonicalBytes(record, true)
 }
 
-export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, sub2apiRoot: string): CrossRepoRecord {
+function validateNestedRecordSchema(record: JsonObject): void {
+  const authority = objectValue(record.authority, 'authority')
+  schemaKeys(authority, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.authority, 'authority')
+  const cc = objectValue(authority.cc, 'authority.cc')
+  const sub = objectValue(authority.sub, 'authority.sub')
+  schemaKeys(cc, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.cc, 'authority.cc')
+  schemaKeys(sub, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.sub, 'authority.sub')
+  const immutableSub = Object.fromEntries(Object.keys(SUB_IMMUTABLE_BINDINGS).map((key) => [key, sub[key]]))
+  requireSchema(canonicalEqual(immutableSub, SUB_IMMUTABLE_BINDINGS), 'authority.sub immutable binding')
+  requireSchema(OID.test(String(sub.sub_plan_commit)) && OID.test(String(sub.sub_plan_tree)) && SHA256.test(String(sub.sub_plan_sha256)) && OID.test(String(sub.r1_commit)) && OID.test(String(sub.r1_tree)) && OID.test(String(sub.i1_commit)) && OID.test(String(sub.i1_tree)), 'authority.sub implementation binding')
+
+  const selection = objectValue(sub.selection, 'authority.sub.selection')
+  if (selection.mode === 'remote_ref') {
+    schemaKeys(selection, CROSS_REPO_RECORD_CONSTRAINTS.selection_branches.remote_ref.required, 'authority.sub.selection')
+    requireSchema(SAFE_REF.test(String(selection.selected_remote_name)) && SAFE_REF.test(String(selection.selected_remote_ref)) && OID.test(String(selection.selected_remote_oid)) && String(selection.selected_remote_url).startsWith('https://'), 'remote selection')
+  } else if (selection.mode === 'total_controller_local_override') {
+    schemaKeys(selection, CROSS_REPO_RECORD_CONSTRAINTS.selection_branches.total_controller_local_override.required, 'authority.sub.selection')
+    requireSchema(SHA256.test(String(selection.selection_override_sha256)) && SAFE_REF.test(String(selection.selection_override_controller_id)) && SAFE_REF.test(String(selection.selection_override_task_id)) && Number.isSafeInteger(selection.selection_override_issued_at_ms) && selection.selection_override_decision === 'authorize_refs/heads/codex/native-search-gateway_at_3ac410ea02edc53c3925f28eddcbc22b51c0a137', 'local override selection')
+  } else {
+    requireSchema(false, 'authority.sub.selection mode')
+  }
+
+  const bundle = objectValue(record.bundle, 'bundle')
+  schemaKeys(bundle, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.bundle, 'bundle')
+  const files = arrayValue(bundle.files, 'bundle.files')
+  requireSchema(files.length === CONTRACT_FILES.length, 'bundle.files')
+  for (const raw of files) {
+    const file = objectValue(raw, 'bundle file')
+    schemaKeys(file, ['relative_path', 'sha256'], 'bundle file')
+    requireSchema(typeof file.relative_path === 'string' && SHA256.test(String(file.sha256)), 'bundle file')
+  }
+
+  const dag = objectValue(record.commit_dag, 'commit_dag')
+  schemaKeys(dag, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.commit_dag, 'commit_dag')
+  for (const raw of arrayValue(dag.nodes, 'commit_dag.nodes')) {
+    const node = objectValue(raw, 'commit DAG node')
+    schemaKeys(node, ['id', 'role', 'parent_ids', 'head', 'tree'], 'commit DAG node')
+    requireSchema(SAFE_REF.test(String(node.id)) && SAFE_REF.test(String(node.role)) && OID.test(String(node.head)) && OID.test(String(node.tree)) && arrayValue(node.parent_ids, 'parent_ids').every((id) => typeof id === 'string' && SAFE_REF.test(id)), 'commit DAG node')
+  }
+  for (const edge of arrayValue(dag.edges, 'commit_dag.edges')) requireSchema(Array.isArray(edge) && edge.length === 2 && edge.every((id) => typeof id === 'string' && SAFE_REF.test(id)), 'commit DAG edge')
+
+  const result = objectValue(record.result, 'result')
+  schemaKeys(result, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.result, 'result')
+  for (const field of ['case_rows', 'mutation_rows'] as const) for (const raw of arrayValue(result[field], `result.${field}`)) {
+    const row = objectValue(raw, 'decision row')
+    schemaKeys(row, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.decision_row, 'decision row')
+    requireSchema(SAFE_REF.test(String(row.case_id)) && typeof row.allowed === 'boolean' && typeof row.code === 'string' && (row.next_state_digest === null || SHA256.test(String(row.next_state_digest))) && (row.canonical_hex === null || (typeof row.canonical_hex === 'string' && /^[0-9a-f]*$/.test(row.canonical_hex) && row.canonical_hex.length % 2 === 0)), 'decision row')
+  }
+  const surfaces = objectValue(result.semantic_surfaces, 'result.semantic_surfaces')
+  schemaKeys(surfaces, SEMANTIC_SURFACES, 'result.semantic_surfaces')
+  requireSchema(SEMANTIC_SURFACES.every((surface) => surfaces[surface] === true), 'result.semantic_surfaces')
+  requireSchema(['decisions_sha256', 'mutation_results_sha256', 'required_set_sha256', 'stable_code_set_sha256'].every((field) => SHA256.test(String(result[field]))), 'result digests')
+
+  const review = objectValue(record.review, 'review')
+  schemaKeys(review, ['sub', 'cross'], 'review')
+  for (const role of ['sub', 'cross']) {
+    const item = objectValue(review[role], `review.${role}`)
+    schemaKeys(item, CROSS_REPO_RECORD_SCHEMA_PROJECTION.closed_required.review_item, `review.${role}`)
+    requireSchema(SAFE_REF.test(String(item.task_id)) && item.model === 'gpt-5.6-sol' && SHA256.test(String(item.artifact_sha256)) && item.critical === 0 && item.important === 0 && typeof item.verdict === 'string', `review.${role}`)
+  }
+}
+
+export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, sub2apiRoot: string, options: { selectionOverrideArtifact?: Uint8Array } = {}): CrossRepoRecord {
   const bytes = Buffer.from(raw)
-  if (bytes.length < 2 || bytes.at(-1) !== 0x0a || bytes.at(-2) === 0x0a || bytes.at(-2) === 0x0d || bytes.at(-2) === 0x20 || bytes.at(-2) === 0x09) {
+  if (bytes.length < 2 || bytes.length > 1 << 20 || bytes.at(-1) !== 0x0a || bytes.at(-2) === 0x0a || bytes.at(-2) === 0x0d || bytes.at(-2) === 0x20 || bytes.at(-2) === 0x09) {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', 'record must be JCS plus exactly one LF')
   }
   const parsed = objectValue(parseStrictJson(bytes.subarray(0, -1), 'cross-repo record'), 'cross-repo record')
@@ -460,6 +729,7 @@ export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, 
   if (parsed.schema_id !== 'oracle.cross_repo_record' || parsed.schema_major !== 1 || parsed.schema_revision !== 0 || parsed.kind !== 'oracle_contract_rebaseline') {
     throw new CrossRepoContractError('contract_schema_invalid', 'record schema identity differs')
   }
+  validateNestedRecordSchema(parsed)
   if (!Number.isSafeInteger(parsed.issued_at_ms) || !Number.isSafeInteger(parsed.expires_at_ms) || parsed.expires_at_ms !== (parsed.issued_at_ms as number) + CROSS_REPO_RECORD_SCHEMA_PROJECTION.lease_ms) {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', 'record lease is invalid')
   }
@@ -479,6 +749,20 @@ export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, 
     ccC1Commit: String(c1.head), ccC1Tree: String(c1.tree), commandId: String(authority.command_id),
     subReviewTaskId: String(subReview.task_id), subReviewArtifactSha256: String(subReview.artifact_sha256),
     crossReviewTaskId: String(crossReview.task_id), crossReviewArtifactSha256: String(crossReview.artifact_sha256),
+    selectionOverride: (() => {
+      const sub = objectValue(authority.sub, 'authority.sub')
+      const selection = objectValue(sub.selection, 'authority.sub.selection')
+      if (selection.mode === 'remote_ref') return undefined
+      if (selection.mode !== 'total_controller_local_override' || !options.selectionOverrideArtifact) {
+        throw new CrossRepoContractError('contract_schema_invalid', 'selection override artifact is missing')
+      }
+      return {
+        artifact: options.selectionOverrideArtifact,
+        controllerId: String(selection.selection_override_controller_id),
+        taskId: String(selection.selection_override_task_id),
+        issuedAtMs: Number(selection.selection_override_issued_at_ms),
+      }
+    })(),
   })
   if (!canonicalEqual(parsed.result, expected.result)) throw new CrossRepoContractError('cross_repo_result_mismatch', 'record result differs from independently computed results')
   const unsigned = { ...parsed }
@@ -490,7 +774,7 @@ export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, 
   return parsed as CrossRepoRecord
 }
 
-export function checkCrossRepoContract(input: { ccGatewayRoot: string; sub2apiRoot: string; runCommands: boolean }): CrossRepoContractResult {
+export function checkCrossRepoContract(input: { ccGatewayRoot: string; sub2apiRoot: string; runCommands: boolean; recordBytes?: Uint8Array }): CrossRepoContractResult {
   let shared
   try {
     shared = checkSharedContract({ ccGatewayRoot: input.ccGatewayRoot, sub2apiRoot: input.sub2apiRoot })
@@ -499,7 +783,7 @@ export function checkCrossRepoContract(input: { ccGatewayRoot: string; sub2apiRo
     throw error
   }
   const staticResult = validateStaticContract(input.ccGatewayRoot, input.sub2apiRoot)
-  if (input.runCommands) runExactSubCommand(input.sub2apiRoot)
+  const subReceiptDigest = input.runCommands ? runExactSubCommand(input.ccGatewayRoot, input.sub2apiRoot, staticResult.result, input.recordBytes) : undefined
   return {
     ok: true, bundleDigest: shared.bundleDigest, schemaRange: staticResult.schemaRange,
     fixtureCases: staticResult.fixtureCases, commandsRun: input.runCommands ? 1 : 0,
@@ -508,6 +792,7 @@ export function checkCrossRepoContract(input: { ccGatewayRoot: string; sub2apiRo
     mutationResultsDigest: staticResult.result.mutation_results_sha256,
     requiredSetDigest: staticResult.result.required_set_sha256,
     stableCodeSetDigest: staticResult.result.stable_code_set_sha256,
+    subReceiptDigest,
   }
 }
 
