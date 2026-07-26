@@ -70,9 +70,14 @@ test('retryable terminal and recovery programs share the trigger then diverge de
   assert.deepEqual(buildResponseProgram('reset_terminal').actions.map((action) => [action.kind, action.status]), [['reset', null], ['http', 400]])
 })
 
-test('process-env config treatment selects the second sealed route', () => {
-  const row = buildCampaignLedger('p3b-route-policy').rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
-  assert.equal(expectedSelectedRoute(row), 1)
+test('config route policy keeps process-env on request route zero and uses route one only for file treatments', () => {
+  const rows = buildCampaignLedger('p3b-route-policy').rows
+  const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
+  const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
+  const control = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('control/'))!
+  assert.equal(expectedSelectedRoute(processEnv), 0)
+  assert.equal(expectedSelectedRoute(localFile), 1)
+  assert.equal(expectedSelectedRoute(control), 0)
 })
 
 test('fixed reviewer registry rejects a caller-fabricated signature', () => {

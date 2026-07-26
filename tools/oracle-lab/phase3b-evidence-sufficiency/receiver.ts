@@ -92,6 +92,18 @@ const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
 const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_persistence: false })
 
+export type ResponseWireEvent = Readonly<
+  | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
+  | { kind: 'body'; monotonic_ns: string; bytes: Uint8Array }
+  | { kind: 'terminal'; monotonic_ns: string; terminal: 'eof' | 'reset' }
+>
+
+// Behavioral seam for the focused RED. GREEN replaces this placeholder with the
+// receiver's strict parser over bytes and monotonic events captured at writes.
+export function deriveResponseObservationFromWire(_events: readonly ResponseWireEvent[], _startedMonotonicNs: bigint, _delayBoundaryMs: number): Readonly<Record<string, unknown>> {
+  return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_failed', delay_elapsed_ns: '0', timing_bucket: 'not_delayed' })
+}
+
 function executableIdentity(): string {
   const identity = stableRead(process.execPath, { maximumBytes: 134_217_728 }).identity
   return sha256Canonical(identity)
