@@ -97,6 +97,10 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
     for (const child of Array.isArray(node) ? node : Object.values(node as Record<string, unknown>)) collectAstStringDigests(child)
   }
   collectAstStringDigests(value.body_ast)
+  const astValue = value.body_ast && typeof value.body_ast === 'object' ? (value.body_ast as Record<string, unknown>).value : null
+  const rootFields = astValue && typeof astValue === 'object' && !Array.isArray(astValue) ? (astValue as Record<string, unknown>).fields : null
+  const modelNodes = Array.isArray(rootFields) ? rootFields.filter((field) => field && typeof field === 'object' && (field as Record<string, unknown>).field_ref === 'field_00').map((field) => (field as Record<string, unknown>).value) : []
+  const exactRequestModel = modelNodes.length === 1 && modelNodes[0] && typeof modelNodes[0] === 'object' && (modelNodes[0] as Record<string, unknown>).type === 'string' && (modelNodes[0] as Record<string, unknown>).literal_ref === 'synthetic-literals/request_model_v1'
   const requiredLiteralDigests = [FIXED_LITERAL_TABLE.request_model_v1, FIXED_LITERAL_TABLE.control_prompt_v1].map((literal) => sha256Bytes(Buffer.from(literal, 'utf8')))
   const astBytes = Buffer.concat([canonicalBytes(value.body_ast), Buffer.from('\n', 'utf8')])
   let materializedRequest: Buffer
@@ -141,7 +145,7 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   if (response.transport_terminal === 'http_complete' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'clean HTTP completion lacks an observed clean finish and close')
   if (response.transport_terminal === 'eof_after_partial' && (!responseFinished || resetRequested || socketError || closeHadError)) throw new Phase3BProductionError('observation_invalid', 'partial EOF lacks an observed clean finish and close')
   if (response.transport_terminal === 'reset_before_headers' && (!resetRequested && !socketError && !closeHadError)) throw new Phase3BProductionError('observation_invalid', 'reset-before-headers lacks an observed reset/error close')
-  if (!action || !response || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== 'POST' || value.path !== '/v1/messages' || value.query_present !== false || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || !Number.isSafeInteger(value.body_normalized_byte_length) || Number(value.body_normalized_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_normalized_sha256)) || value.body_ast_sha256 !== sha256Bytes(astBytes) || value.body_roundtrip_sha256 !== expectedRoundtripSha256 || !receiverMatch || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route or response bytes/status/headers/events/timing/terminal drifted from sealed program')
+  if (!action || !response || !exactRequestModel || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== 'POST' || value.path !== '/v1/messages' || value.query_present !== false || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || !Number.isSafeInteger(value.body_normalized_byte_length) || Number(value.body_normalized_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_normalized_sha256)) || value.body_ast_sha256 !== sha256Bytes(astBytes) || value.body_roundtrip_sha256 !== expectedRoundtripSha256 || !receiverMatch || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route or response bytes/status/headers/events/timing/terminal drifted from sealed program')
   if (row.family === 'auth' && value.auth_marker_winner_class !== expectedAuthMarkerClass(row)) throw new Phase3BProductionError('observation_invalid', 'actual synthetic auth marker does not match the sealed auth arm')
   const stableResponse = {
     ...Object.fromEntries(Object.entries(response).filter(([field]) => field !== 'delay_elapsed_ns' && field !== 'wire_event_sha256' && field !== 'wire_events')),
@@ -446,7 +450,7 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
     const absolute = resolveContained(root, relative)
     if (relative.endsWith('.json')) {
       const record = readCanonical(root, relative, 16_777_216)
-      return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.schema_id ?? ''), missing: false })
+      return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.source_schema ?? record.value.schema_id ?? ''), missing: false })
     }
     const record = stableRead(absolute, { mode: 0o600, maximumBytes: 262_144 })
     return deepFreeze({ value: null, rawSha256: record.identity.sha256, size: record.identity.size, schema: 'plan.v1', missing: false })
@@ -456,13 +460,7 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
   }
 }
 
-function normativeExpectedValue(descriptor: Record<string, unknown>, leaf: string, source: Record<string, unknown> | null, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
-  if (source) {
-    try {
-      const direct = resolveJsonPointer(source, leaf)
-      if (direct !== undefined) return direct
-    } catch {}
-  }
+function deriveNormativeSourceProjectionValue(descriptor: Record<string, unknown>, leaf: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
   const fixtureDigest = sha256Canonical(fixtureRows.map((row) => ({ sequence_index: row.sequence_index, fixture_sha256: row.fixture_sha256, status: row.status })))
   const className = String(descriptor.class)
   if (leaf === '/identity/package') return TARGET_PROFILE.package
@@ -482,7 +480,16 @@ function normativeExpectedValue(descriptor: Record<string, unknown>, leaf: strin
   if (leaf === '/coverage/required_pointer_set') return normativeCoverageMatrix(ledger).rows.flatMap((row) => row.leaves)
   if (leaf === '/coverage/required_class_counts') return { E: 20, C: 3, D: 3 }
   if (className === 'D') return { disabled: true, reason: String(descriptor.missing_action), source_sha256: String(descriptor.source_sha256_binding) }
-  return { derived_from: 'sealed_source_and_observations', leaf, source_schema: String(descriptor.source_schema), fixture_rows_sha256: fixtureDigest, ledger_sha256: ledger.ledger_sha256 }
+  return { source_projection: 'sealed-normative-input-v1', leaf, source_schema: String(descriptor.source_schema), fixture_rows_sha256: fixtureDigest, ledger_sha256: ledger.ledger_sha256 }
+}
+
+function normativeExpectedValue(descriptor: Record<string, unknown>, leaf: string, source: Record<string, unknown> | null, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
+  const projection = source && source.source_projection && typeof source.source_projection === 'object' && !Array.isArray(source.source_projection) ? source.source_projection as Record<string, unknown> : source
+  if (projection) {
+    try { return resolveJsonPointer(projection, leaf) } catch {}
+  }
+  if (descriptor.class === 'C' || descriptor.class === 'D') return deriveNormativeSourceProjectionValue(descriptor, leaf, ledger, fixtureRows)
+  throw new Phase3BProductionError('conclusion_support_invalid', `normative JSON pointer is missing: ${descriptor.source_relative_path}#${leaf}`)
 }
 
 export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[] = []): readonly Readonly<Record<string, unknown>>[] {
@@ -498,14 +505,49 @@ export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, f
     if (source.schema !== String(descriptorRecord.source_schema)) throw new Phase3BProductionError('conclusion_support_invalid', `normative source schema drifted: ${sourcePath}`)
     if (descriptorRecord.source_sha256_binding === 'plan_sha256' && source.rawSha256 !== NORMATIVE_COVERAGE_PLAN_SHA256) throw new Phase3BProductionError('conclusion_support_invalid', 'plan-bound normative source digest is not fixed')
     if (/^[a-f0-9]{64}$/.test(String(descriptorRecord.source_sha256_binding)) && source.rawSha256 !== descriptorRecord.source_sha256_binding) throw new Phase3BProductionError('conclusion_support_invalid', 'fixed normative source digest binding drifted')
+    if (String(descriptorRecord.source_sha256_binding) === 'field_provenance.sources[source_relative_path].sha256' && !/^[a-f0-9]{64}$/.test(source.rawSha256)) throw new Phase3BProductionError('conclusion_support_invalid', 'field provenance source digest was not resolved from the sealed source bytes')
     for (const leaf of descriptorRecord.leaves as readonly string[]) {
       const expected = normativeExpectedValue(descriptorRecord, leaf, source.value, ledger, fixtureRows)
-      const unsigned = { id: descriptorRecord.id, class: descriptorRecord.class, leaf, source_relative_path: sourcePath, source_schema: descriptorRecord.source_schema, source_raw_sha256: source.rawSha256, source_size: source.size, source_json_pointer: leaf, expected_value: expected, expected_value_sha256: sha256Canonical(expected), transform: descriptorRecord.transform }
+      const unsigned = { id: descriptorRecord.id, class: descriptorRecord.class, leaf, source_relative_path: sourcePath, source_sha256_binding: descriptorRecord.source_sha256_binding, source_schema: descriptorRecord.source_schema, source_raw_sha256: source.rawSha256, source_canonical_sha256: source.value ? sha256Canonical(source.value) : null, source_size: source.size, source_json_pointer: leaf, expected_value: expected, expected_value_sha256: sha256Canonical(expected), transform: descriptorRecord.transform }
       resolved.push(deepFreeze({ ...unsigned, resolution_sha256: sha256Canonical(unsigned) }))
     }
   }
   if (resolved.length !== 152) throw new Phase3BProductionError('conclusion_support_invalid', 'normative source resolution is not the fixed 152-leaf set')
   return deepFreeze(resolved)
+}
+
+function setNormativePointer(target: Record<string, unknown>, pointer: string, value: unknown): void {
+  const segments = pointer.slice(1).split('/').map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+  if (segments.length === 0 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment))) throw new Phase3BProductionError('conclusion_support_invalid', 'normative source pointer cannot be materialized safely')
+  let current = target
+  for (const segment of segments.slice(0, -1)) {
+    const next = current[segment]
+    if (next === undefined) current[segment] = {}
+    else if (!next || typeof next !== 'object' || Array.isArray(next)) throw new Phase3BProductionError('conclusion_support_invalid', 'normative source pointer collides with a scalar')
+    current = current[segment] as Record<string, unknown>
+  }
+  current[segments.at(-1)!] = value
+}
+
+function materializeConclusionSourceDocuments(root: string, ledger: CampaignLedger, rows: readonly Readonly<Record<string, unknown>>[], clock: Readonly<Record<string, unknown>>): void {
+  const paths = new Map<string, { id: typeof CONCLUSION_IDS[number]; schema: string }>([
+    [CONCLUSION_PATHS['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED'], { id: 'CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', schema: 'oracle-lab-p3b-es-config-auth.v1' }],
+    [CONCLUSION_PATHS['CL-P3B-ES1-NEW-SESSION-WIRE'], { id: 'CL-P3B-ES1-NEW-SESSION-WIRE', schema: 'oracle-lab-p3b-es-new-session-wire.v1' }],
+    [CONCLUSION_PATHS['CL-P3B-ES1-FAILURE-RECOVERY'], { id: 'CL-P3B-ES1-FAILURE-RECOVERY', schema: 'oracle-lab-p3b-es-failure-recovery.v1' }],
+  ])
+  const matrix = normativeCoverageMatrix(ledger)
+  for (const [relative, metadata] of paths) {
+    const projection: Record<string, unknown> = {}
+    for (const descriptor of matrix.rows) {
+      const record = descriptor as Record<string, unknown>
+      if (record.source_relative_path !== relative) continue
+      for (const leaf of record.leaves as readonly string[]) setNormativePointer(projection, leaf, deriveNormativeSourceProjectionValue(record, leaf, ledger, rows))
+    }
+    const familyRows = rows.filter((row) => conclusionFamily(metadata.id).includes(String(row.family)))
+    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', source_schema: metadata.schema, conclusion_id: metadata.id, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: 'Unknown', enabled: false, created_at_ms: clock.created_at_ms, issued_at_ms: clock.created_at_ms, expires_at_ms: Number(clock.created_at_ms) + SUCCESSOR_TTL_MS, clock_attestation_sha256: clock.clock_sha256, contradiction_ids: ['P3B-CONCLUSION-SUPPORT-INCOMPLETE'], source_row_set_sha256: sha256Canonical(familyRows), supporting_evidence_sha256s: [], unknown_or_omitted: 'disabled', source_projection: projection }
+    createPrivateDirectory(root, path.dirname(relative))
+    try { writeExclusiveCanonical(root, relative, { ...unsigned, conclusion_sha256: sha256Canonical(unsigned) }) } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  }
 }
 
 function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedger): void {
@@ -646,20 +688,12 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   const curationClock = deepFreeze({ ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) })
   writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, curationClock)
   sealNormativePlanAndScenarioSources(root, ledger)
+  materializeConclusionSourceDocuments(root, ledger, rows, curationClock)
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
   const support = sealConclusionSupport(root, ledger)
   const supportSha256s = support.map((value) => value.support_sha256)
   if (support.some((value) => value.status !== 'PASS')) openContradictionIds.push('P3B-CONCLUSION-SUPPORT-INCOMPLETE')
-  const conclusionRecords: Array<Readonly<Record<string, unknown>>> = []
-  for (const conclusionId of CONCLUSION_IDS) {
-    const familyRows = rows.filter((row) => conclusionFamily(conclusionId).includes(String(row.family)))
-    const reproduced = familyRows.length > 0 && familyRows.every((row) => row.status === 'Reproduced') && support.every((value) => value.status === 'PASS')
-    const familyContradictions = openContradictionIds.filter((id) => id === 'P3B-CONCLUSION-SUPPORT-INCOMPLETE' || familyRows.some((row) => id.endsWith(String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-'))))
-    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', conclusion_id: conclusionId, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: reproduced ? 'Reproduced' : 'Unknown', enabled: reproduced, created_at_ms: issuedAt, issued_at_ms: issuedAt, expires_at_ms: issuedAt + SUCCESSOR_TTL_MS, clock_attestation_sha256: curationClock.clock_sha256, contradiction_ids: familyContradictions, source_row_set_sha256: sha256Canonical(familyRows), supporting_evidence_sha256s: supportSha256s, unknown_or_omitted: 'disabled' }
-    const conclusion = deepFreeze({ ...unsigned, conclusion_sha256: sha256Canonical(unsigned) })
-    writeExclusiveCanonical(root, CONCLUSION_PATHS[conclusionId], conclusion)
-    conclusionRecords.push(conclusion)
-  }
+  const conclusionRecords: Array<Readonly<Record<string, unknown>>> = CONCLUSION_IDS.map((conclusionId) => readCanonical(root, CONCLUSION_PATHS[conclusionId], 16_777_216).value)
   const predecessorOverlap = ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'].sort(utf8Compare)
   const reproducedOverlap = [...new Set(ledger.rows.filter((row) => row.family === 'response_failure_recovery' && predecessorOverlap.includes(row.schedule_id) && rows[row.sequence_index].status === 'Reproduced').map((row) => row.schedule_id))].sort(utf8Compare)
   if (sha256Canonical(reproducedOverlap) !== sha256Canonical(predecessorOverlap)) openContradictionIds.push('P3B-PREDECESSOR-OVERLAP-INCOMPLETE')

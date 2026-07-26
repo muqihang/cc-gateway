@@ -202,7 +202,7 @@ test('authority RED: ES7 contains literal-bound executable round-trip fixtures',
 
 test('authority RED: persisted request AST is normalized-safe and contains no raw or encoded secret bytes', () => {
   const marker = 'sk-SECRET12345678'
-  const wire = Buffer.from(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Return exactly the synthetic marker output.complete."}],"stream":true,"max_tokens":17,"unexpected":"${marker}"}`, 'utf8')
+  const wire = Buffer.from(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Return exactly the synthetic marker output.complete."}],"stream":true,"max_tokens":17,"description":"${marker}"}`, 'utf8')
   const ast = normalizeRequestAst(wire) as Record<string, unknown>
   assert.equal(ast.materializer, REQUEST_AST_MATERIALIZER)
   const persisted = canonicalJson(ast)
@@ -212,6 +212,13 @@ test('authority RED: persisted request AST is normalized-safe and contains no ra
   assert.match(persisted, /synthetic-literals\/request_model_v1/)
   const normalized = materializeRequestAst(ast)
   assert.equal(normalized.includes(Buffer.from(marker)), false)
+  const tampered = JSON.parse(JSON.stringify(ast)) as Record<string, any>
+  const rootFields = tampered.value.fields as Array<Record<string, any>>
+  const redacted = rootFields.find((field) => field.field_ref === 'field_13')!.value
+  redacted.byte_length += 1
+  tampered.normalized_byte_length = 0
+  tampered.normalized_sha256 = '0'.repeat(64)
+  assert.throws(() => materializeRequestAst(tampered), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
 })
 
 test('authority RED: typed request schema rejects sensitive field names and response-only literals', () => {

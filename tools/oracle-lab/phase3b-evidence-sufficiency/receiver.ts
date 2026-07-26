@@ -91,6 +91,11 @@ type ReceiverState = {
 const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
 export const REQUEST_AST_MATERIALIZER = 'typed-json-ast-normalized-safe-v3'
+const REQUEST_FIELD_NAMES = ['model', 'messages', 'role', 'content', 'stream', 'max_tokens', 'system', 'tools', 'tool_choice', 'type', 'text', 'name', 'input_schema', 'description', 'input', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'] as const
+const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
+const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
+const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
+const REDACTION_PROOF_SCHEMA = 'opaque-redaction-proof-v1'
 const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
@@ -320,13 +325,24 @@ function verifyPeerOwnership(pid: number, receiverPort: number, executableIdenti
 
 function semanticRequestAst(value: unknown): unknown {
   const literals = new Map(Object.entries(FIXED_LITERAL_TABLE).map(([name, literal]) => [literal, `synthetic-literals/${name}`]))
+  const createRedactedString = (text: string): Readonly<Record<string, unknown>> => {
+    const bytes = Buffer.from(text, 'utf8')
+    const byteLength = bytes.byteLength
+    const valueSha256 = sha256Bytes(bytes)
+    return { type: 'redacted_string', byte_length: byteLength, value_sha256: valueSha256, redaction_proof: sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: byteLength, value_sha256: valueSha256 }) }
+  }
   const visit = (node: unknown): unknown => {
     if (node === null) return { type: 'null' }
     if (Array.isArray(node)) return { type: 'array', length: node.length, items: node.map(visit) }
-    if (typeof node === 'object') return { type: 'object', fields: Object.keys(node as object).map((name) => ({ name, value: visit((node as Record<string, unknown>)[name]) })) }
+    if (typeof node === 'object') return { type: 'object', fields: Object.keys(node as object).map((name) => {
+      const fieldRef = REQUEST_FIELD_IDS.get(name)
+      if (!fieldRef || (SENSITIVE_FIELD_NAME.test(name) && name !== 'max_tokens')) throw new Phase3BProductionError('receiver_request_invalid', 'request contains an unknown or sensitive field name')
+      return { field_ref: fieldRef, value: visit((node as Record<string, unknown>)[name]) }
+    }) }
     if (typeof node === 'string') {
+      if (node === FIXED_LITERAL_TABLE['model.test']) throw new Phase3BProductionError('receiver_request_invalid', 'response-only model literal is forbidden in request input')
       const literalRef = literals.get(node)
-      return literalRef ? { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')), literal_ref: literalRef } : { type: 'redacted_string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')) }
+      return literalRef ? { type: 'string', byte_length: Buffer.byteLength(node), value_sha256: sha256Bytes(Buffer.from(node, 'utf8')), literal_ref: literalRef } : createRedactedString(node)
     }
     if (typeof node === 'number') return { type: 'number', finite: Number.isFinite(node), value_text: String(node) }
     if (typeof node === 'boolean') return { type: 'boolean', value: node }
@@ -360,18 +376,24 @@ function materializeSemanticAst(node: unknown): unknown {
   if (value.type === 'object' && Array.isArray(value.fields)) {
     const result: Record<string, unknown> = {}
     for (const field of value.fields) {
-      if (!field || typeof field !== 'object' || Array.isArray(field) || typeof (field as Record<string, unknown>).name !== 'string') throw new Phase3BProductionError('receiver_request_invalid', 'typed object field is invalid')
-      result[(field as Record<string, unknown>).name as string] = materializeSemanticAst((field as Record<string, unknown>).value)
+      if (!field || typeof field !== 'object' || Array.isArray(field) || typeof (field as Record<string, unknown>).field_ref !== 'string') throw new Phase3BProductionError('receiver_request_invalid', 'typed object field is invalid')
+      const fieldRef = String((field as Record<string, unknown>).field_ref)
+      const name = REQUEST_FIELD_NAMES_BY_ID.get(fieldRef)
+      if (!name || (SENSITIVE_FIELD_NAME.test(name) && name !== 'max_tokens')) throw new Phase3BProductionError('receiver_request_invalid', 'typed object field reference is invalid')
+      result[name] = materializeSemanticAst((field as Record<string, unknown>).value)
     }
     return result
   }
   if (value.type === 'string' && typeof value.literal_ref === 'string') {
     const name = value.literal_ref.slice('synthetic-literals/'.length)
     const literal = (FIXED_LITERAL_TABLE as Record<string, string>)[name]
-    if (value.literal_ref !== `synthetic-literals/${name}` || literal === undefined || sha256Bytes(Buffer.from(literal, 'utf8')) !== value.value_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'typed literal reference is invalid')
+    if (name === 'model.test' || value.literal_ref !== `synthetic-literals/${name}` || literal === undefined || sha256Bytes(Buffer.from(literal, 'utf8')) !== value.value_sha256) throw new Phase3BProductionError('receiver_request_invalid', 'typed literal reference is invalid or response-only')
     return literal
   }
-  if (value.type === 'redacted_string' && typeof value.value_sha256 === 'string' && Number.isSafeInteger(value.byte_length)) return `<redacted:${value.value_sha256}>`
+  if (value.type === 'redacted_string') {
+    assertExactKeys(value, ['type', 'byte_length', 'value_sha256', 'redaction_proof'], 'receiver_request_invalid')
+    if (/^[a-f0-9]{64}$/.test(String(value.value_sha256)) && Number.isSafeInteger(value.byte_length) && Number(value.byte_length) >= 0 && Number(value.byte_length) <= 1_048_576 && value.redaction_proof === sha256Canonical({ schema: REDACTION_PROOF_SCHEMA, materializer: REQUEST_AST_MATERIALIZER, byte_length: value.byte_length, value_sha256: value.value_sha256 })) return `<redacted:${value.value_sha256}>`
+  }
   if (value.type === 'number' && typeof value.value_text === 'string' && /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value.value_text)) return Number(value.value_text)
   if (value.type === 'boolean' && typeof value.value === 'boolean') return value.value
   throw new Phase3BProductionError('receiver_request_invalid', 'typed request AST node is invalid')
