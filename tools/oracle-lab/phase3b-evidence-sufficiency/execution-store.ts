@@ -220,7 +220,7 @@ export function appendTerminal(store: ExecutionStore, row: RunLedgerRow, authori
     const unsigned = { schema_id: 'oracle-lab-p3b-campaign-failure.v1' as const, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, failing_sequence_index: row.sequence_index, failure_phase: 'after_spawn' as const, failure_family: result.terminalClass, action: 'stop_all_target_launches' as const, terminal_receipt_sha256: receipt.receipt_sha256 }
     const failure = { ...unsigned, failure_sha256: sha256Canonical(unsigned) }
     writeExclusiveCanonical(runtimeRoot, 'campaign-failure.json', failure)
-    appendNotExecuted(store, row.sequence_index, receipt.receipt_sha256)
+    appendNotExecuted(store, row.sequence_index, receipt.receipt_sha256, failure.failure_sha256)
   }
   return receipt
 }
@@ -235,16 +235,17 @@ export function sealPostTerminalFailure(store: ExecutionStore, row: RunLedgerRow
   const unsigned = { schema_id: 'oracle-lab-p3b-campaign-failure.v1' as const, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, failing_sequence_index: row.sequence_index, failure_phase: 'after_spawn' as const, failure_family: failureFamily, action: 'stop_all_target_launches' as const, terminal_receipt_sha256: terminal.receipt_sha256 }
   const failure = deepFreeze({ ...unsigned, failure_sha256: sha256Canonical(unsigned) })
   writeExclusiveCanonical(runtimeRoot, 'campaign-failure.json', failure)
-  appendNotExecuted(store, row.sequence_index, terminal.receipt_sha256)
+  appendNotExecuted(store, row.sequence_index, terminal.receipt_sha256, failure.failure_sha256)
   return failure
 }
 
-function appendNotExecuted(store: ExecutionStore, failingIndex: number, failureReceiptSha256: string): void {
+function appendNotExecuted(store: ExecutionStore, failingIndex: number, failureReceiptSha256: string, failureBindingSha256: string): void {
   assertSha256(failureReceiptSha256, 'execution_receipt_invalid', 'failure receipt')
+  assertSha256(failureBindingSha256, 'execution_receipt_invalid', 'failure binding')
   const { ledger } = stateOf(store)
   let previous: string | null = failureReceiptSha256
   for (const row of ledger.rows.slice(failingIndex + 1)) {
-    previous = appendAfter(store, row, 'not_executed', { ...blankFields(), launch_authority_sha256: failureReceiptSha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
+    previous = appendAfter(store, row, 'not_executed', { ...blankFields(), launch_authority_sha256: failureBindingSha256, terminal_class: 'not_executed', cause_code: 'first_terminal_global_stop' }, previous).receipt_sha256
   }
 }
 

@@ -82,6 +82,8 @@ export type RunLedgerRow = Readonly<{
   external_socket_budget: 0
   argv: readonly string[]
   argv_sha256: string
+  request_stimulus: Readonly<{ stimulus_id: string; tool_policy: string; argv_suffix: readonly string[]; stimulus_sha256: string }>
+  request_stimulus_sha256: string
   environment_sha256: string
   cwd_ref: '$SEALED_RUNTIME_ROOT'
   cwd_sha256: string
@@ -135,7 +137,7 @@ const COMPLETE_ACTION: ResponseAction = deepFreeze({
 })
 
 function actionFor(programId: string, ordinal: number): ResponseAction {
-  if (programId === 'reset_terminal' || (programId === 'reset_before_headers_then_complete' && ordinal === 0)) {
+  if ((programId === 'reset_terminal' || programId === 'reset_before_headers_then_complete') && ordinal === 0) {
     return deepFreeze({ action_ordinal: ordinal, kind: 'reset', status: null, ordered_headers: [], body_kind: 'empty', delay_class: 'none', delay_ms: 0, transport_terminal: 'reset_before_headers' })
   }
   if (programId === 'partial_sse_then_eof') {
@@ -145,6 +147,7 @@ function actionFor(programId: string, ordinal: number): ResponseAction {
   if (statusMatch && ordinal === 0) {
     return deepFreeze({ action_ordinal: ordinal, kind: 'http', status: Number(statusMatch[1]), ordered_headers: [{ name: 'content-type', value_class: 'application/json' }], body_kind: 'error_json', delay_class: 'none', delay_ms: 0, transport_terminal: 'http_complete' })
   }
+  if ((programId === 'http_429_terminal' || programId === 'http_500_terminal' || programId === 'http_529_terminal' || programId === 'reset_terminal') && ordinal === 1) return deepFreeze({ action_ordinal: ordinal, kind: 'http', status: 400, ordered_headers: [{ name: 'content-type', value_class: 'application/json' }], body_kind: 'error_json', delay_class: 'none', delay_ms: 0, transport_terminal: 'http_complete' })
   if (programId === 'delayed_headers_boundary') {
     return deepFreeze({ ...COMPLETE_ACTION, action_ordinal: ordinal, delay_class: 'bounded_before_headers', delay_ms: 25 })
   }
@@ -152,7 +155,7 @@ function actionFor(programId: string, ordinal: number): ResponseAction {
 }
 
 export function buildResponseProgram(programId: string): ResponseProgram {
-  const retryPrograms = new Set(['http_429_then_complete', 'http_500_then_complete', 'reset_before_headers_then_complete'])
+  const retryPrograms = new Set(['http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'reset_terminal', 'http_429_then_complete', 'http_500_then_complete', 'reset_before_headers_then_complete'])
   const actionCount = retryPrograms.has(programId) ? 2 : 1
   const actions = Array.from({ length: actionCount }, (_, index) => actionFor(programId, index))
   const completeSse = actions.some((action) => action.body_kind === 'complete_sse') ? deepFreeze({
@@ -234,10 +237,21 @@ function selectedExecutable(arm: ExecutableArm): 'original_image' | 'probe_image
   return arm.includes('instrumented') && !arm.includes('uninstrumented') ? 'probe_image' : 'original_image'
 }
 
+function requestStimulus(family: LedgerFamily, scheduleId: string): Readonly<{ stimulus_id: string; tool_policy: string; argv_suffix: readonly string[]; stimulus_sha256: string }> {
+  let toolPolicy = 'campaign-default'
+  let argvSuffix: readonly string[] = []
+  if (family === 'request_wire' && scheduleId === 'prompt_only') { toolPolicy = 'no-tools'; argvSuffix = ['--tools', ''] }
+  else if (family === 'request_wire' && scheduleId === 'safe_tool_catalog') { toolPolicy = 'safe-readonly-catalog'; argvSuffix = ['--tools', 'Read,Glob,Grep'] }
+  else if (family === 'request_wire' && scheduleId === 'tool_disabled') { toolPolicy = 'explicitly-disabled-read'; argvSuffix = ['--tools', 'Read', '--disallowedTools', 'Read'] }
+  const unsigned = { stimulus_id: scheduleId, tool_policy: toolPolicy, argv_suffix: argvSuffix }
+  return deepFreeze({ ...unsigned, stimulus_sha256: sha256Canonical(unsigned) })
+}
+
 function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string, repetition: number, arm: ExecutableArm, sequenceIndex: number): RunLedgerRow {
   const seed = FIXED_SEEDS[repetition]
   const runId = exactRunId(campaignId, scheduleId, arm, repetition, seed)
-  const argv = ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', runId, '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions']
+  const stimulus = requestStimulus(family, scheduleId)
+  const argv = ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', runId, '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions', ...stimulus.argv_suffix]
   const responseProgram = buildResponseProgram(family === 'target_control' || family === 'config' || family === 'auth' || family === 'request_wire' ? 'complete_sse' : scheduleId)
   const unsigned = {
     run_id: runId,
@@ -255,6 +269,8 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
     external_socket_budget: 0 as const,
     argv,
     argv_sha256: sha256Canonical(argv),
+    request_stimulus: stimulus,
+    request_stimulus_sha256: stimulus.stimulus_sha256,
     environment_sha256: sha256Canonical({ fixed_policy: 'closed-isolated-environment-v1', unknown_or_omitted: 'disabled' }),
     cwd_ref: '$SEALED_RUNTIME_ROOT' as const,
     cwd_sha256: sha256Canonical('$SEALED_RUNTIME_ROOT'),

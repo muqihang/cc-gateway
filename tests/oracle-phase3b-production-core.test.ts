@@ -5,11 +5,13 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { deriveCuration, runCloseout, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, buildCampaignLedger, buildResponseProgram, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
+import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
+import { loadTrustedReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
@@ -49,6 +51,34 @@ test('complete_sse and recovery descriptors are complete, ordered, and attempt-b
   const retry = buildResponseProgram('http_429_then_complete')
   assert.equal(retry.maximum_attempts, 2)
   assert.deepEqual(retry.actions.map((action) => [action.action_ordinal, action.status, action.body_kind]), [[0, 429, 'error_json'], [1, 200, 'complete_sse']])
+})
+
+test('request-wire schedules carry three distinct real argv stimuli with paired-arm stability', () => {
+  const rows = buildCampaignLedger('p3b-request-stimuli').rows.filter((row) => row.family === 'request_wire')
+  const bySchedule = ['prompt_only', 'safe_tool_catalog', 'tool_disabled'].map((schedule) => rows.filter((row) => row.schedule_id === schedule))
+  assert.equal(new Set(bySchedule.map((members) => members[0].request_stimulus_sha256)).size, 3)
+  assert.equal(new Set(bySchedule.map((members) => JSON.stringify(members[0].request_stimulus.argv_suffix))).size, 3)
+  for (const members of bySchedule) assert.equal(new Set(members.map((row) => row.request_stimulus_sha256)).size, 1)
+})
+
+test('retryable terminal and recovery programs share the trigger then diverge deterministically', () => {
+  const terminal = buildResponseProgram('http_429_terminal')
+  const recovery = buildResponseProgram('http_429_then_complete')
+  assert.equal(terminal.maximum_attempts, 2)
+  assert.deepEqual(terminal.actions.map((action) => [action.status, action.body_kind]), [[429, 'error_json'], [400, 'error_json']])
+  assert.deepEqual(recovery.actions.map((action) => [action.status, action.body_kind]), [[429, 'error_json'], [200, 'complete_sse']])
+  assert.deepEqual(buildResponseProgram('reset_terminal').actions.map((action) => [action.kind, action.status]), [['reset', null], ['http', 400]])
+})
+
+test('process-env config treatment selects the second sealed route', () => {
+  const row = buildCampaignLedger('p3b-route-policy').rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
+  assert.equal(expectedSelectedRoute(row), 1)
+})
+
+test('fixed reviewer registry rejects a caller-fabricated signature', () => {
+  const registry = loadTrustedReviewerRegistry(process.cwd())
+  const reviewer = registry.reviewers.find((candidate) => candidate.reviewer_role === 'requirements')!
+  assert.throws(() => verifyTrustedSignature({ reviewer_identity: reviewer.reviewer_identity, reviewer_role: reviewer.reviewer_role, signing_key_id: reviewer.key_id, signature_algorithm: 'ed25519_canonical_json_v1', signature: Buffer.alloc(64).toString('base64'), authority_sha256: 'a'.repeat(64) }, registry, 'requirements', 'authority_sha256', 'operator_authority_invalid'), (error: Error & { code?: string }) => error.code === 'operator_authority_invalid')
 })
 
 test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', () => {
@@ -105,4 +135,10 @@ test('curation and exact five-record closeout derive Unknown/disabled only from 
   assert.equal(closeout.phase3b_usable, false)
   const external = validateExternalSet(root)
   assert.deepEqual((external.records as Array<Record<string, unknown>>).map((record) => record.name), ['artifact-index', 'leak-report', 'exit-report', 'handoff', 'terminal-manifest'])
+  assert.equal(SUPPORT_PATHS.length, 5)
+  assert.equal(validateConclusionSupport(root, false).length, 5)
+  assert.throws(() => validateConclusionSupport(root, true), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
+  createPrivateDirectory(root, 'runs')
+  writeExclusiveCanonical(root, 'runs/unindexed-extra.json', { schema_id: 'unexpected.v1', value: 'caller-leftover' })
+  assert.throws(() => validateArtifactIndexCoverage(root, readCanonical(root, 'capsules/P3B-ES1/closure/artifact-index.json', 16_777_216).value), (error: Error & { code?: string }) => error.code === 'artifact_index_invalid')
 })

@@ -5,6 +5,7 @@ import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from
 import { FIXED_STDIN_LITERAL, FIXED_LITERAL_TABLE_SHA256, type RunLedgerRow } from './ledger.js'
 import type { ReceiverTargetBootstrap } from './receiver.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { buildSandboxProfile } from './sandbox-policy.js'
 
 export type PreparedCell = Readonly<{
   schema_id: 'oracle-lab-p3b-prepared-cell.v1'
@@ -74,24 +75,6 @@ export function expectedAuthMarkerClass(row: RunLedgerRow): string {
   return parts.length === 0 ? 'none' : parts.join('+')
 }
 
-function profileEscape(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
-}
-
-export function buildSandboxProfile(runtimeRoot: string, writableRoot: string, routePorts: readonly number[]): string {
-  const unique = [...new Set(routePorts)].sort((left, right) => left - right)
-  if (unique.length < 1 || unique.some((port) => !Number.isSafeInteger(port) || port < 1 || port > 65535)) throw new Phase3BProductionError('sandbox_profile_invalid', 'sandbox loopback ports are invalid')
-  return [
-    '(version 1)',
-    '(allow default)',
-    '(deny network*)',
-    '(deny file-write*)',
-    `(allow file-write* (subpath "${profileEscape(writableRoot)}"))`,
-    `(allow file-read* (subpath "${profileEscape(runtimeRoot)}"))`,
-    ...unique.map((port) => `(allow network-outbound (remote tcp "localhost:${port}"))`),
-  ].join(' ')
-}
-
 function materializeConfig(runtimeRoot: string, runRelative: string, row: RunLedgerRow, routeUrls: readonly string[], env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
   const definition = CONFIG_VALUES[row.schedule_id]
   if (!definition || routeUrls.length !== 2) throw new Phase3BProductionError('scenario_input_invalid', 'config row does not have exact two-route definition')
@@ -151,7 +134,7 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
   const sandboxProfileSha256 = sha256Bytes(Buffer.from(profile, 'utf8'))
   const descriptorUnsigned = {
     schema_id: 'oracle-lab-p3b-cell-input-descriptor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256,
-    run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, argv_sha256: row.argv_sha256,
+    run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, argv_sha256: row.argv_sha256, request_stimulus_sha256: row.request_stimulus_sha256,
     environment_sha256: environmentSha256, cwd_sha256: sha256Canonical(roots.cwd), stdin_sha256: row.stdin_sha256,
     launch_authority_sha256: bootstrap.launch_authority_sha256, route_authorities_sha256: sha256Canonical(bootstrap.route_urls), input_class_sha256s: inputClasses, sandbox_profile_sha256: sandboxProfileSha256, unknown_or_omitted: 'disabled', raw_material_persisted: false,
   }

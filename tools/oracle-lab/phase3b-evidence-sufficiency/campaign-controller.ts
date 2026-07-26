@@ -13,6 +13,7 @@ import { sealTargetControlTranche } from './closeout.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
+import { TRUSTED_REVIEWER_REGISTRY_RELATIVE, TRUSTED_REVIEWER_REGISTRY_SHA256, loadTrustedReviewerRegistry, verifyTrustedSignature } from './trust.js'
 
 export type CampaignInput = Readonly<{
   schema_id: 'oracle-lab-p3b-production-input.v1'
@@ -25,8 +26,13 @@ export type CampaignInput = Readonly<{
   cross_repo_review_path: string
   original_source: string
   probe_source: string
+  probe_source_sha256: string
+  probe_unsigned_source: string
+  probe_unsigned_source_sha256: string
   original_recipe: string
+  original_recipe_sha256: string
   probe_recipe: string
+  probe_recipe_sha256: string
   platform_archive_path: string
   platform_archive_sha256: string
   source_tree_path: string
@@ -53,16 +59,23 @@ export type OperatorAuthority = Readonly<{
   reviewed_candidate_tree: string
   implementation_review_path: string
   implementation_review_sha256: string
+  reviewed_artifact_set_sha256: string
   critical: 0
   important: 0
   dynamic_launch_authorized: true
   created_at_ms: number
   expires_at_ms: number
+  reviewer_identity: string
+  reviewer_role: 'requirements'
+  signing_key_id: string
+  signature_algorithm: 'ed25519_canonical_json_v1'
+  signature: string
   authority_sha256: string
 }>
 
-const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
-const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'implementation_review_path', 'implementation_review_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'authority_sha256'] as const
+const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
+const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
+const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
 
 function parseExternalCanonical(file: string): Record<string, unknown> {
   const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes: 1_048_576 })
@@ -82,17 +95,23 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
   assertExactKeys(value, INPUT_KEYS, 'campaign_input_invalid')
   assertDigestField(value, 'input_sha256', 'campaign_input_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-production-input.v1' || typeof value.campaign_id !== 'string') throw new Phase3BProductionError('campaign_input_invalid', 'campaign input schema or ID drifted')
-  for (const field of ['platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
-  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
+  for (const field of ['probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
+  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
   if (stableRead(value.cross_repo_review_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== CROSS_REPO_AUTHORITY.review_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'actual C1 CROSS_REPO_PASS review bytes drifted')
+  if (stableRead(path.join(String(value.cc_repository), TRUSTED_REVIEWER_REGISTRY_RELATIVE), { maximumBytes: 32_768 }).identity.sha256 !== TRUSTED_REVIEWER_REGISTRY_SHA256) throw new Phase3BProductionError('campaign_input_invalid', 'trusted reviewer root is not the immutable base registry')
   if (value.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || value.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256 || stableRead(value.original_source as string, { maximumBytes: 67_108_864 }).identity.sha256 !== TARGET_PROFILE.entrypoint_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'target artifact is not exact Claude Code 2.1.215 darwin-arm64')
   if (stableRead(value.platform_archive_path as string, { maximumBytes: 134_217_728 }).identity.sha256 !== value.platform_archive_sha256 || stableRead(value.source_tree_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.source_tree_sha256 || stableRead(value.toolchain_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.toolchain_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'actual archive, source-tree, or toolchain artifact bytes drifted')
+  for (const [fileField, digestField] of [['probe_source', 'probe_source_sha256'], ['probe_unsigned_source', 'probe_unsigned_source_sha256'], ['original_recipe', 'original_recipe_sha256'], ['probe_recipe', 'probe_recipe_sha256']] as const) if (stableRead(String(value[fileField]), { maximumBytes: 67_108_864 }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('campaign_input_invalid', `${fileField} bytes drifted from its reviewed digest`)
   if (stableRead(value.schema_bundle_path as string, { maximumBytes: 16_777_216 }).identity.sha256 !== value.schema_bundle_sha256) throw new Phase3BProductionError('campaign_input_invalid', 'schema bundle bytes drifted')
   const focusedSuite = parseExternalCanonical(value.focused_suite_path as string)
   if (stableRead(value.focused_suite_path as string, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256 !== value.focused_suite_sha256 || focusedSuite.passed !== true || focusedSuite.strict_typescript !== true || focusedSuite.build !== true || focusedSuite.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'actual cumulative focused suite artifact is not green')
   if (stableRead(value.predecessor_config_auth_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] || stableRead(value.predecessor_failure_stream_path as string, { maximumBytes: 1_048_576 }).identity.sha256 !== PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM']) throw new Phase3BProductionError('predecessor_invalid', 'exact Phase 3A conclusion bytes drifted')
   if (Date.now() >= Date.parse(PREDECESSOR_AUTHORITY.expires_at)) throw new Phase3BProductionError('predecessor_expired', 'Phase 3A predecessor authority expired')
   return deepFreeze(value as CampaignInput)
+}
+
+function reviewedArtifactSetSha256(input: CampaignInput): string {
+  return sha256Canonical({ schema_id: 'oracle-lab-p3b-reviewed-artifact-set.v1', target_profile: TARGET_PROFILE, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe_sha256: input.original_recipe_sha256, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, schema_bundle_sha256: input.schema_bundle_sha256, focused_suite_sha256: input.focused_suite_sha256 })
 }
 
 function validateRepositories(input: CampaignInput, candidateCommit: string, candidateTree: string): void {
@@ -105,7 +124,10 @@ function validateRepositories(input: CampaignInput, candidateCommit: string, can
 function validateAuthority(value: Record<string, unknown>, input: CampaignInput): OperatorAuthority {
   assertExactKeys(value, AUTHORITY_KEYS, 'operator_authority_invalid')
   assertDigestField(value, 'authority_sha256', 'operator_authority_invalid')
-  if (value.schema_id !== 'oracle-lab-p3b-production-authority.v1' || value.decision !== 'authorize_fresh_phase3b_production_campaign' || value.campaign_id !== input.campaign_id || value.campaign_input_sha256 !== input.input_sha256 || value.critical !== 0 || value.important !== 0 || value.dynamic_launch_authorized !== true || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(CROSS_REPO_AUTHORITY)) throw new Phase3BProductionError('operator_authority_invalid', 'operator authority scope/review/source binding drifted')
+  const registry = loadTrustedReviewerRegistry(input.cc_repository)
+  verifyTrustedSignature(value, registry, 'requirements', 'authority_sha256', 'operator_authority_invalid')
+  const artifactSetSha256 = reviewedArtifactSetSha256(input)
+  if (value.schema_id !== 'oracle-lab-p3b-production-authority.v1' || value.decision !== 'authorize_fresh_phase3b_production_campaign' || value.campaign_id !== input.campaign_id || value.campaign_input_sha256 !== input.input_sha256 || value.reviewed_artifact_set_sha256 !== artifactSetSha256 || value.critical !== 0 || value.important !== 0 || value.dynamic_launch_authorized !== true || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(CROSS_REPO_AUTHORITY)) throw new Phase3BProductionError('operator_authority_invalid', 'operator authority scope/review/source binding drifted')
   if (!Number.isSafeInteger(value.created_at_ms) || !Number.isSafeInteger(value.expires_at_ms) || Number(value.created_at_ms) > Date.now() || Number(value.expires_at_ms) <= Date.now() || Number(value.expires_at_ms) - Number(value.created_at_ms) > 86_400_000) throw new Phase3BProductionError('operator_authority_stale', 'operator authority is future, stale, or overlong')
   for (const field of ['reviewed_candidate_commit', 'reviewed_candidate_tree'] as const) if (typeof value[field] !== 'string' || !/^[a-f0-9]{40}$/.test(value[field] as string)) throw new Phase3BProductionError('operator_authority_invalid', `${field} is invalid`)
   assertSha256(value.implementation_review_sha256, 'operator_authority_invalid', 'implementation review')
@@ -113,7 +135,10 @@ function validateAuthority(value: Record<string, unknown>, input: CampaignInput)
   const reviewBytes = stableRead(value.implementation_review_path as string, { mode: 0o600, maximumBytes: 1_048_576 })
   if (reviewBytes.identity.sha256 !== value.implementation_review_sha256) throw new Phase3BProductionError('implementation_review_failed', 'implementation review bytes drifted')
   const review = parseExternalCanonical(value.implementation_review_path as string)
-  if (review.reviewed_commit !== value.reviewed_candidate_commit || review.reviewed_tree !== value.reviewed_candidate_tree || review.critical !== 0 || review.important !== 0 || !['PASS', 'APPROVED'].includes(String(review.verdict))) throw new Phase3BProductionError('implementation_review_failed', 'exact-head implementation review is not 0C/0I')
+  assertExactKeys(review, REVIEW_KEYS, 'implementation_review_failed')
+  assertDigestField(review, 'review_sha256', 'implementation_review_failed')
+  verifyTrustedSignature(review, registry, 'security_quality', 'review_sha256', 'implementation_review_failed')
+  if (review.schema_id !== 'oracle-lab-p3b-implementation-review.v2' || review.review_kind !== 'phase3b-production-executor' || review.reviewed_candidate_commit !== value.reviewed_candidate_commit || review.reviewed_candidate_tree !== value.reviewed_candidate_tree || review.reviewed_artifact_set_sha256 !== artifactSetSha256 || review.critical !== 0 || review.important !== 0 || review.verdict !== 'PASS' || sha256Canonical(review.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(review.c1) !== sha256Canonical(CROSS_REPO_AUTHORITY) || !Number.isSafeInteger(review.created_at_ms) || !Number.isSafeInteger(review.expires_at_ms) || Number(review.created_at_ms) > Date.now() || Number(review.expires_at_ms) <= Date.now()) throw new Phase3BProductionError('implementation_review_failed', 'trusted exact-head implementation review is not current 0C/0I')
   validateRepositories(input, String(value.reviewed_candidate_commit), String(value.reviewed_candidate_tree))
   return deepFreeze(value as OperatorAuthority)
 }
@@ -132,13 +157,18 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
   writeExclusiveCanonical(root, 'control/campaign-input.json', input)
   writeExclusiveCanonical(root, 'control/operator-authority.json', authority)
   writeExclusiveCanonical(root, 'control/focused-suite.json', parseExternalCanonical(input.focused_suite_path))
+  writeExclusiveCanonical(root, 'control/implementation-review.json', parseExternalCanonical(authority.implementation_review_path))
+  writeExclusiveCanonical(root, 'control/cross-repo-review.json', parseExternalCanonical(input.cross_repo_review_path))
+  writeExclusiveCanonical(root, 'control/predecessor-config-auth.json', parseExternalCanonical(input.predecessor_config_auth_path))
+  writeExclusiveCanonical(root, 'control/predecessor-failure-stream.json', parseExternalCanonical(input.predecessor_failure_stream_path))
+  writeExclusiveCanonical(root, 'control/trusted-reviewers.json', loadTrustedReviewerRegistry(input.cc_repository))
   createPrivateDirectory(root, 'synthetic-literals')
   writeExclusiveCanonical(root, FIXED_LITERAL_TABLE_PATH, FIXED_LITERAL_TABLE)
   const ledger = buildCampaignLedger(input.campaign_id)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
-  const images = createSealedLaunchImages({ runtime_root: root, original_source: input.original_source, probe_source: input.probe_source, original_recipe: input.original_recipe, probe_recipe: input.probe_recipe, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256 })
+  const images = createSealedLaunchImages({ runtime_root: root, original_source: input.original_source, probe_source: input.probe_source, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source: input.probe_unsigned_source, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe: input.original_recipe, original_recipe_sha256: input.original_recipe_sha256, probe_recipe: input.probe_recipe, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256 })
   const receiver = captureReceiverRuntimeIdentity()
-  const anchor = buildStaticAnchor({ platform_archive_sha256: input.platform_archive_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, images, ...receiver, controller_source_sha256: controllerSourceSetSha256(), controller_executable_sha256: controllerExecutableSha256(), schema_bundle_sha256: input.schema_bundle_sha256 })
+  const anchor = buildStaticAnchor({ platform_archive_sha256: input.platform_archive_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, images, ...receiver, controller_source_sha256: controllerSourceSetSha256(), controller_executable_sha256: controllerExecutableSha256(), schema_bundle_sha256: input.schema_bundle_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256 })
   writeExclusiveCanonical(root, 'prelaunch/static-anchor.json', anchor)
   const selectionUnsigned = { schema_id: 'oracle-lab-p3b-active-selection.v1', campaign_id: input.campaign_id, ledger_sha256: ledger.ledger_sha256, anchor_sha256: anchor.anchor_sha256, original_image_record_sha256: images.original.record_sha256, probe_image_record_sha256: images.probe.record_sha256 }
   writeExclusiveCanonical(root, 'prelaunch/active-selection.json', { ...selectionUnsigned, selection_sha256: sha256Canonical(selectionUnsigned) })
@@ -164,7 +194,7 @@ export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promi
   if (imageSet.schema_id !== 'oracle-lab-p3b-launch-image-set.v1' || imageSet.set_sha256 !== sha256Canonical({ original: imageSet.original, probe: imageSet.probe })) throw new Phase3BProductionError('launch_image_invalid', 'sealed launch image set drifted')
   const images = { original: loadLaunchImageRecord(imageSet.original), probe: loadLaunchImageRecord(imageSet.probe) }
   const anchor = loadStaticAnchor(readCanonical(root, 'prelaunch/static-anchor.json').value)
-  if (anchor.original_image_record_sha256 !== images.original.record_sha256 || anchor.probe_image_record_sha256 !== images.probe.record_sha256 || anchor.source_tree_sha256 !== input.source_tree_sha256 || anchor.toolchain_sha256 !== input.toolchain_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor image/source/toolchain drifted')
+  if (anchor.original_image_record_sha256 !== images.original.record_sha256 || anchor.probe_image_record_sha256 !== images.probe.record_sha256 || anchor.source_tree_sha256 !== input.source_tree_sha256 || anchor.toolchain_sha256 !== input.toolchain_sha256 || anchor.reviewed_artifact_set_sha256 !== authority.reviewed_artifact_set_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor image/source/toolchain/review drifted')
   const receiverIdentity = captureReceiverRuntimeIdentity()
   if (anchor.receiver_source_sha256 !== receiverIdentity.receiver_source_sha256 || anchor.receiver_executable_identity_sha256 !== receiverIdentity.receiver_executable_identity_sha256 || anchor.receiver_schema_sha256 !== receiverIdentity.receiver_schema_sha256 || anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256()) throw new Phase3BProductionError('static_anchor_invalid', 'receiver/controller runtime tuple drifted')
   const controller = createProductionController({ campaign_id: input.campaign_id })

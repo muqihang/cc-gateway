@@ -3,11 +3,11 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { Phase3BProductionError, canonicalJson } from './core.js'
-import { issueOperatorDecisionFromTty } from './gates.js'
+import { importSignedOperatorDecision } from './gates.js'
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-  if (argv.length !== 2 || argv[0] !== '--evidence-root') throw new Phase3BProductionError('runner_cli_invalid', 'usage: operator-decision --evidence-root FIXED_ROOT')
-  const decision = await issueOperatorDecisionFromTty(path.resolve(argv[1]))
+  if (argv.length !== 4 || argv[0] !== '--evidence-root' || argv[2] !== '--signed-decision') throw new Phase3BProductionError('runner_cli_invalid', 'usage: operator-decision --evidence-root FIXED_ROOT --signed-decision FILE')
+  const decision = importSignedOperatorDecision(path.resolve(argv[1]), path.resolve(argv[3]))
   process.stdout.write(`${canonicalJson({ decision_sha256: decision.decision_sha256 })}\n`)
   return 0
 }

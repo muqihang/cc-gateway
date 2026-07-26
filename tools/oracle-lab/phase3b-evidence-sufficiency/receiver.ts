@@ -11,6 +11,7 @@ import { assertControllerLaunchPrerequisites, assertLaunchAuthority } from './la
 import { type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { expectedSelectedRoute } from './route-policy.js'
 
 type Route = Readonly<{
   route_ordinal: number
@@ -90,12 +91,6 @@ type ReceiverState = {
 const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
 const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_persistence: false })
-
-function expectedSelectedRoute(row: RunLedgerRow): number {
-  if (row.route_count === 1) return 0
-  if (row.family !== 'config' || row.schedule_id === 'config-precedence-process-env-vs-local') return 0
-  return row.arm.startsWith('treatment/') ? 1 : 0
-}
 
 function executableIdentity(): string {
   const identity = stableRead(process.execPath, { maximumBytes: 134_217_728 }).identity
@@ -332,17 +327,23 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
 }
 
 async function sendAction(response: ServerResponse, action: ResponseAction): Promise<Readonly<Record<string, unknown>>> {
+  const started = process.hrtime.bigint()
   if (action.delay_ms > 0) await new Promise((resolve) => setTimeout(resolve, action.delay_ms))
   if (action.kind === 'reset') {
     response.socket?.destroy()
-    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: 'reset_before_headers', timing_bucket: 'not_observed' })
+    const elapsed = process.hrtime.bigint() - started
+    return deepFreeze({ status: null, ordered_header_classes: [], body_byte_length: 0, body_sha256: sha256Bytes(Buffer.alloc(0)), sse_event_order: [], transport_terminal: response.socket?.destroyed === true ? 'reset_before_headers' : 'reset_failed', delay_elapsed_ns: elapsed.toString(), timing_bucket: action.delay_ms > 0 && elapsed >= BigInt(action.delay_ms) * 1_000_000n ? 'at_or_after_boundary' : action.delay_ms > 0 ? 'before_boundary' : 'not_delayed' })
   }
   const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8')
+  response.sendDate = false
   response.statusCode = action.status!
   for (const header of action.ordered_headers) response.setHeader(header.name, header.value_class === 'text/event-stream' ? 'text/event-stream' : 'application/json')
+  const actualHeaders = response.getHeaderNames().map((name) => ({ name: name.toLowerCase(), value_class: String(response.getHeader(name)).toLowerCase().startsWith('text/event-stream') ? 'text/event-stream' : String(response.getHeader(name)).toLowerCase().startsWith('application/json') ? 'application/json' : 'other' }))
   await new Promise<void>((resolve) => response.end(body, () => resolve()))
-  const eventOrder = action.body_kind === 'complete_sse' ? ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'] : action.body_kind === 'partial_sse' ? ['message_start', 'content_block_start', 'content_block_delta'] : []
-  return deepFreeze({ status: action.status, ordered_header_classes: action.ordered_headers, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: eventOrder, transport_terminal: action.transport_terminal, timing_bucket: action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_observed' })
+  const elapsed = process.hrtime.bigint() - started
+  const eventOrder = [...body.toString('utf8').matchAll(/^event: ([a-z_]+)$/gm)].map((match) => match[1])
+  const transportTerminal = action.body_kind === 'partial_sse' && !eventOrder.includes('message_stop') ? 'eof_after_partial' : response.writableEnded ? 'http_complete' : 'http_incomplete'
+  return deepFreeze({ status: response.statusCode, ordered_header_classes: actualHeaders, body_byte_length: body.length, body_sha256: sha256Bytes(body), sse_event_order: eventOrder, transport_terminal: transportTerminal, delay_elapsed_ns: elapsed.toString(), timing_bucket: action.delay_class === 'bounded_before_headers' ? elapsed >= BigInt(action.delay_ms) * 1_000_000n ? 'at_or_after_boundary' : 'before_boundary' : 'not_delayed' })
 }
 
 export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<ReceiverResult> {

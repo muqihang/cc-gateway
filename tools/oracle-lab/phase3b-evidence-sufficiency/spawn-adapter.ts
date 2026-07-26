@@ -11,7 +11,8 @@ import { type LaunchAuthorityReceipt, assertLaunchAuthority } from './launch-aut
 import { type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
 import type { RunLedgerRow } from './ledger.js'
 import { type ReceiverAuthority, abortReceiverGroup, assertReceiverAuthority, prepareReceiverLaunch, registerReceiverTarget, sealReceiverGroup } from './receiver.js'
-import { buildSandboxProfile, prepareScenarioCell, preparedCellState } from './scenario-input.js'
+import { prepareScenarioCell, preparedCellState } from './scenario-input.js'
+import { buildSandboxProfile } from './sandbox-policy.js'
 import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 
 export type RowExecutionResult = Readonly<{
@@ -207,6 +208,7 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
   createPrivateDirectory(runtimeRoot, runRelative)
   const routePorts = input.receiver.routes.map((route) => route.port)
   const preArmProfile = buildSandboxProfile(runtimeRoot, path.join(runtimeRoot, runRelative), routePorts)
+  if (sha256Bytes(Buffer.from(preArmProfile, 'utf8')) !== input.authority.guard_profile_sha256) throw new Phase3BProductionError('guard_profile_invalid', 'actual sandbox profile differs from launch authority')
   const guardReceiptSha256 = await runExactGuard(input.controller, input.row, preArmProfile, routePorts)
   const bootstrap = prepareReceiverLaunch(input.receiver, input.authority)
   const prepared = prepareScenarioCell(input.controller, input.row, bootstrap)
