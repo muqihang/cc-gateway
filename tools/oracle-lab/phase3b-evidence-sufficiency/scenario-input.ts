@@ -51,7 +51,11 @@ export function materializeRouteDispatch(row: RunLedgerRow, routeUrls: readonly 
   if (routeUrls.length !== 2 || routeUrls.some((value) => !/^http:\/\/127\.0\.0\.1:\d+$/.test(value))) throw new Phase3BProductionError('scenario_input_invalid', 'synthetic route dispatch requires the exact two loopback URLs')
   const plan = configRoutePlan(row)
   const sourceRoute = plan['process-env'] ?? plan.request_route
-  const selectedUrl = routeUrls[sourceRoute]
+  const plannedUrl = routeUrls[sourceRoute]
+  const selectedUrl = plan['process-env'] !== null && process.env.ANTHROPIC_BASE_URL !== undefined
+    ? process.env.ANTHROPIC_BASE_URL
+    : plannedUrl
+  if (!routeUrls.includes(selectedUrl)) throw new Phase3BProductionError('scenario_input_invalid', 'process environment selected a URL outside the sealed route set')
   const actualRoute = routeUrls.indexOf(selectedUrl)
   if (actualRoute !== 0 && actualRoute !== 1) throw new Phase3BProductionError('scenario_input_invalid', 'materialized route URL is not in the sealed route set')
   return deepFreeze({ request_route: plan.request_route, preflight_route: plan.preflight_route, actual_route: actualRoute as 0 | 1, selected_url: selectedUrl })

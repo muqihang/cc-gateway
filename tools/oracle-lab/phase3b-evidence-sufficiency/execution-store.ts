@@ -253,6 +253,35 @@ export function sealSyntheticSuccessReceipts(store: ExecutionStore): readonly Ex
   return readExecutionReceipts(store)
 }
 
+export function appendAdapterSuccessReceipts(store: ExecutionStore, authorityForRow: (row: RunLedgerRow) => LaunchAuthorityReceipt): readonly ExecutionReceipt[] {
+  const state = stateOf(store)
+  let previous: string | null = null
+  for (const row of state.ledger.rows) {
+    const authority = authorityForRow(row)
+    const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previous)
+    const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
+    const terminal = appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: (BigInt(started.started_monotonic_ns!) + 5_000n).toString(), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
+    previous = terminal.receipt_sha256
+  }
+  return readExecutionReceipts(store)
+}
+
+export function appendAdapterRowSuccess(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, previousReceiptSha256: string | null): ExecutionReceipt {
+  const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previousReceiptSha256)
+  const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
+  return appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: (BigInt(started.started_monotonic_ns!) + 5_000n).toString(), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
+}
+
+export function appendAdapterRowStartedSpawned(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, previousReceiptSha256: string | null): Readonly<{ started: ExecutionReceipt; spawned: ExecutionReceipt }> {
+  const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previousReceiptSha256)
+  const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
+  return deepFreeze({ started, spawned })
+}
+
+export function appendAdapterRowTerminal(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, started: ExecutionReceipt, spawned: ExecutionReceipt): ExecutionReceipt {
+  return appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: (BigInt(started.started_monotonic_ns!) + 5_000n).toString(), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
+}
+
 export function sealPostTerminalFailure(store: ExecutionStore, row: RunLedgerRow, cause: unknown): CampaignFailure {
   const { runtimeRoot, ledger } = stateOf(store)
   const receipts = readExecutionReceipts(store)

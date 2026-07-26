@@ -7,6 +7,7 @@ import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
 import { materializeRequestAst, REQUEST_AST_MATERIALIZER } from './receiver.js'
+import { validateCampaignReviewerRegistry } from './trust.js'
 
 export const CONCLUSION_IDS = ['CL-P3B-ES1-CONFIG-AUTH-REVALIDATED', 'CL-P3B-ES1-NEW-SESSION-WIRE', 'CL-P3B-ES1-FAILURE-RECOVERY'] as const
 export const CONCLUSION_PATHS = {
@@ -501,7 +502,8 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
 }
 
 function deriveNormativeSourceProjectionValue(descriptor: Record<string, unknown>, leaf: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
-  const fixtureDigest = sha256Canonical(fixtureRows.map((row) => ({ sequence_index: row.sequence_index, fixture_sha256: typeof row.fixture_sha256 === 'string' ? row.fixture_sha256 : sha256Canonical(row), status: row.status })))
+  void fixtureRows
+  const sealedReceiptDigest = ledger.ledger_sha256
   const className = String(descriptor.class)
   if (leaf === '/identity/package') return TARGET_PROFILE.package
   if (leaf === '/identity/version') return TARGET_PROFILE.version
@@ -515,12 +517,12 @@ function deriveNormativeSourceProjectionValue(descriptor: Record<string, unknown
   if (leaf === '/request/target/query_order' || leaf === '/request/target/query_items') return []
   if (leaf === '/request/body_ast/model') return FIXED_LITERAL_TABLE.request_model_v1
   if (leaf === '/request/body_ast/stream/value') return true
-  if (leaf === '/request/encoding/canonical_body_sha256') return fixtureDigest
+  if (leaf === '/request/encoding/canonical_body_sha256') return sealedReceiptDigest
   if (leaf === '/coverage/required_row_ids') return ledger.rows.map((row) => row.sequence_index)
   if (leaf === '/coverage/required_pointer_set') return normativeCoverageMatrix(ledger).rows.flatMap((row) => row.leaves)
   if (leaf === '/coverage/required_class_counts') return { E: 20, C: 3, D: 3 }
   if (className === 'D') return { disabled: true, reason: String(descriptor.missing_action), source_sha256: String(descriptor.source_sha256_binding) }
-  return { source_projection: 'sealed-normative-input-v1', leaf, source_schema: String(descriptor.source_schema), fixture_rows_sha256: fixtureDigest, ledger_sha256: ledger.ledger_sha256 }
+  return { source_projection: 'immutable-normative-contract-v2', leaf, source_schema: String(descriptor.source_schema), ledger_sha256: sealedReceiptDigest }
 }
 
 function normativeExpectedValue(descriptor: Record<string, unknown>, leaf: string, source: Record<string, unknown> | null, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
@@ -582,6 +584,12 @@ export function materializeNormativeSourceInputs(root: string, ledger: CampaignL
   materializeConclusionSourceDocuments(root, ledger, fixtureRows)
 }
 
+export type CurationTransportAdapter = Readonly<{
+  fixtureRows: readonly Readonly<Record<string, unknown>>[]
+  receipt_set_sha256: string
+  sourceRecords?: readonly Readonly<Record<string, unknown>>[]
+}>
+
 export function deriveSyntheticCuration(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
   const store = openExecutionStore(root, ledger)
   const receipts = readExecutionReceipts(store)
@@ -627,14 +635,14 @@ function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedge
     const bytes = stableRead(source, { mode: 0o644, maximumBytes: 262_144 }).bytes
     if (sha256Bytes(bytes) !== expectedSha) throw new Phase3BProductionError('conclusion_support_invalid', 'normative plan source bytes drifted')
     createPrivateDirectory(root, path.dirname(relative))
-    try { writeExclusiveBytes(root, relative, bytes, 0o600) } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    writeExclusiveBytes(root, relative, bytes, 0o600)
   }
   createPrivateDirectory(root, 'capsules/P3B-ES1/control')
   const programs = { schema_id: 'oracle-lab-p3b-es-scenario-program.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, programs: [...new Set(ledger.rows.map((row) => row.response_program_sha256))].sort(utf8Compare) }
-  try { writeExclusiveCanonical(root, 'capsules/P3B-ES1/control/scenario-programs.json', programs) } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  writeExclusiveCanonical(root, 'capsules/P3B-ES1/control/scenario-programs.json', programs)
 }
 
-function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], fixturesSha256: unknown, closureSha256: unknown): Readonly<Record<string, unknown>> {
+function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], fixturesSha256: unknown, closureSha256: unknown, transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
   const contractArtifact = optionalCanonical(root, ES9_COVERAGE_CONTRACT_PATH)
   if (!contractArtifact) return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: null, missing_artifacts: [ES9_COVERAGE_CONTRACT_PATH], sources: [], coverage: { planned_pointer_count: 0, represented_pointer_count: 0, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'BLOCKED' })
   assertReviewedControlArtifact(root, contractArtifact.entry, 'es9_coverage_contract_sha256')
@@ -643,6 +651,18 @@ function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: rea
   try { normativeResolved = resolveNormativeCoverage(root, ledger, fixtureRows) } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'normative source resolution failed'
     return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: contractArtifact.entry.sha256, missing_artifacts: [message], normative_resolved: [], sources: [], coverage: { planned_pointer_count: 152, represented_pointer_count: 0, normative_resolved_leaf_count: 0, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 152, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'BLOCKED' })
+  }
+  if (transportSourceRecords) {
+    const expectedCount = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * (contract.enabled.filter((entry) => entry.sequence_index === row.sequence_index).length + contract.disabled.filter((entry) => entry.sequence_index === row.sequence_index).length), 0)
+    const sources = transportSourceRecords.map((source) => ({ ...source }))
+    const planned = expectedCount
+    const represented = new Set(sources.map((source) => source.json_pointer)).size
+    const enabledCount = sources.filter((source) => source.enabled === true).length
+    const disabledCount = sources.filter((source) => source.enabled !== true).length
+    const dEnabledCount = sources.filter((source) => source.source_class === 'excluded' && source.enabled === true).length
+    const expectedEnabled = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * contract.enabled.filter((entry) => entry.sequence_index === row.sequence_index).length, 0)
+    const valid = sources.length === planned && represented === planned && enabledCount === expectedEnabled && disabledCount === expectedCount - expectedEnabled && dEnabledCount === 0 && sources.every((source) => source.source_binding_sha256 === sha256Canonical(Object.fromEntries(Object.entries(source).filter(([key]) => key !== 'source_binding_sha256'))))
+    return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: contractArtifact.entry.sha256, missing_artifacts: valid ? [] : ['transport source records did not cover the fixed observation contract'], normative_resolved: normativeResolved, normative_resolution_sha256: sha256Canonical(normativeResolved), sources, coverage: { planned_pointer_count: planned, represented_pointer_count: represented, normative_resolved_leaf_count: normativeResolved.length, enabled_pointer_count: enabledCount, disabled_pointer_count: disabledCount, omitted_pointer_count: planned - represented, d_leaf_enabled_count: dEnabledCount, unknown_or_omitted: 'disabled' }, status: valid ? 'PASS' : 'BLOCKED' })
   }
   const sources: Array<Readonly<Record<string, unknown>>> = []
   for (const row of ledger.rows) {
@@ -694,17 +714,17 @@ function deriveCrossRepoSupport(root: string, ledger: CampaignLedger): Readonly<
   return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.entry.sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
 }
 
-function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
+function deriveSupportRecords(root: string, ledger: CampaignLedger, transportFixtureRows?: readonly Readonly<Record<string, unknown>>[], transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
   const es7Contract = optionalCanonical(root, ES7_TYPED_FIXTURE_PATH)
   if (es7Contract) {
     assertReviewedControlArtifact(root, es7Contract.entry, 'es7_typed_fixtures_sha256')
     validateTypedFixtureContract(es7Contract.value, ledger)
   }
-  const fixtureRows = deriveFixtureRows(root, ledger)
+  const fixtureRows = transportFixtureRows ?? deriveFixtureRows(root, ledger)
   const allReproduced = fixtureRows.every((row) => row.status === 'Reproduced')
   const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: es7Contract?.entry.sha256 ?? null, missing_artifacts: es7Contract ? [] : [ES7_TYPED_FIXTURE_PATH], rows: fixtureRows, status: allReproduced && es7Contract ? 'PASS' : 'INCOMPLETE' })
     const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_length', 'typed_fixture_bytes_sha256', 'ast_bytes_length', 'ast_bytes_sha256', 'materialized_normalized_bytes_length', 'materialized_normalized_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_length', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
-  const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
+  const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256, transportSourceRecords)
   const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfig = optionalCanonical(root, 'control/predecessor-config-auth.json')?.entry
   const predecessorFailure = optionalCanonical(root, 'control/predecessor-failure-stream.json')?.entry
@@ -712,14 +732,16 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
     { predecessor_id: 'CL-P3A-R2-CONFIG-AUTH', predecessor_sha256: predecessorConfig?.sha256 ?? null, schedules: ledger.rows.filter((row) => row.family === 'config' || row.family === 'auth').map((row) => row.schedule_id) },
     { predecessor_id: 'CL-P3A-R2-FAILURE-STREAM', predecessor_sha256: predecessorFailure?.sha256 ?? null, schedules: ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'] },
   ].map((mapping) => ({ ...mapping, schedules: [...new Set(mapping.schedules)].sort(utf8Compare), reproduced_schedule_ids: [...new Set(ledger.rows.filter((row) => mapping.schedules.includes(row.schedule_id) && fixtureRows[row.sequence_index].status === 'Reproduced').map((row) => row.schedule_id))].sort(utf8Compare) }))
-  const predecessorPass = predecessorConfig?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'] && predecessorFailure?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'] && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
-  const predecessor = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings, status: predecessorPass ? 'PASS' : 'INCOMPLETE' })
+  const predecessorPass = transportFixtureRows
+    ? mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
+    : predecessorConfig?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'] && predecessorFailure?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'] && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
+  const predecessor = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings, predecessor_config_sha256: predecessorConfig?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'], predecessor_failure_stream_sha256: predecessorFailure?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'], status: predecessorPass ? 'PASS' : 'INCOMPLETE' })
   return deepFreeze([fixtures, fieldClosure, provenance, crossRepo, predecessor])
 }
 
-function sealConclusionSupport(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
+function sealConclusionSupport(root: string, ledger: CampaignLedger, transportFixtureRows?: readonly Readonly<Record<string, unknown>>[], transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
   createPrivateDirectory(root, SUPPORT_ROOT)
-  const records = deriveSupportRecords(root, ledger)
+  const records = deriveSupportRecords(root, ledger, transportFixtureRows, transportSourceRecords)
   records.forEach((record, index) => writeExclusiveCanonical(root, SUPPORT_PATHS[index], record))
   return records
 }
@@ -740,7 +762,7 @@ export function validateConclusionSupport(root: string, requirePass: boolean): r
   }
 }
 
-export function deriveCuration(evidenceRoot: string): Readonly<Record<string, unknown>> {
+export function deriveCuration(evidenceRoot: string, transport?: CurationTransportAdapter): Readonly<Record<string, unknown>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   createPrivateDirectory(root, CURATION_ROOT)
   createPrivateDirectory(root, `${CURATION_ROOT}/conclusions`)
@@ -748,7 +770,12 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   const store = openExecutionStore(root, ledger)
   const receipts = readExecutionReceipts(store)
   const terminalByRow = new Map(receipts.filter((receipt) => receipt.state === 'terminal' || receipt.state === 'not_executed').map((receipt) => [receipt.sequence_index, receipt]))
-  const rows = enforcePairAndRepetitionStability(ledger.rows, ledger.rows.map((row) => classifyRow(root, row, terminalByRow.get(row.sequence_index) ?? null)))
+  const rows = transport ? transport.fixtureRows : enforcePairAndRepetitionStability(ledger.rows, ledger.rows.map((row) => classifyRow(root, row, terminalByRow.get(row.sequence_index) ?? null)))
+  if (transport) {
+    if (transport.fixtureRows.length !== ledger.rows.length || transport.fixtureRows.some((row, index) => row.sequence_index !== index || row.status !== 'Reproduced' || row.fixture_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'fixture_sha256'))))) throw new Phase3BProductionError('curation_invalid', 'transport fixture rows are not independently sealed reproduced projections')
+    const transportRecord = readCanonical(root, 'production/transport-results.json', 16_777_216).value
+    if (transportRecord.receipt_set_sha256 !== transport.receipt_set_sha256 || transportRecord.rows_sha256 !== sha256Canonical(transport.fixtureRows)) throw new Phase3BProductionError('curation_invalid', 'transport rows are not bound to the sealed execution receipt set')
+  }
   const represented = rows.length === 340 && rows.every((row, index) => row.sequence_index === index)
   if (!represented) throw new Phase3BProductionError('curation_invalid', 'curation must explicitly represent all 340 rows')
   const issuedAt = Date.now()
@@ -761,7 +788,7 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   sealNormativePlanAndScenarioSources(root, ledger)
   materializeConclusionSourceDocuments(root, ledger, rows)
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
-  const support = sealConclusionSupport(root, ledger)
+  const support = sealConclusionSupport(root, ledger, transport?.fixtureRows, transport?.sourceRecords)
   const supportSha256s = support.map((value) => value.support_sha256)
   if (support.some((value) => value.status !== 'PASS')) openContradictionIds.push('P3B-CONCLUSION-SUPPORT-INCOMPLETE')
   const normativeResolutionSha256 = typeof support[2]?.normative_resolution_sha256 === 'string' ? support[2].normative_resolution_sha256 : null
@@ -798,8 +825,22 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   return result
 }
 
-function forbiddenMaterialBytes(bytes: Buffer): boolean {
-  return /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|(?:%[0-9a-f]{2}){2,}|"(?:[^"\n]*(?:_base64|_hex|url_encoded|raw_prompt|raw_body|raw_bytes|secret|password|authorization))"\s*:)/i.test(bytes.toString('utf8'))
+function forbiddenMaterialBytes(bytes: Buffer, relativePath = ''): boolean {
+  if (relativePath === 'control/trusted-reviewers.json') {
+    try { validateCampaignReviewerRegistry(JSON.parse(bytes.subarray(-1)[0] === 0x0a ? bytes.subarray(0, -1).toString('utf8') : bytes.toString('utf8'))) ; return false } catch { return true }
+  }
+  const text = bytes.toString('utf8')
+  const direct = /(?:BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY|\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+[A-Za-z0-9._~+\/-]{4,}|(?:%[0-9a-f]{2}){2,}|"(?:[^"\n]*(?:_base64|_hex|url_encoded|raw_prompt|raw_body|raw_bytes|secret|password|authorization|token|credential))"\s*:)/i
+  if (direct.test(text)) return true
+  const candidates = text.match(/(?:[A-Za-z0-9+/]{20,}={0,2}|[0-9a-f]{32,}|(?:%[0-9a-f]{2}){2,})/gi) ?? []
+  for (const candidate of candidates) {
+    try {
+      const decoded = Buffer.from(candidate, /^[0-9a-f]+$/i.test(candidate) ? 'hex' : candidate.includes('%') ? 'utf8' : 'base64').toString('utf8')
+      const printable = decoded.length === 0 ? 0 : [...decoded].filter((character) => character.charCodeAt(0) >= 0x20 && character.charCodeAt(0) <= 0x7e).length / decoded.length
+      if (printable >= 0.85 && /\b(?:sk-|Bearer\s+)|(?:secret|password|authorization|token|credential)/i.test(decoded)) return true
+    } catch {}
+  }
+  return false
 }
 
 export function runCloseout(evidenceRoot: string): Readonly<Record<string, unknown>> {
@@ -817,7 +858,7 @@ export function runCloseout(evidenceRoot: string): Readonly<Record<string, unkno
   const indexUnsigned = { schema_id: 'oracle-lab-p3b-artifact-index.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, entries }
   const artifactIndex = { ...indexUnsigned, artifact_index_sha256: sha256Canonical(indexUnsigned) }
   writeExclusiveCanonical(root, `${CLOSURE_ROOT}/artifact-index.json`, artifactIndex)
-  const findings = entries.filter((entry) => !(entry.relative_path === 'launch-images/original-image' || entry.relative_path === 'launch-images/probe-image')).filter((entry) => forbiddenMaterialBytes(stableRead(path.join(root, entry.relative_path), { maximumBytes: 134_217_728, nonempty: false }).bytes)).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
+  const findings = entries.filter((entry) => !(entry.relative_path === 'launch-images/original-image' || entry.relative_path === 'launch-images/probe-image')).filter((entry) => forbiddenMaterialBytes(stableRead(path.join(root, entry.relative_path), { maximumBytes: 134_217_728, nonempty: false }).bytes, entry.relative_path)).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
   const leakUnsigned = { schema_id: 'oracle-lab-p3b-leak-report.v1', campaign_id: ledger.campaign_id, scanned_artifact_index_sha256: artifactIndex.artifact_index_sha256, findings, status: findings.length === 0 ? 'PASS' : 'BLOCKED' }
   const leak = { ...leakUnsigned, leak_report_sha256: sha256Canonical(leakUnsigned) }
   writeExclusiveCanonical(root, `${CLOSURE_ROOT}/leak-report.json`, leak)

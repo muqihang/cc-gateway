@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { createHmac } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -97,7 +97,7 @@ const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name,
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
 const REDACTION_PROOF_SCHEMA = 'opaque-redaction-proof-v1'
-const REDACTION_MAC_KEY = Buffer.from('phase3b-opaque-request-redaction-v1', 'utf8')
+const REDACTION_MAC_KEY = randomBytes(32)
 const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<

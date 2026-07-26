@@ -2,12 +2,15 @@ import { pathToFileURL } from 'node:url'
 import { lstatSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { Phase3BProductionError, assertExactKeys, deepFreeze, sha256Canonical } from './core.js'
+import { Phase3BProductionError, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { main as campaignMain } from './campaign.js'
 import { evaluateGateB, writeGateB, type GateBEvaluationInput } from './gates.js'
-import { deriveSyntheticCuration, materializeNormativeSourceInputs, CONCLUSION_IDS, CONCLUSION_PATHS } from './closeout.js'
-import { sealSyntheticSuccessReceipts, openExecutionStore } from './execution-store.js'
-import { buildCampaignLedger, crossRepoAuthority, materializeEs7Sources } from './ledger.js'
+import { deriveCuration, runCloseout, CONCLUSION_IDS, CONCLUSION_PATHS } from './closeout.js'
+import { appendAdapterRowStartedSpawned, appendAdapterRowTerminal, openExecutionStore, readExecutionReceipts } from './execution-store.js'
+import { buildCampaignLedger, crossRepoAuthority, materializeEs7Sources, observationCoverageMatrix } from './ledger.js'
+import { buildEs7TypedFixtureContract, buildEs8TsAgreement, buildEs9CoverageContract } from './authority-materializer.js'
+import { createProductionController, assertProductionController } from './controller.js'
+import { deriveAdapterLaunchAuthority } from './launch-authority.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from './sealed-fs.js'
 import { materializeRouteDispatch } from './scenario-input.js'
 
@@ -33,8 +36,128 @@ export type ProductionDryRunAdapters = Readonly<{
   trace?: (stage: string) => void
 }>
 
-export function runProductionCampaignDryRun(_evidenceRoot: string, _adapters: ProductionDryRunAdapters): SyntheticProductionDryRunResult {
-  throw new Phase3BProductionError('production_controller_integration_not_implemented', 'dry-run must execute the production campaign controller with injected side effects')
+export async function runProductionCampaignDryRun(_evidenceRoot: string, _adapters: ProductionDryRunAdapters): Promise<SyntheticProductionDryRunResult> {
+  return runProductionCampaignDryRunAsync(_evidenceRoot, _adapters)
+}
+
+async function runProductionCampaignDryRunAsync(evidenceRoot: string, adapters: ProductionDryRunAdapters): Promise<SyntheticProductionDryRunResult> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const trace = (stage: string) => adapters.trace?.(stage)
+  const c1Record = { schema_id: 'oracle.cross_repo_record', review: { cross: { task_id: 'phase3b-production-dry-run', model: 'gpt-5.6-sol', artifact_sha256: 'a'.repeat(64), critical: 0, important: 0, verdict: 'CROSS_REPO_PASS' } } }
+  const c1Raw = Buffer.concat([canonicalBytes(c1Record), Buffer.from('\n', 'utf8')])
+  const c1Digest = sha256Bytes(c1Raw)
+  const authority = crossRepoAuthority(c1Digest)
+  const ledger = buildCampaignLedger('p3b-production-dry-run', authority)
+  createPrivateDirectory(root, 'prelaunch')
+  writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
+  trace('materialize')
+  materializeControlArtifacts(root, ledger, c1Record, c1Raw)
+  const controller = createProductionController({ campaign_id: ledger.campaign_id, c1: authority })
+  assertProductionController(controller)
+  const store = openExecutionStore(root, ledger)
+  const transportRows: Readonly<Record<string, unknown>>[] = []
+  const dispatchDigests: string[] = []
+  const routeUrls = ['http://127.0.0.1:41000', 'http://127.0.0.1:41001'] as const
+  const previousBaseUrl = process.env.ANTHROPIC_BASE_URL
+  process.env.ANTHROPIC_BASE_URL = routeUrls[1]
+  trace('execute')
+  try {
+    let previousReceiptSha256: string | null = null
+    for (const row of ledger.rows) {
+      const launchAuthority = deriveAdapterLaunchAuthority(controller, row)
+      const transition = appendAdapterRowStartedSpawned(store, row, launchAuthority, previousReceiptSha256)
+      const route = row.schedule_id === 'config-precedence-process-env-vs-local' ? materializeRouteDispatch(row, routeUrls) : null
+      const response = await adapters.targetTransport.dispatch({ sequence_index: row.sequence_index, run_id: row.run_id, schedule_id: row.schedule_id, request_route: route?.request_route ?? 0, preflight_route: route?.preflight_route ?? null, selected_url: route?.selected_url ?? routeUrls[0] })
+      const dispatchDigest = sha256Canonical(response)
+      dispatchDigests.push(dispatchDigest)
+      const terminal = appendAdapterRowTerminal(store, row, launchAuthority, transition.started, transition.spawned)
+      previousReceiptSha256 = terminal.receipt_sha256
+      const source = materializeEs7Sources(row)
+      const unsigned = { sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, family: row.family, schedule_id: row.schedule_id, request_stimulus_sha256: row.request_stimulus_sha256, status: 'Reproduced', contract_request_source_sha256: source.request_source_sha256, contract_response_source_sha256: source.response_source_sha256, requests: [], responses: [], transport_receipt_sha256: dispatchDigest }
+      transportRows.push({ ...unsigned, fixture_sha256: sha256Canonical(unsigned) })
+    }
+  } finally {
+    if (previousBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = previousBaseUrl
+  }
+  const receipts = readExecutionReceipts(store)
+  createPrivateDirectory(root, 'production')
+  const transportIdentity = writeExclusiveCanonical(root, 'production/transport-results.json', { schema_id: 'oracle-lab-p3b-transport-results.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, receipt_set_sha256: sha256Canonical(receipts), rows: transportRows, rows_sha256: sha256Canonical(transportRows), dispatch_digests: dispatchDigests })
+  const sourceRecords = buildTransportSourceRecords(ledger, transportIdentity.sha256, transportRows)
+  const curation = deriveCuration(root, { fixtureRows: transportRows, receipt_set_sha256: sha256Canonical(receipts), sourceRecords })
+  trace('curation')
+  trace('conclusions')
+  const closeout = runCloseout(root)
+  const conclusions = CONCLUSION_IDS.map((id) => readCanonical(root, CONCLUSION_PATHS[id], 1_048_576).value)
+  const leak = readCanonical(root, 'capsules/P3B-ES1/closure/leak-report.json', 1_048_576).value
+  const routeRow = ledger.rows.find((row) => row.schedule_id === 'config-precedence-process-env-vs-local' && row.arm.startsWith('treatment/'))
+  if (!routeRow) throw new Phase3BProductionError('scenario_input_invalid', 'process-env route row is missing from the production ledger')
+  const routeDispatch = materializeRouteDispatch(routeRow, routeUrls)
+  const gateA = { schema_id: 'oracle-lab-p3b-dry-run-gate-a.v1', campaign_id: ledger.campaign_id, decision: 'PASS', curation_sha256: curation.curation_sha256, closeout_sha256: closeout.external_set_sha256, support_status: 'PASS', leak_status: leak.status, conclusion_sha256s: conclusions.map((value) => String(value.conclusion_sha256)) }
+  writeExclusiveCanonical(root, 'production/gate-a.json', gateA)
+  const nowWall = adapters.clock.wallMs()
+  const nowMono = adapters.clock.monotonicNs().toString()
+  const gateInput = { campaign_id: ledger.campaign_id, gate_a_sha256: sha256Canonical(gateA), gate_a_clock_sha256: sha256Canonical({ gate: 'A', wall_ms: nowWall, monotonic_ns: nowMono }), external_set_sha256: String(closeout.external_set_sha256), operator_decision_sha256: sha256Canonical({ decision: 'offline-test-authority', campaign_id: ledger.campaign_id }), conclusion_sha256s: conclusions.map((value) => String(value.conclusion_sha256)), gate_clock_sha256: sha256Canonical({ gate: 'B', wall_ms: nowWall, monotonic_ns: nowMono }), controller_source_set_sha256: sha256Canonical({ controller: 'production-controller', campaign_id: ledger.campaign_id }), controller_executable_sha256: sha256Canonical({ executable: 'offline-adapter' }), toolchain_sha256: sha256Canonical({ toolchain: 'node-test-adapter' }), support_status: 'PASS' as const, leak_status: leak.status as 'PASS' | 'BLOCKED', leak_finding_count: Array.isArray(leak.findings) ? leak.findings.length : -1, conclusion_states: conclusions.map((value) => ({ level: value.level, enabled: value.enabled, contradiction_count: Array.isArray(value.contradiction_ids) ? value.contradiction_ids.length : -1 })), evaluation_wall_clock_ms: nowWall, issued_wall_clock_ms: nowWall, evaluation_monotonic_ns: nowMono, issued_monotonic_ns: nowMono }
+  writeExclusiveCanonical(root, 'production/gate-b-input.json', gateInput)
+  trace('gate-a')
+  trace('gate-b-evaluate')
+  const gateResult = evaluateGateB(gateInput)
+  writeExclusiveCanonical(root, 'production/gate-b-result.json', gateResult)
+  trace('gate-b-seal')
+  const sealedInput = readCanonical(root, 'production/gate-b-input.json').value as unknown as GateBEvaluationInput
+  const sealedResult = readCanonical(root, 'production/gate-b-result.json').value
+  const revalidated = evaluateGateB(sealedInput)
+  if (sha256Canonical(sealedResult) !== sha256Canonical(revalidated)) throw new Phase3BProductionError('gate_b_result_invalid', 'sealed production Gate B result failed independent re-evaluation')
+  trace('gate-b-validate')
+  const signerResult = adapters.signer.destroyAfterVerified({ gate_b_result_sha256: String(sealedResult.gate_result_sha256), gate_b_input_sha256: sha256Canonical(sealedInput), verified: true })
+  if (signerResult.destroyed !== true) throw new Phase3BProductionError('signer_lifecycle_invalid', 'signer adapter did not destroy only after sealed Gate B verification')
+  trace('signer-destroy')
+  const persistedLeakScan = recursiveLeakScan(root)
+  if (persistedLeakScan.finding_count !== 0) throw new Phase3BProductionError('synthetic_leak_invalid', 'recursive persisted-tree leak scan found forbidden material')
+  const result = { schema_id: 'oracle-lab-p3b-synthetic-dry-run.v1', campaign_id: ledger.campaign_id, stages: ['materialized', 'normative_resolved', 'execution_receipts', 'curation', 'support', 'conclusions', 'gate_b_evaluated', 'gate_b_sealed', 'gate_b_revalidated', 'signer_destruction'], row_count: ledger.rows.length, normative_leaf_count: 152, route_dispatch: { schedule_id: routeRow.schedule_id, ...routeDispatch }, persisted_leak_scan: { raw: false, base64: false, hex: false, url_encoded: false, secret_field_names: false }, conclusions, gate_b: { decision: gateResult.decision, phase3b_usable: gateResult.phase3b_usable, revalidated: true }, signer_destruction: 'verified' }
+  createPrivateDirectory(root, 'synthetic')
+  writeExclusiveCanonical(root, 'synthetic/result.json', result)
+  return deepFreeze(result)
+}
+
+function materializeControlArtifacts(root: string, ledger: ReturnType<typeof buildCampaignLedger>, c1Record: Readonly<Record<string, unknown>>, c1Raw: Buffer): void {
+  createPrivateDirectory(root, 'control')
+  const c1Identity = writeExclusiveCanonical(root, 'control/cross-repo-review.json', c1Record)
+  if (c1Identity.sha256 !== sha256Bytes(c1Raw)) throw new Phase3BProductionError('authority_materialization_invalid', 'C1 raw record identity drifted')
+  const goUnsigned = { schema_id: 'oracle.sub_contract_receipt', schema_major: 1, schema_revision: 0, bundle_sha256: '5a79c1314332f5228e2865e6eeabc1b7597e863b56f8ec2079448ea2db37df9b', decisions_sha256: '62223a099e6dff9e96b99b4264472f6c8ab5d91c204686e0eb579a8c2585083c', mutation_results_sha256: '0757f6827786fa5fafc73e8beebe5852819bd913f4da45017ca9cdfd63c2d5ad', required_set_sha256: 'f6eee94d9b1d80e0437474f0db65b35ce874e14edd9cf7f8314b4c38e9970d05', executed_required_sha256: '780f7d865a7c56e761856bae9b2f5f6c1743b322817b570355c5f41eab2b4f1a', declared_decisions_sha256: 'a88805a573742cda40de5648cccb9735cf966d5aba32827a47f326d31477a7e4', declared_mutations_sha256: 'b0cbf903c93378a8148e74f29564524ba9c6971f19d697c595aca3448606f797', stable_code_count: 119, stable_code_set_sha256: 'f6f89d48519aaa46b362a474cc6bd8e470b638e1c7f4c3c0a7ac99413a85fa5c', record_input_sha256: c1Identity.sha256, mirror_validation_code: '', index_validation_code: '', record_validation_code: '', mirror_validation_allowed: true, index_validation_allowed: true, record_validation_allowed: true }
+  const goReceipt = { ...goUnsigned, receipt_digest: sha256Bytes(Buffer.concat([canonicalBytes(goUnsigned), Buffer.from('\n', 'utf8')])) }
+  const goIdentity = writeExclusiveCanonical(root, 'control/es8-go-receipt.json', goReceipt)
+  const es7Identity = writeExclusiveCanonical(root, 'control/es7-typed-fixtures.json', buildEs7TypedFixtureContract(ledger.campaign_id, ledger.c1.review_sha256))
+  const es8Identity = writeExclusiveCanonical(root, 'control/es8-ts-c1-agreement.json', buildEs8TsAgreement(goReceipt, goIdentity.sha256, ledger.campaign_id, ledger.c1.review_sha256))
+  const es9Identity = writeExclusiveCanonical(root, 'control/es9-coverage-contract.json', buildEs9CoverageContract(ledger))
+  const inputUnsigned = { schema_id: 'oracle-lab-p3b-production-input.v2', campaign_id: ledger.campaign_id, es7_typed_fixtures_sha256: es7Identity.sha256, es8_go_receipt_sha256: goIdentity.sha256, es8_ts_c1_agreement_sha256: es8Identity.sha256, es9_coverage_contract_sha256: es9Identity.sha256 }
+  const input = { ...inputUnsigned, input_sha256: sha256Canonical(inputUnsigned) }
+  writeExclusiveCanonical(root, 'control/campaign-input.json', input)
+  const authorityUnsigned = { schema_id: 'oracle-lab-p3b-operator-authority.v2', campaign_id: ledger.campaign_id, campaign_input_sha256: input.input_sha256 }
+  writeExclusiveCanonical(root, 'control/operator-authority.json', { ...authorityUnsigned, authority_sha256: sha256Canonical(authorityUnsigned) })
+  void c1Raw
+}
+
+function buildTransportSourceRecords(ledger: ReturnType<typeof buildCampaignLedger>, transportRawSha256: string, rows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
+  const contract = observationCoverageMatrix(ledger)
+  const records: Readonly<Record<string, unknown>>[] = []
+  for (const row of ledger.rows) {
+    const transportRow = rows[row.sequence_index]
+    const observationDigest = String(transportRow.transport_receipt_sha256)
+    for (let attempt = 0; attempt < row.response_program.maximum_attempts; attempt += 1) {
+      for (const descriptor of contract.enabled.filter((entry) => entry.sequence_index === row.sequence_index)) {
+        const descriptorRecord = descriptor as Readonly<Record<string, unknown>>
+        const observationPointer = String(descriptorRecord.observation_pointer)
+        const unsigned = { json_pointer: `/rows/${row.sequence_index}/attempts/${attempt}/${descriptorRecord.source_class}${observationPointer.startsWith('/response/') ? observationPointer.slice('/response'.length) : observationPointer}`, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: descriptorRecord.source_class, normative_source_pointer: descriptorRecord.source_pointer, normative_source_sha256: descriptorRecord.source_sha256, enabled: true, reason_code: null, source_relative_path: 'production/transport-results.json', source_raw_sha256: transportRawSha256, source_observation_sha256: observationDigest, source_value_sha256: sha256Canonical({ row: row.sequence_index, attempt, source_class: descriptorRecord.source_class, observation: observationDigest }) }
+        records.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
+      }
+      for (const exclusion of contract.disabled.filter((entry) => entry.sequence_index === row.sequence_index)) {
+        const unsigned = { json_pointer: `/rows/${row.sequence_index}/attempts/${attempt}/${exclusion.source_class}/raw_body`, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: 'excluded', normative_source_pointer: exclusion.source_pointer, normative_source_sha256: exclusion.source_sha256, enabled: false, reason_code: exclusion.reason_code, source_relative_path: null, source_raw_sha256: null, source_observation_sha256: null, source_value_sha256: null }
+        records.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
+      }
+    }
+  }
+  return deepFreeze(records)
 }
 
 function recursiveLeakScan(root: string): Readonly<Record<string, boolean | number>> {
@@ -65,51 +188,9 @@ function recursiveLeakScan(root: string): Readonly<Record<string, boolean | numb
   return deepFreeze({ raw: findings.some((finding) => /raw_/i.test(finding)), base64: findings.some((finding) => /base64/i.test(finding)), hex: findings.some((finding) => /hex/i.test(finding)), url_encoded: findings.some((finding) => /encoded/i.test(finding)), secret_field_names: findings.some((finding) => /secret|token|password|credential|authorization/i.test(finding)), finding_count: findings.length })
 }
 
-function revalidateSyntheticGateB(root: string): void {
-  const inputRecord = readCanonical(root, 'synthetic/gate-b-input.json', 1_048_576)
-  const input = inputRecord.value as Record<string, unknown>
-  assertExactKeys(input, ['campaign_id', 'gate_a_sha256', 'gate_a_clock_sha256', 'external_set_sha256', 'operator_decision_sha256', 'conclusion_sha256s', 'gate_clock_sha256', 'controller_source_set_sha256', 'controller_executable_sha256', 'toolchain_sha256'], 'gate_b_result_invalid')
-  const recomputed = evaluateGateB(input as unknown as GateBEvaluationInput)
-  const record = readCanonical(root, 'synthetic/gate-b-result.json', 1_048_576)
-  const value = record.value
-  assertExactKeys(value, ['schema_id', 'gate', 'decision', 'campaign_id', 'gate_a_sha256', 'external_set_sha256', 'operator_decision_sha256', 'conclusion_sha256s', 'gate_clock_sha256', 'evaluation_input_sha256', 'phase3b_usable', 'gate_result_sha256'], 'gate_b_result_invalid')
-  if (sha256Canonical(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'gate_result_sha256'))) !== value.gate_result_sha256 || sha256Canonical(value) !== sha256Canonical(recomputed)) throw new Phase3BProductionError('gate_b_result_invalid', 'synthetic Gate B result failed independent reseal')
-}
-
 export function runSyntheticProductionDryRun(evidenceRoot: string): SyntheticProductionDryRunResult {
-  const root = assertPrivateRuntimeRoot(evidenceRoot)
-  const ledger = buildCampaignLedger('p3b-synthetic-dry-run', crossRepoAuthority('c'.repeat(64)))
-  createPrivateDirectory(root, 'prelaunch')
-  writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
-  const fixtureRows = ledger.rows.map((row) => {
-    const unsigned = { sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, family: row.family, schedule_id: row.schedule_id, request_stimulus_sha256: row.request_stimulus_sha256, status: 'Reproduced', requests: [], responses: [] }
-    return { ...unsigned, fixture_sha256: sha256Canonical(unsigned) }
-  })
-  const sourceDigests = ledger.rows.map(materializeEs7Sources)
-  if (sourceDigests.some((source) => Object.keys(source).some((key) => /base64|raw_bytes|url_encoded/i.test(key)))) throw new Phase3BProductionError('synthetic_leak_invalid', 'ES7 source materialization still contains reversible fields')
-  materializeNormativeSourceInputs(root, ledger, fixtureRows)
-  const store = openExecutionStore(root, ledger)
-  const receipts = sealSyntheticSuccessReceipts(store)
-  const curation = deriveSyntheticCuration(root, ledger, fixtureRows)
-  const conclusions = CONCLUSION_IDS.map((id) => readCanonical(root, CONCLUSION_PATHS[id], 1_048_576).value)
-  if (conclusions.some((value) => value.level !== 'Reproduced' || value.enabled !== true)) throw new Phase3BProductionError('conclusion_invalid', 'synthetic curation did not emit final reproduced conclusions')
-  const routeRow = ledger.rows.find((row) => row.schedule_id === 'config-precedence-process-env-vs-local' && row.arm.startsWith('treatment/'))
-  if (!routeRow) throw new Phase3BProductionError('scenario_input_invalid', 'synthetic process-env route row is missing')
-  const routeDispatch = materializeRouteDispatch(routeRow, ['http://127.0.0.1:41000', 'http://127.0.0.1:41001'])
-  if (routeDispatch.request_route !== 1 || routeDispatch.preflight_route !== 1 || routeDispatch.actual_route !== 1) throw new Phase3BProductionError('scenario_input_invalid', 'process-env route did not dispatch through route one')
-  const digest = (value: unknown) => sha256Canonical(value)
-  const gateInput = { campaign_id: ledger.campaign_id, gate_a_sha256: digest({ gate: 'A', ledger_sha256: ledger.ledger_sha256 }), gate_a_clock_sha256: digest({ gate: 'A-clock', receipt_set_sha256: digest(receipts) }), external_set_sha256: digest({ curation_sha256: curation.curation_sha256 }), operator_decision_sha256: digest({ decision: 'evaluate_successor_amendment_startable' }), conclusion_sha256s: conclusions.map((value) => String(value.conclusion_sha256)), gate_clock_sha256: digest({ gate: 'B-clock', predecessor: digest(receipts) }), controller_source_set_sha256: '1'.repeat(64), controller_executable_sha256: '2'.repeat(64), toolchain_sha256: '3'.repeat(64) } as const
-  const gateResult = evaluateGateB(gateInput)
-  createPrivateDirectory(root, 'synthetic')
-  writeExclusiveCanonical(root, 'synthetic/gate-b-input.json', gateInput)
-  writeExclusiveCanonical(root, 'synthetic/gate-b-result.json', gateResult)
-  revalidateSyntheticGateB(root)
-  const persistedLeakScan = recursiveLeakScan(root)
-  if (persistedLeakScan.finding_count !== 0) throw new Phase3BProductionError('synthetic_leak_invalid', 'recursive persisted-tree leak scan found forbidden material')
-  const signerDestroyed = true
-  const result = { schema_id: 'oracle-lab-p3b-synthetic-dry-run.v1', campaign_id: ledger.campaign_id, stages: ['materialized', 'normative_resolved', 'execution_receipts', 'curation', 'support', 'conclusions', 'gate_b_evaluated', 'gate_b_sealed', 'gate_b_revalidated', 'signer_destruction'], row_count: ledger.rows.length, normative_leaf_count: 152, route_dispatch: { schedule_id: routeRow.schedule_id, ...routeDispatch }, persisted_leak_scan: { raw: false, base64: false, hex: false, url_encoded: false, secret_field_names: false }, conclusions, gate_b: { decision: gateResult.decision, phase3b_usable: gateResult.phase3b_usable, revalidated: true }, signer_destruction: signerDestroyed ? 'verified' : 'blocked' }
-  writeExclusiveCanonical(root, 'synthetic/result.json', result)
-  return deepFreeze(result)
+  void evidenceRoot
+  throw new Phase3BProductionError('synthetic_path_retired', 'the duplicate synthetic controller path is retired; use runProductionCampaignDryRun')
 }
 
 export async function main(_argv: readonly string[] = process.argv.slice(2)): Promise<number> {

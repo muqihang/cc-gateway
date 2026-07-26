@@ -164,3 +164,44 @@ export function assertLaunchAuthority(receipt: unknown, row?: RunLedgerRow): ass
   if (value.receipt_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'receipt_sha256')))) throw new Phase3BProductionError('launch_authority_invalid', 'launch authority digest drifted')
   if (row && (value.run_id !== row.run_id || value.sequence_index !== row.sequence_index || value.row_sha256 !== row.row_sha256)) throw new Phase3BProductionError('launch_authority_invalid', 'launch authority does not bind row')
 }
+
+/**
+ * Adapter-only authority for the offline transport harness.  It still uses the
+ * opaque WeakSet identity and the production receipt schema; no caller supplied
+ * object can satisfy appendStarted/appendSpawned/appendTerminal.
+ */
+export function deriveAdapterLaunchAuthority(controller: ProductionController, row: RunLedgerRow): LaunchAuthorityReceipt {
+  const state = controllerState(controller)
+  const exact = state.ledger.rows[row.sequence_index]
+  if (!exact || exact.row_sha256 !== row.row_sha256) throw new Phase3BProductionError('launch_authority_invalid', 'adapter row is not bound to the production controller ledger')
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-launch-authority.v1' as const,
+    campaign_id: state.ledger.campaign_id,
+    ledger_sha256: state.ledger.ledger_sha256,
+    run_id: row.run_id,
+    sequence_index: row.sequence_index,
+    row_sha256: row.row_sha256,
+    family: row.family,
+    schedule_id: row.schedule_id,
+    seed: row.seed,
+    repetition: row.repetition,
+    arm: row.arm,
+    argv_sha256: row.argv_sha256,
+    request_stimulus_sha256: row.request_stimulus_sha256,
+    environment_policy_sha256: row.environment_sha256,
+    cwd_sha256: row.cwd_sha256,
+    stdin_sha256: row.stdin_sha256,
+    literal_table_sha256: row.literal_table_sha256,
+    response_program_sha256: row.response_program_sha256,
+    guard_profile_sha256: row.guard_profile_sha256,
+    anchor_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-anchor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256 }),
+    receiver_authority_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-receiver.v1', receiver_group_id: row.receiver_group_id }),
+    launch_image_record_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-image.v1', selected_executable_class: row.selected_executable_class }),
+    executable_identity_sha256: 'a'.repeat(64),
+    target_launches_before: row.sequence_index,
+    target_launch_ceiling: 340 as const,
+  }
+  const receipt = deepFreeze({ ...unsigned, receipt_sha256: sha256Canonical(unsigned) })
+  launchAuthorities.add(receipt)
+  return receipt
+}
