@@ -17,6 +17,12 @@ export function evaluateProductionGateB(_input: Readonly<Record<string, unknown>
   return evaluateGateB(_input.evidence_root) as GateBResult
 }
 
+export type SyntheticProductionDryRunResult = Readonly<Record<string, unknown>>
+
+export function runSyntheticProductionDryRun(_evidenceRoot: string): SyntheticProductionDryRunResult {
+  throw new Phase3BProductionError('synthetic_dry_run_not_implemented', 'the complete production-path synthetic dry-run is not implemented')
+}
+
 export async function main(_argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   return campaignMain(_argv)
 }
