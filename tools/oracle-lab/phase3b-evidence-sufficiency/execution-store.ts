@@ -238,43 +238,10 @@ export function appendTerminal(store: ExecutionStore, row: RunLedgerRow, authori
   return receipt
 }
 
-export function sealSyntheticSuccessReceipts(store: ExecutionStore): readonly ExecutionReceipt[] {
-  const state = stateOf(store)
-  let previous = readExecutionReceipts(store).at(-1)?.receipt_sha256 ?? null
-  if (previous !== null) throw new Phase3BProductionError('execution_store_invalid', 'synthetic receipt dry-run requires an empty execution store')
-  for (const row of state.ledger.rows) {
-    const launchAuthoritySha256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-synthetic-launch-authority.v1', campaign_id: state.ledger.campaign_id, run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256 })
-    const startedMonotonicNs = String(1_000_000_000n + BigInt(row.sequence_index) * 10_000n)
-    const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: launchAuthoritySha256, started_monotonic_ns: startedMonotonicNs }, previous)
-    const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: launchAuthoritySha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: 'a'.repeat(64), started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
-    const terminal = appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: launchAuthoritySha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: String(BigInt(startedMonotonicNs) + 5_000n), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
-    previous = terminal.receipt_sha256
-  }
-  return readExecutionReceipts(store)
-}
-
-export function appendAdapterSuccessReceipts(store: ExecutionStore, authorityForRow: (row: RunLedgerRow) => LaunchAuthorityReceipt): readonly ExecutionReceipt[] {
-  const state = stateOf(store)
-  let previous: string | null = null
-  for (const row of state.ledger.rows) {
-    const authority = authorityForRow(row)
-    const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previous)
-    const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
-    const terminal = appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: (BigInt(started.started_monotonic_ns!) + 5_000n).toString(), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
-    previous = terminal.receipt_sha256
-  }
-  return readExecutionReceipts(store)
-}
-
-export function appendAdapterRowSuccess(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, previousReceiptSha256: string | null): ExecutionReceipt {
+export function appendAdapterRowStartedSpawned(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, previousReceiptSha256: string | null, runtime: Readonly<{ sandbox_pid: number; target_pid: number; executable_identity_sha256: string }>): Readonly<{ started: ExecutionReceipt; spawned: ExecutionReceipt }> {
+  if (![runtime.sandbox_pid, runtime.target_pid].every((pid) => Number.isSafeInteger(pid) && pid > 0) || runtime.executable_identity_sha256 !== authority.executable_identity_sha256) throw new Phase3BProductionError('external_fact_authority_invalid', 'started/spawned transition lacks captured OS process identity')
   const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previousReceiptSha256)
-  const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
-  return appendAfter(store, row, 'terminal', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: started.started_monotonic_ns, terminal_monotonic_ns: (BigInt(started.started_monotonic_ns!) + 5_000n).toString(), exit_code: 0, signal: null, terminal_class: 'success', cause_code: null }, spawned.receipt_sha256)
-}
-
-export function appendAdapterRowStartedSpawned(store: ExecutionStore, row: RunLedgerRow, authority: LaunchAuthorityReceipt, previousReceiptSha256: string | null): Readonly<{ started: ExecutionReceipt; spawned: ExecutionReceipt }> {
-  const started = appendAfter(store, row, 'started', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, started_monotonic_ns: process.hrtime.bigint().toString() }, previousReceiptSha256)
-  const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: 20_000 + row.sequence_index, target_pid: 30_000 + row.sequence_index, executable_identity_sha256: authority.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
+  const spawned = appendAfter(store, row, 'spawned', { ...blankFields(), launch_authority_sha256: authority.receipt_sha256, sandbox_pid: runtime.sandbox_pid, target_pid: runtime.target_pid, executable_identity_sha256: runtime.executable_identity_sha256, started_monotonic_ns: started.started_monotonic_ns }, started.receipt_sha256)
   return deepFreeze({ started, spawned })
 }
 

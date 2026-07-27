@@ -10,6 +10,7 @@ import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanoni
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { fixedGit, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
+import { assertAdapterRuntimeIdentity, type AdapterRuntimeIdentity } from './production-dry-run-adapters.js'
 
 export type LaunchAuthorityReceipt = Readonly<{
   schema_id: 'oracle-lab-p3b-launch-authority.v1'
@@ -170,10 +171,12 @@ export function assertLaunchAuthority(receipt: unknown, row?: RunLedgerRow): ass
  * opaque WeakSet identity and the production receipt schema; no caller supplied
  * object can satisfy appendStarted/appendSpawned/appendTerminal.
  */
-export function deriveAdapterLaunchAuthority(controller: ProductionController, row: RunLedgerRow): LaunchAuthorityReceipt {
+export function deriveAdapterLaunchAuthority(controller: ProductionController, row: RunLedgerRow, runtime: AdapterRuntimeIdentity): LaunchAuthorityReceipt {
+  assertAdapterRuntimeIdentity(runtime)
   const state = controllerState(controller)
   const exact = state.ledger.rows[row.sequence_index]
-  if (!exact || exact.row_sha256 !== row.row_sha256) throw new Phase3BProductionError('launch_authority_invalid', 'adapter row is not bound to the production controller ledger')
+  try { process.kill(runtime.child_pid, 0) } catch { throw new Phase3BProductionError('external_fact_authority_invalid', 'adapter child PID is not live') }
+  if (!exact || exact.row_sha256 !== row.row_sha256 || !Number.isSafeInteger(runtime.child_pid) || runtime.child_pid <= 0 || !/^[a-f0-9]{64}$/.test(runtime.executable_identity_sha256) || !/^[a-f0-9]{64}$/.test(runtime.receiver_identity_sha256)) throw new Phase3BProductionError('external_fact_authority_invalid', 'adapter row, child executable, or receiver identity is not OS-bound')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-launch-authority.v1' as const,
     campaign_id: state.ledger.campaign_id,
@@ -194,10 +197,10 @@ export function deriveAdapterLaunchAuthority(controller: ProductionController, r
     literal_table_sha256: row.literal_table_sha256,
     response_program_sha256: row.response_program_sha256,
     guard_profile_sha256: row.guard_profile_sha256,
-    anchor_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-anchor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256 }),
-    receiver_authority_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-receiver.v1', receiver_group_id: row.receiver_group_id }),
-    launch_image_record_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-image.v1', selected_executable_class: row.selected_executable_class }),
-    executable_identity_sha256: 'a'.repeat(64),
+    anchor_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-anchor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256, child_pid: runtime.child_pid, receiver_identity_sha256: runtime.receiver_identity_sha256 }),
+    receiver_authority_sha256: runtime.receiver_identity_sha256,
+    launch_image_record_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-image.v1', selected_executable_class: row.selected_executable_class, executable_identity_sha256: runtime.executable_identity_sha256 }),
+    executable_identity_sha256: runtime.executable_identity_sha256,
     target_launches_before: row.sequence_index,
     target_launch_ceiling: 340 as const,
   }

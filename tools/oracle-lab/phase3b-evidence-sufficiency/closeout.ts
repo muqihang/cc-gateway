@@ -2,7 +2,7 @@ import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha25
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
-import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
+import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, immutableNormativeSourceBytes, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -374,7 +374,8 @@ function assertReviewedControlArtifact(root: string, artifact: ArtifactEntry, di
   if (!input || !authority) throw new Phase3BProductionError('conclusion_support_invalid', 'reviewed campaign input or operator authority is missing')
   assertDigestField(input.value, 'input_sha256', 'conclusion_support_invalid')
   assertDigestField(authority.value, 'authority_sha256', 'conclusion_support_invalid')
-  if (input.value[digestField] !== artifact.sha256 || authority.value.campaign_input_sha256 !== input.value.input_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed support artifact is not bound by the reviewed campaign input and operator authority')
+  const authorityInputSha256 = authority.value.campaign_input_sha256 ?? (authority.value.payload && typeof authority.value.payload === 'object' && !Array.isArray(authority.value.payload) ? (authority.value.payload as Record<string, unknown>).campaign_input_sha256 : null)
+  if (input.value[digestField] !== artifact.sha256 || authorityInputSha256 !== input.value.input_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed support artifact is not bound by the reviewed campaign input and operator authority')
 }
 
 export function validateTypedFixtureContract(value: Record<string, unknown>, ledger: CampaignLedger): void {
@@ -631,9 +632,7 @@ export function deriveSyntheticCuration(root: string, ledger: CampaignLedger, fi
 
 function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedger): void {
   for (const [relative, expectedSha] of [[NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256], ['docs/superpowers/plans/2026-07-24-claude-code-2.1.215-phase-3b-non-resume-amendment.md', NORMATIVE_AMENDMENT_SHA256]] as const) {
-    const source = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../', relative)
-    const bytes = stableRead(source, { mode: 0o644, maximumBytes: 262_144 }).bytes
-    if (sha256Bytes(bytes) !== expectedSha) throw new Phase3BProductionError('conclusion_support_invalid', 'normative plan source bytes drifted')
+    const bytes = immutableNormativeSourceBytes(relative, expectedSha)
     createPrivateDirectory(root, path.dirname(relative))
     writeExclusiveBytes(root, relative, bytes, 0o600)
   }

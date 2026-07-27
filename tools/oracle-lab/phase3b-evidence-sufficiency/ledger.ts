@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalJson, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
-import { stableRead } from './sealed-fs.js'
+import { fixedGit, fixedGitBytes } from './trust.js'
 
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
 export const FIXED_STDIN_LITERAL = 'Return exactly the synthetic marker output.complete.\n'
@@ -203,14 +204,25 @@ export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string
 
 export const NORMATIVE_COVERAGE_PLAN_RELATIVE = 'docs/superpowers/plans/2026-07-24-claude-code-2.1.215-phase-3b-normalized-safe-evidence-sufficiency-supplement.md'
 export const NORMATIVE_COVERAGE_PLAN_SHA256 = '1583dad45085e3dc18941349f323e2342eedd0ff273eb12a7a1a43f5dc736a57'
-const NORMATIVE_COVERAGE_PLAN_PATH = fileURLToPath(new URL(`../../../${NORMATIVE_COVERAGE_PLAN_RELATIVE}`, import.meta.url))
+const NORMATIVE_SOURCE_COMMIT = '64dbbb3822d9dfdc4be8523e801fcfee65983f48'
+const NORMATIVE_COVERAGE_PLAN_BLOB = '3a31c9b3e4bb3bb41177a0a644c4436b6d2f2db5'
+const NORMATIVE_AMENDMENT_RELATIVE = 'docs/superpowers/plans/2026-07-24-claude-code-2.1.215-phase-3b-non-resume-amendment.md'
+const NORMATIVE_AMENDMENT_BLOB = '458033da9e6a858d2d4ee110456927a2cbcc06ea'
+const NORMATIVE_REPOSITORY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const COVERAGE_BLOCK_OPEN = '```json coverage-source-bindings\n'
+
+export function immutableNormativeSourceBytes(relative: string, expectedSha256: string): Buffer {
+  const blob = relative === NORMATIVE_COVERAGE_PLAN_RELATIVE ? NORMATIVE_COVERAGE_PLAN_BLOB : relative === NORMATIVE_AMENDMENT_RELATIVE ? NORMATIVE_AMENDMENT_BLOB : null
+  if (!blob || fixedGit(NORMATIVE_REPOSITORY, ['rev-parse', `${NORMATIVE_SOURCE_COMMIT}:${relative}`]) !== blob) throw new Phase3BProductionError('conclusion_support_invalid', 'normative Git object/path is outside the fixed source universe')
+  const bytes = fixedGitBytes(NORMATIVE_REPOSITORY, ['cat-file', 'blob', blob], 262_144)
+  if (sha256Bytes(bytes) !== expectedSha256) throw new Phase3BProductionError('conclusion_support_invalid', 'normative Git object bytes drifted')
+  return bytes
+}
 
 export function normativeCoverageMatrix(ledger: CampaignLedger): Readonly<{ rows: readonly Readonly<Record<string, unknown>>[]; e_rows: readonly Readonly<Record<string, unknown>>[]; c_rows: readonly Readonly<Record<string, unknown>>[]; d_rows: readonly Readonly<Record<string, unknown>>[]; leaf_count: number }> {
   if (ledger.rows.length !== 340) throw new Phase3BProductionError('conclusion_support_invalid', 'normative coverage requires the exact 340-row campaign ledger')
-  const plan = stableRead(NORMATIVE_COVERAGE_PLAN_PATH, { mode: 0o644, maximumBytes: 262_144 })
-  if (plan.identity.sha256 !== NORMATIVE_COVERAGE_PLAN_SHA256) throw new Phase3BProductionError('conclusion_support_invalid', 'normative E/C/D coverage plan bytes drifted')
-  const text = plan.bytes.toString('utf8')
+  const planBytes = immutableNormativeSourceBytes(NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256)
+  const text = planBytes.toString('utf8')
   const start = text.indexOf(COVERAGE_BLOCK_OPEN)
   const end = start < 0 ? -1 : text.indexOf('\n```', start + COVERAGE_BLOCK_OPEN.length)
   let parsed: unknown
