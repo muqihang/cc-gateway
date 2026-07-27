@@ -476,11 +476,24 @@ function gitValue(root: string, revision: string): string {
   return value
 }
 
-function actualRepositoryIdentities(ccGatewayRoot: string, sub2apiRoot: string): { ccHead: string; ccTree: string } {
-  const ccHead = gitValue(ccGatewayRoot, 'HEAD')
-  const ccTree = gitValue(ccGatewayRoot, 'HEAD^{tree}')
+function actualRepositoryIdentities(ccGatewayRoot: string, sub2apiRoot: string, expectedCcC1?: Readonly<{ commit: string; tree: string }>): { ccHead: string; ccTree: string } {
+  const liveHead = gitValue(ccGatewayRoot, 'HEAD')
+  const liveTree = gitValue(ccGatewayRoot, 'HEAD^{tree}')
   if (gitOutput(ccGatewayRoot, ['status', '--porcelain=v1', '--untracked-files=normal']) !== '') {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', 'CC checkout is not clean')
+  }
+  let ccHead = liveHead
+  let ccTree = liveTree
+  if (expectedCcC1) {
+    if (!OID.test(expectedCcC1.commit) || !OID.test(expectedCcC1.tree) || gitValue(ccGatewayRoot, `${expectedCcC1.commit}^{tree}`) !== expectedCcC1.tree) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'expected C1 candidate identity is invalid')
+    const parents = gitOutput(ccGatewayRoot, ['show', '-s', '--format=%P', liveHead]).split(' ').filter(Boolean)
+    if (parents.length !== 2) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'live CC approval is not a two-parent merge')
+    const attestation = parents[1]
+    const attestationParents = gitOutput(ccGatewayRoot, ['show', '-s', '--format=%P', attestation]).split(' ').filter(Boolean)
+    if (attestationParents.length !== 1 || attestationParents[0] !== expectedCcC1.commit || gitValue(ccGatewayRoot, `${attestation}^{tree}`) !== liveTree) throw new CrossRepoContractError('cross_repo_binding_mismatch', 'live CC approval does not merge the direct candidate attestation tree')
+    gitOutput(ccGatewayRoot, ['merge-base', '--is-ancestor', parents[0], expectedCcC1.commit])
+    ccHead = expectedCcC1.commit
+    ccTree = expectedCcC1.tree
   }
 
   const subHead = gitValue(sub2apiRoot, 'HEAD')
@@ -542,7 +555,7 @@ function validateSubReceipt(raw: Uint8Array, expected: {
   return digest
 }
 
-function runExactSubCommand(ccGatewayRoot: string, sub2apiRoot: string, staticResult: ReturnType<typeof buildResult>, recordBytes?: Uint8Array): string {
+function runExactSubCommand(ccGatewayRoot: string, sub2apiRoot: string, staticResult: ReturnType<typeof buildResult>, recordBytes?: Uint8Array): { digest: string; bytes: Buffer } {
   const runRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'oracle-c1-sub-focused-')))
   for (const directory of ['home', 'tmp', 'go-build', 'go-mod-empty', 'go-tmp']) mkdirSync(path.join(runRoot, directory))
   const boundRecord = Buffer.from(recordBytes ?? encodeCrossRepoRecord(buildCrossRepoRecord(ccGatewayRoot, sub2apiRoot, {
@@ -579,7 +592,8 @@ function runExactSubCommand(ccGatewayRoot: string, sub2apiRoot: string, staticRe
   if (!receiptInfo.isFile() || receiptInfo.isSymbolicLink() || (receiptInfo.mode & 0o777) !== 0o600) {
     throw new CrossRepoContractError('contract_command_failed', 'Sub receipt type or mode differs')
   }
-  return validateSubReceipt(readFileSync(receiptPath), {
+  const receiptBytes = readFileSync(receiptPath)
+  const digest = validateSubReceipt(receiptBytes, {
     bundle_sha256: digestWithLF(CONTRACT_FILES.map((relative_path) => ({ relative_path, sha256: CONTRACT_FILE_SHA256[relative_path] }))),
     decisions_sha256: FROZEN_SUB_EXECUTION_DECISIONS_SHA256,
     mutation_results_sha256: FROZEN_SUB_EXECUTION_MUTATIONS_SHA256,
@@ -591,6 +605,27 @@ function runExactSubCommand(ccGatewayRoot: string, sub2apiRoot: string, staticRe
     stable_code_set_sha256: staticResult.stable_code_set_sha256,
     record_input_sha256: sha256Bytes(boundRecord),
   })
+  return { digest, bytes: receiptBytes }
+}
+
+export function executeCrossRepoRecord(input: { ccGatewayRoot: string; sub2apiRoot: string; recordBytes: Uint8Array }): { result: CrossRepoContractResult; receiptBytes: Buffer } {
+  const shared = checkSharedContract({ ccGatewayRoot: input.ccGatewayRoot, sub2apiRoot: input.sub2apiRoot })
+  const staticResult = validateStaticContract(input.ccGatewayRoot, input.sub2apiRoot)
+  validateCrossRepoRecord(input.recordBytes, input.ccGatewayRoot, input.sub2apiRoot)
+  const receipt = runExactSubCommand(input.ccGatewayRoot, input.sub2apiRoot, staticResult.result, input.recordBytes)
+  return {
+    result: {
+      ok: true, bundleDigest: shared.bundleDigest, schemaRange: staticResult.schemaRange,
+      fixtureCases: staticResult.fixtureCases, commandsRun: 1,
+      decisionRows: staticResult.result.case_rows.length, mutationRows: staticResult.result.mutation_rows.length,
+      decisionsDigest: staticResult.result.decisions_sha256,
+      mutationResultsDigest: staticResult.result.mutation_results_sha256,
+      requiredSetDigest: staticResult.result.required_set_sha256,
+      stableCodeSetDigest: staticResult.result.stable_code_set_sha256,
+      subReceiptDigest: receipt.digest,
+    },
+    receiptBytes: receipt.bytes,
+  }
 }
 
 export type CrossRepoRecordInput = {
@@ -746,7 +781,7 @@ function validateNestedRecordSchema(record: JsonObject): void {
   }
 }
 
-export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, sub2apiRoot: string, options: { selectionOverrideArtifact?: Uint8Array } = {}): CrossRepoRecord {
+export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, sub2apiRoot: string, options: { selectionOverrideArtifact?: Uint8Array; expectedCcC1?: Readonly<{ commit: string; tree: string }> } = {}): CrossRepoRecord {
   const bytes = Buffer.from(raw)
   if (bytes.length < 2 || bytes.length > 1 << 20 || bytes.at(-1) !== 0x0a || bytes.at(-2) === 0x0a || bytes.at(-2) === 0x0d || bytes.at(-2) === 0x20 || bytes.at(-2) === 0x09) {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', 'record must be JCS plus exactly one LF')
@@ -773,7 +808,7 @@ export function validateCrossRepoRecord(raw: Uint8Array, ccGatewayRoot: string, 
   if (!c1 || !OID.test(String(c1.head)) || !OID.test(String(c1.tree)) || !SAFE_REF.test(String(authority.command_id)) || authority.reviewer_model !== 'gpt-5.6-sol' || !SAFE_REF.test(String(subReview.task_id)) || !SAFE_REF.test(String(crossReview.task_id)) || !SHA256.test(String(subReview.artifact_sha256)) || !SHA256.test(String(crossReview.artifact_sha256))) {
     throw new CrossRepoContractError('contract_schema_invalid', 'record authority or review binding is invalid')
   }
-  const actual = actualRepositoryIdentities(ccGatewayRoot, sub2apiRoot)
+  const actual = actualRepositoryIdentities(ccGatewayRoot, sub2apiRoot, options.expectedCcC1)
   if (c1.head !== actual.ccHead || c1.tree !== actual.ccTree) {
     throw new CrossRepoContractError('cross_repo_binding_mismatch', 'record C1 identity differs from the CC checkout')
   }
@@ -816,7 +851,7 @@ export function checkCrossRepoContract(input: { ccGatewayRoot: string; sub2apiRo
     throw error
   }
   const staticResult = validateStaticContract(input.ccGatewayRoot, input.sub2apiRoot)
-  const subReceiptDigest = input.runCommands ? runExactSubCommand(input.ccGatewayRoot, input.sub2apiRoot, staticResult.result, input.recordBytes) : undefined
+  const subReceiptDigest = input.runCommands ? runExactSubCommand(input.ccGatewayRoot, input.sub2apiRoot, staticResult.result, input.recordBytes).digest : undefined
   return {
     ok: true, bundleDigest: shared.bundleDigest, schemaRange: staticResult.schemaRange,
     fixtureCases: staticResult.fixtureCases, commandsRun: input.runCommands ? 1 : 0,

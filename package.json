@@ -28,6 +28,8 @@
     "oracle:post-integration:validate-receipt": "tsx tools/oracle-lab/post-integration-handoff.ts validate-receipt",
     "oracle:phase1:recovery": "tsx tools/oracle-lab/phase-1-recovery.ts",
     "oracle:phase2:contract": "tsx tools/oracle-contract/check-cross-repo.ts",
+    "oracle:phase3b": "tsx tools/oracle-lab/phase3b-evidence-sufficiency/campaign.ts",
+    "oracle:phase3b:operator-decision": "tsx tools/oracle-lab/phase3b-evidence-sufficiency/operator-decision.ts",
     "oracle:p0-1": "tools/oracle-lab/oracle-p0-1",
     "test:oracle:p0-1": "tsx tests/run-p0-1.ts",
     "test:oracle:non-p0-1": "tsx tests/run-all.ts --exclude-oracle-p0-1"
