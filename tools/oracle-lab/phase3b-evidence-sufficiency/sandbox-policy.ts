@@ -27,6 +27,7 @@ export function buildSandboxProfile(runtimeRoot: string, writableRoot: string, r
     `(allow process-exec (subpath "${profileEscape(runtimeRoot)}/launch-images"))`,
     '(allow sysctl-read)',
     '(allow file-read-metadata)',
+    '(allow file-read-data (literal "/"))',
     `(allow file-write* (subpath "${profileEscape(writableRoot)}"))`,
     `(allow file-read* (subpath "${profileEscape(runtimeRoot)}"))`,
     '(allow file-read* (subpath "/System/Library"))',

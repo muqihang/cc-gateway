@@ -1,6 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
+import { homedir } from 'node:os'
 import path from 'node:path'
 
 import type { ProductionController } from './controller.js'
@@ -56,21 +57,63 @@ async function runExactGuard(controller: ProductionController, row: RunLedgerRow
   if (process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync('/usr/bin/sandbox-exec')) throw new Phase3BProductionError('isolation_unavailable', 'darwin-arm64 sandbox-exec is required')
   const alternate = createServer((socket) => socket.end())
   const alternatePort = await listen(alternate)
-const script = String.raw`
-const net=require('node:net'),dgram=require('node:dgram'),fs=require('node:fs'),cp=require('node:child_process');
-function tcp(host,port){return new Promise(r=>{const s=net.createConnection({host,port});let d=false;const end=v=>{if(d)return;d=true;s.destroy();r(v)};s.setTimeout(600,()=>end(false));s.once('connect',()=>end(true));s.once('error',()=>end(false))})}
-function udp(){return new Promise(r=>{const s=dgram.createSocket('udp4');let d=false;const end=v=>{if(d)return;d=true;s.close();r(v)};s.once('error',()=>end(false));s.send(Buffer.from([0]),53,'1.1.1.1',e=>end(!e));setTimeout(()=>end(false),600)})}
-function write(file){try{fs.writeFileSync(file,'{"schema_id":"oracle-lab-p3b-guard-write.v1","value":"synthetic"}\n',{flag:'wx',mode:0o600});return true}catch{return false}}
-function read(file){try{fs.readFileSync(file);return true}catch{return false}}
-function processInfo(){try{cp.execFileSync('/bin/ps',['-p',String(process.pid)],{stdio:'ignore'});return true}catch{return false}}
-(async()=>{const ports=JSON.parse(process.argv[1]),declared=[];for(const p of ports)declared.push(await tcp('127.0.0.1',p));const alt=await tcp('127.0.0.1',Number(process.argv[2]));const v4=await tcp('1.1.1.1',443),v6=await tcp('2606:4700:4700::1111',443),u=await udp();console.log(JSON.stringify({declared,alternate:alt,ipv4:v4,ipv6:v6,udp:u,inside:write(process.argv[3]),outside:write(process.argv[4]),host_read:read('/etc/passwd'),credential_read:read('/Users/muqihang/.ssh/config'),process_info:processInfo()}))})().catch(()=>process.exit(2));`
+  const script = String.raw`
+require 'socket'
+require 'json'
+def tcp(host, port)
+  Socket.tcp(host, port, connect_timeout: 0.6) { true }
+rescue StandardError
+  false
+end
+def udp
+  socket = UDPSocket.new
+  socket.connect('1.1.1.1', 53)
+  socket.send("\0", 0)
+  true
+rescue StandardError
+  false
+ensure
+  socket&.close
+end
+def write_once(file)
+  File.open(file, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |io| io.write("{\"schema_id\":\"oracle-lab-p3b-guard-write.v1\",\"value\":\"synthetic\"}\n") }
+  true
+rescue StandardError
+  false
+end
+def readable(file)
+  File.binread(file)
+  true
+rescue StandardError
+  false
+end
+def process_info
+  system('/bin/ps', '-p', Process.pid.to_s, out: File::NULL, err: File::NULL) == true
+rescue StandardError
+  false
+end
+ports = JSON.parse(ARGV[0])
+probe = {
+  declared: ports.map { |port| tcp('127.0.0.1', port) },
+  alternate: tcp('127.0.0.1', Integer(ARGV[1])),
+  ipv4: tcp('1.1.1.1', 443),
+  ipv6: tcp('2606:4700:4700::1111', 443),
+  udp: udp,
+  inside: write_once(ARGV[2]),
+  outside: write_once(ARGV[3]),
+  host_read: readable('/etc/passwd'),
+  credential_read: readable(ARGV[4]),
+  process_info: process_info,
+}
+STDOUT.write(JSON.generate(probe))`
   const state = controllerState(controller)
   const runRoot = path.join(state.runtimeRoot!, 'runs', `${String(row.sequence_index).padStart(3, '0')}-${row.run_id}`)
   const inside = path.join(runRoot, 'guard-allowed.tmp')
   const outside = path.join(state.runtimeRoot!, 'guard-denied.tmp')
   try {
     const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-      const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, process.execPath, '-e', script, JSON.stringify(routePorts), String(alternatePort), inside, outside], { cwd: runRoot, env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'ignore'] })
+      const credentialPath = path.join(homedir(), '.ssh', 'config')
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', script, JSON.stringify(routePorts), String(alternatePort), inside, outside, credentialPath], { cwd: runRoot, env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'ignore'] })
       let stdout = ''
       child.stdout!.on('data', (chunk: Buffer) => { if (stdout.length < 16_384) stdout += chunk.toString('utf8') })
       const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
