@@ -554,7 +554,10 @@ async function sendAction(response: ServerResponse, action: ResponseAction): Pro
 export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<ReceiverResult> {
   assertReceiverAuthority(authority)
   const state = receivers.get(authority)!
-  if (!state.armed || state.sealed || state.activeRequests !== 0) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver is not in a sealable armed state')
+  if (!state.armed || state.sealed) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver is not in a sealable armed state')
+  const drainDeadline = Date.now() + 10_000
+  while (state.activeRequests !== 0 && state.violationCode === null && Date.now() < drainDeadline) await new Promise((resolve) => setTimeout(resolve, 5))
+  if (state.activeRequests !== 0) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver request handling did not reach a sealed terminal state')
   state.sealed = true
   await Promise.all(state.routes.map((route) => new Promise<void>((resolve, reject) => route.server.close((error) => error ? reject(error) : resolve()))))
   assertReceiverAuthority(authority, state.row)
