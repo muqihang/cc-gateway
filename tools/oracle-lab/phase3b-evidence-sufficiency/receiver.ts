@@ -401,7 +401,7 @@ function materializeSemanticAst(node: unknown): unknown {
   throw new Phase3BProductionError('receiver_request_invalid', 'typed request AST node is invalid')
 }
 
-function safeHeaderProjection(request: IncomingMessage): Readonly<{ ordered: readonly Readonly<Record<string, unknown>>[]; presence: Readonly<Record<string, number>>; authMarkerClass: string }> {
+function safeHeaderProjection(request: IncomingMessage): Readonly<{ ordered: readonly Readonly<Record<string, unknown>>[]; presence: readonly Readonly<{ header_ref: string; count: number }>[]; authMarkerClass: string }> {
   const ordered: Array<Readonly<Record<string, unknown>>> = []
   const presence: Record<string, number> = {}
   const authMarkers: string[] = []
@@ -420,7 +420,8 @@ function safeHeaderProjection(request: IncomingMessage): Readonly<{ ordered: rea
     ordered.push({ ordinal: index / 2, name, value_class: valueClass })
   }
   authMarkers.sort((left, right) => left.startsWith('authorization:') === right.startsWith('authorization:') ? left.localeCompare(right) : left.startsWith('authorization:') ? -1 : 1)
-  return deepFreeze({ ordered, presence, authMarkerClass: authMarkers.length === 0 ? 'none' : authMarkers.join('+') })
+  const safePresence = Object.entries(presence).sort(([left], [right]) => left.localeCompare(right)).map(([name, count]) => ({ header_ref: `header_${sha256Bytes(Buffer.from(name, 'utf8')).slice(0, 16)}`, count }))
+  return deepFreeze({ ordered, presence: safePresence, authMarkerClass: authMarkers.length === 0 ? 'none' : authMarkers.join('+') })
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {

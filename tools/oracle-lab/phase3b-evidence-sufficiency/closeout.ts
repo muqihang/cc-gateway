@@ -724,7 +724,7 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   const curationClock = deepFreeze({ ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) })
   writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, curationClock)
   sealNormativePlanAndScenarioSources(root, ledger)
-  materializeCapturedConclusionSources(root, ledger, rows)
+  materializeCapturedConclusionSources(root, ledger, deriveFixtureRows(root, ledger))
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
   const support = sealConclusionSupport(root, ledger)
   const supportSha256s = support.map((value) => value.support_sha256)

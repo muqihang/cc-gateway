@@ -67,6 +67,7 @@ const AUTH_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record<s
   'auth-credential-coexistence': { control: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-a', ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-a' }, treatment: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-b', ANTHROPIC_AUTH_TOKEN: 'oracle-phase3b-placeholder:auth-token-b' } },
   'auth-missing-credential': { control: { ANTHROPIC_API_KEY: 'oracle-phase3b-placeholder:auth-api-key-a' }, treatment: {} },
 }
+const AUTH_ENV_FIELD_IDS = new Map([['ANTHROPIC_API_KEY', 'env_00'], ['ANTHROPIC_AUTH_TOKEN', 'env_01']])
 
 const AUTH_MARKERS = new Map<string, string>([
   ['oracle-phase3b-placeholder:auth-api-key-a', 'api-key-a'],
@@ -150,7 +151,11 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
       const definition = AUTH_VALUES[row.schedule_id]
       if (!definition) throw new Phase3BProductionError('scenario_input_invalid', 'auth schedule is not frozen')
       Object.assign(env, row.arm.startsWith('treatment/') ? definition.treatment : definition.control)
-      inputClasses = deepFreeze(Object.fromEntries(Object.keys(row.arm.startsWith('treatment/') ? definition.treatment : definition.control).sort().map((key) => [key, 'synthetic-placeholder'])))
+      inputClasses = deepFreeze(Object.fromEntries(Object.keys(row.arm.startsWith('treatment/') ? definition.treatment : definition.control).sort().map((key) => {
+        const fieldId = AUTH_ENV_FIELD_IDS.get(key)
+        if (!fieldId) throw new Phase3BProductionError('scenario_input_invalid', 'auth environment field is not in the fixed opaque schema')
+        return [fieldId, 'synthetic-marker-present']
+      })))
     } else env.ANTHROPIC_API_KEY = 'oracle-phase3b-placeholder:campaign'
   }
   const routePorts = bootstrap.route_urls.map((value) => Number(new URL(value).port))
