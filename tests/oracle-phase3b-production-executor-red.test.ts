@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import {
-  assertProductionController,
-  buildCampaignLedger,
-  createProductionController,
-  evaluateProductionGateB,
-} from '../tools/oracle-lab/phase3b-evidence-sufficiency/production-executor.js'
-import { crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { assertProductionController, createProductionController } from '../tools/oracle-lab/phase3b-evidence-sufficiency/controller.js'
+import { evaluateGateB } from '../tools/oracle-lab/phase3b-evidence-sufficiency/gates.js'
+import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const TEST_C1 = crossRepoAuthority('c'.repeat(64))
@@ -29,11 +25,11 @@ test('review C2: launch authority is process-opaque and a structural clone is re
 })
 
 test('review C4/I1: Gate B cannot be self-authorized with caller time, hashes, or READY', () => {
-  assert.throws(() => evaluateProductionGateB({
+  assert.throws(() => evaluateGateB({
     now_ms: 0,
     max_age_ms: Number.MAX_SAFE_INTEGER,
     gate_a: 'READY',
     artifact_sha256s: ['a'.repeat(64)],
     operator_decision: 'READY',
-  }), (error: Error & { code?: string }) => error.code === 'gate_input_invalid')
+  } as never), (error: Error & { code?: string }) => error.code === 'gate_input_invalid')
 })
