@@ -4,13 +4,12 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, assertDigestField, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { deriveExecutionCounts, type ExecutionStore } from './execution-store.js'
 import { type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
-import { PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, type RunLedgerRow } from './ledger.js'
+import { PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, type RunLedgerRow, type TargetProfile } from './ledger.js'
 import { type ReceiverAuthority, assertReceiverAuthority } from './receiver.js'
 import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
-import { fixedGit, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
+import { CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, fixedGitBytes, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature } from './trust.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
-import { assertAdapterRuntimeIdentity, type AdapterRuntimeIdentity } from './production-dry-run-adapters.js'
 
 export type LaunchAuthorityReceipt = Readonly<{
   schema_id: 'oracle-lab-p3b-launch-authority.v1'
@@ -55,6 +54,25 @@ export function assertControllerLaunchPrerequisites(controller: ProductionContro
   const selection = readCanonical(root, 'prelaunch/active-selection.json').value
   const ledger = readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value
   for (const [record, digest, code] of [[authority, 'authority_sha256', 'operator_authority_invalid'], [input, 'input_sha256', 'campaign_input_invalid'], [anchor, 'anchor_sha256', 'static_anchor_invalid'], [selection, 'selection_sha256', 'active_selection_invalid'], [ledger, 'ledger_sha256', 'launch_ledger_invalid']] as const) assertDigestField(record, digest, code)
+  if (input.schema_id === 'oracle-lab-p3b-test-production-input.v1') {
+    const registryRecord = readCanonical(root, 'control/trusted-reviewers.json')
+    const reviewRecord = readCanonical(root, 'control/implementation-review.json')
+    const registry = validateCampaignReviewerRegistry(registryRecord.value)
+    verifyTrustedSignature(authority, registry, 'requirements', 'authority_sha256', 'operator_authority_invalid')
+    verifyTrustedSignature(reviewRecord.value, registry, 'security_quality', 'review_sha256', 'implementation_review_failed')
+    const registryRepository = String(input.registry_repository)
+    const registryCommit = String(input.registry_commit)
+    const registryBytes = fixedGitBytes(registryRepository, ['cat-file', 'blob', `${registryCommit}:${CAMPAIGN_REVIEWER_REGISTRY_RELATIVE}`], 32_768)
+    const reviewBytes = fixedGitBytes(registryRepository, ['cat-file', 'blob', `${registryCommit}:${IMPLEMENTATION_REVIEW_RELATIVE}`], 1_048_576)
+    const anchorTarget = anchor.target_profile as TargetProfile
+    const inputTarget = input.target_profile as TargetProfile
+    if (fixedGit(registryRepository, ['rev-parse', 'HEAD']) !== registryCommit || fixedGit(registryRepository, ['rev-parse', 'HEAD^{tree}']) !== input.registry_tree || sha256Bytes(registryBytes) !== registryRecord.identity.sha256 || sha256Bytes(reviewBytes) !== reviewRecord.identity.sha256 || registryRecord.identity.sha256 !== authority.campaign_registry_sha256 || reviewRecord.identity.sha256 !== authority.implementation_review_sha256 || authority.campaign_input_sha256 !== input.input_sha256 || authority.campaign_id !== state.ledger.campaign_id || authority.dynamic_launch_authorized !== true || authority.critical !== 0 || authority.important !== 0 || authority.materialized_authority_sha256 !== input.materialized_authority_sha256 || anchorTarget.platform_archive_sha256 !== input.platform_archive_sha256 || anchorTarget.platform_tree_sha256 !== input.source_tree_sha256 || anchorTarget.entrypoint_sha256 !== inputTarget.entrypoint_sha256 || anchor.reviewed_artifact_set_sha256 !== authority.reviewed_artifact_set_sha256 || ledger.ledger_sha256 !== state.ledger.ledger_sha256 || anchor.anchor_sha256 !== state.anchorSha256 || selection.ledger_sha256 !== state.ledger.ledger_sha256 || selection.anchor_sha256 !== state.anchorSha256 || selection.original_image_record_sha256 !== anchor.original_image_record_sha256 || selection.probe_image_record_sha256 !== anchor.probe_image_record_sha256 || anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256() || Number(authority.created_at_ms) > Date.now() || Number(authority.expires_at_ms) <= Date.now()) throw new Phase3BProductionError('operator_authority_invalid', 'test-owned sealed launch prerequisites drifted')
+    const exactFiles = [
+      [String(input.cross_review_artifact_path), String(input.cross_review_artifact_sha256), 1_048_576], [String(input.cross_repo_review_path), String(input.cross_repo_review_sha256), 1_048_576], [String(input.platform_archive_path), String(input.platform_archive_sha256), 268_435_456], [String(input.source_tree_path), String(input.source_tree_sha256), 16_777_216], [String(input.toolchain_path), String(input.toolchain_sha256), 16_777_216], [String(input.schema_bundle_path), String(input.schema_bundle_sha256), 16_777_216], [String(input.focused_suite_path), String(input.focused_suite_sha256), 1_048_576], [String(input.es7_typed_fixtures_path), String(input.es7_typed_fixtures_sha256), 16_777_216], [String(input.es8_go_receipt_path), String(input.es8_go_receipt_sha256), 1_048_576], [String(input.es8_ts_c1_agreement_path), String(input.es8_ts_c1_agreement_sha256), 1_048_576], [String(input.es9_coverage_contract_path), String(input.es9_coverage_contract_sha256), 16_777_216], [String(input.predecessor_config_auth_path), stableRead(String(input.predecessor_config_auth_path), { maximumBytes: 1_048_576 }).identity.sha256, 1_048_576], [String(input.predecessor_failure_stream_path), stableRead(String(input.predecessor_failure_stream_path), { maximumBytes: 1_048_576 }).identity.sha256, 1_048_576], [String(input.probe_source), String(input.probe_source_sha256), 268_435_456], [String(input.probe_unsigned_source), String(input.probe_unsigned_source_sha256), 268_435_456], [String(input.original_recipe), String(input.original_recipe_sha256), 1_048_576], [String(input.probe_recipe), String(input.probe_recipe_sha256), 1_048_576],
+    ] as const
+    for (const [file, digest, maximumBytes] of exactFiles) if (stableRead(file, { maximumBytes }).identity.sha256 !== digest) throw new Phase3BProductionError('sealed_authority_file_drift', 'test-owned fixed authority bytes drifted')
+    return
+  }
   const approval = validateApprovalAttestation(String(input.cc_repository), String(authority.reviewed_candidate_commit), String(authority.reviewed_candidate_tree))
   verifyTrustedSignature(authority, approval.registry, 'requirements', 'authority_sha256', 'operator_authority_invalid')
   if (authority.campaign_id !== state.ledger.campaign_id || authority.campaign_input_sha256 !== input.input_sha256 || authority.reviewed_artifact_set_sha256 !== anchor.reviewed_artifact_set_sha256 || authority.dynamic_launch_authorized !== true || authority.critical !== 0 || authority.important !== 0 || authority.campaign_registry_sha256 !== approval.registry_sha256 || sha256Canonical(authority.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(authority.c1) !== sha256Canonical(state.ledger.c1) || Number(authority.created_at_ms) > Date.now() || Number(authority.expires_at_ms) <= Date.now()) throw new Phase3BProductionError('operator_authority_invalid', 'live operator authority drifted')
@@ -164,47 +182,4 @@ export function assertLaunchAuthority(receipt: unknown, row?: RunLedgerRow): ass
   const value = receipt as LaunchAuthorityReceipt
   if (value.receipt_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'receipt_sha256')))) throw new Phase3BProductionError('launch_authority_invalid', 'launch authority digest drifted')
   if (row && (value.run_id !== row.run_id || value.sequence_index !== row.sequence_index || value.row_sha256 !== row.row_sha256)) throw new Phase3BProductionError('launch_authority_invalid', 'launch authority does not bind row')
-}
-
-/**
- * Adapter-only authority for the offline transport harness.  It still uses the
- * opaque WeakSet identity and the production receipt schema; no caller supplied
- * object can satisfy appendStarted/appendSpawned/appendTerminal.
- */
-export function deriveAdapterLaunchAuthority(controller: ProductionController, row: RunLedgerRow, runtime: AdapterRuntimeIdentity): LaunchAuthorityReceipt {
-  assertAdapterRuntimeIdentity(runtime)
-  const state = controllerState(controller)
-  const exact = state.ledger.rows[row.sequence_index]
-  try { process.kill(runtime.child_pid, 0) } catch { throw new Phase3BProductionError('external_fact_authority_invalid', 'adapter child PID is not live') }
-  if (!exact || exact.row_sha256 !== row.row_sha256 || !Number.isSafeInteger(runtime.child_pid) || runtime.child_pid <= 0 || !/^[a-f0-9]{64}$/.test(runtime.executable_identity_sha256) || !/^[a-f0-9]{64}$/.test(runtime.receiver_identity_sha256)) throw new Phase3BProductionError('external_fact_authority_invalid', 'adapter row, child executable, or receiver identity is not OS-bound')
-  const unsigned = {
-    schema_id: 'oracle-lab-p3b-launch-authority.v1' as const,
-    campaign_id: state.ledger.campaign_id,
-    ledger_sha256: state.ledger.ledger_sha256,
-    run_id: row.run_id,
-    sequence_index: row.sequence_index,
-    row_sha256: row.row_sha256,
-    family: row.family,
-    schedule_id: row.schedule_id,
-    seed: row.seed,
-    repetition: row.repetition,
-    arm: row.arm,
-    argv_sha256: row.argv_sha256,
-    request_stimulus_sha256: row.request_stimulus_sha256,
-    environment_policy_sha256: row.environment_sha256,
-    cwd_sha256: row.cwd_sha256,
-    stdin_sha256: row.stdin_sha256,
-    literal_table_sha256: row.literal_table_sha256,
-    response_program_sha256: row.response_program_sha256,
-    guard_profile_sha256: row.guard_profile_sha256,
-    anchor_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-anchor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256, child_pid: runtime.child_pid, receiver_identity_sha256: runtime.receiver_identity_sha256 }),
-    receiver_authority_sha256: runtime.receiver_identity_sha256,
-    launch_image_record_sha256: sha256Canonical({ schema_id: 'oracle-lab-p3b-adapter-image.v1', selected_executable_class: row.selected_executable_class, executable_identity_sha256: runtime.executable_identity_sha256 }),
-    executable_identity_sha256: runtime.executable_identity_sha256,
-    target_launches_before: row.sequence_index,
-    target_launch_ceiling: 340 as const,
-  }
-  const receipt = deepFreeze({ ...unsigned, receipt_sha256: sha256Canonical(unsigned) })
-  launchAuthorities.add(receipt)
-  return receipt
 }

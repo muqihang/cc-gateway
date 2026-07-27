@@ -1,16 +1,16 @@
 import { loadSealedControl } from './campaign-controller.js'
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import { CONCLUSION_IDS, CONCLUSION_PATHS, SUCCESSOR_TTL_MS, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from './closeout.js'
+import { CONCLUSION_IDS, CONCLUSION_PATHS, SUCCESSOR_TTL_MS, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validatePostGateLeakReport } from './closeout.js'
 import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Canonical } from './core.js'
 import { deriveExecutionCounts, openExecutionStore, readExecutionReceipts } from './execution-store.js'
 import { validateCampaignLedger } from './ledger.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
-import { loadTrustedReviewerRegistry, verifyTrustedSignature } from './trust.js'
+import { verifyTrustedSignature } from './trust.js'
 
-const OPERATOR_MAX_DELAY_MS = 300_000
-const SCOPE = 'non-resume; claude-code-2.1.215; darwin-arm64; synthetic-loopback-only; no-production; no-real-credentials; no-upstream; no-promotion'
+export const OPERATOR_MAX_DELAY_MS = 300_000
+export const GATE_B_SCOPE = 'non-resume; claude-code-2.1.215; darwin-arm64; synthetic-loopback-only; no-production; no-real-credentials; no-upstream; no-promotion'
 const CURATION_ROOT = 'capsules/P3B-ES1/curation'
 const CLOSURE_ROOT = 'capsules/P3B-ES1/closure'
 const GATE_ROOT = 'capsules/P3B-ES1/gates'
@@ -153,11 +153,11 @@ export function importSignedOperatorDecision(evidenceRoot: string, signedDecisio
   try { parsed = JSON.parse(externalDecision.bytes.subarray(0, -1).toString('utf8')) } catch { throw new Phase3BProductionError('operator_decision_invalid', 'signed operator decision is invalid JSON') }
   assertExactKeys(parsed, ['schema_id', 'decision_id', 'decision', 'campaign_id', 'gate_a_path', 'gate_a_sha256', 'gate_a_clock_sha256', 'external_set_path', 'external_set_sha256', 'conclusion_paths', 'conclusion_sha256s', 'implementation_review_sha256', 'issued_at_ms', 'issued_monotonic_ns', 'maximum_evaluation_delay_ms', 'scope', 'prohibited_claims', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'decision_sha256'], 'operator_decision_invalid')
   assertDigestField(parsed, 'decision_sha256', 'operator_decision_invalid')
-  verifyTrustedSignature(parsed, loadTrustedReviewerRegistry(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree), 'requirements', 'decision_sha256', 'operator_decision_invalid')
+  verifyTrustedSignature(parsed, loadSealedControl(root).registry, 'requirements', 'decision_sha256', 'operator_decision_invalid')
   const decision = deepFreeze(parsed)
   const issuedAt = Number(decision.issued_at_ms)
   const issuedMonotonic = BigInt(String(decision.issued_monotonic_ns))
-  if (decision.schema_id !== 'oracle-lab-p3b-operator-decision.v2' || decision.decision !== 'evaluate_successor_amendment_startable' || decision.campaign_id !== gateA.campaign_id || decision.gate_a_path !== `${GATE_ROOT}/gate-a-result.json` || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.external_set_path !== `${CLOSURE_ROOT}/external-digest-set.json` || decision.external_set_sha256 !== external.external_set_sha256 || sha256Canonical(decision.conclusion_paths) !== sha256Canonical(CONCLUSION_IDS.map((id) => CONCLUSION_PATHS[id])) || sha256Canonical(decision.conclusion_sha256s) !== sha256Canonical(conclusionRows.map((row) => row.conclusion_sha256)) || decision.implementation_review_sha256 !== authority.implementation_review_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== SCOPE || sha256Canonical(decision.prohibited_claims) !== sha256Canonical(['production_ready', 'real_upstream_validated', 'real_credentials_validated', 'resume_supported', 'cross_platform_validated']) || !Number.isSafeInteger(issuedAt) || issuedAt < Number(gateAClock.wall_clock_ms) || issuedMonotonic < BigInt(String(gateAClock.monotonic_ns))) throw new Phase3BProductionError('operator_decision_invalid', 'signed operator decision does not bind the exact Gate A scope')
+  if (decision.schema_id !== 'oracle-lab-p3b-operator-decision.v2' || decision.decision !== 'evaluate_successor_amendment_startable' || decision.campaign_id !== gateA.campaign_id || decision.gate_a_path !== `${GATE_ROOT}/gate-a-result.json` || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.external_set_path !== `${CLOSURE_ROOT}/external-digest-set.json` || decision.external_set_sha256 !== external.external_set_sha256 || sha256Canonical(decision.conclusion_paths) !== sha256Canonical(CONCLUSION_IDS.map((id) => CONCLUSION_PATHS[id])) || sha256Canonical(decision.conclusion_sha256s) !== sha256Canonical(conclusionRows.map((row) => row.conclusion_sha256)) || decision.implementation_review_sha256 !== authority.implementation_review_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== GATE_B_SCOPE || sha256Canonical(decision.prohibited_claims) !== sha256Canonical(['production_ready', 'real_upstream_validated', 'real_credentials_validated', 'resume_supported', 'cross_platform_validated']) || !Number.isSafeInteger(issuedAt) || issuedAt < Number(gateAClock.wall_clock_ms) || issuedMonotonic < BigInt(String(gateAClock.monotonic_ns))) throw new Phase3BProductionError('operator_decision_invalid', 'signed operator decision does not bind the exact Gate A scope')
   writeGate(root, `${GATE_ROOT}/successor-amendment-decision.json`, decision)
   return decision
 }
@@ -210,7 +210,7 @@ export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknow
   assertExactKeys(gateAClock, ['schema_id', 'gate', 'campaign_id', 'external_set_sha256', 'conclusion_sha256s', 'controller_source_set_sha256', 'controller_executable_sha256', 'toolchain_sha256', 'predecessor_clock_sha256', 'predecessor_wall_clock_ms', 'predecessor_monotonic_ns', 'wall_clock_ms', 'monotonic_ns', 'clock_sha256'], 'gate_clock_invalid')
   assertExactKeys(decision, ['schema_id', 'decision_id', 'decision', 'campaign_id', 'gate_a_path', 'gate_a_sha256', 'gate_a_clock_sha256', 'external_set_path', 'external_set_sha256', 'conclusion_paths', 'conclusion_sha256s', 'implementation_review_sha256', 'issued_at_ms', 'issued_monotonic_ns', 'maximum_evaluation_delay_ms', 'scope', 'prohibited_claims', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'decision_sha256'], 'operator_decision_invalid')
   for (const [value, digest, code] of [[gateA, 'gate_result_sha256', 'gate_a_invalid'], [gateAClock, 'clock_sha256', 'gate_clock_invalid'], [decision, 'decision_sha256', 'operator_decision_invalid']] as const) assertDigestField(value, digest, code)
-  if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || decision.decision !== 'evaluate_successor_amendment_startable' || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.external_set_sha256 !== external.external_set_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== SCOPE) throw new Phase3BProductionError('operator_decision_invalid', 'operator decision scope or Gate A binding drifted')
+  if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || decision.decision !== 'evaluate_successor_amendment_startable' || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.external_set_sha256 !== external.external_set_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== GATE_B_SCOPE) throw new Phase3BProductionError('operator_decision_invalid', 'operator decision scope or Gate A binding drifted')
   const conclusionRows = conclusions(root)
   const curationClock = validateCurationClock(root, conclusionRows)
   const supportSha256s = validateConclusionSupport(root, true)
@@ -224,8 +224,8 @@ export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknow
   }
   const expectedDigests = conclusionRows.map((row) => row.conclusion_sha256)
   if (sha256Canonical(decision.conclusion_paths) !== sha256Canonical(CONCLUSION_IDS.map((id) => CONCLUSION_PATHS[id])) || sha256Canonical(decision.conclusion_sha256s) !== sha256Canonical(expectedDigests) || sha256Canonical(gateA.conclusion_sha256s) !== sha256Canonical(expectedDigests) || sha256Canonical(gateAClock.conclusion_sha256s) !== sha256Canonical(expectedDigests)) throw new Phase3BProductionError('conclusion_invalid', 'decision/Gate A clock/result conclusion binding drifted')
-  const { input, authority } = loadSealedControl(root)
-  verifyTrustedSignature(decision, loadTrustedReviewerRegistry(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree), 'requirements', 'decision_sha256', 'operator_decision_invalid')
+  const { input, authority, registry } = loadSealedControl(root)
+  verifyTrustedSignature(decision, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid')
   if (gateA.gate_clock_sha256 !== gateAClock.clock_sha256 || gateA.external_set_sha256 !== external.external_set_sha256 || gateAClock.gate !== 'A' || gateAClock.campaign_id !== gateA.campaign_id || gateAClock.external_set_sha256 !== external.external_set_sha256 || gateAClock.controller_source_set_sha256 !== controllerSourceSetSha256() || gateAClock.controller_executable_sha256 !== controllerExecutableSha256() || gateAClock.toolchain_sha256 !== input.toolchain_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.implementation_review_sha256 !== authority.implementation_review_sha256 || decision.gate_a_path !== `${GATE_ROOT}/gate-a-result.json` || decision.external_set_path !== `${CLOSURE_ROOT}/external-digest-set.json`) throw new Phase3BProductionError('gate_a_invalid', 'Gate A clock/result/operator bindings drifted')
   const clock = captureClock(root, 'B', { sha256: String(gateAClock.clock_sha256), wall: Number(gateAClock.wall_clock_ms), monotonic: String(gateAClock.monotonic_ns) }, String(external.external_set_sha256), expectedDigests.map(String), input.toolchain_sha256)
   if (clock.wall_clock_ms < issued) throw new Phase3BProductionError('gate_clock_rollback', 'Gate B clock predates operator decision')
@@ -241,9 +241,10 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const expectedPath = path.join(root, GATE_ROOT, 'gate-b-result.json')
   if (path.normalize(resultPath) !== expectedPath) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result path is not the fixed sealed path')
-  assertFixedDirectory(root, GATE_ROOT, ['gate-a-clock.json', 'gate-a-result.json', 'successor-amendment-decision.json', 'gate-b-clock.json', 'gate-b-result.json', 'gate-b-evaluation-receipt.json'])
+  assertFixedDirectory(root, GATE_ROOT, ['gate-a-clock.json', 'gate-a-result.json', 'successor-amendment-decision.json', 'gate-b-clock.json', 'gate-b-result.json', 'gate-b-evaluation-receipt.json', 'post-gate-leak-report.json'])
   assertFixedDirectory(root, CLOSURE_ROOT, CLOSURE_FILES)
   const external = validateExternalSet(root)
+  validatePostGateLeakReport(root)
   validateArtifactIndexCoverage(root, readCanonical(root, `${CLOSURE_ROOT}/artifact-index.json`, 16_777_216).value)
   const gateA = readCanonical(root, `${GATE_ROOT}/gate-a-result.json`).value
   const gateAClock = readCanonical(root, `${GATE_ROOT}/gate-a-clock.json`).value
@@ -266,9 +267,9 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   validateCurationClock(root, conclusionRows)
   const supportSha256s = validateConclusionSupport(root, true)
   if (conclusionRows.some((row) => row.level !== 'Reproduced' || row.enabled !== true || Number(row.expires_at_ms) !== Number(row.issued_at_ms) + SUCCESSOR_TTL_MS || Number(row.issued_at_ms) > Date.now() || Date.now() >= Number(row.expires_at_ms) || (row.contradiction_ids as unknown[]).length !== 0 || sha256Canonical(row.supporting_evidence_sha256s) !== sha256Canonical(supportSha256s))) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B conclusions are not current reproduced PASS support')
-  const { input, authority } = loadSealedControl(root)
-  verifyTrustedSignature(decision, loadTrustedReviewerRegistry(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree), 'requirements', 'decision_sha256', 'operator_decision_invalid')
-  if (decision.schema_id !== 'oracle-lab-p3b-operator-decision.v2' || decision.decision !== 'evaluate_successor_amendment_startable' || decision.campaign_id !== gateA.campaign_id || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.external_set_sha256 !== external.external_set_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== SCOPE || sha256Canonical(decision.conclusion_sha256s) !== sha256Canonical(conclusionRows.map((row) => row.conclusion_sha256)) || sha256Canonical(decision.prohibited_claims) !== sha256Canonical(['production_ready', 'real_upstream_validated', 'real_credentials_validated', 'resume_supported', 'cross_platform_validated'])) throw new Phase3BProductionError('gate_b_result_invalid', 'operator decision signature or scope drifted')
+  const { input, registry } = loadSealedControl(root)
+  verifyTrustedSignature(decision, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid')
+  if (decision.schema_id !== 'oracle-lab-p3b-operator-decision.v2' || decision.decision !== 'evaluate_successor_amendment_startable' || decision.campaign_id !== gateA.campaign_id || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.external_set_sha256 !== external.external_set_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== GATE_B_SCOPE || sha256Canonical(decision.conclusion_sha256s) !== sha256Canonical(conclusionRows.map((row) => row.conclusion_sha256)) || sha256Canonical(decision.prohibited_claims) !== sha256Canonical(['production_ready', 'real_upstream_validated', 'real_credentials_validated', 'resume_supported', 'cross_platform_validated'])) throw new Phase3BProductionError('gate_b_result_invalid', 'operator decision signature or scope drifted')
   const resultRecord = stableRead(expectedPath, { mode: 0o600, maximumBytes: 1_048_576 })
   const receipt = readCanonical(root, `${GATE_ROOT}/gate-b-evaluation-receipt.json`).value
   assertExactKeys(receipt, ['schema_id', 'campaign_id', 'result_raw_sha256', 'result_canonical_sha256', 'evaluation_input_sha256', 'evaluator_nonce', 'receipt_sha256'], 'gate_b_result_invalid')

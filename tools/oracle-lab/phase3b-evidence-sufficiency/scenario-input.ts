@@ -134,6 +134,10 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
     XDG_CACHE_HOME: path.join(roots.xdg, 'cache'), XDG_DATA_HOME: path.join(roots.xdg, 'data'), XDG_STATE_HOME: path.join(roots.xdg, 'state'),
     TMPDIR: roots.tmp, TMP: roots.tmp, TEMP: roots.tmp, CLAUDE_CODE_TMPDIR: roots.tmp, TZ: 'UTC', LANG: 'C', LC_ALL: 'C',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', NO_PROXY: '127.0.0.1,localhost', ANTHROPIC_CUSTOM_HEADERS: bootstrap.custom_headers,
+    ORACLE_PHASE3B_SELECTED_BASE_URL: bootstrap.selected_base_url,
+    ORACLE_PHASE3B_MAX_ATTEMPTS: String(row.response_program.maximum_attempts),
+    ORACLE_PHASE3B_EXPECT_COMPLETE: row.response_program.actions.at(-1)?.body_kind === 'complete_sse' ? '1' : '0',
+    ORACLE_PHASE3B_EXPECT_FAILURE: (row.family === 'auth' && row.schedule_id === 'auth-missing-credential' && row.arm.startsWith('treatment/')) || (row.family === 'response_failure_recovery' && /_terminal$|^reset_terminal$|^partial_sse_then_eof$/.test(row.schedule_id)) ? '1' : '0',
   }
   for (const relative of [`${runRelative}/xdg/config`, `${runRelative}/xdg/cache`, `${runRelative}/xdg/data`, `${runRelative}/xdg/state`]) createPrivateDirectory(state.runtimeRoot, relative)
   let inputClasses: Readonly<Record<string, string>> = {}

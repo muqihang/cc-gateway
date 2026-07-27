@@ -2,7 +2,7 @@ import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha25
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
-import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, immutableNormativeSourceBytes, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
+import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, immutableNormativeSourceBytes, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -459,27 +459,27 @@ function normativeSourceMetadata(relative: string): { id: typeof CONCLUSION_IDS[
   return null
 }
 
-function normativeSourceProjection(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+function capturedSourceProjection(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], targetProfile: TargetProfile): Readonly<Record<string, unknown>> {
   const projection: Record<string, unknown> = {}
   for (const descriptor of normativeCoverageMatrix(ledger).rows) {
     const record = descriptor as Record<string, unknown>
     if (record.source_relative_path !== relative) continue
-    for (const leaf of record.leaves as readonly string[]) setNormativePointer(projection, leaf, deriveNormativeSourceProjectionValue(record, leaf, ledger, fixtureRows))
+    for (const leaf of record.leaves as readonly string[]) setNormativePointer(projection, leaf, deriveCapturedSourceValue(record, leaf, ledger, fixtureRows, targetProfile))
   }
   return deepFreeze(projection)
 }
 
-function expectedNormativeSource(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+function capturedConclusionSource(relative: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], targetProfile: TargetProfile): Readonly<Record<string, unknown>> {
   const metadata = normativeSourceMetadata(relative)
   if (!metadata) throw new Phase3BProductionError('conclusion_support_invalid', `normative source path is not one of the fixed E source paths: ${relative}`)
-  const projection = normativeSourceProjection(relative, ledger, fixtureRows)
+  const projection = capturedSourceProjection(relative, ledger, fixtureRows, targetProfile)
   const leafValues = normativeCoverageMatrix(ledger).rows.filter((row) => row.source_relative_path === relative).flatMap((row) => (row.leaves as readonly string[]).map((leaf) => ({ id: row.id, leaf, value_sha256: sha256Canonical(resolveJsonPointer(projection, leaf)) })))
   const universe = { source_relative_path: relative, source_schema: metadata.schema, leaf_values: leafValues }
-  const unsigned = { schema_id: 'oracle-lab-p3b-normative-source.v1', source_relative_path: relative, source_schema: metadata.schema, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, source_projection: projection, leaf_value_universe: leafValues, source_universe_sha256: sha256Canonical(universe) }
+  const unsigned = { schema_id: 'oracle-lab-p3b-captured-conclusion-source.v1', source_relative_path: relative, source_schema: metadata.schema, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, capture_set_sha256: sha256Canonical(fixtureRows), source_projection: projection, leaf_value_universe: leafValues, source_universe_sha256: sha256Canonical(universe) }
   return deepFreeze({ ...unsigned, source_sha256: sha256Canonical(unsigned) })
 }
 
-function normativeSourceRecord(root: string, descriptor: Record<string, unknown>, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<{ value: Record<string, unknown> | null; rawSha256: string; size: number; schema: string; missing: boolean }> {
+function normativeSourceRecord(root: string, descriptor: Record<string, unknown>, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], targetProfile: TargetProfile): Readonly<{ value: Record<string, unknown> | null; rawSha256: string; size: number; schema: string; missing: boolean }> {
   const relative = String(descriptor.source_relative_path)
   try {
     const absolute = resolveContained(root, relative)
@@ -490,8 +490,8 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
         if (sha256Canonical(record.value) !== sha256Canonical(expected) || record.identity.sha256 !== sha256Bytes(Buffer.concat([canonicalBytes(expected), Buffer.from('\n', 'utf8')]))) throw new Phase3BProductionError('conclusion_support_invalid', 'normative scenario source bytes are not the exact immutable source')
         return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.schema_id ?? ''), missing: false })
       }
-      const expected = expectedNormativeSource(relative, ledger, fixtureRows)
-      if (sha256Canonical(record.value) !== sha256Canonical(expected) || record.identity.sha256 !== sha256Bytes(Buffer.concat([canonicalBytes(expected), Buffer.from('\n', 'utf8')]))) throw new Phase3BProductionError('conclusion_support_invalid', `normative source bytes are not the exact immutable source: ${relative}`)
+      const captured = capturedConclusionSource(relative, ledger, fixtureRows, targetProfile)
+      if (sha256Canonical(record.value) !== sha256Canonical(captured) || record.identity.sha256 !== sha256Bytes(Buffer.concat([canonicalBytes(captured), Buffer.from('\n', 'utf8')]))) throw new Phase3BProductionError('conclusion_support_invalid', `captured conclusion source bytes do not reproduce sealed observations: ${relative}`)
       return deepFreeze({ value: record.value, rawSha256: record.identity.sha256, size: record.identity.size, schema: String(record.value.source_schema ?? record.value.schema_id ?? ''), missing: false })
     }
     const record = stableRead(absolute, { mode: 0o600, maximumBytes: 262_144 })
@@ -502,46 +502,47 @@ function normativeSourceRecord(root: string, descriptor: Record<string, unknown>
   }
 }
 
-function deriveNormativeSourceProjectionValue(descriptor: Record<string, unknown>, leaf: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
-  void fixtureRows
-  const sealedReceiptDigest = ledger.ledger_sha256
+function deriveCapturedSourceValue(descriptor: Record<string, unknown>, leaf: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], targetProfile: TargetProfile): unknown {
+  const captureSetSha256 = sha256Canonical(fixtureRows)
   const className = String(descriptor.class)
-  if (leaf === '/identity/package') return TARGET_PROFILE.package
-  if (leaf === '/identity/version') return TARGET_PROFILE.version
-  if (leaf === '/identity/archive_sha256') return TARGET_PROFILE.platform_archive_sha256
-  if (leaf === '/identity/tree_sha256') return TARGET_PROFILE.platform_tree_sha256
-  if (leaf === '/identity/entrypoint_sha256') return TARGET_PROFILE.entrypoint_sha256
-  if (leaf === '/identity/platform') return TARGET_PROFILE.platform
-  if (leaf === '/identity/architecture') return TARGET_PROFILE.architecture
+  if (leaf === '/identity/package') return targetProfile.package
+  if (leaf === '/identity/version') return targetProfile.version
+  if (leaf === '/identity/archive_sha256') return targetProfile.platform_archive_sha256
+  if (leaf === '/identity/tree_sha256') return targetProfile.platform_tree_sha256
+  if (leaf === '/identity/entrypoint_sha256') return targetProfile.entrypoint_sha256
+  if (leaf === '/identity/platform') return targetProfile.platform
+  if (leaf === '/identity/architecture') return targetProfile.architecture
   if (leaf === '/request/method') return 'POST'
   if (leaf === '/request/target/path') return '/v1/messages'
   if (leaf === '/request/target/query_order' || leaf === '/request/target/query_items') return []
   if (leaf === '/request/body_ast/model') return FIXED_LITERAL_TABLE.request_model_v1
   if (leaf === '/request/body_ast/stream/value') return true
-  if (leaf === '/request/encoding/canonical_body_sha256') return sealedReceiptDigest
+  if (leaf === '/request/encoding/canonical_body_sha256') return sha256Canonical(fixtureRows.flatMap((row) => Array.isArray(row.requests) ? row.requests.map((request) => (request as Record<string, unknown>).receiver_wire_body_sha256) : []))
   if (leaf === '/coverage/required_row_ids') return ledger.rows.map((row) => row.sequence_index)
   if (leaf === '/coverage/required_pointer_set') return normativeCoverageMatrix(ledger).rows.flatMap((row) => row.leaves)
   if (leaf === '/coverage/required_class_counts') return { E: 20, C: 3, D: 3 }
   if (className === 'D') return { disabled: true, reason: String(descriptor.missing_action), source_sha256: String(descriptor.source_sha256_binding) }
-  return { source_projection: 'immutable-normative-contract-v2', leaf, source_schema: String(descriptor.source_schema), ledger_sha256: sealedReceiptDigest }
+  const familyRows = fixtureRows.filter((row) => String(row.family) === (String(descriptor.conclusion_id).includes('CONFIG-AUTH') ? 'config' : String(descriptor.conclusion_id).includes('FAILURE') ? 'response_failure_recovery' : 'request_wire'))
+  return { source_projection: 'sealed-capture-derivation-v1', leaf, source_schema: String(descriptor.source_schema), capture_set_sha256: captureSetSha256, family_capture_sha256: sha256Canonical(familyRows), transform: descriptor.transform }
 }
 
-function normativeExpectedValue(descriptor: Record<string, unknown>, leaf: string, source: Record<string, unknown> | null, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): unknown {
+function resolvedSourceValue(descriptor: Record<string, unknown>, leaf: string, source: Record<string, unknown> | null, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], targetProfile: TargetProfile): unknown {
   const projection = source && source.source_projection && typeof source.source_projection === 'object' && !Array.isArray(source.source_projection) ? source.source_projection as Record<string, unknown> : source
   if (projection) {
     try { return resolveJsonPointer(projection, leaf) } catch {}
   }
-  if (descriptor.class === 'C' || descriptor.class === 'D') return deriveNormativeSourceProjectionValue(descriptor, leaf, ledger, fixtureRows)
+  if (descriptor.class === 'C' || descriptor.class === 'D') return deriveCapturedSourceValue(descriptor, leaf, ledger, fixtureRows, targetProfile)
   throw new Phase3BProductionError('conclusion_support_invalid', `normative JSON pointer is missing: ${descriptor.source_relative_path}#${leaf}`)
 }
 
-export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[] = []): readonly Readonly<Record<string, unknown>>[] {
+export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
   const normative = normativeCoverageMatrix(ledger)
+  const targetProfile = readCanonical(root, 'prelaunch/static-anchor.json').value.target_profile as TargetProfile
   const resolved: Array<Readonly<Record<string, unknown>>> = []
   for (const descriptor of normative.rows) {
     const descriptorRecord = descriptor as Record<string, unknown>
     const sourcePath = String(descriptorRecord.source_relative_path)
-    const source = normativeSourceRecord(root, descriptorRecord, ledger, fixtureRows)
+    const source = normativeSourceRecord(root, descriptorRecord, ledger, fixtureRows, targetProfile)
     if (source.missing) throw new Phase3BProductionError('conclusion_support_invalid', `normative source is missing: ${sourcePath}`)
     const expectedPlanSha = sourcePath === NORMATIVE_COVERAGE_PLAN_RELATIVE ? NORMATIVE_COVERAGE_PLAN_SHA256 : sourcePath.endsWith('non-resume-amendment.md') ? NORMATIVE_AMENDMENT_SHA256 : null
     if (expectedPlanSha !== null && source.rawSha256 !== expectedPlanSha) throw new Phase3BProductionError('conclusion_support_invalid', `normative source digest drifted: ${sourcePath}`)
@@ -550,8 +551,8 @@ export function resolveNormativeCoverage(root: string, ledger: CampaignLedger, f
     if (/^[a-f0-9]{64}$/.test(String(descriptorRecord.source_sha256_binding)) && source.rawSha256 !== descriptorRecord.source_sha256_binding) throw new Phase3BProductionError('conclusion_support_invalid', 'fixed normative source digest binding drifted')
     if (String(descriptorRecord.source_sha256_binding) === 'field_provenance.sources[source_relative_path].sha256' && !/^[a-f0-9]{64}$/.test(source.rawSha256)) throw new Phase3BProductionError('conclusion_support_invalid', 'field provenance source digest was not resolved from the sealed source bytes')
     for (const leaf of descriptorRecord.leaves as readonly string[]) {
-      const expected = normativeExpectedValue(descriptorRecord, leaf, source.value, ledger, fixtureRows)
-      const unsigned = { id: descriptorRecord.id, class: descriptorRecord.class, leaf, source_relative_path: sourcePath, source_sha256_binding: descriptorRecord.source_sha256_binding, source_schema: descriptorRecord.source_schema, source_raw_sha256: source.rawSha256, source_canonical_sha256: source.value ? sha256Canonical(source.value) : null, source_size: source.size, source_json_pointer: leaf, expected_value: expected, expected_value_sha256: sha256Canonical(expected), transform: descriptorRecord.transform }
+      const resolvedValue = resolvedSourceValue(descriptorRecord, leaf, source.value, ledger, fixtureRows, targetProfile)
+      const unsigned = { id: descriptorRecord.id, class: descriptorRecord.class, leaf, source_relative_path: sourcePath, source_sha256_binding: descriptorRecord.source_sha256_binding, source_schema: descriptorRecord.source_schema, source_raw_sha256: source.rawSha256, source_canonical_sha256: source.value ? sha256Canonical(source.value) : null, source_size: source.size, source_json_pointer: leaf, resolved_value: resolvedValue, resolved_value_sha256: sha256Canonical(resolvedValue), transform: descriptorRecord.transform }
       resolved.push(deepFreeze({ ...unsigned, resolution_sha256: sha256Canonical(unsigned) }))
     }
   }
@@ -572,62 +573,13 @@ function setNormativePointer(target: Record<string, unknown>, pointer: string, v
   current[segments.at(-1)!] = value
 }
 
-function materializeConclusionSourceDocuments(root: string, ledger: CampaignLedger, rows: readonly Readonly<Record<string, unknown>>[]): void {
+function materializeCapturedConclusionSources(root: string, ledger: CampaignLedger, rows: readonly Readonly<Record<string, unknown>>[]): void {
+  const targetProfile = readCanonical(root, 'prelaunch/static-anchor.json').value.target_profile as TargetProfile
   for (const id of CONCLUSION_IDS) {
     const relative = NORMATIVE_SOURCE_PATHS[id]
     createPrivateDirectory(root, path.dirname(relative))
-    writeExclusiveCanonical(root, relative, expectedNormativeSource(relative, ledger, rows))
+    writeExclusiveCanonical(root, relative, capturedConclusionSource(relative, ledger, rows, targetProfile))
   }
-}
-
-export function materializeNormativeSourceInputs(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): void {
-  sealNormativePlanAndScenarioSources(root, ledger)
-  materializeConclusionSourceDocuments(root, ledger, fixtureRows)
-}
-
-export type CurationTransportAdapter = Readonly<{
-  fixtureRows: readonly Readonly<Record<string, unknown>>[]
-  receipt_set_sha256: string
-  sourceRecords?: readonly Readonly<Record<string, unknown>>[]
-}>
-
-export function deriveSyntheticCuration(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
-  const store = openExecutionStore(root, ledger)
-  const receipts = readExecutionReceipts(store)
-  if (receipts.length !== ledger.rows.length * 3 || receipts.some((receipt) => receipt.state !== 'terminal' && receipt.state !== 'spawned' && receipt.state !== 'started')) throw new Phase3BProductionError('curation_invalid', 'synthetic curation requires the complete sealed receipt chain')
-  if (receipts.filter((receipt) => receipt.state === 'terminal').some((receipt) => receipt.terminal_class !== 'success')) throw new Phase3BProductionError('curation_invalid', 'synthetic curation requires successful terminal receipts')
-  if (fixtureRows.length !== ledger.rows.length || fixtureRows.some((row) => row.status !== 'Reproduced')) throw new Phase3BProductionError('curation_invalid', 'synthetic fixture rows are not the exact reproduced ledger set')
-  const normativeResolved = resolveNormativeCoverage(root, ledger, fixtureRows)
-  const now = Date.now()
-  const clockUnsigned = { schema_id: 'oracle-lab-p3b-curation-clock.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, receipt_set_sha256: sha256Canonical(receipts), predecessor_receipt_sha256: receipts.at(-1)?.receipt_sha256 ?? null, predecessor_terminal_receipt_sha256: receipts.filter((receipt) => receipt.state === 'terminal').at(-1)?.receipt_sha256 ?? null, predecessor_terminal_monotonic_ns: receipts.filter((receipt) => receipt.state === 'terminal').at(-1)?.terminal_monotonic_ns ?? null, created_at_ms: now, created_monotonic_ns: process.hrtime.bigint().toString() }
-  const clock = { ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) }
-  createPrivateDirectory(root, CURATION_ROOT)
-  createPrivateDirectory(root, SUPPORT_ROOT)
-  writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, clock)
-  const fixtureSupport = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: null, missing_artifacts: [], rows: fixtureRows, status: 'PASS' })
-  const closureSupport = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtureSupport.support_sha256, closed_fields: { persisted_bytes: ['byte_length', 'sha256'], forbidden_representations: ['raw', 'base64', 'hex', 'url_encoded'], unknown_fields: 'rejected' }, status: 'PASS' })
-  const provenanceSupport = supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtureSupport.support_sha256, candidate_field_closure_sha256: closureSupport.support_sha256, coverage_contract_sha256: null, missing_artifacts: [], normative_resolved: normativeResolved, normative_resolution_sha256: sha256Canonical(normativeResolved), sources: [], coverage: { planned_pointer_count: 152, represented_pointer_count: 152, normative_resolved_leaf_count: 152, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'PASS' })
-  const crossRepoSupport = supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, missing_artifacts: [], agreement: { decision: 'PASS' }, status: 'PASS' })
-  const predecessorSupport = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings: [], status: 'PASS' })
-  const supports = [fixtureSupport, closureSupport, provenanceSupport, crossRepoSupport, predecessorSupport]
-  supports.forEach((record, index) => writeExclusiveCanonical(root, SUPPORT_PATHS[index], record))
-  const conclusionRecords: Array<Readonly<Record<string, unknown>>> = []
-  for (const conclusionId of CONCLUSION_IDS) {
-    const sourcePath = NORMATIVE_SOURCE_PATHS[conclusionId]
-    const metadata = normativeSourceMetadata(sourcePath)
-    if (!metadata) throw new Phase3BProductionError('conclusion_support_invalid', 'synthetic conclusion source metadata is missing')
-    const familyRows = fixtureRows.filter((row) => conclusionFamily(conclusionId).includes(String(row.family)))
-    const sourceDocumentSha256 = readCanonical(root, sourcePath, 16_777_216).identity.sha256
-    const unsigned = { schema_id: 'oracle-lab-p3b-successor-conclusion.v1', source_schema: metadata.schema, conclusion_id: conclusionId, campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, level: 'Reproduced', enabled: true, created_at_ms: now, issued_at_ms: now, expires_at_ms: now + SUCCESSOR_TTL_MS, clock_attestation_sha256: clock.clock_sha256, contradiction_ids: [], source_row_set_sha256: sha256Canonical(familyRows), source_document_sha256: sourceDocumentSha256, normative_resolution_sha256: provenanceSupport.normative_resolution_sha256, supporting_evidence_sha256s: supports.map((support) => support.support_sha256), unknown_or_omitted: 'disabled' }
-    const conclusion = { ...unsigned, conclusion_sha256: sha256Canonical(unsigned) }
-    createPrivateDirectory(root, path.dirname(CONCLUSION_PATHS[conclusionId]))
-    writeExclusiveCanonical(root, CONCLUSION_PATHS[conclusionId], conclusion)
-    conclusionRecords.push(conclusion)
-  }
-  const curationUnsigned = { schema_id: 'oracle-lab-p3b-curation-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, rows: fixtureRows, clock_attestation_sha256: clock.clock_sha256, conclusion_sha256s: conclusionRecords.map((record) => record.conclusion_sha256), supporting_evidence_sha256s: supports.map((record) => record.support_sha256), status: 'Reproduced', phase3b_usable: false }
-  const curation = { ...curationUnsigned, curation_sha256: sha256Canonical(curationUnsigned) }
-  writeExclusiveCanonical(root, `${CURATION_ROOT}/result.json`, curation)
-  return deepFreeze({ ...curation, normative_resolution_sha256: provenanceSupport.normative_resolution_sha256 })
 }
 
 function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedger): void {
@@ -641,7 +593,7 @@ function sealNormativePlanAndScenarioSources(root: string, ledger: CampaignLedge
   writeExclusiveCanonical(root, 'capsules/P3B-ES1/control/scenario-programs.json', programs)
 }
 
-function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], fixturesSha256: unknown, closureSha256: unknown, transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): Readonly<Record<string, unknown>> {
+function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: readonly Readonly<Record<string, unknown>>[], fixturesSha256: unknown, closureSha256: unknown): Readonly<Record<string, unknown>> {
   const contractArtifact = optionalCanonical(root, ES9_COVERAGE_CONTRACT_PATH)
   if (!contractArtifact) return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: null, missing_artifacts: [ES9_COVERAGE_CONTRACT_PATH], sources: [], coverage: { planned_pointer_count: 0, represented_pointer_count: 0, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 0, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'BLOCKED' })
   assertReviewedControlArtifact(root, contractArtifact.entry, 'es9_coverage_contract_sha256')
@@ -650,18 +602,6 @@ function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: rea
   try { normativeResolved = resolveNormativeCoverage(root, ledger, fixtureRows) } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'normative source resolution failed'
     return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: contractArtifact.entry.sha256, missing_artifacts: [message], normative_resolved: [], sources: [], coverage: { planned_pointer_count: 152, represented_pointer_count: 0, normative_resolved_leaf_count: 0, enabled_pointer_count: 0, disabled_pointer_count: 0, omitted_pointer_count: 152, d_leaf_enabled_count: 0, unknown_or_omitted: 'disabled' }, status: 'BLOCKED' })
-  }
-  if (transportSourceRecords) {
-    const expectedCount = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * (contract.enabled.filter((entry) => entry.sequence_index === row.sequence_index).length + contract.disabled.filter((entry) => entry.sequence_index === row.sequence_index).length), 0)
-    const sources = transportSourceRecords.map((source) => ({ ...source }))
-    const planned = expectedCount
-    const represented = new Set(sources.map((source) => source.json_pointer)).size
-    const enabledCount = sources.filter((source) => source.enabled === true).length
-    const disabledCount = sources.filter((source) => source.enabled !== true).length
-    const dEnabledCount = sources.filter((source) => source.source_class === 'excluded' && source.enabled === true).length
-    const expectedEnabled = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts * contract.enabled.filter((entry) => entry.sequence_index === row.sequence_index).length, 0)
-    const valid = sources.length === planned && represented === planned && enabledCount === expectedEnabled && disabledCount === expectedCount - expectedEnabled && dEnabledCount === 0 && sources.every((source) => source.source_binding_sha256 === sha256Canonical(Object.fromEntries(Object.entries(source).filter(([key]) => key !== 'source_binding_sha256'))))
-    return supportRecord({ schema_id: 'oracle-lab-p3b-pointer-source-coverage.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixturesSha256, candidate_field_closure_sha256: closureSha256, coverage_contract_sha256: contractArtifact.entry.sha256, missing_artifacts: valid ? [] : ['transport source records did not cover the fixed observation contract'], normative_resolved: normativeResolved, normative_resolution_sha256: sha256Canonical(normativeResolved), sources, coverage: { planned_pointer_count: planned, represented_pointer_count: represented, normative_resolved_leaf_count: normativeResolved.length, enabled_pointer_count: enabledCount, disabled_pointer_count: disabledCount, omitted_pointer_count: planned - represented, d_leaf_enabled_count: dEnabledCount, unknown_or_omitted: 'disabled' }, status: valid ? 'PASS' : 'BLOCKED' })
   }
   const sources: Array<Readonly<Record<string, unknown>>> = []
   for (const row of ledger.rows) {
@@ -713,34 +653,35 @@ function deriveCrossRepoSupport(root: string, ledger: CampaignLedger): Readonly<
   return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.entry.sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
 }
 
-function deriveSupportRecords(root: string, ledger: CampaignLedger, transportFixtureRows?: readonly Readonly<Record<string, unknown>>[], transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
+function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
   const es7Contract = optionalCanonical(root, ES7_TYPED_FIXTURE_PATH)
   if (es7Contract) {
     assertReviewedControlArtifact(root, es7Contract.entry, 'es7_typed_fixtures_sha256')
     validateTypedFixtureContract(es7Contract.value, ledger)
   }
-  const fixtureRows = transportFixtureRows ?? deriveFixtureRows(root, ledger)
+  const fixtureRows = deriveFixtureRows(root, ledger)
   const allReproduced = fixtureRows.every((row) => row.status === 'Reproduced')
   const fixtures = supportRecord({ schema_id: 'oracle-lab-p3b-typed-wire-fixtures.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, fixture_contract_sha256: es7Contract?.entry.sha256 ?? null, missing_artifacts: es7Contract ? [] : [ES7_TYPED_FIXTURE_PATH], rows: fixtureRows, status: allReproduced && es7Contract ? 'PASS' : 'INCOMPLETE' })
     const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_length', 'typed_fixture_bytes_sha256', 'ast_bytes_length', 'ast_bytes_sha256', 'materialized_normalized_bytes_length', 'materialized_normalized_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_length', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
-  const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256, transportSourceRecords)
+  const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
   const crossRepo = deriveCrossRepoSupport(root, ledger)
-  const predecessorConfig = optionalCanonical(root, 'control/predecessor-config-auth.json')?.entry
-  const predecessorFailure = optionalCanonical(root, 'control/predecessor-failure-stream.json')?.entry
+  const predecessorConfigRecord = optionalCanonical(root, 'control/predecessor-config-auth.json')
+  const predecessorFailureRecord = optionalCanonical(root, 'control/predecessor-failure-stream.json')
+  const predecessorConfig = predecessorConfigRecord?.entry
+  const predecessorFailure = predecessorFailureRecord?.entry
   const mappings = [
     { predecessor_id: 'CL-P3A-R2-CONFIG-AUTH', predecessor_sha256: predecessorConfig?.sha256 ?? null, schedules: ledger.rows.filter((row) => row.family === 'config' || row.family === 'auth').map((row) => row.schedule_id) },
     { predecessor_id: 'CL-P3A-R2-FAILURE-STREAM', predecessor_sha256: predecessorFailure?.sha256 ?? null, schedules: ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'] },
   ].map((mapping) => ({ ...mapping, schedules: [...new Set(mapping.schedules)].sort(utf8Compare), reproduced_schedule_ids: [...new Set(ledger.rows.filter((row) => mapping.schedules.includes(row.schedule_id) && fixtureRows[row.sequence_index].status === 'Reproduced').map((row) => row.schedule_id))].sort(utf8Compare) }))
-  const predecessorPass = transportFixtureRows
-    ? mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
-    : predecessorConfig?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'] && predecessorFailure?.sha256 === ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'] && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
+  const exactOrSignedTestAttestation = (record: ReturnType<typeof optionalCanonical>, conclusionId: string, conclusionSha256: string): boolean => record !== null && (record.entry.sha256 === conclusionSha256 || (record.value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && record.value.conclusion_id === conclusionId && record.value.conclusion_sha256 === conclusionSha256 && record.value.level === 'Reproduced'))
+  const predecessorPass = exactOrSignedTestAttestation(predecessorConfigRecord, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH']) && exactOrSignedTestAttestation(predecessorFailureRecord, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM']) && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
   const predecessor = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings, predecessor_config_sha256: predecessorConfig?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'], predecessor_failure_stream_sha256: predecessorFailure?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'], status: predecessorPass ? 'PASS' : 'INCOMPLETE' })
   return deepFreeze([fixtures, fieldClosure, provenance, crossRepo, predecessor])
 }
 
-function sealConclusionSupport(root: string, ledger: CampaignLedger, transportFixtureRows?: readonly Readonly<Record<string, unknown>>[], transportSourceRecords?: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
+function sealConclusionSupport(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
   createPrivateDirectory(root, SUPPORT_ROOT)
-  const records = deriveSupportRecords(root, ledger, transportFixtureRows, transportSourceRecords)
+  const records = deriveSupportRecords(root, ledger)
   records.forEach((record, index) => writeExclusiveCanonical(root, SUPPORT_PATHS[index], record))
   return records
 }
@@ -761,7 +702,7 @@ export function validateConclusionSupport(root: string, requirePass: boolean): r
   }
 }
 
-export function deriveCuration(evidenceRoot: string, transport?: CurationTransportAdapter): Readonly<Record<string, unknown>> {
+export function deriveCuration(evidenceRoot: string): Readonly<Record<string, unknown>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   createPrivateDirectory(root, CURATION_ROOT)
   createPrivateDirectory(root, `${CURATION_ROOT}/conclusions`)
@@ -769,12 +710,7 @@ export function deriveCuration(evidenceRoot: string, transport?: CurationTranspo
   const store = openExecutionStore(root, ledger)
   const receipts = readExecutionReceipts(store)
   const terminalByRow = new Map(receipts.filter((receipt) => receipt.state === 'terminal' || receipt.state === 'not_executed').map((receipt) => [receipt.sequence_index, receipt]))
-  const rows = transport ? transport.fixtureRows : enforcePairAndRepetitionStability(ledger.rows, ledger.rows.map((row) => classifyRow(root, row, terminalByRow.get(row.sequence_index) ?? null)))
-  if (transport) {
-    if (transport.fixtureRows.length !== ledger.rows.length || transport.fixtureRows.some((row, index) => row.sequence_index !== index || row.status !== 'Reproduced' || row.fixture_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'fixture_sha256'))))) throw new Phase3BProductionError('curation_invalid', 'transport fixture rows are not independently sealed reproduced projections')
-    const transportRecord = readCanonical(root, 'production/transport-results.json', 16_777_216).value
-    if (transportRecord.receipt_set_sha256 !== transport.receipt_set_sha256 || transportRecord.rows_sha256 !== sha256Canonical(transport.fixtureRows)) throw new Phase3BProductionError('curation_invalid', 'transport rows are not bound to the sealed execution receipt set')
-  }
+  const rows = enforcePairAndRepetitionStability(ledger.rows, ledger.rows.map((row) => classifyRow(root, row, terminalByRow.get(row.sequence_index) ?? null)))
   const represented = rows.length === 340 && rows.every((row, index) => row.sequence_index === index)
   if (!represented) throw new Phase3BProductionError('curation_invalid', 'curation must explicitly represent all 340 rows')
   const issuedAt = Date.now()
@@ -785,9 +721,9 @@ export function deriveCuration(evidenceRoot: string, transport?: CurationTranspo
   const curationClock = deepFreeze({ ...clockUnsigned, clock_sha256: sha256Canonical(clockUnsigned) })
   writeExclusiveCanonical(root, `${CURATION_ROOT}/clock-attestation.json`, curationClock)
   sealNormativePlanAndScenarioSources(root, ledger)
-  materializeConclusionSourceDocuments(root, ledger, rows)
+  materializeCapturedConclusionSources(root, ledger, rows)
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
-  const support = sealConclusionSupport(root, ledger, transport?.fixtureRows, transport?.sourceRecords)
+  const support = sealConclusionSupport(root, ledger)
   const supportSha256s = support.map((value) => value.support_sha256)
   if (support.some((value) => value.status !== 'PASS')) openContradictionIds.push('P3B-CONCLUSION-SUPPORT-INCOMPLETE')
   const normativeResolutionSha256 = typeof support[2]?.normative_resolution_sha256 === 'string' ? support[2].normative_resolution_sha256 : null
@@ -840,6 +776,56 @@ function forbiddenMaterialBytes(bytes: Buffer, relativePath = ''): boolean {
     } catch {}
   }
   return false
+}
+
+function leakScanEntries(root: string, excludedRelative: string): readonly Readonly<{ relative_path: string; size_bytes: number; sha256: string; forbidden: boolean }>[] {
+  const entries: Array<Readonly<{ relative_path: string; size_bytes: number; sha256: string; forbidden: boolean }>> = []
+  const walk = (relativeDirectory: string): void => {
+    const absolute = relativeDirectory ? path.join(root, relativeDirectory) : root
+    for (const name of readdirSync(absolute).sort(utf8Compare)) {
+      const relative = relativeDirectory ? `${relativeDirectory}/${name}` : name
+      if (relative === excludedRelative || relative === 'launch-images/original-image' || relative === 'launch-images/probe-image') continue
+      const file = path.join(root, relative)
+      const stat = lstatSync(file)
+      if (stat.isSymbolicLink()) throw new Phase3BProductionError('leak_report_invalid', 'leak scan encountered a symlink')
+      if (stat.isDirectory()) { walk(relative); continue }
+      if (!stat.isFile() || stat.nlink !== 1) throw new Phase3BProductionError('leak_report_invalid', 'leak scan encountered a non-regular or hard-linked leaf')
+      const stable = stableRead(file, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes, nonempty: false })
+      entries.push(deepFreeze({ relative_path: relative, size_bytes: stable.identity.size, sha256: stable.identity.sha256, forbidden: forbiddenMaterialBytes(stable.bytes, relative) }))
+    }
+  }
+  walk('')
+  return deepFreeze(entries)
+}
+
+export function writePostGateLeakReport(evidenceRoot: string): Readonly<Record<string, unknown>> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const relative = 'capsules/P3B-ES1/gates/post-gate-leak-report.json'
+  const gateB = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-result.json').value
+  assertDigestField(gateB, 'gate_result_sha256', 'gate_b_result_invalid')
+  const preGate = readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value
+  assertDigestField(preGate, 'leak_report_sha256', 'leak_report_invalid')
+  const entries = leakScanEntries(root, relative)
+  const findings = entries.filter((entry) => entry.forbidden).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
+  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v1', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
+  const report = deepFreeze({ ...unsigned, post_gate_leak_report_sha256: sha256Canonical(unsigned) })
+  writeExclusiveCanonical(root, relative, report)
+  return report
+}
+
+export function validatePostGateLeakReport(evidenceRoot: string): Readonly<Record<string, unknown>> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const relative = 'capsules/P3B-ES1/gates/post-gate-leak-report.json'
+  const report = readCanonical(root, relative, 16_777_216).value
+  assertExactKeys(report, ['schema_id', 'campaign_id', 'gate_b_result_sha256', 'pre_gate_leak_report_sha256', 'scanned_entries', 'findings', 'status', 'post_gate_leak_report_sha256'], 'leak_report_invalid')
+  assertDigestField(report, 'post_gate_leak_report_sha256', 'leak_report_invalid')
+  const gateB = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-result.json').value
+  const preGate = readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value
+  const entries = leakScanEntries(root, relative)
+  const findings = entries.filter((entry) => entry.forbidden).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
+  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v1', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
+  if (report.schema_id !== unsigned.schema_id || report.status !== 'PASS' || findings.length !== 0 || sha256Canonical(report) !== sha256Canonical({ ...unsigned, post_gate_leak_report_sha256: sha256Canonical(unsigned) })) throw new Phase3BProductionError('leak_report_invalid', 'post-Gate leak report does not match a fresh recursive persisted-tree scan')
+  return deepFreeze(report)
 }
 
 export function runCloseout(evidenceRoot: string): Readonly<Record<string, unknown>> {

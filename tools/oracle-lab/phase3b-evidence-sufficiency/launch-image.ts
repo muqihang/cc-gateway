@@ -3,7 +3,7 @@ import { chmodSync } from 'node:fs'
 import path from 'node:path'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
-import { REPOSITORY_AUTHORITY, TARGET_PROFILE, crossRepoAuthority, type CrossRepoAuthority } from './ledger.js'
+import { REPOSITORY_AUTHORITY, TARGET_PROFILE, crossRepoAuthority, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveBytes, writeExclusiveCanonical, type StableFileIdentity } from './sealed-fs.js'
 
 export type LaunchImageRecord = Readonly<{
@@ -26,7 +26,7 @@ export type StaticAnchor = Readonly<{
   schema_id: 'oracle-lab-p3b-static-anchor.v1'
   repositories: typeof REPOSITORY_AUTHORITY
   c1: CrossRepoAuthority
-  target_profile: typeof TARGET_PROFILE
+  target_profile: TargetProfile
   platform_archive_sha256: string
   source_tree_sha256: string
   toolchain_sha256: string
@@ -118,11 +118,12 @@ function recordImage(input: { selectedClass: LaunchImageRecord['selected_executa
   return record
 }
 
-export function createSealedLaunchImages(input: Readonly<{ runtime_root: string; original_source: string; probe_source: string; probe_source_sha256: string; probe_unsigned_source: string; probe_unsigned_source_sha256: string; original_recipe: string; original_recipe_sha256: string; probe_recipe: string; probe_recipe_sha256: string; source_tree_sha256: string; toolchain_sha256: string; reviewed_artifact_set_sha256: string }>): Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }> {
+export function createSealedLaunchImages(input: Readonly<{ runtime_root: string; original_source: string; probe_source: string; probe_source_sha256: string; probe_unsigned_source: string; probe_unsigned_source_sha256: string; original_recipe: string; original_recipe_sha256: string; probe_recipe: string; probe_recipe_sha256: string; source_tree_sha256: string; toolchain_sha256: string; reviewed_artifact_set_sha256: string; target_profile?: TargetProfile }>): Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }> {
   assertSha256(input.source_tree_sha256, 'launch_image_input_invalid', 'source tree')
   assertSha256(input.toolchain_sha256, 'launch_image_input_invalid', 'toolchain')
+  const targetProfile: TargetProfile = input.target_profile ?? TARGET_PROFILE as TargetProfile
   const originalSource = stableRead(input.original_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
-  if (originalSource.sha256 !== TARGET_PROFILE.entrypoint_sha256 || originalSource.size !== TARGET_PROFILE.entrypoint_size || input.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256) throw new Phase3BProductionError('launch_image_invalid', 'original launch image is not exact Claude Code 2.1.215 darwin-arm64')
+  if (originalSource.sha256 !== targetProfile.entrypoint_sha256 || originalSource.size !== targetProfile.entrypoint_size || input.source_tree_sha256 !== targetProfile.platform_tree_sha256 || targetProfile.platform !== 'darwin' || targetProfile.architecture !== 'arm64' || !Number.isSafeInteger(targetProfile.maximum_executable_bytes) || targetProfile.maximum_executable_bytes < targetProfile.entrypoint_size || targetProfile.maximum_executable_bytes > TARGET_EXECUTABLE_MAXIMUM_BYTES) throw new Phase3BProductionError('launch_image_invalid', 'original launch image does not match the authority-bound target profile')
   const probeSource = stableRead(input.probe_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   const probeUnsignedSource = stableRead(input.probe_unsigned_source, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   if (probeSource.sha256 !== input.probe_source_sha256 || probeUnsignedSource.sha256 !== input.probe_unsigned_source_sha256) throw new Phase3BProductionError('launch_image_invalid', 'probe pre-sign or post-sign bytes drifted from trusted review')
@@ -163,17 +164,18 @@ export function loadLaunchImageRecord(value: unknown): LaunchImageRecord {
   return verifyLaunchImage(record)
 }
 
-export function buildStaticAnchor(input: Readonly<{ c1: CrossRepoAuthority; platform_archive_sha256: string; source_tree_sha256: string; toolchain_sha256: string; images: Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }>; receiver_source_sha256: string; receiver_executable_identity_sha256: string; receiver_schema_sha256: string; controller_source_sha256: string; controller_executable_sha256: string; schema_bundle_sha256: string; reviewed_artifact_set_sha256: string }>): StaticAnchor {
+export function buildStaticAnchor(input: Readonly<{ c1: CrossRepoAuthority; platform_archive_sha256: string; source_tree_sha256: string; toolchain_sha256: string; images: Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }>; receiver_source_sha256: string; receiver_executable_identity_sha256: string; receiver_schema_sha256: string; controller_source_sha256: string; controller_executable_sha256: string; schema_bundle_sha256: string; reviewed_artifact_set_sha256: string; target_profile?: TargetProfile }>): StaticAnchor {
   for (const field of ['platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256'] as const) assertSha256(input[field], 'static_anchor_invalid', field)
-  if (input.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || input.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor target profile drifted')
+  const targetProfile: TargetProfile = input.target_profile ?? TARGET_PROFILE as TargetProfile
+  if (input.platform_archive_sha256 !== targetProfile.platform_archive_sha256 || input.source_tree_sha256 !== targetProfile.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor target profile drifted')
   const original = verifyLaunchImage(input.images.original)
   const probe = verifyLaunchImage(input.images.probe)
-  if (original.source_tree_sha256 !== input.source_tree_sha256 || probe.source_tree_sha256 !== input.source_tree_sha256 || original.toolchain_sha256 !== input.toolchain_sha256 || probe.toolchain_sha256 !== input.toolchain_sha256 || original.reviewed_artifact_set_sha256 !== input.reviewed_artifact_set_sha256 || probe.reviewed_artifact_set_sha256 !== input.reviewed_artifact_set_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'launch image source/tree/toolchain/review continuity drifted')
+  if (original.source_identity.sha256 !== targetProfile.entrypoint_sha256 || original.source_identity.size !== targetProfile.entrypoint_size || original.source_tree_sha256 !== input.source_tree_sha256 || probe.source_tree_sha256 !== input.source_tree_sha256 || original.toolchain_sha256 !== input.toolchain_sha256 || probe.toolchain_sha256 !== input.toolchain_sha256 || original.reviewed_artifact_set_sha256 !== input.reviewed_artifact_set_sha256 || probe.reviewed_artifact_set_sha256 !== input.reviewed_artifact_set_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'launch image target/source/tree/toolchain/review continuity drifted')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-static-anchor.v1' as const,
     repositories: REPOSITORY_AUTHORITY,
     c1: input.c1,
-    target_profile: TARGET_PROFILE,
+    target_profile: targetProfile,
     platform_archive_sha256: input.platform_archive_sha256,
     source_tree_sha256: input.source_tree_sha256,
     toolchain_sha256: input.toolchain_sha256,
@@ -202,7 +204,10 @@ export function loadStaticAnchor(value: unknown): StaticAnchor {
   assertExactKeys(value, ['schema_id', 'repositories', 'c1', 'target_profile', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'original_image_record_sha256', 'probe_image_record_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256', 'anchor_sha256'], 'static_anchor_invalid')
   assertDigestField(value, 'anchor_sha256', 'static_anchor_invalid')
   assertExactKeys(value.c1, ['verdict', 'review_sha256'], 'static_anchor_invalid')
-  if (value.schema_id !== 'oracle-lab-p3b-static-anchor.v1' || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(crossRepoAuthority(String(value.c1.review_sha256))) || sha256Canonical(value.target_profile) !== sha256Canonical(TARGET_PROFILE) || value.platform_archive_sha256 !== TARGET_PROFILE.platform_archive_sha256 || value.source_tree_sha256 !== TARGET_PROFILE.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor authority or target profile drifted')
+  const targetProfile = value.target_profile as TargetProfile
+  if (!targetProfile || typeof targetProfile !== 'object' || targetProfile.platform !== 'darwin' || targetProfile.architecture !== 'arm64' || !Number.isSafeInteger(targetProfile.entrypoint_size) || !Number.isSafeInteger(targetProfile.maximum_executable_bytes) || targetProfile.entrypoint_size <= 0 || targetProfile.maximum_executable_bytes < targetProfile.entrypoint_size || targetProfile.maximum_executable_bytes > TARGET_EXECUTABLE_MAXIMUM_BYTES) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor target profile shape is invalid')
+  for (const field of ['platform_archive_sha256', 'platform_tree_sha256', 'entrypoint_sha256'] as const) assertSha256(targetProfile[field], 'static_anchor_invalid', `target profile ${field}`)
+  if (value.schema_id !== 'oracle-lab-p3b-static-anchor.v1' || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(crossRepoAuthority(String(value.c1.review_sha256))) || value.platform_archive_sha256 !== targetProfile.platform_archive_sha256 || value.source_tree_sha256 !== targetProfile.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor authority or target profile drifted')
   for (const field of ['platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'original_image_record_sha256', 'probe_image_record_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256'] as const) assertSha256(value[field], 'static_anchor_invalid', field)
   const anchor = deepFreeze(value as StaticAnchor)
   anchors.add(anchor)

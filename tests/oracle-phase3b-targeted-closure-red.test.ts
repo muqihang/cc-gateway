@@ -8,7 +8,7 @@ import { buildEs9CoverageContract } from '../tools/oracle-lab/phase3b-evidence-s
 import { SUPPORT_PATHS, deriveCuration, validateConclusionSupport, validateCoverageContract, validateIndependentGoReceipt, validateIndependentTsAgreement } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { buildCampaignLedger, crossRepoAuthority, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { buildCampaignLedger, crossRepoAuthority, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, TARGET_PROFILE, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
@@ -87,6 +87,7 @@ test('targeted C1 closure: blocked support names missing independent ES8 and nor
   createPrivateDirectory(root, 'prelaunch')
   const ledger = buildCampaignLedger('p3b-targeted-support-shape', TEST_C1)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
+  writeExclusiveCanonical(root, 'prelaunch/static-anchor.json', { schema_id: 'oracle-lab-p3b-test-static-anchor.v1', target_profile: TARGET_PROFILE })
   const store = openExecutionStore(root, ledger)
   const failureUnsigned = { schema_id: 'oracle-lab-p3b-campaign-failure.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, failing_sequence_index: 0, failure_phase: 'before_spawn', failure_family: 'campaign_execution_failure', action: 'stop_all_target_launches', terminal_receipt_sha256: null }
   const failure = { ...failureUnsigned, failure_sha256: sha256Canonical(failureUnsigned) }

@@ -49,6 +49,18 @@ export const TARGET_PROFILE = deepFreeze({
   maximum_executable_bytes: 268_435_456,
 })
 
+export type TargetProfile = Readonly<{
+  package: string
+  version: string
+  platform: 'darwin'
+  architecture: 'arm64'
+  platform_archive_sha256: string
+  platform_tree_sha256: string
+  entrypoint_sha256: string
+  entrypoint_size: number
+  maximum_executable_bytes: number
+}>
+
 export type LedgerFamily = 'target_control' | 'config' | 'auth' | 'request_wire' | 'response_failure_recovery'
 export type ExecutableArm = 'instrumented' | 'uninstrumented' | 'control/instrumented' | 'control/uninstrumented' | 'treatment/instrumented' | 'treatment/uninstrumented'
 

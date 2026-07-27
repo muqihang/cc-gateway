@@ -8,7 +8,7 @@ import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-suffi
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
@@ -136,6 +136,7 @@ test('curation and exact five-record closeout derive Unknown/disabled only from 
   createPrivateDirectory(root, 'prelaunch')
   const ledger = buildCampaignLedger('p3b-focused-closeout', TEST_C1)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
+  writeExclusiveCanonical(root, 'prelaunch/static-anchor.json', { schema_id: 'oracle-lab-p3b-test-static-anchor.v1', target_profile: TARGET_PROFILE })
   const store = openExecutionStore(root, ledger)
   sealPreSpawnFailure(store, ledger.rows[0], 'authority_drift')
   const curation = deriveCuration(root)

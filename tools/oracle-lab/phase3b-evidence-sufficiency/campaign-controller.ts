@@ -2,18 +2,18 @@ import { chmodSync } from 'node:fs'
 import path from 'node:path'
 
 import { bindControllerRuntime, createProductionController, sealControllerNamespace } from './controller.js'
-import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalBytes, deepFreeze, sha256Canonical } from './core.js'
+import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { appendTerminal, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPostTerminalFailure, sealPreSpawnFailure } from './execution-store.js'
 import { deriveLaunchAuthority, type LaunchAuthorityReceipt } from './launch-authority.js'
 import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loadStaticAnchor, type LaunchImageRecord } from './launch-image.js'
-import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority } from './ledger.js'
+import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
-import { IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, validateApprovalAttestation, verifyTrustedSignature } from './trust.js'
+import { CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, fixedGitBytes, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewerRegistry } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
 
 export type CampaignInput = Readonly<{
@@ -91,9 +91,45 @@ export type OperatorAuthority = Readonly<{
   authority_sha256: string
 }>
 
+type TestCampaignInput = Readonly<Omit<CampaignInput, 'schema_id'> & {
+  schema_id: 'oracle-lab-p3b-test-production-input.v1'
+  target_profile: TargetProfile
+  controller_source_sha256: string
+  controller_executable_sha256: string
+  materialized_authority_path: string
+  materialized_authority_sha256: string
+  registry_repository: string
+  registry_commit: string
+  registry_tree: string
+}>
+
+type TestOperatorAuthority = Readonly<Omit<OperatorAuthority, 'schema_id' | 'decision' | 'dynamic_launch_authorized'> & {
+  schema_id: 'oracle-lab-p3b-test-production-authority.v1'
+  decision: 'authorize_test_owned_offline_campaign'
+  dynamic_launch_authorized: true
+  registry_repository: string
+  registry_commit: string
+  registry_tree: string
+  materialized_authority_sha256: string
+  controller_source_sha256: string
+  controller_executable_sha256: string
+  campaign_input_path: string
+  campaign_input_raw_sha256: string
+  signed_gate_b_decision_path: string
+  signer_closure_path: string
+}>
+
+type SealedCampaignInput = CampaignInput | TestCampaignInput
+type SealedOperatorAuthority = OperatorAuthority | TestOperatorAuthority
+
 const INPUT_KEYS = ['schema_id', 'campaign_id', 'campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_task_id', 'cross_review_artifact_path', 'cross_review_artifact_sha256', 'cross_repo_review_path', 'cross_repo_review_sha256', 'original_source', 'probe_source', 'probe_source_sha256', 'probe_unsigned_source', 'probe_unsigned_source_sha256', 'original_recipe', 'original_recipe_sha256', 'probe_recipe', 'probe_recipe_sha256', 'platform_archive_path', 'platform_archive_sha256', 'source_tree_path', 'source_tree_sha256', 'toolchain_path', 'toolchain_sha256', 'schema_bundle_path', 'schema_bundle_sha256', 'focused_suite_path', 'focused_suite_sha256', 'es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'es8_go_receipt_path', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_path', 'es9_coverage_contract_sha256', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'input_sha256'] as const
 const AUTHORITY_KEYS = ['schema_id', 'decision', 'campaign_id', 'campaign_input_sha256', 'repositories', 'c1', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree', 'campaign_registry_sha256', 'implementation_review_path', 'implementation_review_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'dynamic_launch_authorized', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'authority_sha256'] as const
 const REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'requirements_public_entry_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
+const TEST_INPUT_KEYS = [...INPUT_KEYS, 'target_profile', 'controller_source_sha256', 'controller_executable_sha256', 'materialized_authority_path', 'materialized_authority_sha256', 'registry_repository', 'registry_commit', 'registry_tree'] as const
+const TEST_AUTHORITY_KEYS = [...AUTHORITY_KEYS, 'registry_repository', 'registry_commit', 'registry_tree', 'materialized_authority_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'campaign_input_path', 'campaign_input_raw_sha256', 'signed_gate_b_decision_path', 'signer_closure_path'] as const
+const TEST_REVIEW_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'requirements_public_entry_sha256', 'materialized_authority_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'review_sha256'] as const
+const COMPLETE_CONTROLLER_KEYS = ['mode', 'authority_path', 'input_path', 'evidence_root', 'signed_gate_b_decision_path', 'signer_closure_path'] as const
+const TEST_CONTROLLER_KEYS = ['mode', 'authority_manifest_path', 'evidence_root'] as const
 
 function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
   const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
@@ -184,20 +220,86 @@ function validateAuthority(value: Record<string, unknown>, input: CampaignInput)
   return deepFreeze(value as OperatorAuthority)
 }
 
+function validateTargetProfile(value: unknown): TargetProfile {
+  assertExactKeys(value, ['package', 'version', 'platform', 'architecture', 'platform_archive_sha256', 'platform_tree_sha256', 'entrypoint_sha256', 'entrypoint_size', 'maximum_executable_bytes'], 'test_authority_manifest_invalid')
+  const profile = value as Record<string, unknown>
+  for (const field of ['platform_archive_sha256', 'platform_tree_sha256', 'entrypoint_sha256'] as const) assertSha256(profile[field], 'test_authority_manifest_invalid', field)
+  if (typeof profile.package !== 'string' || typeof profile.version !== 'string' || profile.platform !== 'darwin' || profile.architecture !== 'arm64' || !Number.isSafeInteger(profile.entrypoint_size) || Number(profile.entrypoint_size) <= 0 || !Number.isSafeInteger(profile.maximum_executable_bytes) || Number(profile.maximum_executable_bytes) < Number(profile.entrypoint_size) || Number(profile.maximum_executable_bytes) > TARGET_EXECUTABLE_MAXIMUM_BYTES) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test target profile is outside the production executable boundary')
+  return deepFreeze(value as TargetProfile)
+}
+
+function canonicalGitRecord(repository: string, commit: string, relative: string, maximumBytes = 1_048_576): Readonly<{ value: Record<string, unknown>; raw_sha256: string }> {
+  const bytes = fixedGitBytes(repository, ['cat-file', 'blob', `${commit}:${relative}`], maximumBytes)
+  if (bytes.at(-1) !== 0x0a) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority Git blob is not canonical newline JSON')
+  let value: unknown
+  try { value = JSON.parse(bytes.subarray(0, -1).toString('utf8')) } catch { throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority Git blob is invalid JSON') }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(bytes.subarray(0, -1))) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority Git blob is not canonical JSON')
+  return deepFreeze({ value: value as Record<string, unknown>, raw_sha256: sha256Bytes(bytes) })
+}
+
+function validateTestInput(value: Record<string, unknown>): TestCampaignInput {
+  assertExactKeys(value, TEST_INPUT_KEYS, 'test_authority_manifest_invalid')
+  assertDigestField(value, 'input_sha256', 'test_authority_manifest_invalid')
+  if (value.schema_id !== 'oracle-lab-p3b-test-production-input.v1' || typeof value.campaign_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.campaign_id)) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test campaign input schema or campaign ID drifted')
+  const profile = validateTargetProfile(value.target_profile)
+  for (const field of ['cross_review_artifact_sha256', 'cross_repo_review_sha256', 'probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es7_typed_fixtures_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'materialized_authority_sha256'] as const) assertSha256(value[field], 'test_authority_manifest_invalid', field)
+  for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_artifact_path', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path', 'materialized_authority_path', 'registry_repository'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(String(value[field])) || path.normalize(String(value[field])) !== value[field]) throw new Phase3BProductionError('test_authority_manifest_invalid', `${field} is not a normalized absolute path`)
+  for (const field of ['registry_commit', 'registry_tree'] as const) if (typeof value[field] !== 'string' || !/^[a-f0-9]{40}$/.test(String(value[field]))) throw new Phase3BProductionError('test_authority_manifest_invalid', `${field} is not an exact Git object`)
+  if (value.platform_archive_sha256 !== profile.platform_archive_sha256 || value.source_tree_sha256 !== profile.platform_tree_sha256) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test input target archive/tree does not match its signed profile')
+  const exactFiles = [
+    ['cross_review_artifact_path', 'cross_review_artifact_sha256', 1_048_576], ['cross_repo_review_path', 'cross_repo_review_sha256', 1_048_576],
+    ['probe_source', 'probe_source_sha256', TARGET_EXECUTABLE_MAXIMUM_BYTES], ['probe_unsigned_source', 'probe_unsigned_source_sha256', TARGET_EXECUTABLE_MAXIMUM_BYTES],
+    ['original_recipe', 'original_recipe_sha256', 1_048_576], ['probe_recipe', 'probe_recipe_sha256', 1_048_576], ['platform_archive_path', 'platform_archive_sha256', TARGET_EXECUTABLE_MAXIMUM_BYTES],
+    ['source_tree_path', 'source_tree_sha256', 16_777_216], ['toolchain_path', 'toolchain_sha256', 16_777_216], ['schema_bundle_path', 'schema_bundle_sha256', 16_777_216], ['focused_suite_path', 'focused_suite_sha256', 1_048_576],
+    ['es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 16_777_216], ['es8_go_receipt_path', 'es8_go_receipt_sha256', 1_048_576], ['es8_ts_c1_agreement_path', 'es8_ts_c1_agreement_sha256', 1_048_576], ['es9_coverage_contract_path', 'es9_coverage_contract_sha256', 16_777_216],
+  ] as const
+  for (const [pathField, digestField, maximumBytes] of exactFiles) if (stableRead(String(value[pathField]), { maximumBytes }).identity.sha256 !== value[digestField]) throw new Phase3BProductionError('test_authority_manifest_invalid', `${pathField} drifted from the signed test input`)
+  const original = stableRead(String(value.original_source), { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  if (original.sha256 !== profile.entrypoint_sha256 || original.size !== profile.entrypoint_size) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test target executable identity drifted')
+  const materialized = readExternalCanonical(String(value.materialized_authority_path), 16_777_216)
+  if (materialized.identity.sha256 !== value.materialized_authority_sha256 || materialized.value.materialized_authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(materialized.value).filter(([field]) => field !== 'materialized_authority_sha256')))) throw new Phase3BProductionError('test_authority_manifest_invalid', 'materialized test authority bytes drifted')
+  const focused = readExternalCanonical(String(value.focused_suite_path)).value
+  if (focused.passed !== true || focused.strict_typescript !== true || focused.build !== true || focused.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'test focused receipt is not an executed PASS')
+  bindMaterializedCrossRepoAuthority(stableRead(String(value.cross_repo_review_path), { mode: 0o600, maximumBytes: 1_048_576 }).bytes, { cc_repository: String(value.cc_repository), sub_repository: String(value.sub_repository), reviewed_candidate_commit: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD']), reviewed_candidate_tree: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD^{tree}']) })
+  return deepFreeze({ ...value, target_profile: profile } as TestCampaignInput)
+}
+
+function validateTestAuthority(value: Record<string, unknown>, input: TestCampaignInput): Readonly<{ authority: TestOperatorAuthority; registry: TrustedReviewerRegistry; implementation_review: Record<string, unknown> }> {
+  assertExactKeys(value, TEST_AUTHORITY_KEYS, 'test_authority_manifest_invalid')
+  assertDigestField(value, 'authority_sha256', 'test_authority_manifest_invalid')
+  assertSha256(value.campaign_input_raw_sha256, 'test_authority_manifest_invalid', 'campaign input raw digest')
+  for (const field of ['campaign_input_path', 'signed_gate_b_decision_path', 'signer_closure_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(String(value[field])) || path.normalize(String(value[field])) !== value[field]) throw new Phase3BProductionError('test_authority_manifest_invalid', `${field} is not a signed normalized absolute path`)
+  if (value.schema_id !== 'oracle-lab-p3b-test-production-authority.v1' || value.decision !== 'authorize_test_owned_offline_campaign' || value.dynamic_launch_authorized !== true || value.critical !== 0 || value.important !== 0 || value.campaign_id !== input.campaign_id || value.campaign_input_sha256 !== input.input_sha256 || value.campaign_input_path !== input.campaign_input_path || value.materialized_authority_sha256 !== input.materialized_authority_sha256 || value.reviewed_artifact_set_sha256 !== input.materialized_authority_sha256 || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(crossRepoAuthority(input.cross_repo_review_sha256))) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority scope drifted')
+  for (const field of ['reviewed_candidate_commit', 'reviewed_candidate_tree', 'registry_commit', 'registry_tree'] as const) if (!/^[a-f0-9]{40}$/.test(String(value[field]))) throw new Phase3BProductionError('test_authority_manifest_invalid', `${field} is invalid`)
+  if (value.registry_repository !== input.registry_repository || value.registry_commit !== input.registry_commit || value.registry_tree !== input.registry_tree || value.materialized_authority_sha256 !== input.materialized_authority_sha256 || value.controller_source_sha256 !== input.controller_source_sha256 || value.controller_executable_sha256 !== input.controller_executable_sha256 || value.reviewed_candidate_commit !== fixedGit(input.cc_repository, ['rev-parse', 'HEAD']) || value.reviewed_candidate_tree !== fixedGit(input.cc_repository, ['rev-parse', 'HEAD^{tree}']) || value.registry_commit !== fixedGit(input.registry_repository, ['rev-parse', 'HEAD']) || value.registry_tree !== fixedGit(input.registry_repository, ['rev-parse', 'HEAD^{tree}'])) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority Git/source/materialization identity drifted')
+  const names = fixedGit(input.registry_repository, ['ls-tree', '-r', '--name-only', input.registry_commit]).split('\n').filter(Boolean).sort()
+  if (sha256Canonical(names) !== sha256Canonical([CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE].sort())) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority Git commit contains an unexpected path')
+  const registryRecord = canonicalGitRecord(input.registry_repository, input.registry_commit, CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, 32_768)
+  const reviewRecord = canonicalGitRecord(input.registry_repository, input.registry_commit, IMPLEMENTATION_REVIEW_RELATIVE)
+  const registry = validateCampaignReviewerRegistry(registryRecord.value)
+  if (registryRecord.raw_sha256 !== value.campaign_registry_sha256 || registry.reviewed_candidate_commit !== value.reviewed_candidate_commit || registry.reviewed_candidate_tree !== value.reviewed_candidate_tree || reviewRecord.raw_sha256 !== value.implementation_review_sha256) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test registry or review Git blob binding drifted')
+  const review = reviewRecord.value
+  assertExactKeys(review, TEST_REVIEW_KEYS, 'implementation_review_failed')
+  assertDigestField(review, 'review_sha256', 'implementation_review_failed')
+  verifyTrustedSignature(review, registry, 'security_quality', 'review_sha256', 'implementation_review_failed')
+  verifyTrustedSignature(value, registry, 'requirements', 'authority_sha256', 'test_authority_manifest_invalid')
+  const now = Date.now()
+  if (review.schema_id !== 'oracle-lab-p3b-test-implementation-review.v1' || review.review_kind !== 'phase3b-real-controller-test' || review.reviewed_candidate_commit !== value.reviewed_candidate_commit || review.reviewed_candidate_tree !== value.reviewed_candidate_tree || review.requirements_public_entry_sha256 !== sha256Canonical(registry.reviewers[0]) || review.materialized_authority_sha256 !== input.materialized_authority_sha256 || review.controller_source_sha256 !== controllerSourceSetSha256() || review.controller_executable_sha256 !== controllerExecutableSha256() || review.critical !== 0 || review.important !== 0 || review.verdict !== 'PASS' || Number(review.created_at_ms) > now || Number(review.expires_at_ms) <= now || Number(value.created_at_ms) > now || Number(value.expires_at_ms) <= now || Number(value.expires_at_ms) - Number(value.created_at_ms) > 86_400_000) throw new Phase3BProductionError('implementation_review_failed', 'test implementation review is not current, exact-source 0C/0I')
+  return deepFreeze({ authority: value as TestOperatorAuthority, registry, implementation_review: review })
+}
+
 function fixedExternalPaths(authorityPath: string, inputPath: string, evidenceRoot: string, input: CampaignInput): void {
   if (path.basename(authorityPath) !== 'phase3b-operator-authority.json' || path.basename(inputPath) !== 'phase3b-campaign-input.json' || path.basename(evidenceRoot) !== `phase3b-${input.campaign_id}` || authorityPath !== input.operator_authority_path || inputPath !== input.campaign_input_path || evidenceRoot !== input.evidence_root) throw new Phase3BProductionError('fixed_path_invalid', 'authority, input, or namespace exact path is not authority-bound')
 }
 
-export function runPrelaunchOnly(authorityPath: string, inputPath: string, evidenceRoot: string): Readonly<Record<string, unknown>> {
-  const input = validateInput(parseExternalCanonical(inputPath))
-  const authority = validateAuthority(parseExternalCanonical(authorityPath), input)
-  fixedExternalPaths(authorityPath, inputPath, evidenceRoot, input)
+function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOperatorAuthority, registry: TrustedReviewerRegistry, implementationReview: Readonly<Record<string, unknown>>, targetProfile: TargetProfile): Readonly<Record<string, unknown>> {
+  const evidenceRoot = input.evidence_root
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   assertDirectoryEmpty(root)
   for (const directory of ['control', 'prelaunch', 'observations', 'receiver-results', 'runs', 'guards', 'cell-results']) createPrivateDirectory(root, directory)
   writeExclusiveCanonical(root, 'control/campaign-input.json', input)
   writeExclusiveCanonical(root, 'control/operator-authority.json', authority)
-  writeExclusiveCanonical(root, 'control/implementation-review.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).implementation_review)
+  writeExclusiveCanonical(root, 'control/implementation-review.json', implementationReview)
   const externalControls = [
     ['control/focused-suite.json', input.focused_suite_path, input.focused_suite_sha256, 1_048_576],
     ['control/cross-review-artifact.json', input.cross_review_artifact_path, input.cross_review_artifact_sha256, 1_048_576],
@@ -206,23 +308,23 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
     ['control/es7-typed-fixtures.json', input.es7_typed_fixtures_path, input.es7_typed_fixtures_sha256, 16_777_216],
     ['control/es8-ts-c1-agreement.json', input.es8_ts_c1_agreement_path, input.es8_ts_c1_agreement_sha256, 1_048_576],
     ['control/es9-coverage-contract.json', input.es9_coverage_contract_path, input.es9_coverage_contract_sha256, 16_777_216],
-    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'], 1_048_576],
-    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'], 1_048_576],
+    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
+    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
   ] as const
   for (const [relative, source, sha256, maximumBytes] of externalControls) {
     const record = readExternalCanonical(source, maximumBytes)
     if (record.identity.sha256 !== sha256) throw new Phase3BProductionError('sealed_authority_file_drift', `${relative} changed before sealing`)
     writeExclusiveCanonical(root, relative, record.value)
   }
-  writeExclusiveCanonical(root, 'control/trusted-reviewers.json', validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree).registry)
+  writeExclusiveCanonical(root, 'control/trusted-reviewers.json', registry)
   createPrivateDirectory(root, 'synthetic-literals')
   writeExclusiveCanonical(root, FIXED_LITERAL_TABLE_PATH, FIXED_LITERAL_TABLE)
   const c1 = crossRepoAuthority(input.cross_repo_review_sha256)
   const ledger = buildCampaignLedger(input.campaign_id, c1)
   writeExclusiveCanonical(root, 'prelaunch/run-ledger.json', ledger)
-  const images = createSealedLaunchImages({ runtime_root: root, original_source: input.original_source, probe_source: input.probe_source, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source: input.probe_unsigned_source, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe: input.original_recipe, original_recipe_sha256: input.original_recipe_sha256, probe_recipe: input.probe_recipe, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256 })
+  const images = createSealedLaunchImages({ runtime_root: root, original_source: input.original_source, probe_source: input.probe_source, probe_source_sha256: input.probe_source_sha256, probe_unsigned_source: input.probe_unsigned_source, probe_unsigned_source_sha256: input.probe_unsigned_source_sha256, original_recipe: input.original_recipe, original_recipe_sha256: input.original_recipe_sha256, probe_recipe: input.probe_recipe, probe_recipe_sha256: input.probe_recipe_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256, target_profile: targetProfile })
   const receiver = captureReceiverRuntimeIdentity()
-  const anchor = buildStaticAnchor({ c1, platform_archive_sha256: input.platform_archive_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, images, ...receiver, controller_source_sha256: controllerSourceSetSha256(), controller_executable_sha256: controllerExecutableSha256(), schema_bundle_sha256: input.schema_bundle_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256 })
+  const anchor = buildStaticAnchor({ c1, platform_archive_sha256: input.platform_archive_sha256, source_tree_sha256: input.source_tree_sha256, toolchain_sha256: input.toolchain_sha256, images, ...receiver, controller_source_sha256: controllerSourceSetSha256(), controller_executable_sha256: controllerExecutableSha256(), schema_bundle_sha256: input.schema_bundle_sha256, reviewed_artifact_set_sha256: authority.reviewed_artifact_set_sha256, target_profile: targetProfile })
   writeExclusiveCanonical(root, 'prelaunch/static-anchor.json', anchor)
   const selectionUnsigned = { schema_id: 'oracle-lab-p3b-active-selection.v1', campaign_id: input.campaign_id, ledger_sha256: ledger.ledger_sha256, anchor_sha256: anchor.anchor_sha256, original_image_record_sha256: images.original.record_sha256, probe_image_record_sha256: images.probe.record_sha256 }
   writeExclusiveCanonical(root, 'prelaunch/active-selection.json', { ...selectionUnsigned, selection_sha256: sha256Canonical(selectionUnsigned) })
@@ -233,11 +335,36 @@ export function runPrelaunchOnly(authorityPath: string, inputPath: string, evide
   return result
 }
 
-export function loadSealedControl(root: string): { input: CampaignInput; authority: OperatorAuthority } {
-  const input = validateInput(readCanonical(root, 'control/campaign-input.json').value)
+export function runPrelaunchOnly(authorityPath: string, inputPath: string, evidenceRoot: string): Readonly<Record<string, unknown>> {
+  const input = validateInput(parseExternalCanonical(inputPath))
+  const authority = validateAuthority(parseExternalCanonical(authorityPath), input)
+  fixedExternalPaths(authorityPath, inputPath, evidenceRoot, input)
+  const approval = validateApprovalAttestation(input.cc_repository, authority.reviewed_candidate_commit, authority.reviewed_candidate_tree)
+  return sealValidatedPrelaunch(input, authority, approval.registry, approval.implementation_review, TARGET_PROFILE as TargetProfile)
+}
+
+function runTestPrelaunch(authorityPath: string, evidenceRoot: string): Readonly<Record<string, unknown>> {
+  const authorityRecord = readExternalCanonical(authorityPath)
+  const authorityValue = authorityRecord.value
+  if (typeof authorityValue.campaign_input_path !== 'string' || !path.isAbsolute(authorityValue.campaign_input_path)) throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority does not bind a sealed input path')
+  const inputRecord = readExternalCanonical(authorityValue.campaign_input_path, 16_777_216)
+  const input = validateTestInput(inputRecord.value)
+  if (inputRecord.identity.sha256 !== authorityValue.campaign_input_raw_sha256 || input.campaign_input_path !== authorityValue.campaign_input_path || input.operator_authority_path !== authorityPath || input.evidence_root !== evidenceRoot || authorityValue.campaign_input_sha256 !== input.input_sha256 || path.basename(authorityPath) !== 'phase3b-test-authority-manifest.json' || path.basename(input.campaign_input_path) !== 'phase3b-test-campaign-input.json') throw new Phase3BProductionError('test_authority_manifest_invalid', 'test authority/input/evidence path binding drifted')
+  const validated = validateTestAuthority(authorityValue, input)
+  return sealValidatedPrelaunch(input, validated.authority, validated.registry, validated.implementation_review, input.target_profile)
+}
+
+export function loadSealedControl(root: string): { input: SealedCampaignInput; authority: SealedOperatorAuthority; registry: TrustedReviewerRegistry } {
+  const inputValue = readCanonical(root, 'control/campaign-input.json').value
+  const input = inputValue.schema_id === 'oracle-lab-p3b-test-production-input.v1' ? validateTestInput(inputValue) : validateInput(inputValue)
   if (input.evidence_root !== root) throw new Phase3BProductionError('fixed_path_invalid', 'sealed campaign input does not bind this evidence root')
-  const authority = validateAuthority(readCanonical(root, 'control/operator-authority.json').value, input)
-  return { input, authority }
+  const authorityValue = readCanonical(root, 'control/operator-authority.json').value
+  const testValidated = input.schema_id === 'oracle-lab-p3b-test-production-input.v1' ? validateTestAuthority(authorityValue, input) : null
+  const authority = testValidated?.authority ?? validateAuthority(authorityValue, input as CampaignInput)
+  const registryRecord = readCanonical(root, 'control/trusted-reviewers.json')
+  const registry = testValidated?.registry ?? validateCampaignReviewerRegistry(registryRecord.value)
+  if (registryRecord.identity.sha256 !== authority.campaign_registry_sha256 || registry.reviewed_candidate_commit !== authority.reviewed_candidate_commit || registry.reviewed_candidate_tree !== authority.reviewed_candidate_tree) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'sealed reviewer registry does not bind the exact authority candidate')
+  return { input, authority, registry }
 }
 
 export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
@@ -282,4 +409,85 @@ export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promi
   const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
   writeExclusiveCanonical(root, 'execution-result.json', result)
   return result
+}
+
+async function waitForExternalCanonical(file: string, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs
+  do {
+    try { return readExternalCanonical(file).value } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  } while (Date.now() < deadline)
+  throw new Phase3BProductionError('external_authority_timeout', `external authority path was not sealed in time: ${path.basename(file)}`)
+}
+
+function validateControllerRequest(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Phase3BProductionError('campaign_controller_input_invalid', 'campaign controller accepts one closed path-only request')
+  const value = input as Record<string, unknown>
+  const keys = value.mode === 'test-owned-offline-full-path' ? TEST_CONTROLLER_KEYS : COMPLETE_CONTROLLER_KEYS
+  try { assertExactKeys(value, keys, 'campaign_controller_input_invalid') } catch { throw new Phase3BProductionError('campaign_controller_input_invalid', 'campaign controller request contains a missing or caller-authored field') }
+  for (const field of keys.filter((key) => key !== 'mode')) if (typeof value[field] !== 'string' || !path.isAbsolute(String(value[field])) || path.normalize(String(value[field])) !== value[field]) throw new Phase3BProductionError('campaign_controller_input_invalid', `${field} must be a normalized absolute sealed path`)
+  return value
+}
+
+function validateSignerClosure(root: string, closurePath: string, gateBResultPath: string): Readonly<Record<string, unknown>> {
+  const closureRecord = readExternalCanonical(closurePath)
+  const closure = closureRecord.value
+  assertExactKeys(closure, ['schema_id', 'campaign_id', 'operator_decision_sha256', 'gate_b_result_sha256', 'gate_b_result_raw_sha256', 'gate_b_result_dev', 'gate_b_result_ino', 'gate_b_result_size', 'post_gate_leak_report_sha256', 'evaluation_input_sha256', 'evidence_root', 'result_path', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'status', 'signature', 'closure_sha256'], 'signer_closure_invalid')
+  assertDigestField(closure, 'closure_sha256', 'signer_closure_invalid')
+  const { authority, registry } = loadSealedControl(root)
+  verifyTrustedSignature(closure, registry, 'requirements', 'closure_sha256', 'signer_closure_invalid')
+  const gateB = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-result.json').value
+  const postGateLeak = readCanonical(root, 'capsules/P3B-ES1/gates/post-gate-leak-report.json').value
+  const gateBIdentity = stableRead(gateBResultPath, { mode: 0o600, maximumBytes: 1_048_576 }).identity
+  if (closure.schema_id !== 'oracle-lab-p3b-requirements-signer-closure.v2' || closure.campaign_id !== authority.campaign_id || closure.gate_b_result_sha256 !== gateB.gate_result_sha256 || closure.gate_b_result_raw_sha256 !== gateBIdentity.sha256 || closure.gate_b_result_dev !== gateBIdentity.dev || closure.gate_b_result_ino !== gateBIdentity.ino || closure.gate_b_result_size !== gateBIdentity.size || closure.post_gate_leak_report_sha256 !== postGateLeak.post_gate_leak_report_sha256 || closure.evaluation_input_sha256 !== gateB.evaluation_input_sha256 || closure.evidence_root !== root || closure.result_path !== gateBResultPath || closure.status !== 'private_key_destroyed_after_gate_b') throw new Phase3BProductionError('signer_closure_invalid', 'signer closure does not bind the independently validated Gate B and post-Gate leak report')
+  return deepFreeze(closure)
+}
+
+export async function runCampaignController(request: unknown): Promise<Readonly<Record<string, unknown>>> {
+  const input = validateControllerRequest(request)
+  const root = String(input.evidence_root)
+  let decisionPath: string
+  let closurePath: string
+  let gateAExternallyOwned = false
+  if (input.mode === 'test-owned-offline-full-path') {
+    const authorityPath = String(input.authority_manifest_path)
+    const authority = readExternalCanonical(authorityPath).value
+    runTestPrelaunch(authorityPath, root)
+    decisionPath = String(authority.signed_gate_b_decision_path)
+    closurePath = String(authority.signer_closure_path)
+    gateAExternallyOwned = true
+  } else if (input.mode === 'production-full-path') {
+    const authorityPath = String(input.authority_path)
+    const inputPath = String(input.input_path)
+    decisionPath = String(input.signed_gate_b_decision_path)
+    closurePath = String(input.signer_closure_path)
+    runPrelaunchOnly(authorityPath, inputPath, root)
+  } else throw new Phase3BProductionError('campaign_controller_input_invalid', 'campaign controller mode is not fixed')
+  for (const [file, basename] of [[decisionPath, 'phase3b-successor-amendment-decision.json'], [closurePath, 'phase3b-requirements-signer-closure.json']] as const) if (path.basename(file) !== basename) throw new Phase3BProductionError('campaign_controller_input_invalid', 'external decision and signer closure basenames are fixed')
+
+  const execution = await runExecuteFromSealedPrelaunch(root)
+  const closeoutModule = await import('./closeout.js')
+  const gatesModule = await import('./gates.js')
+  const curation = closeoutModule.deriveCuration(root)
+  const closeout = closeoutModule.runCloseout(root)
+  const gateAPath = path.join(root, 'capsules/P3B-ES1/gates/gate-a-result.json')
+  if (gateAExternallyOwned) await waitForExternalCanonical(gateAPath)
+  else gatesModule.evaluateGateA(root)
+  const gateA = readCanonical(root, 'capsules/P3B-ES1/gates/gate-a-result.json').value
+  await waitForExternalCanonical(decisionPath)
+  gatesModule.importSignedOperatorDecision(root, decisionPath)
+  const gateB = gatesModule.writeGateB(root)
+  const postGateLeak = closeoutModule.writePostGateLeakReport(root)
+  const gateBPath = path.join(root, 'capsules/P3B-ES1/gates/gate-b-result.json')
+  const validatedGateB = gatesModule.validateSealedGateBResult(root, gateBPath)
+  await waitForExternalCanonical(closurePath)
+  const signerClosure = validateSignerClosure(root, closurePath, gateBPath)
+  const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
+  const receipts = readExecutionReceipts(openExecutionStore(root, ledger))
+  const provenance = readCanonical(root, 'capsules/P3B-ES1/curation/support/field-provenance.json', 16_777_216).value
+  const normalized = provenance.normative_resolved
+  const result = { schema_id: 'oracle-lab-p3b-campaign-controller-result.v1', campaign_id: ledger.campaign_id, row_count: ledger.rows.length, receipt_count: receipts.length, normative_leaf_count: Array.isArray(normalized) ? normalized.length : -1, pre_gate_leak_status: readCanonical(root, 'capsules/P3B-ES1/closure/leak-report.json').value.status, post_gate_leak_status: postGateLeak.status, gate_b_validated: validatedGateB.value.gate_result_sha256 === gateB.gate_result_sha256 && validatedGateB.value.decision === 'PASS', signer_destroyed: signerClosure.status === 'private_key_destroyed_after_gate_b', execution_result_sha256: execution.execution_result_sha256, curation_sha256: curation.curation_sha256, closeout_sha256: closeout.external_set_sha256, gate_a_sha256: gateA.gate_result_sha256, gate_b_sha256: gateB.gate_result_sha256 }
+  return deepFreeze({ ...result, controller_result_sha256: sha256Canonical(result) })
 }
