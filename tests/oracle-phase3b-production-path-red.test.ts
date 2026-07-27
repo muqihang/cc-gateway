@@ -35,3 +35,29 @@ test('production path RED: injected dry-run must traverse the production control
   assert.equal(result.signer_destruction, 'verified')
   assert.deepEqual(trace, ['materialize', 'execute', 'curation', 'conclusions', 'gate-a', 'gate-b-evaluate', 'gate-b-seal', 'gate-b-validate', 'signer-destroy'])
 })
+
+test('production path RED: controller rejects adapters that author external observations and authorities', async () => {
+  const forgedAdapter = {
+    clock: { wallMs: () => 1_700_000_000_000, monotonicNs: () => 1_000_000_000n },
+    targetTransport: {
+      dispatch: async (input: Readonly<Record<string, unknown>>) => ({
+        ...input,
+        route_index: 1,
+        request_receipt: 'forged',
+        captured_request: { method: 'POST', path: '/v1/messages', body_sha256: 'a'.repeat(64) },
+        captured_wire: { response_sha256: 'b'.repeat(64), terminal: 'clean' },
+        child_pid: 4242,
+        executable_identity_sha256: 'c'.repeat(64),
+        receiver_identity_sha256: 'd'.repeat(64),
+        gate_a: 'PASS',
+        gate_b: 'PASS',
+        leak_status: 'PASS',
+      }),
+    },
+    signer: { destroyAfterVerified: () => ({ destroyed: true }) },
+  }
+  await assert.rejects(
+    runProductionCampaignDryRun(privateRoot('p3b-production-forged-adapter-'), forgedAdapter),
+    (error: Error & { code?: string }) => error.code === 'external_fact_authority_invalid',
+  )
+})
