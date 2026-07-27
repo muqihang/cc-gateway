@@ -468,6 +468,7 @@ export async function runCampaignController(request: unknown): Promise<Readonly<
   for (const [file, basename] of [[decisionPath, 'phase3b-successor-amendment-decision.json'], [closurePath, 'phase3b-requirements-signer-closure.json']] as const) if (path.basename(file) !== basename) throw new Phase3BProductionError('campaign_controller_input_invalid', 'external decision and signer closure basenames are fixed')
 
   const execution = await runExecuteFromSealedPrelaunch(root)
+  if (execution.completed_all_rows !== true) throw new Phase3BProductionError('campaign_execution_failed', 'campaign execution stopped before all sealed rows reached a successful terminal receipt')
   const closeoutModule = await import('./closeout.js')
   const gatesModule = await import('./gates.js')
   const curation = closeoutModule.deriveCuration(root)

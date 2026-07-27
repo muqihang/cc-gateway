@@ -561,7 +561,7 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
   const routeCounts = state.routes.map((route) => route.requestCount)
   const selected = state.routes.findIndex((route) => route.expected_selected)
   const observedConnections = [...new Set(state.observations.map((observation) => Number(observation.connection_ordinal)))].sort((left, right) => left - right)
-  if (state.violationCode !== null || state.observations.length === 0 || routeCounts[selected] === 0 || routeCounts.some((count, index) => index === selected ? false : count !== 0) || state.observations.length !== state.row.response_program.maximum_attempts || observedConnections.length !== state.nextConnectionOrdinal || observedConnections.some((value, index) => value !== index)) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver violation, zero-request, route selection, connection, or exact attempt predicate failed')
+  if (state.violationCode !== null || state.observations.length === 0 || routeCounts[selected] === 0 || routeCounts.some((count, index) => index === selected ? false : count !== 0) || state.observations.length !== state.row.response_program.maximum_attempts || observedConnections.length !== state.nextConnectionOrdinal || observedConnections.some((value, index) => value !== index)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, zero-request, route selection, connection, or exact attempt predicate failed')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-result.v1' as const,
     campaign_id: authority.campaign_id,
