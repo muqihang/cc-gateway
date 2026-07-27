@@ -415,7 +415,7 @@ export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promi
   return result
 }
 
-async function waitForExternalCanonical(file: string, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+async function waitForExternalCanonical(file: string, timeoutMs = 180_000): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   do {
     try { return readExternalCanonical(file).value } catch (error: unknown) {
