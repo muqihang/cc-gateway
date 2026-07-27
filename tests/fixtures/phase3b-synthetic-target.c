@@ -44,7 +44,7 @@ static int send_attempt(int port, const char *custom, const char *api_key, const
   if (api_key != NULL) {
     char with_key[16384];
     int key_length = snprintf(with_key, sizeof(with_key),
-      "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n%s%s%s%s%s%s%s\r\n%s",
+      "POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n%s%s%s%s%s%s%s\r\n\r\n%s",
       port, strlen(body), canonical_custom,
       canonical_custom[0] == '\0' ? "" : "\r\n",
       auth_token == NULL ? "" : "Authorization: Bearer ", auth_token == NULL ? "" : auth_token,
