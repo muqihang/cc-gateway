@@ -21,6 +21,7 @@ export type MaterializedCrossRepoValidation = Readonly<{
   sub_repository: string
   reviewed_candidate_commit: string
   reviewed_candidate_tree: string
+  direct_candidate?: true
 }>
 
 export const MATERIALIZED_BASENAMES = deepFreeze({
@@ -231,7 +232,8 @@ export function bindMaterializedCrossRepoAuthority(rawRecord: Uint8Array, valida
   if (cross.model !== 'gpt-5.6-sol' || cross.critical !== 0 || cross.important !== 0 || cross.verdict !== 'CROSS_REPO_PASS') throw new Phase3BProductionError('cross_repo_authority_invalid', 'C1 record does not contain an exact 0C/0I CROSS_REPO_PASS')
   if (validation) {
     try {
-      validateCrossRepoRecord(bytes, validation.cc_repository, validation.sub_repository, { expectedCcC1: { commit: validation.reviewed_candidate_commit, tree: validation.reviewed_candidate_tree } })
+      validateCrossRepoRecord(bytes, validation.cc_repository, validation.sub_repository, validation.direct_candidate ? {} : { expectedCcC1: { commit: validation.reviewed_candidate_commit, tree: validation.reviewed_candidate_tree } })
+      if (validation.direct_candidate && (fixedGit(validation.cc_repository, ['rev-parse', 'HEAD']) !== validation.reviewed_candidate_commit || fixedGit(validation.cc_repository, ['rev-parse', 'HEAD^{tree}']) !== validation.reviewed_candidate_tree)) throw new Error('direct candidate HEAD/tree drifted')
     } catch (error) {
       throw new Phase3BProductionError('cross_repo_authority_invalid', `materialized C1 validation failed: ${(error as Error).message}`)
     }

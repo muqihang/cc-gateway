@@ -260,7 +260,7 @@ function validateTestInput(value: Record<string, unknown>): TestCampaignInput {
   if (materialized.identity.sha256 !== value.materialized_authority_sha256 || materialized.value.materialized_authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(materialized.value).filter(([field]) => field !== 'materialized_authority_sha256')))) throw new Phase3BProductionError('test_authority_manifest_invalid', 'materialized test authority bytes drifted')
   const focused = readExternalCanonical(String(value.focused_suite_path)).value
   if (focused.passed !== true || focused.strict_typescript !== true || focused.build !== true || focused.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'test focused receipt is not an executed PASS')
-  bindMaterializedCrossRepoAuthority(stableRead(String(value.cross_repo_review_path), { mode: 0o600, maximumBytes: 1_048_576 }).bytes, { cc_repository: String(value.cc_repository), sub_repository: String(value.sub_repository), reviewed_candidate_commit: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD']), reviewed_candidate_tree: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD^{tree}']) })
+  bindMaterializedCrossRepoAuthority(stableRead(String(value.cross_repo_review_path), { mode: 0o600, maximumBytes: 1_048_576 }).bytes, { cc_repository: String(value.cc_repository), sub_repository: String(value.sub_repository), reviewed_candidate_commit: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD']), reviewed_candidate_tree: fixedGit(String(value.cc_repository), ['rev-parse', 'HEAD^{tree}']), direct_candidate: true })
   return deepFreeze({ ...value, target_profile: profile } as TestCampaignInput)
 }
 

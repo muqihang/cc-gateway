@@ -97,11 +97,18 @@ test('production path RED: the real controller owns the complete sealed lifecycl
 
   const entry = (campaignController as Record<string, unknown>).runCampaignController
   assert.equal(typeof entry, 'function', 'campaign-controller must expose the one complete production entry')
-  const result = await (entry as (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>>)({
-    mode: 'test-owned-offline-full-path',
-    authority_manifest_path: authorityManifestPath,
-    evidence_root: root,
-  })
+  let result: Readonly<Record<string, unknown>>
+  try {
+    result = await (entry as (input: Readonly<Record<string, unknown>>) => Promise<Readonly<Record<string, unknown>>>)({
+      mode: 'test-owned-offline-full-path',
+      authority_manifest_path: authorityManifestPath,
+      evidence_root: root,
+    })
+  } catch (error) {
+    requirements.kill('SIGKILL')
+    await requirementsExit
+    throw error
+  }
   assert.equal(result.schema_id, 'oracle-lab-p3b-campaign-controller-result.v1')
   assert.equal(result.row_count, 340)
   assert.equal(result.receipt_count, 1020)
