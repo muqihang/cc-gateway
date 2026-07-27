@@ -303,7 +303,6 @@ function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOpe
   const externalControls = [
     ['control/focused-suite.json', input.focused_suite_path, input.focused_suite_sha256, 1_048_576],
     ['control/cross-review-artifact.json', input.cross_review_artifact_path, input.cross_review_artifact_sha256, 1_048_576],
-    ['control/cross-repo-review.json', input.cross_repo_review_path, input.cross_repo_review_sha256, 1_048_576],
     ['control/es8-go-receipt.json', input.es8_go_receipt_path, input.es8_go_receipt_sha256, 1_048_576],
     ['control/es7-typed-fixtures.json', input.es7_typed_fixtures_path, input.es7_typed_fixtures_sha256, 16_777_216],
     ['control/es8-ts-c1-agreement.json', input.es8_ts_c1_agreement_path, input.es8_ts_c1_agreement_sha256, 1_048_576],
@@ -316,6 +315,11 @@ function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOpe
     if (record.identity.sha256 !== sha256) throw new Phase3BProductionError('sealed_authority_file_drift', `${relative} changed before sealing`)
     writeExclusiveCanonical(root, relative, record.value)
   }
+  const c1Record = readExternalCanonical(input.cross_repo_review_path)
+  if (c1Record.identity.sha256 !== input.cross_repo_review_sha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'C1 changed before sealing')
+  const c1Binding = bindMaterializedCrossRepoAuthority(c1Record.bytes)
+  const c1BindingUnsigned = { schema_id: 'oracle-lab-p3b-cross-repo-review-binding.v1', verdict: c1Binding.verdict, review_sha256: c1Binding.review_sha256 }
+  writeExclusiveCanonical(root, 'control/cross-repo-review.json', { ...c1BindingUnsigned, binding_sha256: sha256Canonical(c1BindingUnsigned) })
   writeExclusiveCanonical(root, 'control/trusted-reviewers.json', registry)
   createPrivateDirectory(root, 'synthetic-literals')
   writeExclusiveCanonical(root, FIXED_LITERAL_TABLE_PATH, FIXED_LITERAL_TABLE)

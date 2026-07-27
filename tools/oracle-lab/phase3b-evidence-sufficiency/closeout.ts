@@ -646,12 +646,14 @@ function deriveCrossRepoSupport(root: string, ledger: CampaignLedger): Readonly<
     const missing = [!c1 ? 'control/cross-repo-review.json' : null, !goReceipt ? ES8_GO_RECEIPT_PATH : null, !tsAgreement ? ES8_TS_AGREEMENT_PATH : null].filter((value): value is string => value !== null)
     return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1?.entry.sha256 ?? null, go_receipt_raw_sha256: goReceipt?.entry.sha256 ?? null, go_receipt_internal_sha256: null, ts_agreement_raw_sha256: tsAgreement?.entry.sha256 ?? null, ts_agreement_internal_sha256: null, missing_artifacts: missing, agreement: null, status: 'BLOCKED' })
   }
-  if (c1.entry.sha256 !== ledger.c1.review_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'actual C1 record raw digest drifted')
+  assertExactKeys(c1.value, ['schema_id', 'verdict', 'review_sha256', 'binding_sha256'], 'conclusion_support_invalid')
+  assertDigestField(c1.value, 'binding_sha256', 'conclusion_support_invalid')
+  if (c1.value.schema_id !== 'oracle-lab-p3b-cross-repo-review-binding.v1' || c1.value.verdict !== 'CROSS_REPO_PASS' || c1.value.review_sha256 !== ledger.c1.review_sha256) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed C1 binding drifted from the independently validated raw record')
   assertReviewedControlArtifact(root, goReceipt.entry, 'es8_go_receipt_sha256')
   assertReviewedControlArtifact(root, tsAgreement.entry, 'es8_ts_c1_agreement_sha256')
   validateIndependentGoReceipt(goReceipt.value, ledger.c1.review_sha256)
   validateIndependentTsAgreement(tsAgreement.value, goReceipt.value, goReceipt.entry.sha256, ledger)
-  return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.entry.sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
+  return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.value.review_sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
 }
 
 function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
@@ -860,7 +862,7 @@ export function runCloseout(evidenceRoot: string): Readonly<Record<string, unkno
   writeExclusiveCanonical(root, `${CLOSURE_ROOT}/terminal-manifest.json`, terminal)
   const closureRecords = CLOSURE_ORDER.map((name) => {
     const relative = `${CLOSURE_ROOT}/${name}.json`
-    const record = readCanonical(root, relative)
+    const record = readCanonical(root, relative, 16_777_216)
     return { name, relative_path: relative, schema_id: String(record.value.schema_id), sha256: record.identity.sha256 }
   })
   const externalUnsigned = { schema_id: 'oracle-lab-p3b-external-digest-set.v1', campaign_id: ledger.campaign_id, records: closureRecords }
@@ -880,7 +882,7 @@ export function validateExternalSet(evidenceRoot: string): Record<string, unknow
     const record = entry as Record<string, unknown>
     assertExactKeys(record, ['name', 'relative_path', 'schema_id', 'sha256'], 'external_set_invalid')
     if (record.name !== CLOSURE_ORDER[index] || record.relative_path !== `${CLOSURE_ROOT}/${CLOSURE_ORDER[index]}.json`) throw new Phase3BProductionError('external_set_invalid', 'external set order/path drifted')
-    const actual = readCanonical(root, String(record.relative_path))
+    const actual = readCanonical(root, String(record.relative_path), 16_777_216)
     if (actual.identity.sha256 !== record.sha256 || actual.value.schema_id !== record.schema_id) throw new Phase3BProductionError('external_set_invalid', 'external set does not bind actual artifact bytes')
   })
   return external
