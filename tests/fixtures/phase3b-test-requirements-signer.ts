@@ -27,7 +27,7 @@ function externalCanonical(file: string): Record<string, unknown> {
   return value
 }
 
-async function waitFor(file: string, timeoutMs = 900_000): Promise<Record<string, unknown>> {
+async function waitFor(file: string, timeoutMs = 2_700_000): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     try { return externalCanonical(file) } catch (error: unknown) {

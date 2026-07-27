@@ -105,6 +105,10 @@ test('production path RED: the real controller owns the complete sealed lifecycl
       evidence_root: root,
     })
   } catch (error) {
+    if (requirements.exitCode !== null || requirements.signalCode !== null) {
+      const exited = await requirementsExit
+      throw new Error(`requirements signer exited before controller completion: ${exited.stderr}`, { cause: error })
+    }
     requirements.kill('SIGKILL')
     await requirementsExit
     throw error
