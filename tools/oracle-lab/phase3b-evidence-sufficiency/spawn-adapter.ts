@@ -65,6 +65,9 @@ def tcp(host, port)
 rescue StandardError
   false
 end
+def tcp_attempts(host, port)
+  tcp(host, port) || tcp(host, port)
+end
 def udp
   socket = UDPSocket.new
   socket.connect('1.1.1.1', 53)
@@ -94,10 +97,10 @@ rescue StandardError
 end
 ports = JSON.parse(ARGV[0])
 probe = {
-  declared: ports.map { |port| tcp('127.0.0.1', port) },
-  alternate: tcp('127.0.0.1', Integer(ARGV[1])),
-  ipv4: tcp('1.1.1.1', 443),
-  ipv6: tcp('2606:4700:4700::1111', 443),
+  declared: ports.map { |port| tcp_attempts('127.0.0.1', port) },
+  alternate: tcp_attempts('127.0.0.1', Integer(ARGV[1])),
+  ipv4: tcp_attempts('1.1.1.1', 443),
+  ipv6: tcp_attempts('2606:4700:4700::1111', 443),
   udp: udp,
   inside: write_once(ARGV[2]),
   outside: write_once(ARGV[3]),

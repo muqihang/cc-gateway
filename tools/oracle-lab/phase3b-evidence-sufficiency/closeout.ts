@@ -4,7 +4,7 @@ import path from 'node:path'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
 import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, immutableNormativeSourceBytes, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
 import { materializeRequestAst, REQUEST_AST_MATERIALIZER } from './receiver.js'
 import { validateCampaignReviewerRegistry } from './trust.js'
@@ -56,16 +56,18 @@ function optionalCanonical(root: string, relative: string): { value: Record<stri
   }
 }
 
-export function predecessorSupportSourceSha256(value: Record<string, unknown>, sealedRawSha256: string, conclusionId: string, conclusionSha256: string): string | null {
-  if (value.schema_id === 'oracle-lab-p3b-predecessor-binding.v1') {
-    assertExactKeys(value, ['schema_id', 'conclusion_id', 'source_raw_sha256', 'normalized_conclusion_sha256', 'conclusion', 'binding_sha256'], 'conclusion_support_invalid')
-    assertDigestField(value, 'binding_sha256', 'conclusion_support_invalid')
-    assertSha256(value.source_raw_sha256, 'conclusion_support_invalid', 'predecessor source raw digest')
-    assertSha256(value.normalized_conclusion_sha256, 'conclusion_support_invalid', 'normalized predecessor digest')
-    const conclusion = value.conclusion
-    if (!conclusion || typeof conclusion !== 'object' || Array.isArray(conclusion) || value.normalized_conclusion_sha256 !== sha256Canonical(conclusion)) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed predecessor normalization binding is invalid')
-    return value.conclusion_id === conclusionId && (conclusion as Record<string, unknown>).conclusion_id === conclusionId && value.source_raw_sha256 === conclusionSha256 ? conclusionSha256 : null
+function optionalPredecessorConclusion(root: string, relative: string): { value: Record<string, unknown>; entry: ArtifactEntry } | null {
+  try {
+    const record = readCanonicalTransport(resolveContained(root, relative), { mode: 0o600, maximumBytes: 16_777_216 })
+    return { value: record.value, entry: { name: relative, relative_path: relative, schema_id: String(record.value.schema_id), size_bytes: record.identity.size, sha256: record.identity.sha256 } }
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
+}
+
+export function predecessorSupportSourceSha256(value: Record<string, unknown>, sealedRawSha256: string, conclusionId: string, conclusionSha256: string): string | null {
+  if (value.conclusion_id !== conclusionId) return null
   if (sealedRawSha256 === conclusionSha256) return conclusionSha256
   if (value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && value.conclusion_id === conclusionId && value.conclusion_sha256 === conclusionSha256 && value.level === 'Reproduced') return conclusionSha256
   return null
@@ -683,8 +685,8 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
     const fieldClosure = supportRecord({ schema_id: 'oracle-lab-p3b-candidate-field-closure.v3', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, typed_wire_fixtures_sha256: fixtures.support_sha256, closed_fields: { observation: OBSERVATION_FIELDS, response: RESPONSE_FIELDS, fixture: ['sequence_index', 'run_id', 'row_sha256', 'family', 'schedule_id', 'request_stimulus_sha256', 'status', 'contract_request_source_sha256', 'contract_response_source_sha256', 'requests', 'responses', 'fixture_sha256'], typed_request: ['schema_id', ...ES7_REQUEST_FIELDS], typed_response: ['schema_id', ...RESPONSE_FIELDS], source_binding: ['attempt_ordinal', 'source_relative_path', 'source_raw_sha256', 'source_observation_sha256', 'contract_source_sha256', 'materializer_algorithm', 'literal_table_sha256', 'typed_fixture_bytes_length', 'typed_fixture_bytes_sha256', 'ast_bytes_length', 'ast_bytes_sha256', 'materialized_normalized_bytes_length', 'materialized_normalized_bytes_sha256', 'receiver_wire_body_sha256', 'receiver_match', 'typed_fixture', 'fixture_sha256'], request_ast_binding: ['ast_bytes_length', 'ast_bytes_sha256'], unknown_fields: 'rejected' }, status: allReproduced ? 'PASS' : 'INCOMPLETE' })
   const provenance = deriveProvenance(root, ledger, fixtureRows, fixtures.support_sha256, fieldClosure.support_sha256)
   const crossRepo = deriveCrossRepoSupport(root, ledger)
-  const predecessorConfigRecord = optionalCanonical(root, 'control/predecessor-config-auth.json')
-  const predecessorFailureRecord = optionalCanonical(root, 'control/predecessor-failure-stream.json')
+  const predecessorConfigRecord = optionalPredecessorConclusion(root, 'control/predecessor-config-auth.json')
+  const predecessorFailureRecord = optionalPredecessorConclusion(root, 'control/predecessor-failure-stream.json')
   const predecessorConfigSha256 = predecessorConfigRecord ? predecessorSupportSourceSha256(predecessorConfigRecord.value, predecessorConfigRecord.entry.sha256, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH']) : null
   const predecessorFailureSha256 = predecessorFailureRecord ? predecessorSupportSourceSha256(predecessorFailureRecord.value, predecessorFailureRecord.entry.sha256, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM']) : null
   const mappings = [

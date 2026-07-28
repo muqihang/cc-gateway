@@ -9,7 +9,7 @@ import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loa
 import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
@@ -143,28 +143,16 @@ function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnTy
 }
 
 export function readPredecessorConclusion(file: string, expectedSha256: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
-  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
+  const { bytes, identity, value } = readCanonicalTransport(file, { mode: 0o600, maximumBytes })
   if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'Phase 3A predecessor is not owned by current operator UID')
   if (identity.sha256 !== expectedSha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor changed before sealing')
-  const payload = bytes.at(-1) === 0x0a ? bytes.subarray(0, -1) : bytes
-  if (payload.includes(0x0a) || payload.includes(0x0d)) throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor contains noncanonical line breaks')
-  let value: unknown
-  try { value = JSON.parse(payload.toString('utf8')) } catch { throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor JSON is invalid') }
-  if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(payload)) throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor is not canonical JSON')
-  return { bytes, identity, value: value as Record<string, unknown> }
+  return { bytes, identity, value }
 }
 
-export function sealPredecessorConclusion(root: string, relative: string, source: string, expectedSha256: string, expectedConclusionId: string): ReturnType<typeof writeExclusiveCanonical> {
+export function sealPredecessorConclusion(root: string, relative: string, source: string, expectedSha256: string, expectedConclusionId: string): ReturnType<typeof writeExclusiveBytes> {
   const record = readPredecessorConclusion(source, expectedSha256)
   if (record.value.conclusion_id !== expectedConclusionId) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor identity changed before sealing')
-  const unsigned = {
-    schema_id: 'oracle-lab-p3b-predecessor-binding.v1',
-    conclusion_id: expectedConclusionId,
-    source_raw_sha256: record.identity.sha256,
-    normalized_conclusion_sha256: sha256Canonical(record.value),
-    conclusion: record.value,
-  }
-  return writeExclusiveCanonical(root, relative, { ...unsigned, binding_sha256: sha256Canonical(unsigned) })
+  return writeExclusiveBytes(root, relative, record.bytes, 0o600)
 }
 
 function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<string, unknown> {

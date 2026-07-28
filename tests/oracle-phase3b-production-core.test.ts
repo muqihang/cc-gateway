@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import os from 'node:os'
@@ -14,7 +14,7 @@ import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExe
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
-import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
+import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
@@ -55,11 +55,13 @@ test('prelaunch and conclusion support preserve exact digest-bound Phase 3A byte
 
   createPrivateDirectory(root, 'control')
   sealPredecessorConclusion(root, 'control/predecessor-config-auth.json', file, record.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH')
-  const sealed = readCanonical(root, 'control/predecessor-config-auth.json')
-  assert.notEqual(sealed.identity.sha256, record.identity.sha256)
+  const sealed = readCanonicalTransport(path.join(root, 'control/predecessor-config-auth.json'), { mode: 0o600 })
+  assert.deepEqual(sealed.value, conclusion)
+  assert.equal(sealed.identity.sha256, record.identity.sha256)
+  assert.equal(sealed.bytes.at(-1), 0x7d)
   assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), record.identity.sha256)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-FAILURE-STREAM', record.identity.sha256), null)
   assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), null)
-  assert.throws(() => predecessorSupportSourceSha256({ ...sealed.value, source_raw_sha256: 'f'.repeat(64) }, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 
   const newlineFile = path.join(root, 'phase3a-conclusion-newline.json')
   const newlineBytes = Buffer.concat([bytes, Buffer.from('\n')])
@@ -166,6 +168,7 @@ test('sandbox policy binds the exact loopback endpoint and denies an adjacent li
   try {
     const profile = buildSandboxProfile(root, runRoot, [routePort])
     assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote ip "localhost:${routePort}"\\)\\)`))
+    assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote tcp "localhost:${routePort}"\\)\\)`))
     assert.doesNotMatch(profile, /remote (?:ip|tcp) "\*:/)
     const probe = String.raw`
 require 'socket'
@@ -174,6 +177,9 @@ def tcp(host, port)
   Socket.tcp(host, port, connect_timeout: 0.6) { true }
 rescue StandardError
   false
+end
+def tcp_attempts(host, port)
+  tcp(host, port) || tcp(host, port)
 end
 def udp(host, port)
   socket = UDPSocket.new
@@ -185,12 +191,20 @@ rescue StandardError
 ensure
   socket&.close
 end
-STDOUT.write(JSON.generate({ route: tcp('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp('127.0.0.1', Integer(ARGV[1])), external: tcp('1.1.1.1', 443) }))`
-    const result = spawnSync('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
-      cwd: runRoot,
-      env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
-      encoding: 'utf8',
-      timeout: 5_000,
+STDOUT.write(JSON.generate({ route: tcp_attempts('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp_attempts('127.0.0.1', Integer(ARGV[1])), external: tcp_attempts('1.1.1.1', 443) }))`
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
+        cwd: runRoot,
+        env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      const timer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+      child.once('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
+      child.once('error', (error) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}${error.message}` }) })
     })
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false })
