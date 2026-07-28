@@ -1,4 +1,4 @@
-import { chmodSync } from 'node:fs'
+import { chmodSync, lstatSync } from 'node:fs'
 import path from 'node:path'
 
 import { bindControllerRuntime, createProductionController, sealControllerNamespace } from './controller.js'
@@ -9,7 +9,7 @@ import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loa
 import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
@@ -372,17 +372,31 @@ export function loadSealedControl(root: string): { input: SealedCampaignInput; a
   return { input, authority, registry }
 }
 
+const PREEXISTING_EXECUTION_MARKERS = ['execution-records', 'receiver-authorities', 'receiver-results', 'observations', 'launch-authorities', 'guards', 'cell-results', 'runs', 'campaign-failure.json', 'execution-result.json'] as const
+
+function preexistingExecutionEvidence(root: string): readonly string[] {
+  return PREEXISTING_EXECUTION_MARKERS.filter((relative) => {
+    try { lstatSync(resolveContained(root, relative)); return true } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
+    }
+  })
+}
+
 function claimExecutionAttempt(root: string): Readonly<Record<string, unknown>> {
+  const preexistingEvidence = preexistingExecutionEvidence(root)
+  const unverifiedLiveIo = preexistingEvidence.length > 0
   const unsigned = {
     schema_id: 'oracle-lab-p3b-execution-attempt-claim.v1',
     evidence_root: root,
     epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     consumption_boundary: PHASE3B_EPOCH_CONSUMPTION_POLICY.consumption_boundary,
-    attempt_state_at_claim: 'SEALED',
-    epoch_consumed_at_claim: false,
-    receiver_binds_at_claim: 0,
-    target_launches_at_claim: 0,
-    sockets_at_claim: 0,
+    attempt_state_at_claim: unverifiedLiveIo ? 'UNVERIFIED_PREEXISTING_EXECUTION_EVIDENCE' : 'SEALED',
+    preexisting_execution_evidence: preexistingEvidence,
+    epoch_consumed_at_claim: unverifiedLiveIo ? null : false,
+    receiver_binds_at_claim: unverifiedLiveIo ? null : 0,
+    target_launches_at_claim: unverifiedLiveIo ? null : 0,
+    sockets_at_claim: unverifiedLiveIo ? null : 0,
     same_attempt_resume_allowed: false,
     automatic_retry_allowed: false,
   }
@@ -401,6 +415,7 @@ function executionAttemptFailureCode(cause: unknown): string {
 }
 
 function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, failureStage: 'external_control_validation' | 'sealed_prelaunch_validation', cause: unknown): Readonly<Record<string, unknown>> {
+  const unverifiedLiveIo = Array.isArray(claim.preexisting_execution_evidence) && claim.preexisting_execution_evidence.length > 0
   const unsigned = {
     schema_id: 'oracle-lab-p3b-execution-attempt-failure.v1',
     evidence_root: root,
@@ -408,14 +423,15 @@ function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string
     epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     failure_stage: failureStage,
     cause_code: executionAttemptFailureCode(cause),
-    epoch_consumed: false,
-    receiver_binds: 0,
-    target_launches: 0,
-    sockets: 0,
+    consumption_status: unverifiedLiveIo ? 'UNKNOWN_OR_CONSUMED' : 'NOT_CONSUMED',
+    epoch_consumed: unverifiedLiveIo ? null : false,
+    receiver_binds: unverifiedLiveIo ? null : 0,
+    target_launches: unverifiedLiveIo ? null : 0,
+    sockets: unverifiedLiveIo ? null : 0,
     same_attempt_resume_allowed: false,
     automatic_retry_allowed: false,
-    failure_disposition: 'close_attempt_and_start_fresh_preparation',
-    terminal_status: 'CLOSED_BEFORE_LIVE_IO',
+    failure_disposition: unverifiedLiveIo ? 'root_cause_review_and_fresh_admission_required' : 'close_attempt_and_start_fresh_preparation',
+    terminal_status: unverifiedLiveIo ? 'CLOSED_UNVERIFIED_LIVE_IO_STATE' : 'CLOSED_BEFORE_LIVE_IO',
   }
   const failure = deepFreeze({ ...unsigned, failure_sha256: sha256Canonical(unsigned) })
   writeExclusiveCanonical(root, 'control/execution-attempt-failure.json', failure)

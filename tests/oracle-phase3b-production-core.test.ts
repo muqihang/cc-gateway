@@ -118,6 +118,7 @@ test('RED: execute mode claims a sealed namespace before fallible validation and
   assert.equal(claim.same_attempt_resume_allowed, false)
   assert.equal(claim.automatic_retry_allowed, false)
   assert.equal(claim.attempt_state_at_claim, 'SEALED')
+  assert.deepEqual(claim.preexisting_execution_evidence, [])
   assert.equal(claim.epoch_consumed_at_claim, false)
   assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [0, 0, 0])
   assert.equal(typeof claim.epoch_policy_sha256, 'string')
@@ -152,6 +153,25 @@ test('RED: real execute CLI claims and closes before fallible external validatio
   assert.equal(failure.same_attempt_resume_allowed, false)
   assert.equal(failure.automatic_retry_allowed, false)
   await assert.rejects(campaignMain(args), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: preexisting execution evidence can never be closed as zero live I/O', async () => {
+  const root = privateRoot('p3b-execution-preexisting-')
+  createPrivateDirectory(root, 'control')
+  createPrivateDirectory(root, 'execution-records')
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root))
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED_PREEXISTING_EXECUTION_EVIDENCE')
+  assert.deepEqual(claim.preexisting_execution_evidence, ['execution-records'])
+  assert.equal(claim.epoch_consumed_at_claim, null)
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.consumption_status, 'UNKNOWN_OR_CONSUMED')
+  assert.equal(failure.epoch_consumed, null)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [null, null, null])
+  assert.equal(failure.failure_disposition, 'root_cause_review_and_fresh_admission_required')
+  assert.equal(failure.terminal_status, 'CLOSED_UNVERIFIED_LIVE_IO_STATE')
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
