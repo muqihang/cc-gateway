@@ -5,7 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
+import { executionCompletedAllRows, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
@@ -230,6 +230,12 @@ test('RED: claimed live execution and finalization share one terminal failure bo
   const source = readFileSync(new URL('../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.ts', import.meta.url), 'utf8')
   assert.match(source, /async function executeAndFinalizeClaimedCampaign\([^]*catch \(error: unknown\) \{[^]*sealExecutionAttemptFailure\(/)
   assert.match(source, /readCampaignFailure\(store\)[^]*sealExecutionAttemptFailure\([^]*'live_execution'/)
+})
+
+test('RED: a final-row post-terminal failure can never report all rows complete', () => {
+  const successReceipts = Array.from({ length: 340 }, () => ({ terminal_class: 'success' }))
+  assert.equal(executionCompletedAllRows(successReceipts, null), true)
+  assert.equal(executionCompletedAllRows(successReceipts, { failing_sequence_index: 339, failure_family: 'post_terminal_artifact_failure' }), false)
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {

@@ -446,6 +446,10 @@ function executionAttemptFailureCode(cause: unknown): string {
   return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `filesystem_${code.toLowerCase()}` : 'campaign_execution_failure'
 }
 
+export function executionCompletedAllRows(receipts: readonly Readonly<{ terminal_class: unknown }>[], campaignFailure: unknown): boolean {
+  return campaignFailure === null && receipts.filter((receipt) => receipt.terminal_class === 'success').length === 340
+}
+
 type ExecutionAttemptFailureStage = 'execution_evidence_assessment' | 'external_control_validation' | 'sealed_prelaunch_validation' | 'live_execution' | 'execution_finalization'
 
 export function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, assessmentSha256: unknown, executionEvidence: readonly string[], failureStage: ExecutionAttemptFailureStage, cause: unknown): Readonly<Record<string, unknown>> {
@@ -564,7 +568,7 @@ async function executeAndFinalizeClaimedCampaign(evidenceRoot: string, claim: Re
     }
     failureStage = 'execution_finalization'
     const receipts = readExecutionReceipts(store)
-    const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, execution_attempt_claim_sha256: claim.claim_sha256, execution_evidence_assessment_sha256: assessment.assessment_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: receipts.filter((row) => row.state === 'terminal' && row.terminal_class === 'success').length === 340 }
+    const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, execution_attempt_claim_sha256: claim.claim_sha256, execution_evidence_assessment_sha256: assessment.assessment_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: executionCompletedAllRows(receipts, campaignFailure) }
     const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
     writeExclusiveCanonical(root, 'execution-result.json', result)
     return result
