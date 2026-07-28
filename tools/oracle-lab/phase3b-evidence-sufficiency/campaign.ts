@@ -2,11 +2,10 @@
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { runExecuteFromSealedPrelaunch, runPrelaunchOnly } from './campaign-controller.js'
+import { assertExternalMatchesSealed, runExecuteFromExternalSealedPrelaunch, runPrelaunchOnly } from './campaign-controller.js'
 import { deriveCuration, runCloseout } from './closeout.js'
 import { Phase3BProductionError, canonicalJson } from './core.js'
 import { evaluateGateA, writeGateB } from './gates.js'
-import { assertPrivateRuntimeRoot, readCanonical, stableRead } from './sealed-fs.js'
 
 const MODES = ['prelaunch-only', 'execute-from-sealed-prelaunch', 'closeout-only', 'evaluate-gate-a', 'evaluate-gate-b'] as const
 type Mode = typeof MODES[number]
@@ -29,19 +28,6 @@ function exactKeys(value: Record<string, string>, keys: readonly string[]): void
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) throw new Phase3BProductionError('runner_cli_invalid', 'mode arguments are missing or unknown')
 }
 
-function assertExternalMatchesSealed(root: string, authorityPath: string, inputPath: string): void {
-  const evidenceRoot = assertPrivateRuntimeRoot(root)
-  if (path.basename(authorityPath) !== 'phase3b-operator-authority.json' || path.basename(inputPath) !== 'phase3b-campaign-input.json') throw new Phase3BProductionError('fixed_path_invalid', 'authority and input basenames are fixed')
-  const pairs = [[authorityPath, 'control/operator-authority.json'], [inputPath, 'control/campaign-input.json']] as const
-  for (const [external, relative] of pairs) {
-    const externalIdentity = stableRead(path.resolve(external), { mode: 0o600, maximumBytes: 1_048_576 }).identity
-    const sealedIdentity = readCanonical(evidenceRoot, relative).identity
-    if (externalIdentity.sha256 !== sealedIdentity.sha256) throw new Phase3BProductionError('sealed_control_drift', 'CLI authority/input differs from sealed control bytes')
-  }
-  const sealedInput = readCanonical(evidenceRoot, 'control/campaign-input.json').value
-  if (sealedInput.operator_authority_path !== authorityPath || sealedInput.campaign_input_path !== inputPath || sealedInput.evidence_root !== evidenceRoot) throw new Phase3BProductionError('fixed_path_invalid', 'CLI paths do not match the sealed namespace tuple')
-}
-
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const args = parseArguments(argv)
   const mode = args.mode as Mode
@@ -53,10 +39,10 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   const evidenceRoot = path.resolve(args['evidence-root'])
   let result: Readonly<Record<string, unknown>>
   if (mode === 'prelaunch-only') result = runPrelaunchOnly(authorityPath, inputPath, evidenceRoot)
+  else if (mode === 'execute-from-sealed-prelaunch') result = await runExecuteFromExternalSealedPrelaunch(evidenceRoot, authorityPath, inputPath)
   else {
     assertExternalMatchesSealed(evidenceRoot, authorityPath, inputPath)
-    if (mode === 'execute-from-sealed-prelaunch') result = await runExecuteFromSealedPrelaunch(evidenceRoot)
-    else if (mode === 'closeout-only') { const curation = deriveCuration(evidenceRoot); result = { curation, closeout: runCloseout(evidenceRoot) } }
+    if (mode === 'closeout-only') { const curation = deriveCuration(evidenceRoot); result = { curation, closeout: runCloseout(evidenceRoot) } }
     else if (mode === 'evaluate-gate-a') result = evaluateGateA(evidenceRoot)
     else {
       const expected = path.join(evidenceRoot, 'capsules/P3B-ES1/gates/successor-amendment-decision.json')

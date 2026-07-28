@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
+import { executionCompletedAllRows, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
+import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
@@ -21,6 +25,21 @@ function privateRoot(prefix: string): string {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
   chmodSync(root, 0o700)
   return root
+}
+
+function listen(server: Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') reject(new Error('test listener did not bind'))
+      else resolve(address.port)
+    })
+  })
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()))
 }
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
@@ -103,6 +122,182 @@ test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', 
   writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 1 })
   assert.deepEqual(readCanonical(parent, 'record.json').value, { schema_id: 'focused.v1', value: 1 })
   assert.throws(() => writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 2 }), (error: NodeJS.ErrnoException) => error.code === 'EEXIST')
+})
+
+test('sandbox policy binds the exact loopback endpoint and denies an adjacent listener', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' }, async () => {
+  const root = privateRoot('p3b-sandbox-loopback-')
+  const runRoot = path.join(root, 'run')
+  mkdirSync(runRoot, { mode: 0o700 })
+  const route = createServer((socket) => socket.end())
+  const adjacent = createServer((socket) => socket.end())
+  const routePort = await listen(route)
+  const adjacentPort = await listen(adjacent)
+  try {
+    const profile = buildSandboxProfile(root, runRoot, [routePort])
+    assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote ip "localhost:${routePort}"\\)\\)`))
+    assert.doesNotMatch(profile, /remote (?:ip|tcp) "\*:/)
+    const probe = String.raw`
+require 'socket'
+require 'json'
+def tcp(host, port)
+  Socket.tcp(host, port, connect_timeout: 0.6) { true }
+rescue StandardError
+  false
+end
+def udp(host, port)
+  socket = UDPSocket.new
+  socket.connect(host, port)
+  socket.send("x", 0)
+  true
+rescue StandardError
+  false
+ensure
+  socket&.close
+end
+STDOUT.write(JSON.generate({ route: tcp('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp('127.0.0.1', Integer(ARGV[1])), external: tcp('1.1.1.1', 443) }))`
+    const result = spawnSync('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
+      cwd: runRoot,
+      env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false })
+  } finally {
+    await Promise.all([close(route), close(adjacent)])
+  }
+})
+
+test('RED: execute mode claims a sealed namespace before fallible validation and rejects re-entry', async () => {
+  const root = privateRoot('p3b-execution-attempt-claim-')
+  for (const directory of ['control', 'prelaunch', 'observations', 'receiver-results', 'runs', 'guards', 'cell-results']) createPrivateDirectory(root, directory)
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root))
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.schema_id, 'oracle-lab-p3b-execution-attempt-claim.v1')
+  assert.equal(claim.evidence_root, root)
+  assert.equal(claim.consumption_boundary, 'first_live_campaign_io')
+  assert.equal(claim.same_attempt_resume_allowed, false)
+  assert.equal(claim.automatic_retry_allowed, false)
+  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED')
+  assert.deepEqual(claim.preexisting_control_evidence, [])
+  assert.equal(claim.epoch_consumed_at_claim, null)
+  assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [null, null, null])
+  assert.equal(typeof claim.epoch_policy_sha256, 'string')
+  assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
+  assert.equal(assessment.status, 'CLEAR')
+  assert.deepEqual(assessment.preexisting_execution_evidence, [])
+  assert.equal(assessment.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(assessment.assessment_sha256, sha256Canonical(Object.fromEntries(Object.entries(assessment).filter(([key]) => key !== 'assessment_sha256'))))
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.schema_id, 'oracle-lab-p3b-execution-attempt-failure.v1')
+  assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(failure.execution_evidence_assessment_sha256, assessment.assessment_sha256)
+  assert.equal(failure.failure_stage, 'sealed_prelaunch_validation')
+  assert.equal(failure.cause_code, 'filesystem_enoent')
+  assert.deepEqual(failure.preexisting_execution_evidence, [])
+  assert.equal(failure.terminal_status, 'CLOSED_BEFORE_LIVE_IO')
+  assert.equal(failure.failure_disposition, 'close_attempt_and_start_fresh_preparation')
+  assert.equal(failure.failure_sha256, sha256Canonical(Object.fromEntries(Object.entries(failure).filter(([key]) => key !== 'failure_sha256'))))
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: real execute CLI claims and closes before fallible external validation', async () => {
+  const root = privateRoot('p3b-execution-cli-claim-')
+  createPrivateDirectory(root, 'control')
+  const authorityPath = path.join(root, 'phase3b-operator-authority.json')
+  const inputPath = path.join(root, 'phase3b-campaign-input.json')
+  const args = ['--mode', 'execute-from-sealed-prelaunch', '--operator-authority', authorityPath, '--campaign-input', inputPath, '--evidence-root', root]
+
+  await assert.rejects(campaignMain(args), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(assessment.status, 'CLEAR')
+  assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(failure.failure_stage, 'external_control_validation')
+  assert.equal(failure.cause_code, 'filesystem_enoent')
+  assert.equal(failure.epoch_consumed, false)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [0, 0, 0])
+  assert.equal(failure.same_attempt_resume_allowed, false)
+  assert.equal(failure.automatic_retry_allowed, false)
+  await assert.rejects(campaignMain(args), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: preexisting execution evidence can never be closed as zero live I/O', async () => {
+  const root = privateRoot('p3b-execution-preexisting-')
+  createPrivateDirectory(root, 'control')
+  createPrivateDirectory(root, 'execution-records')
+  createPrivateDirectory(root, 'observations')
+  writeExclusiveCanonical(root, 'observations/stale.json', { schema_id: 'stale-execution-evidence.v1' })
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_evidence_preexisting')
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED')
+  assert.equal(claim.epoch_consumed_at_claim, null)
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
+  assert.equal(assessment.status, 'BLOCKED')
+  assert.deepEqual(assessment.preexisting_execution_evidence, ['execution-records', 'observations'])
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.failure_stage, 'execution_evidence_assessment')
+  assert.equal(failure.cause_code, 'execution_evidence_preexisting')
+  assert.deepEqual(failure.preexisting_execution_evidence, ['execution-records', 'observations'])
+  assert.equal(failure.consumption_status, 'UNKNOWN_OR_CONSUMED')
+  assert.equal(failure.epoch_consumed, null)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [null, null, null])
+  assert.equal(failure.failure_disposition, 'root_cause_review_and_fresh_admission_required')
+  assert.equal(failure.terminal_status, 'CLOSED_UNVERIFIED_LIVE_IO_STATE')
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: orphaned failure control cannot mask the new terminal claim', async () => {
+  const root = privateRoot('p3b-execution-orphaned-control-')
+  createPrivateDirectory(root, 'control')
+  writeExclusiveCanonical(root, 'control/execution-attempt-failure.json', { schema_id: 'malformed-orphan.v1' })
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_control_evidence_preexisting')
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.attempt_state_at_claim, 'BLOCKED_PREEXISTING_CONTROL_EVIDENCE')
+  assert.deepEqual(claim.preexisting_control_evidence, ['control/execution-attempt-failure.json'])
+  assert.equal(claim.failure_disposition_at_claim, 'root_cause_review_and_fresh_admission_required')
+  assert.equal(claim.terminal_status_at_claim, 'CLOSED_UNVERIFIED_CONTROL_STATE')
+  assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: failure sealing rechecks live evidence created after the initial assessment', () => {
+  const root = privateRoot('p3b-execution-late-evidence-')
+  createPrivateDirectory(root, 'control')
+  createPrivateDirectory(root, 'receiver-authorities')
+
+  const failure = sealExecutionAttemptFailure(
+    root,
+    { claim_sha256: 'a'.repeat(64) },
+    'b'.repeat(64),
+    [],
+    'external_control_validation',
+    Object.assign(new Error('late failure'), { code: 'EIO' }),
+  )
+
+  assert.deepEqual(failure.preexisting_execution_evidence, ['receiver-authorities'])
+  assert.equal(failure.consumption_status, 'UNKNOWN_OR_CONSUMED')
+  assert.equal(failure.epoch_consumed, null)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [null, null, null])
+  assert.equal(failure.terminal_status, 'CLOSED_UNVERIFIED_LIVE_IO_STATE')
+})
+
+test('RED: claimed live execution and finalization share one terminal failure boundary', () => {
+  const source = readFileSync(new URL('../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.ts', import.meta.url), 'utf8')
+  assert.match(source, /async function executeAndFinalizeClaimedCampaign\([^]*catch \(error: unknown\) \{[^]*sealExecutionAttemptFailure\(/)
+  assert.match(source, /readCampaignFailure\(store\)[^]*sealExecutionAttemptFailure\([^]*'live_execution'/)
+})
+
+test('RED: a final-row post-terminal failure can never report all rows complete', () => {
+  const successReceipts = Array.from({ length: 340 }, () => ({ terminal_class: 'success' }))
+  assert.equal(executionCompletedAllRows(successReceipts, null), true)
+  assert.equal(executionCompletedAllRows(successReceipts, { failing_sequence_index: 339, failure_family: 'post_terminal_artifact_failure' }), false)
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
