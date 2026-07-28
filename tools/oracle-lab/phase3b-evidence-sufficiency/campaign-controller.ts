@@ -9,7 +9,7 @@ import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loa
 import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, parseCanonicalTransport, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
@@ -140,6 +140,19 @@ function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnTy
   try { value = JSON.parse(bytes.subarray(0, -1).toString('utf8')) } catch { throw new Phase3BProductionError('canonical_record_invalid', 'external authority JSON is invalid') }
   if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(bytes.subarray(0, -1))) throw new Phase3BProductionError('canonical_record_invalid', 'external authority is not canonical JSON')
   return { bytes, identity, value: value as Record<string, unknown> }
+}
+
+export function readPredecessorConclusion(file: string, expectedSha256: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
+  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
+  if (identity.sha256 !== expectedSha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor changed before sealing')
+  if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'Phase 3A predecessor is not owned by current operator UID')
+  return { bytes, identity, value: parseCanonicalTransport(bytes) }
+}
+
+export function sealPredecessorConclusion(root: string, relative: string, source: string, expectedSha256: string, expectedConclusionId: string): ReturnType<typeof writeExclusiveBytes> {
+  const record = readPredecessorConclusion(source, expectedSha256)
+  if (record.value.conclusion_id !== expectedConclusionId) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor identity changed before sealing')
+  return writeExclusiveBytes(root, relative, record.bytes, 0o600)
 }
 
 function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<string, unknown> {
@@ -308,13 +321,22 @@ function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOpe
     ['control/es7-typed-fixtures.json', input.es7_typed_fixtures_path, input.es7_typed_fixtures_sha256, 16_777_216],
     ['control/es8-ts-c1-agreement.json', input.es8_ts_c1_agreement_path, input.es8_ts_c1_agreement_sha256, 1_048_576],
     ['control/es9-coverage-contract.json', input.es9_coverage_contract_path, input.es9_coverage_contract_sha256, 16_777_216],
-    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
-    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
   ] as const
   for (const [relative, source, sha256, maximumBytes] of externalControls) {
     const record = readExternalCanonical(source, maximumBytes)
     if (record.identity.sha256 !== sha256) throw new Phase3BProductionError('sealed_authority_file_drift', `${relative} changed before sealing`)
     writeExclusiveCanonical(root, relative, record.value)
+  }
+  const predecessorControls = [
+    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, 'CL-P3A-R2-CONFIG-AUTH', input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, 'CL-P3A-R2-FAILURE-STREAM', input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+  ] as const
+  for (const [relative, source, conclusionId, sha256] of predecessorControls) {
+    if (input.schema_id === 'oracle-lab-p3b-production-input.v2') sealPredecessorConclusion(root, relative, source, sha256, conclusionId)
+    else {
+      const record = readPredecessorConclusion(source, sha256)
+      writeExclusiveCanonical(root, relative, record.value)
+    }
   }
   const c1Record = readExternalCanonical(input.cross_repo_review_path)
   if (c1Record.identity.sha256 !== input.cross_repo_review_sha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'C1 changed before sealing')
@@ -633,6 +655,7 @@ function validateSignerClosure(root: string, closurePath: string, gateBResultPat
 export async function runCampaignController(request: unknown): Promise<Readonly<Record<string, unknown>>> {
   const input = validateControllerRequest(request)
   const root = String(input.evidence_root)
+  const testOwned = input.mode === 'test-owned-offline-full-path'
   let decisionPath: string
   let closurePath: string
   let gateAExternallyOwned = false
@@ -656,7 +679,7 @@ export async function runCampaignController(request: unknown): Promise<Readonly<
   if (execution.completed_all_rows !== true) throw new Phase3BProductionError('campaign_execution_failed', 'campaign execution stopped before all sealed rows reached a successful terminal receipt')
   const closeoutModule = await import('./closeout.js')
   const gatesModule = await import('./gates.js')
-  const curation = closeoutModule.deriveCuration(root)
+  const curation = closeoutModule.deriveCuration(root, testOwned)
   const closeout = closeoutModule.runCloseout(root)
   const gateAPath = path.join(root, 'capsules/P3B-ES1/gates/gate-a-result.json')
   if (gateAExternallyOwned) await waitForExternalCanonical(gateAPath)
@@ -664,10 +687,10 @@ export async function runCampaignController(request: unknown): Promise<Readonly<
   const gateA = readCanonical(root, 'capsules/P3B-ES1/gates/gate-a-result.json').value
   await waitForExternalCanonical(decisionPath)
   gatesModule.importSignedOperatorDecision(root, decisionPath)
-  const gateB = gatesModule.writeGateB(root)
+  const gateB = gatesModule.writeGateB(root, testOwned)
   const postGateLeak = closeoutModule.writePostGateLeakReport(root)
   const gateBPath = path.join(root, 'capsules/P3B-ES1/gates/gate-b-result.json')
-  const validatedGateB = gatesModule.validateSealedGateBResult(root, gateBPath)
+  const validatedGateB = gatesModule.validateSealedGateBResult(root, gateBPath, testOwned)
   await waitForExternalCanonical(closurePath)
   const signerClosure = validateSignerClosure(root, closurePath, gateBPath)
   const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)

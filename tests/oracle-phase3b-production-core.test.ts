@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import os from 'node:os'
@@ -7,14 +7,14 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { executionCompletedAllRows, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
-import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
+import { SUPPORT_PATHS, deriveCuration, inventoryNamespace, predecessorSupportSourceSha256, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
-import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
+import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
@@ -41,6 +41,44 @@ function listen(server: Server): Promise<number> {
 function close(server: Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()))
 }
+
+test('prelaunch and conclusion support preserve exact digest-bound Phase 3A bytes without LF', () => {
+  const root = privateRoot('p3b-predecessor-transport-')
+  const file = path.join(root, 'phase3a-conclusion.json')
+  const conclusion = { schema_id: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', level: 'Reproduced', phase3b_usable: true }
+  const bytes = Buffer.from(canonicalJson(conclusion), 'utf8')
+  writeFileSync(file, bytes, { mode: 0o600 })
+
+  const record = readPredecessorConclusion(file, sha256Bytes(bytes))
+  assert.deepEqual(record.value, conclusion)
+  assert.equal(record.identity.sha256, sha256Bytes(bytes))
+
+  createPrivateDirectory(root, 'control')
+  sealPredecessorConclusion(root, 'control/predecessor-config-auth.json', file, record.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH')
+  const sealed = readCanonicalTransport(path.join(root, 'control/predecessor-config-auth.json'), { mode: 0o600 })
+  assert.deepEqual(sealed.value, conclusion)
+  assert.equal(sealed.identity.sha256, record.identity.sha256)
+  assert.equal(sealed.bytes.at(-1), 0x7d)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), record.identity.sha256)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-FAILURE-STREAM', record.identity.sha256), null)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), null)
+  const forgedTestFallback = { schema_id: 'oracle-lab-p3b-test-predecessor-attestation.v1', conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', conclusion_sha256: record.identity.sha256, level: 'Reproduced' }
+  assert.equal(predecessorSupportSourceSha256(forgedTestFallback, 'f'.repeat(64), 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), null)
+  assert.equal(predecessorSupportSourceSha256(forgedTestFallback, 'f'.repeat(64), 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256, true), record.identity.sha256)
+  assert.equal(inventoryNamespace(root).find((entry) => entry.relative_path === 'control/predecessor-config-auth.json')?.schema_id, 'oracle-lab-phase3a-conclusion.v1')
+
+  const newlineFile = path.join(root, 'phase3a-conclusion-newline.json')
+  const newlineBytes = Buffer.concat([bytes, Buffer.from('\n')])
+  writeFileSync(newlineFile, newlineBytes, { mode: 0o600 })
+  assert.deepEqual(readPredecessorConclusion(newlineFile, sha256Bytes(newlineBytes)).value, conclusion)
+
+  const prettyFile = path.join(root, 'phase3a-conclusion-pretty.json')
+  const prettyBytes = Buffer.from(JSON.stringify(conclusion, null, 2), 'utf8')
+  writeFileSync(prettyFile, prettyBytes, { mode: 0o600 })
+  assert.throws(() => readPredecessorConclusion(prettyFile, sha256Bytes(prettyBytes)), (error: Error & { code?: string }) => error.code === 'canonical_record_invalid')
+  assert.throws(() => readPredecessorConclusion(file, 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'sealed_authority_file_drift')
+  assert.throws(() => readPredecessorConclusion(prettyFile, 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'sealed_authority_file_drift')
+})
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
   const ledger = buildCampaignLedger('p3b-focused-core', TEST_C1)
@@ -135,6 +173,7 @@ test('sandbox policy binds the exact loopback endpoint and denies an adjacent li
   try {
     const profile = buildSandboxProfile(root, runRoot, [routePort])
     assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote ip "localhost:${routePort}"\\)\\)`))
+    assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote tcp "localhost:${routePort}"\\)\\)`))
     assert.doesNotMatch(profile, /remote (?:ip|tcp) "\*:/)
     const probe = String.raw`
 require 'socket'
@@ -143,6 +182,9 @@ def tcp(host, port)
   Socket.tcp(host, port, connect_timeout: 0.6) { true }
 rescue StandardError
   false
+end
+def tcp_attempts(host, port)
+  tcp(host, port) || tcp(host, port)
 end
 def udp(host, port)
   socket = UDPSocket.new
@@ -154,12 +196,20 @@ rescue StandardError
 ensure
   socket&.close
 end
-STDOUT.write(JSON.generate({ route: tcp('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp('127.0.0.1', Integer(ARGV[1])), external: tcp('1.1.1.1', 443) }))`
-    const result = spawnSync('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
-      cwd: runRoot,
-      env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
-      encoding: 'utf8',
-      timeout: 5_000,
+STDOUT.write(JSON.generate({ route: tcp_attempts('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp_attempts('127.0.0.1', Integer(ARGV[1])), external: tcp_attempts('1.1.1.1', 443) }))`
+    const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
+        cwd: runRoot,
+        env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      const timer = setTimeout(() => child.kill('SIGKILL'), 5_000)
+      child.once('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
+      child.once('error', (error) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}${error.message}` }) })
     })
     assert.equal(result.status, 0, result.stderr)
     assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false })

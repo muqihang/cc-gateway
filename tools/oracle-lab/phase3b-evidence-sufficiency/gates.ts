@@ -43,7 +43,7 @@ function conclusions(root: string): Array<Record<string, unknown>> {
   })
 }
 
-function validateCurationClock(root: string, conclusionRows: readonly Record<string, unknown>[]): Record<string, unknown> {
+function validateCurationClock(root: string, conclusionRows: readonly Record<string, unknown>[], allowTestAttestation = false): Record<string, unknown> {
   const clock = readCanonical(root, `${CURATION_ROOT}/clock-attestation.json`).value
   assertExactKeys(clock, ['schema_id', 'campaign_id', 'ledger_sha256', 'receipt_set_sha256', 'predecessor_receipt_sha256', 'predecessor_terminal_receipt_sha256', 'predecessor_terminal_monotonic_ns', 'created_at_ms', 'created_monotonic_ns', 'clock_sha256'], 'gate_clock_invalid')
   assertDigestField(clock, 'clock_sha256', 'gate_clock_invalid')
@@ -53,7 +53,7 @@ function validateCurationClock(root: string, conclusionRows: readonly Record<str
   const lastTerminal = [...receipts].reverse().find((receipt) => receipt.state === 'terminal')
   const curation = readCanonical(root, `${CURATION_ROOT}/result.json`, 16_777_216).value
   assertDigestField(curation, 'curation_sha256', 'curation_invalid')
-  const supportSha256s = validateConclusionSupport(root, false)
+  const supportSha256s = validateConclusionSupport(root, false, allowTestAttestation)
   const now = Date.now(); const monotonic = process.hrtime.bigint()
   const createdMonotonicText = String(clock.created_monotonic_ns)
   const createdMonotonic = /^\d+$/.test(createdMonotonicText) ? BigInt(createdMonotonicText) : -1n
@@ -92,7 +92,7 @@ function assertFixedDirectory(root: string, relative: string, expectedFiles: rea
   }
 }
 
-export function evaluateGateA(evidenceRoot: string): Readonly<Record<string, unknown>> {
+export function evaluateGateA(evidenceRoot: string, allowTestAttestation = false): Readonly<Record<string, unknown>> {
   if (typeof evidenceRoot !== 'string') throw new Phase3BProductionError('gate_input_invalid', 'Gate A accepts only a sealed evidence root')
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   createPrivateDirectory(root, GATE_ROOT)
@@ -120,7 +120,7 @@ export function evaluateGateA(evidenceRoot: string): Readonly<Record<string, unk
   if (sealedFocused.identity.sha256 !== input.focused_suite_sha256 || stableRead(input.focused_suite_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256 !== input.focused_suite_sha256 || focused.passed !== true || focused.strict_typescript !== true || focused.build !== true || focused.diff_check !== true) throw new Phase3BProductionError('focused_suite_failed', 'Gate A actual focused suite drifted')
   if (!['COMPLETE', 'Unknown', 'BLOCKED'].includes(String(terminal.terminal_state)) || terminal.terminal_state !== exit.status || terminal.artifact_index_sha256 !== artifactIndex.artifact_index_sha256 || terminal.leak_report_sha256 !== leak.leak_report_sha256 || terminal.exit_report_sha256 !== exit.exit_report_sha256 || terminal.handoff_sha256 !== handoff.handoff_sha256 || exit.counts === null || sha256Canonical(exit.counts) !== sha256Canonical(actualCounts) || exit.receipt_set_sha256 !== sha256Canonical(receipts) || terminal.phase3b_usable !== false || exit.phase3b_usable !== false || actualCounts.terminal + actualCounts.not_executed !== 340) throw new Phase3BProductionError('gate_a_invalid', 'terminal closure does not honestly derive from the sealed matrix and exact five artifacts')
   const conclusionRows = conclusions(root)
-  validateCurationClock(root, conclusionRows)
+  validateCurationClock(root, conclusionRows, allowTestAttestation)
   const closeWall = Number(exit.closed_at_ms)
   const closeMonotonic = String(exit.closed_monotonic_ns)
   if (!Number.isSafeInteger(closeWall) || !/^\d+$/.test(closeMonotonic)) throw new Phase3BProductionError('gate_clock_invalid', 'closeout predecessor clock is invalid')
@@ -196,7 +196,7 @@ export function evaluateGateB(input: GateBEvaluationInput): Readonly<Record<stri
   return deepFreeze({ ...unsigned, gate_result_sha256: sha256Canonical(unsigned) })
 }
 
-export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknown>> {
+export function writeGateB(evidenceRoot: string, allowTestAttestation = false): Readonly<Record<string, unknown>> {
   if (typeof evidenceRoot !== 'string') throw new Phase3BProductionError('gate_input_invalid', 'Gate B accepts only a sealed evidence root')
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   assertFixedDirectory(root, GATE_ROOT, ['gate-a-clock.json', 'gate-a-result.json', 'successor-amendment-decision.json'])
@@ -212,8 +212,8 @@ export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknow
   for (const [value, digest, code] of [[gateA, 'gate_result_sha256', 'gate_a_invalid'], [gateAClock, 'clock_sha256', 'gate_clock_invalid'], [decision, 'decision_sha256', 'operator_decision_invalid']] as const) assertDigestField(value, digest, code)
   if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || decision.decision !== 'evaluate_successor_amendment_startable' || decision.gate_a_sha256 !== gateA.gate_result_sha256 || decision.external_set_sha256 !== external.external_set_sha256 || decision.maximum_evaluation_delay_ms !== OPERATOR_MAX_DELAY_MS || decision.scope !== GATE_B_SCOPE) throw new Phase3BProductionError('operator_decision_invalid', 'operator decision scope or Gate A binding drifted')
   const conclusionRows = conclusions(root)
-  const curationClock = validateCurationClock(root, conclusionRows)
-  const supportSha256s = validateConclusionSupport(root, true)
+  const curationClock = validateCurationClock(root, conclusionRows, allowTestAttestation)
+  const supportSha256s = validateConclusionSupport(root, true, allowTestAttestation)
   const now = Date.now()
   const nowMonotonic = process.hrtime.bigint()
   const issued = Number(decision.issued_at_ms)
@@ -237,7 +237,7 @@ export function writeGateB(evidenceRoot: string): Readonly<Record<string, unknow
   return result
 }
 
-export function validateSealedGateBResult(evidenceRoot: string, resultPath: string): Readonly<{ value: Record<string, unknown>; identity: { dev: number; ino: number; size: number; sha256: string } }> {
+export function validateSealedGateBResult(evidenceRoot: string, resultPath: string, allowTestAttestation = false): Readonly<{ value: Record<string, unknown>; identity: { dev: number; ino: number; size: number; sha256: string } }> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const expectedPath = path.join(root, GATE_ROOT, 'gate-b-result.json')
   if (path.normalize(resultPath) !== expectedPath) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B result path is not the fixed sealed path')
@@ -264,8 +264,8 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   const decisionIssuedMonotonic = BigInt(String(decision.issued_monotonic_ns))
   if (!Number.isSafeInteger(gateBWall) || gateBWall > validationNow || validationNow - gateBWall > OPERATOR_MAX_DELAY_MS || gateBMonotonic > validationMonotonic || !Number.isSafeInteger(decisionIssuedAt) || decisionIssuedAt > validationNow || validationNow - decisionIssuedAt > OPERATOR_MAX_DELAY_MS || decisionIssuedMonotonic > validationMonotonic || decisionIssuedAt > gateBWall || decisionIssuedMonotonic > gateBMonotonic) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B clock or operator decision is future, stale, or not ordered against trusted current time')
   const conclusionRows = conclusions(root)
-  validateCurationClock(root, conclusionRows)
-  const supportSha256s = validateConclusionSupport(root, true)
+  validateCurationClock(root, conclusionRows, allowTestAttestation)
+  const supportSha256s = validateConclusionSupport(root, true, allowTestAttestation)
   if (conclusionRows.some((row) => row.level !== 'Reproduced' || row.enabled !== true || Number(row.expires_at_ms) !== Number(row.issued_at_ms) + SUCCESSOR_TTL_MS || Number(row.issued_at_ms) > Date.now() || Date.now() >= Number(row.expires_at_ms) || (row.contradiction_ids as unknown[]).length !== 0 || sha256Canonical(row.supporting_evidence_sha256s) !== sha256Canonical(supportSha256s))) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B conclusions are not current reproduced PASS support')
   const { input, registry } = loadSealedControl(root)
   verifyTrustedSignature(decision, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid')
