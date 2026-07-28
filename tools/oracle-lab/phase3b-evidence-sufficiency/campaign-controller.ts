@@ -15,6 +15,7 @@ import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, fixedGitBytes, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewerRegistry } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
+import { PHASE3B_EPOCH_CONSUMPTION_POLICY, PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256 } from './pre-epoch-admission.js'
 
 export type CampaignInput = Readonly<{
   schema_id: 'oracle-lab-p3b-production-input.v2'
@@ -371,8 +372,31 @@ export function loadSealedControl(root: string): { input: SealedCampaignInput; a
   return { input, authority, registry }
 }
 
+function claimExecutionAttempt(root: string): Readonly<Record<string, unknown>> {
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-execution-attempt-claim.v1',
+    evidence_root: root,
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    consumption_boundary: PHASE3B_EPOCH_CONSUMPTION_POLICY.consumption_boundary,
+    attempt_state_at_claim: 'SEALED',
+    epoch_consumed_at_claim: false,
+    receiver_binds_at_claim: 0,
+    target_launches_at_claim: 0,
+    sockets_at_claim: 0,
+    same_attempt_resume_allowed: false,
+    automatic_retry_allowed: false,
+  }
+  const claim = deepFreeze({ ...unsigned, claim_sha256: sha256Canonical(unsigned) })
+  try { writeExclusiveCanonical(root, 'control/execution-attempt.json', claim) } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode may be invoked only once for a sealed namespace')
+    throw error
+  }
+  return claim
+}
+
 export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
+  claimExecutionAttempt(root)
   const { input, authority } = loadSealedControl(root)
   const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
   const imageSet = readCanonical(root, 'launch-images.json', 16_777_216).value as Record<string, any>

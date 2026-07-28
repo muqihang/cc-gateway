@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
+import { runExecuteFromSealedPrelaunch } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
@@ -103,6 +104,26 @@ test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', 
   writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 1 })
   assert.deepEqual(readCanonical(parent, 'record.json').value, { schema_id: 'focused.v1', value: 1 })
   assert.throws(() => writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 2 }), (error: NodeJS.ErrnoException) => error.code === 'EEXIST')
+})
+
+test('RED: execute mode claims a sealed namespace before fallible validation and rejects re-entry', async () => {
+  const root = privateRoot('p3b-execution-attempt-claim-')
+  createPrivateDirectory(root, 'control')
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root))
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.schema_id, 'oracle-lab-p3b-execution-attempt-claim.v1')
+  assert.equal(claim.evidence_root, root)
+  assert.equal(claim.consumption_boundary, 'first_live_campaign_io')
+  assert.equal(claim.same_attempt_resume_allowed, false)
+  assert.equal(claim.automatic_retry_allowed, false)
+  assert.equal(claim.attempt_state_at_claim, 'SEALED')
+  assert.equal(claim.epoch_consumed_at_claim, false)
+  assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [0, 0, 0])
+  assert.equal(typeof claim.epoch_policy_sha256, 'string')
+  assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
