@@ -124,8 +124,8 @@ async function main(): Promise<void> {
   writeCanonical(authorityPath, authority)
   process.stdout.write(`${authorityPath}\n`)
 
-  const terminalPath = path.join(evidenceRoot, 'capsules/P3B-ES1/closure/terminal-manifest.json')
-  await waitFor(terminalPath)
+  const externalSetPath = path.join(evidenceRoot, 'capsules/P3B-ES1/closure/external-digest-set.json')
+  await waitFor(externalSetPath)
   const leak = readCanonical(evidenceRoot, 'capsules/P3B-ES1/closure/leak-report.json').value
   if (leak.status !== 'PASS' || !Array.isArray(leak.findings) || leak.findings.length !== 0) throw new Error('requirements signer refused pre-Gate leak report')
   const gateA = evaluateGateA(evidenceRoot)
