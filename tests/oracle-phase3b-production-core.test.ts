@@ -122,8 +122,36 @@ test('RED: execute mode claims a sealed namespace before fallible validation and
   assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [0, 0, 0])
   assert.equal(typeof claim.epoch_policy_sha256, 'string')
   assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.schema_id, 'oracle-lab-p3b-execution-attempt-failure.v1')
+  assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(failure.failure_stage, 'sealed_prelaunch_validation')
+  assert.equal(failure.cause_code, 'filesystem_enoent')
+  assert.equal(failure.terminal_status, 'CLOSED_BEFORE_LIVE_IO')
+  assert.equal(failure.failure_disposition, 'close_attempt_and_start_fresh_preparation')
+  assert.equal(failure.failure_sha256, sha256Canonical(Object.fromEntries(Object.entries(failure).filter(([key]) => key !== 'failure_sha256'))))
 
   await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: real execute CLI claims and closes before fallible external validation', async () => {
+  const root = privateRoot('p3b-execution-cli-claim-')
+  createPrivateDirectory(root, 'control')
+  const authorityPath = path.join(root, 'phase3b-operator-authority.json')
+  const inputPath = path.join(root, 'phase3b-campaign-input.json')
+  const args = ['--mode', 'execute-from-sealed-prelaunch', '--operator-authority', authorityPath, '--campaign-input', inputPath, '--evidence-root', root]
+
+  await assert.rejects(campaignMain(args), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(failure.failure_stage, 'external_control_validation')
+  assert.equal(failure.cause_code, 'filesystem_enoent')
+  assert.equal(failure.epoch_consumed, false)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [0, 0, 0])
+  assert.equal(failure.same_attempt_resume_allowed, false)
+  assert.equal(failure.automatic_retry_allowed, false)
+  await assert.rejects(campaignMain(args), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
