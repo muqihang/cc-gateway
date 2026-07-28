@@ -7,9 +7,9 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { executionCompletedAllRows, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
+import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
-import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
@@ -41,6 +41,29 @@ function listen(server: Server): Promise<number> {
 function close(server: Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()))
 }
+
+test('prelaunch accepts exact digest-bound canonical Phase 3A predecessor bytes without LF', () => {
+  const root = privateRoot('p3b-predecessor-transport-')
+  const file = path.join(root, 'phase3a-conclusion.json')
+  const conclusion = { conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', level: 'Reproduced', phase3b_usable: true }
+  const bytes = Buffer.from(canonicalJson(conclusion), 'utf8')
+  writeFileSync(file, bytes, { mode: 0o600 })
+
+  const record = readPredecessorConclusion(file, sha256Bytes(bytes))
+  assert.deepEqual(record.value, conclusion)
+  assert.equal(record.identity.sha256, sha256Bytes(bytes))
+
+  const newlineFile = path.join(root, 'phase3a-conclusion-newline.json')
+  const newlineBytes = Buffer.concat([bytes, Buffer.from('\n')])
+  writeFileSync(newlineFile, newlineBytes, { mode: 0o600 })
+  assert.deepEqual(readPredecessorConclusion(newlineFile, sha256Bytes(newlineBytes)).value, conclusion)
+
+  const prettyFile = path.join(root, 'phase3a-conclusion-pretty.json')
+  const prettyBytes = Buffer.from(JSON.stringify(conclusion, null, 2), 'utf8')
+  writeFileSync(prettyFile, prettyBytes, { mode: 0o600 })
+  assert.throws(() => readPredecessorConclusion(prettyFile, sha256Bytes(prettyBytes)), (error: Error & { code?: string }) => error.code === 'canonical_record_invalid')
+  assert.throws(() => readPredecessorConclusion(file, 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'sealed_authority_file_drift')
+})
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
   const ledger = buildCampaignLedger('p3b-focused-core', TEST_C1)

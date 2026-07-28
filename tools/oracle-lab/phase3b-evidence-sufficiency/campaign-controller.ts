@@ -142,6 +142,18 @@ function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnTy
   return { bytes, identity, value: value as Record<string, unknown> }
 }
 
+export function readPredecessorConclusion(file: string, expectedSha256: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
+  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
+  if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'Phase 3A predecessor is not owned by current operator UID')
+  if (identity.sha256 !== expectedSha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor changed before sealing')
+  const payload = bytes.at(-1) === 0x0a ? bytes.subarray(0, -1) : bytes
+  if (payload.includes(0x0a) || payload.includes(0x0d)) throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor contains noncanonical line breaks')
+  let value: unknown
+  try { value = JSON.parse(payload.toString('utf8')) } catch { throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor JSON is invalid') }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(payload)) throw new Phase3BProductionError('canonical_record_invalid', 'Phase 3A predecessor is not canonical JSON')
+  return { bytes, identity, value: value as Record<string, unknown> }
+}
+
 function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<string, unknown> {
   return readExternalCanonical(file, maximumBytes).value
 }
@@ -308,12 +320,18 @@ function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOpe
     ['control/es7-typed-fixtures.json', input.es7_typed_fixtures_path, input.es7_typed_fixtures_sha256, 16_777_216],
     ['control/es8-ts-c1-agreement.json', input.es8_ts_c1_agreement_path, input.es8_ts_c1_agreement_sha256, 1_048_576],
     ['control/es9-coverage-contract.json', input.es9_coverage_contract_path, input.es9_coverage_contract_sha256, 16_777_216],
-    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
-    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256, 1_048_576],
   ] as const
   for (const [relative, source, sha256, maximumBytes] of externalControls) {
     const record = readExternalCanonical(source, maximumBytes)
     if (record.identity.sha256 !== sha256) throw new Phase3BProductionError('sealed_authority_file_drift', `${relative} changed before sealing`)
+    writeExclusiveCanonical(root, relative, record.value)
+  }
+  const predecessorControls = [
+    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+  ] as const
+  for (const [relative, source, sha256] of predecessorControls) {
+    const record = readPredecessorConclusion(source, sha256)
     writeExclusiveCanonical(root, relative, record.value)
   }
   const c1Record = readExternalCanonical(input.cross_repo_review_path)
