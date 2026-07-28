@@ -446,8 +446,12 @@ function executionAttemptFailureCode(cause: unknown): string {
   return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `filesystem_${code.toLowerCase()}` : 'campaign_execution_failure'
 }
 
-function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, assessmentSha256: unknown, executionEvidence: readonly string[], failureStage: 'execution_evidence_assessment' | 'external_control_validation' | 'sealed_prelaunch_validation', cause: unknown): Readonly<Record<string, unknown>> {
-  const unverifiedLiveIo = executionEvidence.length > 0
+type ExecutionAttemptFailureStage = 'execution_evidence_assessment' | 'external_control_validation' | 'sealed_prelaunch_validation' | 'live_execution' | 'execution_finalization'
+
+export function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, assessmentSha256: unknown, executionEvidence: readonly string[], failureStage: ExecutionAttemptFailureStage, cause: unknown): Readonly<Record<string, unknown>> {
+  const currentEvidence = preexistingExecutionEvidence(root)
+  const combinedEvidence = deepFreeze([...new Set([...executionEvidence, ...currentEvidence])].sort())
+  const unverifiedLiveIo = combinedEvidence.length > 0
   const unsigned = {
     schema_id: 'oracle-lab-p3b-execution-attempt-failure.v1',
     evidence_root: root,
@@ -456,7 +460,7 @@ function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string
     epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     failure_stage: failureStage,
     cause_code: executionAttemptFailureCode(cause),
-    preexisting_execution_evidence: executionEvidence,
+    preexisting_execution_evidence: combinedEvidence,
     consumption_status: unverifiedLiveIo ? 'UNKNOWN_OR_CONSUMED' : 'NOT_CONSUMED',
     epoch_consumed: unverifiedLiveIo ? null : false,
     receiver_binds: unverifiedLiveIo ? null : 0,
@@ -512,16 +516,10 @@ export function assertExternalMatchesSealed(root: string, authorityPath: string,
   if (sealedInput.operator_authority_path !== authorityPath || sealedInput.campaign_input_path !== inputPath || sealedInput.evidence_root !== evidenceRoot) throw new Phase3BProductionError('fixed_path_invalid', 'CLI paths do not match the sealed namespace tuple')
 }
 
-async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<string, unknown>>, assessment: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> {
+async function executeAndFinalizeClaimedCampaign(evidenceRoot: string, claim: Readonly<Record<string, unknown>>, assessment: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
-  let prepared: Readonly<{
-    input: SealedCampaignInput
-    authority: SealedOperatorAuthority
-    ledger: ReturnType<typeof validateCampaignLedger>
-    images: Readonly<{ original: LaunchImageRecord; probe: LaunchImageRecord }>
-    controller: ReturnType<typeof createProductionController>
-    store: ReturnType<typeof openExecutionStore>
-  }>
+  let failureStage: ExecutionAttemptFailureStage = 'sealed_prelaunch_validation'
+  let attemptFailureSealed = false
   try {
     const { input, authority } = loadSealedControl(root)
     const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
@@ -537,45 +535,50 @@ async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<
     sealControllerNamespace(controller)
     const store = openExecutionStore(root, ledger)
     if (readExecutionReceipts(store).length !== 0) throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode never resumes a partial namespace')
-    prepared = { input, authority, ledger, images, controller, store }
+    failureStage = 'live_execution'
+    for (const row of ledger.rows) {
+      let receiver: ReceiverAuthority | null = null
+      let launchAuthority: LaunchAuthorityReceipt | null = null
+      try {
+        if (row.sequence_index === 20) sealTargetControlTranche(root)
+        receiver = await bindReceiverGroup(controller, row)
+        const image: LaunchImageRecord = row.selected_executable_class === 'original_image' ? images.original : images.probe
+        launchAuthority = deriveLaunchAuthority({ controller, store, row, receiver_authority: receiver, launch_image: image })
+        const result = await executeProductionRow({ controller, store, row, receiver, authority: launchAuthority, image })
+        if (result.terminal_class !== 'success') break
+      } catch (error: unknown) {
+        if (receiver) await abortReceiverGroup(receiver)
+        const receipts = readExecutionReceipts(store)
+        const started = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'started')
+        const terminal = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'terminal')
+        if (started && !terminal && launchAuthority) appendTerminal(store, row, launchAuthority, { terminalClass: 'spawn_error', exitCode: null, signal: null, causeCode: 'runner_ownership_failure' })
+        else if (terminal?.terminal_class === 'success' && readCampaignFailure(store) === null) sealPostTerminalFailure(store, row, error)
+        else if (!started) sealPreSpawnFailure(store, row, error)
+        break
+      }
+    }
+    const campaignFailure = readCampaignFailure(store)
+    if (campaignFailure !== null) {
+      sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'live_execution', new Phase3BProductionError(String(campaignFailure.failure_family), 'sealed campaign execution reached a terminal failure'))
+      attemptFailureSealed = true
+    }
+    failureStage = 'execution_finalization'
+    const receipts = readExecutionReceipts(store)
+    const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, execution_attempt_claim_sha256: claim.claim_sha256, execution_evidence_assessment_sha256: assessment.assessment_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: receipts.filter((row) => row.state === 'terminal' && row.terminal_class === 'success').length === 340 }
+    const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
+    writeExclusiveCanonical(root, 'execution-result.json', result)
+    return result
   } catch (error: unknown) {
-    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'sealed_prelaunch_validation', error)
+    if (!attemptFailureSealed) sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], failureStage, error)
     throw error
   }
-  const { authority, ledger, images, controller, store } = prepared
-  for (const row of ledger.rows) {
-    let receiver: ReceiverAuthority | null = null
-    let launchAuthority: LaunchAuthorityReceipt | null = null
-    try {
-      if (row.sequence_index === 20) sealTargetControlTranche(root)
-      receiver = await bindReceiverGroup(controller, row)
-      const image: LaunchImageRecord = row.selected_executable_class === 'original_image' ? images.original : images.probe
-      launchAuthority = deriveLaunchAuthority({ controller, store, row, receiver_authority: receiver, launch_image: image })
-      const result = await executeProductionRow({ controller, store, row, receiver, authority: launchAuthority, image })
-      if (result.terminal_class !== 'success') break
-    } catch (error: unknown) {
-      if (receiver) await abortReceiverGroup(receiver)
-      const receipts = readExecutionReceipts(store)
-      const started = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'started')
-      const terminal = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'terminal')
-      if (started && !terminal && launchAuthority) appendTerminal(store, row, launchAuthority, { terminalClass: 'spawn_error', exitCode: null, signal: null, causeCode: 'runner_ownership_failure' })
-      else if (terminal?.terminal_class === 'success' && readCampaignFailure(store) === null) sealPostTerminalFailure(store, row, error)
-      else if (!started) sealPreSpawnFailure(store, row, error)
-      break
-    }
-  }
-  const receipts = readExecutionReceipts(store)
-  const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: receipts.filter((row) => row.state === 'terminal' && row.terminal_class === 'success').length === 340 }
-  const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
-  writeExclusiveCanonical(root, 'execution-result.json', result)
-  return result
 }
 
 export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const claim = claimExecutionAttempt(root)
   const assessment = sealExecutionEvidenceAssessment(root, claim)
-  return runClaimedExecution(root, claim, assessment)
+  return executeAndFinalizeClaimedCampaign(root, claim, assessment)
 }
 
 export async function runExecuteFromExternalSealedPrelaunch(evidenceRoot: string, authorityPath: string, inputPath: string): Promise<Readonly<Record<string, unknown>>> {
@@ -586,7 +589,7 @@ export async function runExecuteFromExternalSealedPrelaunch(evidenceRoot: string
     sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'external_control_validation', error)
     throw error
   }
-  return runClaimedExecution(root, claim, assessment)
+  return executeAndFinalizeClaimedCampaign(root, claim, assessment)
 }
 
 async function waitForExternalCanonical(file: string, timeoutMs = 180_000): Promise<Record<string, unknown>> {

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { runExecuteFromSealedPrelaunch } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
+import { runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
@@ -203,6 +203,33 @@ test('RED: orphaned failure control cannot mask the new terminal claim', async (
   assert.equal(claim.terminal_status_at_claim, 'CLOSED_UNVERIFIED_CONTROL_STATE')
   assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
   await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: failure sealing rechecks live evidence created after the initial assessment', () => {
+  const root = privateRoot('p3b-execution-late-evidence-')
+  createPrivateDirectory(root, 'control')
+  createPrivateDirectory(root, 'receiver-authorities')
+
+  const failure = sealExecutionAttemptFailure(
+    root,
+    { claim_sha256: 'a'.repeat(64) },
+    'b'.repeat(64),
+    [],
+    'external_control_validation',
+    Object.assign(new Error('late failure'), { code: 'EIO' }),
+  )
+
+  assert.deepEqual(failure.preexisting_execution_evidence, ['receiver-authorities'])
+  assert.equal(failure.consumption_status, 'UNKNOWN_OR_CONSUMED')
+  assert.equal(failure.epoch_consumed, null)
+  assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [null, null, null])
+  assert.equal(failure.terminal_status, 'CLOSED_UNVERIFIED_LIVE_IO_STATE')
+})
+
+test('RED: claimed live execution and finalization share one terminal failure boundary', () => {
+  const source = readFileSync(new URL('../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.ts', import.meta.url), 'utf8')
+  assert.match(source, /async function executeAndFinalizeClaimedCampaign\([^]*catch \(error: unknown\) \{[^]*sealExecutionAttemptFailure\(/)
+  assert.match(source, /readCampaignFailure\(store\)[^]*sealExecutionAttemptFailure\([^]*'live_execution'/)
 })
 
 test('pre-spawn first failure closes all 340 rows from sealed state without caller counts', () => {
