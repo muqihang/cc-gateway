@@ -5,9 +5,9 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { canonicalBytes, canonicalJson, sha256Bytes } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { main as admissionMain, sealPreEpochAdmissionReceiptAt } from '../tools/oracle-lab/phase3b-evidence-sufficiency/pre-epoch-admission-cli.js'
-import { evaluatePreEpochAdmission, PRE_EPOCH_ADMISSION_AUTHORITY, type PreEpochAdmissionAuthority, type PreEpochAdmissionInput } from '../tools/oracle-lab/phase3b-evidence-sufficiency/pre-epoch-admission.js'
+import { classifyPhase3BCampaignAttempt, evaluatePreEpochAdmission, PRE_EPOCH_ADMISSION_AUTHORITY, type Phase3BCampaignAttemptCounters, type PreEpochAdmissionAuthority, type PreEpochAdmissionInput } from '../tools/oracle-lab/phase3b-evidence-sufficiency/pre-epoch-admission.js'
 import { verifyGithubWebFlowCommit } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const CONFIG_AUTH = '{"conclusion_id":"CL-P3A-R2-CONFIG-AUTH","contradicting_artifact_ids":[],"dynamic_reproduction":{"control_run_ids":["closure-r2-config-v2-control"],"run_ids":["closure-r2-config-v2","closure-r2-auth-v1","closure-r2-auth-co-v2"],"source_count":2},"expiry":"2026-08-03T00:00:00.000Z","level":"Reproduced","negative_capabilities":[],"phase3b_usable":true,"platform_limits":["darwin-arm64 only","synthetic loopback observers only"],"prohibited_claims":["CL-LOCAL-EVIDENCE-PRODUCTION-PROHIBITED"],"schema_version":"oracle-lab-phase3a-conclusion.v1","scope":"claude-code-2.1.215 darwin-arm64 synthetic loopback fixtures","single_source_reason":null,"statement":"Config precedence and placeholder credential lifecycle were stable in the bounded local campaign.","static_anchor":{"artifact_digest":"90608b5c5ab504e96e77365cea6203d046e291d59b2bb42cf28dcb2ccdf9dd58","location":"P3A-1 bounded static inventory and extracted indexes","reproduction_command_digest":"cc30442a88516f17aefbdae360e0f00ceaa53429d68e02d0848f34c5a230a555"},"supporting_artifact_ids":["p3a2-closure-config","p3a2-closure-auth-primary","p3a2-closure-auth-supplement","p3a2-closure-coverage-v8"]}\n'
@@ -123,12 +123,89 @@ test('RED: checked-in pre-epoch evaluator seals canonical PASS without consuming
   assert.equal(sealed.decision, 'PASS')
   assert.equal(sealed.epoch_consumed, false)
   assert.equal(sealed.signer_starts, 0)
+  assert.equal(sealed.consumption_boundary, 'first_live_campaign_io')
+  assert.equal(typeof sealed.epoch_policy_sha256, 'string')
+  assert.equal(sealed.attempt_state, 'PREPARING')
+  assert.equal(typeof sealed.attempt_state_sha256, 'string')
   const receiptBytes = readFileSync(String(value.input.receipt_path))
   assert.equal(sealed.receipt_raw_sha256, sha256Bytes(receiptBytes))
   const output = JSON.parse(receiptBytes.subarray(0, -1).toString('utf8')) as Record<string, unknown>
   assert.deepEqual(canonicalBytes(output), receiptBytes.subarray(0, -1))
   assert.equal(output.output_sha256, sha256Bytes(canonicalBytes(Object.fromEntries(Object.entries(output).filter(([key]) => key !== 'output_sha256')))))
+  assert.deepEqual(output.epoch_policy, {
+    schema_id: 'oracle-lab-p3b-epoch-consumption-policy.v1',
+    consumption_boundary: 'first_live_campaign_io',
+    live_campaign_io_counters: ['receiver_binds', 'target_launches', 'sockets'],
+    before_boundary_failure: 'close_preparation_attempt_and_allow_fresh_preparation',
+    after_boundary_failure: 'close_consumed_campaign_and_require_root_cause_review_and_fresh_admission',
+    automatic_retry: false,
+    same_attempt_resume: false,
+    evidence_retention: 'append_only',
+  })
+  assert.equal(output.epoch_policy_sha256, sha256Canonical(output.epoch_policy))
+  assert.equal((output.attempt_state as Record<string, unknown>).state, 'PREPARING')
+  assert.equal((output.attempt_state as Record<string, unknown>).fresh_preparation_allowed, true)
+  assert.equal(output.attempt_state_sha256, (output.attempt_state as Record<string, unknown>).attempt_state_sha256)
   assert.deepEqual(readdirSync(value.container), before)
+})
+
+function attemptCounters(overrides: Partial<Phase3BCampaignAttemptCounters> = {}): Phase3BCampaignAttemptCounters {
+  return {
+    campaign_id_generated: 0, signer_starts: 0, signer_signatures: 0, materializer_runs: 0, attestation_writes: 0, authority_writes: 0,
+    official_namespaces: 0, prelaunches: 0, receiver_binds: 0, target_launches: 0, sockets: 0, ...overrides,
+  }
+}
+
+test('RED: preparation and sealed failures allow only a fresh attempt before live campaign I/O', () => {
+  const preparing = classifyPhase3BCampaignAttempt(attemptCounters({ campaign_id_generated: 1, signer_starts: 2, signer_signatures: 2, materializer_runs: 1, attestation_writes: 2, authority_writes: 1 }))
+  assert.equal(preparing.state, 'PREPARING')
+  assert.equal(preparing.epoch_consumed, false)
+  assert.equal(preparing.fresh_preparation_allowed, true)
+  assert.equal(preparing.same_attempt_resume_allowed, false)
+  assert.equal(preparing.automatic_retry_allowed, false)
+  assert.equal(preparing.failure_disposition, 'close_attempt_and_start_fresh_preparation')
+
+  const sealed = classifyPhase3BCampaignAttempt(attemptCounters({ campaign_id_generated: 1, signer_starts: 2, signer_signatures: 2, materializer_runs: 1, attestation_writes: 2, authority_writes: 1, official_namespaces: 1, prelaunches: 1 }))
+  assert.equal(sealed.state, 'SEALED')
+  assert.equal(sealed.epoch_consumed, false)
+  assert.equal(sealed.fresh_preparation_allowed, true)
+  assert.equal(sealed.same_attempt_resume_allowed, false)
+})
+
+test('RED: the first live campaign I/O consumes the epoch and restores fail-stop', () => {
+  const base = { campaign_id_generated: 1, signer_starts: 2, signer_signatures: 2, materializer_runs: 1, attestation_writes: 2, authority_writes: 1, official_namespaces: 1, prelaunches: 1 }
+  for (const counter of ['receiver_binds', 'target_launches', 'sockets'] as const) {
+    const consumed = classifyPhase3BCampaignAttempt(attemptCounters({ ...base, [counter]: 1 }))
+    assert.equal(consumed.state, 'CONSUMED')
+    assert.equal(consumed.epoch_consumed, true)
+    assert.equal(consumed.fresh_preparation_allowed, false)
+    assert.equal(consumed.same_attempt_resume_allowed, false)
+    assert.equal(consumed.automatic_retry_allowed, false)
+    assert.equal(consumed.failure_disposition, 'root_cause_review_and_fresh_admission_required')
+  }
+})
+
+test('RED: impossible or caller-expanded attempt counters fail closed', () => {
+  assert.throws(() => classifyPhase3BCampaignAttempt(attemptCounters({ receiver_binds: 1 })), /lifecycle ordering/)
+  assert.throws(() => classifyPhase3BCampaignAttempt(attemptCounters({ campaign_id_generated: 1, official_namespaces: 1, prelaunches: 1, target_launches: 341 })), /fixed ceiling/)
+  assert.throws(() => classifyPhase3BCampaignAttempt({ ...attemptCounters(), retry: 1 }), /missing, unknown, or duplicated/)
+  assert.throws(() => classifyPhase3BCampaignAttempt(attemptCounters({ campaign_id_generated: -1 })), /non-negative safe integer/)
+})
+
+test('RED: the receipt sealer rejects substituted policy or consumed state before writing', () => {
+  for (const substitution of ['policy', 'state', 'counter'] as const) {
+    const value = fixture()
+    const prepared = evaluatePreEpochAdmission(value.input as PreEpochAdmissionInput, { authority: value.authority })
+    const changed: Record<string, unknown> = substitution === 'policy'
+      ? { ...prepared, epoch_policy: { ...(prepared.epoch_policy as Record<string, unknown>), automatic_retry: true } }
+      : substitution === 'state' ? {
+          ...prepared,
+          attempt_state: classifyPhase3BCampaignAttempt(attemptCounters({ campaign_id_generated: 1, authority_writes: 1, official_namespaces: 1, prelaunches: 1, receiver_binds: 1 })),
+        } : { ...prepared, signer_starts: 1 }
+    if (substitution === 'state') changed.attempt_state_sha256 = (changed.attempt_state as Record<string, unknown>).attempt_state_sha256
+    assert.throws(() => sealPreEpochAdmissionReceiptAt(value.input as PreEpochAdmissionInput, changed, Date.parse('2026-07-28T00:00:00.000Z')), /prepared epoch policy or campaign attempt state drifted/)
+    assert.equal(readdirSync(value.root).includes('admission-receipt.json'), false)
+  }
 })
 
 test('RED: admission rejects predecessor byte drift before epoch consumption', () => {
