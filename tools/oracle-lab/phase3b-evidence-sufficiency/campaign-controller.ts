@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync } from 'node:fs'
+import { chmodSync, lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { bindControllerRuntime, createProductionController, sealControllerNamespace } from './controller.js'
@@ -372,39 +372,71 @@ export function loadSealedControl(root: string): { input: SealedCampaignInput; a
   return { input, authority, registry }
 }
 
-const PREEXISTING_EXECUTION_MARKERS = ['execution-records', 'receiver-authorities', 'receiver-results', 'observations', 'launch-authorities', 'guards', 'cell-results', 'runs', 'campaign-failure.json', 'execution-result.json'] as const
+const PREEXISTING_EXECUTION_MARKERS = [
+  { relative: 'execution-records', mode: 'exists' },
+  { relative: 'receiver-authorities', mode: 'exists' },
+  { relative: 'launch-authorities', mode: 'exists' },
+  { relative: 'campaign-failure.json', mode: 'exists' },
+  { relative: 'execution-result.json', mode: 'exists' },
+  { relative: 'observations', mode: 'nonempty_directory' },
+  { relative: 'receiver-results', mode: 'nonempty_directory' },
+  { relative: 'runs', mode: 'nonempty_directory' },
+  { relative: 'guards', mode: 'nonempty_directory' },
+  { relative: 'cell-results', mode: 'nonempty_directory' },
+] as const
+const PREEXISTING_CONTROL_MARKERS = ['control/execution-attempt-failure.json', 'control/execution-evidence-assessment.json'] as const
+
+function existingMarkers(root: string, relatives: readonly string[]): readonly string[] {
+  const evidence: string[] = []
+  for (const relative of relatives) {
+    try { lstatSync(resolveContained(root, relative)); evidence.push(relative) } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  return deepFreeze(evidence)
+}
 
 function preexistingExecutionEvidence(root: string): readonly string[] {
-  return PREEXISTING_EXECUTION_MARKERS.filter((relative) => {
-    try { lstatSync(resolveContained(root, relative)); return true } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+  const evidence: string[] = []
+  for (const marker of PREEXISTING_EXECUTION_MARKERS) {
+    const absolute = resolveContained(root, marker.relative)
+    try {
+      const stat = lstatSync(absolute)
+      if (stat.isSymbolicLink() || (marker.mode === 'nonempty_directory' && !stat.isDirectory())) evidence.push(`${marker.relative}:invalid`)
+      else if (marker.mode === 'exists' || readdirSync(absolute).length > 0) evidence.push(marker.relative)
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
       throw error
     }
-  })
+  }
+  return deepFreeze(evidence)
 }
 
 function claimExecutionAttempt(root: string): Readonly<Record<string, unknown>> {
-  const preexistingEvidence = preexistingExecutionEvidence(root)
-  const unverifiedLiveIo = preexistingEvidence.length > 0
+  const preexistingControlEvidence = existingMarkers(root, PREEXISTING_CONTROL_MARKERS)
+  const blocked = preexistingControlEvidence.length > 0
   const unsigned = {
     schema_id: 'oracle-lab-p3b-execution-attempt-claim.v1',
     evidence_root: root,
     epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     consumption_boundary: PHASE3B_EPOCH_CONSUMPTION_POLICY.consumption_boundary,
-    attempt_state_at_claim: unverifiedLiveIo ? 'UNVERIFIED_PREEXISTING_EXECUTION_EVIDENCE' : 'SEALED',
-    preexisting_execution_evidence: preexistingEvidence,
-    epoch_consumed_at_claim: unverifiedLiveIo ? null : false,
-    receiver_binds_at_claim: unverifiedLiveIo ? null : 0,
-    target_launches_at_claim: unverifiedLiveIo ? null : 0,
-    sockets_at_claim: unverifiedLiveIo ? null : 0,
+    attempt_state_at_claim: blocked ? 'BLOCKED_PREEXISTING_CONTROL_EVIDENCE' : 'UNVERIFIED',
+    preexisting_control_evidence: preexistingControlEvidence,
+    epoch_consumed_at_claim: null,
+    receiver_binds_at_claim: null,
+    target_launches_at_claim: null,
+    sockets_at_claim: null,
     same_attempt_resume_allowed: false,
     automatic_retry_allowed: false,
+    failure_disposition_at_claim: blocked ? 'root_cause_review_and_fresh_admission_required' : null,
+    terminal_status_at_claim: blocked ? 'CLOSED_UNVERIFIED_CONTROL_STATE' : null,
   }
   const claim = deepFreeze({ ...unsigned, claim_sha256: sha256Canonical(unsigned) })
   try { writeExclusiveCanonical(root, 'control/execution-attempt.json', claim) } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode may be invoked only once for a sealed namespace')
     throw error
   }
+  if (blocked) throw new Phase3BProductionError('execution_control_evidence_preexisting', 'preexisting unbound execution control evidence requires root-cause review and fresh admission')
   return claim
 }
 
@@ -414,15 +446,17 @@ function executionAttemptFailureCode(cause: unknown): string {
   return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `filesystem_${code.toLowerCase()}` : 'campaign_execution_failure'
 }
 
-function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, failureStage: 'external_control_validation' | 'sealed_prelaunch_validation', cause: unknown): Readonly<Record<string, unknown>> {
-  const unverifiedLiveIo = Array.isArray(claim.preexisting_execution_evidence) && claim.preexisting_execution_evidence.length > 0
+function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, assessmentSha256: unknown, executionEvidence: readonly string[], failureStage: 'execution_evidence_assessment' | 'external_control_validation' | 'sealed_prelaunch_validation', cause: unknown): Readonly<Record<string, unknown>> {
+  const unverifiedLiveIo = executionEvidence.length > 0
   const unsigned = {
     schema_id: 'oracle-lab-p3b-execution-attempt-failure.v1',
     evidence_root: root,
     execution_attempt_claim_sha256: claim.claim_sha256,
+    execution_evidence_assessment_sha256: assessmentSha256,
     epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     failure_stage: failureStage,
     cause_code: executionAttemptFailureCode(cause),
+    preexisting_execution_evidence: executionEvidence,
     consumption_status: unverifiedLiveIo ? 'UNKNOWN_OR_CONSUMED' : 'NOT_CONSUMED',
     epoch_consumed: unverifiedLiveIo ? null : false,
     receiver_binds: unverifiedLiveIo ? null : 0,
@@ -438,6 +472,33 @@ function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string
   return failure
 }
 
+function sealExecutionEvidenceAssessment(root: string, claim: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const before = preexistingExecutionEvidence(root)
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-execution-evidence-assessment.v1',
+    evidence_root: root,
+    execution_attempt_claim_sha256: claim.claim_sha256,
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    preexisting_execution_evidence: before,
+    status: before.length === 0 ? 'CLEAR' : 'BLOCKED',
+  }
+  const assessment = deepFreeze({ ...unsigned, assessment_sha256: sha256Canonical(unsigned) })
+  writeExclusiveCanonical(root, 'control/execution-evidence-assessment.json', assessment)
+  const after = preexistingExecutionEvidence(root)
+  if (sha256Canonical(after) !== sha256Canonical(before)) {
+    const combined = deepFreeze([...new Set([...before, ...after])].sort())
+    const error = new Phase3BProductionError('execution_evidence_drift', 'execution evidence changed across the sealed assessment')
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, combined, 'execution_evidence_assessment', error)
+    throw error
+  }
+  if (before.length > 0) {
+    const error = new Phase3BProductionError('execution_evidence_preexisting', 'preexisting execution evidence requires root-cause review and fresh admission')
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, before, 'execution_evidence_assessment', error)
+    throw error
+  }
+  return assessment
+}
+
 export function assertExternalMatchesSealed(root: string, authorityPath: string, inputPath: string): void {
   const evidenceRoot = assertPrivateRuntimeRoot(root)
   if (path.basename(authorityPath) !== 'phase3b-operator-authority.json' || path.basename(inputPath) !== 'phase3b-campaign-input.json') throw new Phase3BProductionError('fixed_path_invalid', 'authority and input basenames are fixed')
@@ -451,7 +512,7 @@ export function assertExternalMatchesSealed(root: string, authorityPath: string,
   if (sealedInput.operator_authority_path !== authorityPath || sealedInput.campaign_input_path !== inputPath || sealedInput.evidence_root !== evidenceRoot) throw new Phase3BProductionError('fixed_path_invalid', 'CLI paths do not match the sealed namespace tuple')
 }
 
-async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> {
+async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<string, unknown>>, assessment: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   let prepared: Readonly<{
     input: SealedCampaignInput
@@ -478,7 +539,7 @@ async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<
     if (readExecutionReceipts(store).length !== 0) throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode never resumes a partial namespace')
     prepared = { input, authority, ledger, images, controller, store }
   } catch (error: unknown) {
-    sealExecutionAttemptFailure(root, claim, 'sealed_prelaunch_validation', error)
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'sealed_prelaunch_validation', error)
     throw error
   }
   const { authority, ledger, images, controller, store } = prepared
@@ -513,17 +574,19 @@ async function runClaimedExecution(evidenceRoot: string, claim: Readonly<Record<
 export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const claim = claimExecutionAttempt(root)
-  return runClaimedExecution(root, claim)
+  const assessment = sealExecutionEvidenceAssessment(root, claim)
+  return runClaimedExecution(root, claim, assessment)
 }
 
 export async function runExecuteFromExternalSealedPrelaunch(evidenceRoot: string, authorityPath: string, inputPath: string): Promise<Readonly<Record<string, unknown>>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const claim = claimExecutionAttempt(root)
+  const assessment = sealExecutionEvidenceAssessment(root, claim)
   try { assertExternalMatchesSealed(root, authorityPath, inputPath) } catch (error: unknown) {
-    sealExecutionAttemptFailure(root, claim, 'external_control_validation', error)
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'external_control_validation', error)
     throw error
   }
-  return runClaimedExecution(root, claim)
+  return runClaimedExecution(root, claim, assessment)
 }
 
 async function waitForExternalCanonical(file: string, timeoutMs = 180_000): Promise<Record<string, unknown>> {

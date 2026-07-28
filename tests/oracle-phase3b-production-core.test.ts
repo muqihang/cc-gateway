@@ -108,7 +108,7 @@ test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', 
 
 test('RED: execute mode claims a sealed namespace before fallible validation and rejects re-entry', async () => {
   const root = privateRoot('p3b-execution-attempt-claim-')
-  createPrivateDirectory(root, 'control')
+  for (const directory of ['control', 'prelaunch', 'observations', 'receiver-results', 'runs', 'guards', 'cell-results']) createPrivateDirectory(root, directory)
 
   await assert.rejects(runExecuteFromSealedPrelaunch(root))
   const claim = readCanonical(root, 'control/execution-attempt.json').value
@@ -117,17 +117,24 @@ test('RED: execute mode claims a sealed namespace before fallible validation and
   assert.equal(claim.consumption_boundary, 'first_live_campaign_io')
   assert.equal(claim.same_attempt_resume_allowed, false)
   assert.equal(claim.automatic_retry_allowed, false)
-  assert.equal(claim.attempt_state_at_claim, 'SEALED')
-  assert.deepEqual(claim.preexisting_execution_evidence, [])
-  assert.equal(claim.epoch_consumed_at_claim, false)
-  assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [0, 0, 0])
+  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED')
+  assert.deepEqual(claim.preexisting_control_evidence, [])
+  assert.equal(claim.epoch_consumed_at_claim, null)
+  assert.deepEqual([claim.receiver_binds_at_claim, claim.target_launches_at_claim, claim.sockets_at_claim], [null, null, null])
   assert.equal(typeof claim.epoch_policy_sha256, 'string')
   assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
+  assert.equal(assessment.status, 'CLEAR')
+  assert.deepEqual(assessment.preexisting_execution_evidence, [])
+  assert.equal(assessment.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(assessment.assessment_sha256, sha256Canonical(Object.fromEntries(Object.entries(assessment).filter(([key]) => key !== 'assessment_sha256'))))
   const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
   assert.equal(failure.schema_id, 'oracle-lab-p3b-execution-attempt-failure.v1')
   assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
+  assert.equal(failure.execution_evidence_assessment_sha256, assessment.assessment_sha256)
   assert.equal(failure.failure_stage, 'sealed_prelaunch_validation')
   assert.equal(failure.cause_code, 'filesystem_enoent')
+  assert.deepEqual(failure.preexisting_execution_evidence, [])
   assert.equal(failure.terminal_status, 'CLOSED_BEFORE_LIVE_IO')
   assert.equal(failure.failure_disposition, 'close_attempt_and_start_fresh_preparation')
   assert.equal(failure.failure_sha256, sha256Canonical(Object.fromEntries(Object.entries(failure).filter(([key]) => key !== 'failure_sha256'))))
@@ -144,7 +151,9 @@ test('RED: real execute CLI claims and closes before fallible external validatio
 
   await assert.rejects(campaignMain(args), (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
   const claim = readCanonical(root, 'control/execution-attempt.json').value
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
   const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(assessment.status, 'CLEAR')
   assert.equal(failure.execution_attempt_claim_sha256, claim.claim_sha256)
   assert.equal(failure.failure_stage, 'external_control_validation')
   assert.equal(failure.cause_code, 'filesystem_enoent')
@@ -159,18 +168,40 @@ test('RED: preexisting execution evidence can never be closed as zero live I/O',
   const root = privateRoot('p3b-execution-preexisting-')
   createPrivateDirectory(root, 'control')
   createPrivateDirectory(root, 'execution-records')
+  createPrivateDirectory(root, 'observations')
+  writeExclusiveCanonical(root, 'observations/stale.json', { schema_id: 'stale-execution-evidence.v1' })
 
-  await assert.rejects(runExecuteFromSealedPrelaunch(root))
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_evidence_preexisting')
   const claim = readCanonical(root, 'control/execution-attempt.json').value
-  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED_PREEXISTING_EXECUTION_EVIDENCE')
-  assert.deepEqual(claim.preexisting_execution_evidence, ['execution-records'])
+  assert.equal(claim.attempt_state_at_claim, 'UNVERIFIED')
   assert.equal(claim.epoch_consumed_at_claim, null)
+  const assessment = readCanonical(root, 'control/execution-evidence-assessment.json').value
+  assert.equal(assessment.status, 'BLOCKED')
+  assert.deepEqual(assessment.preexisting_execution_evidence, ['execution-records', 'observations'])
   const failure = readCanonical(root, 'control/execution-attempt-failure.json').value
+  assert.equal(failure.failure_stage, 'execution_evidence_assessment')
+  assert.equal(failure.cause_code, 'execution_evidence_preexisting')
+  assert.deepEqual(failure.preexisting_execution_evidence, ['execution-records', 'observations'])
   assert.equal(failure.consumption_status, 'UNKNOWN_OR_CONSUMED')
   assert.equal(failure.epoch_consumed, null)
   assert.deepEqual([failure.receiver_binds, failure.target_launches, failure.sockets], [null, null, null])
   assert.equal(failure.failure_disposition, 'root_cause_review_and_fresh_admission_required')
   assert.equal(failure.terminal_status, 'CLOSED_UNVERIFIED_LIVE_IO_STATE')
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
+})
+
+test('RED: orphaned failure control cannot mask the new terminal claim', async () => {
+  const root = privateRoot('p3b-execution-orphaned-control-')
+  createPrivateDirectory(root, 'control')
+  writeExclusiveCanonical(root, 'control/execution-attempt-failure.json', { schema_id: 'malformed-orphan.v1' })
+
+  await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_control_evidence_preexisting')
+  const claim = readCanonical(root, 'control/execution-attempt.json').value
+  assert.equal(claim.attempt_state_at_claim, 'BLOCKED_PREEXISTING_CONTROL_EVIDENCE')
+  assert.deepEqual(claim.preexisting_control_evidence, ['control/execution-attempt-failure.json'])
+  assert.equal(claim.failure_disposition_at_claim, 'root_cause_review_and_fresh_admission_required')
+  assert.equal(claim.terminal_status_at_claim, 'CLOSED_UNVERIFIED_CONTROL_STATE')
+  assert.equal(claim.claim_sha256, sha256Canonical(Object.fromEntries(Object.entries(claim).filter(([key]) => key !== 'claim_sha256'))))
   await assert.rejects(runExecuteFromSealedPrelaunch(root), (error: Error & { code?: string }) => error.code === 'execution_resume_forbidden')
 })
 
