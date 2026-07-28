@@ -55,6 +55,47 @@ export const PRE_EPOCH_ADMISSION_AUTHORITY: PreEpochAdmissionAuthority = deepFre
   predecessors: PREDECESSOR_AUTHORITY.conclusions,
 })
 
+export const PHASE3B_EPOCH_CONSUMPTION_POLICY = deepFreeze({
+  schema_id: 'oracle-lab-p3b-epoch-consumption-policy.v1',
+  consumption_boundary: 'first_live_campaign_io',
+  live_campaign_io_counters: ['receiver_binds', 'target_launches', 'sockets'],
+  before_boundary_failure: 'close_preparation_attempt_and_allow_fresh_preparation',
+  after_boundary_failure: 'close_consumed_campaign_and_require_root_cause_review_and_fresh_admission',
+  automatic_retry: false,
+  same_attempt_resume: false,
+  evidence_retention: 'append_only',
+})
+
+export const PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256 = sha256Canonical(PHASE3B_EPOCH_CONSUMPTION_POLICY)
+
+const CAMPAIGN_ATTEMPT_COUNTER_KEYS = ['campaign_id_generated', 'signer_starts', 'signer_signatures', 'materializer_runs', 'attestation_writes', 'authority_writes', 'official_namespaces', 'prelaunches', 'receiver_binds', 'target_launches', 'sockets'] as const
+
+export type Phase3BCampaignAttemptCounters = Readonly<Record<(typeof CAMPAIGN_ATTEMPT_COUNTER_KEYS)[number], number>>
+
+export function classifyPhase3BCampaignAttempt(value: unknown): Readonly<Record<string, unknown>> {
+  assertExactKeys(value, CAMPAIGN_ATTEMPT_COUNTER_KEYS, 'epoch_policy_invalid')
+  const counters = value as Phase3BCampaignAttemptCounters
+  for (const key of CAMPAIGN_ATTEMPT_COUNTER_KEYS) if (!Number.isSafeInteger(counters[key]) || counters[key] < 0) throw new Phase3BProductionError('epoch_policy_invalid', `${key} must be a non-negative safe integer`)
+  if (counters.campaign_id_generated > 1 || counters.materializer_runs > 1 || counters.authority_writes > 1 || counters.official_namespaces > 1 || counters.prelaunches > 1 || counters.target_launches > 340) throw new Phase3BProductionError('epoch_policy_invalid', 'campaign attempt counters exceed their fixed ceiling')
+  const laterActivity = CAMPAIGN_ATTEMPT_COUNTER_KEYS.slice(1).some((key) => counters[key] > 0)
+  const liveIo = counters.receiver_binds > 0 || counters.target_launches > 0 || counters.sockets > 0
+  if ((laterActivity && counters.campaign_id_generated !== 1) || (counters.prelaunches > 0 && counters.official_namespaces !== 1) || (liveIo && (counters.authority_writes !== 1 || counters.official_namespaces !== 1 || counters.prelaunches !== 1))) throw new Phase3BProductionError('epoch_policy_invalid', 'campaign attempt counters violate lifecycle ordering')
+  const state = liveIo ? 'CONSUMED' : counters.official_namespaces > 0 || counters.prelaunches > 0 ? 'SEALED' : 'PREPARING'
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-campaign-attempt-state.v1',
+    state,
+    counters,
+    counters_sha256: sha256Canonical(counters),
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    epoch_consumed: state === 'CONSUMED',
+    fresh_preparation_allowed: state !== 'CONSUMED',
+    same_attempt_resume_allowed: false,
+    automatic_retry_allowed: false,
+    failure_disposition: state === 'CONSUMED' ? 'root_cause_review_and_fresh_admission_required' : 'close_attempt_and_start_fresh_preparation',
+  }
+  return deepFreeze({ ...unsigned, attempt_state_sha256: sha256Canonical(unsigned) })
+}
+
 function assertNormalizedAbsolute(value: unknown, field: string): asserts value is string {
   if (typeof value !== 'string' || !path.isAbsolute(value) || path.normalize(value) !== value) throw new Phase3BProductionError('pre_epoch_admission_input_invalid', `${field} must be a normalized absolute path`)
 }
@@ -150,11 +191,20 @@ export function evaluatePreEpochAdmission(input: PreEpochAdmissionInput, options
   const campaignContainer = inspectEmptyContainer(input.campaign_container, options.hooks?.after_container_open)
   const cc = validateCc(input, authority)
   if (sha256Canonical(initialCc) !== sha256Canonical(cc)) throw new Phase3BProductionError('pre_epoch_repository_invalid', 'CC state changed across admission validation')
+  const counters: Phase3BCampaignAttemptCounters = {
+    campaign_id_generated: 0, signer_starts: 0, signer_signatures: 0, materializer_runs: 0, attestation_writes: 0, authority_writes: 0,
+    official_namespaces: 0, prelaunches: 0, receiver_binds: 0, target_launches: 0, sockets: 0,
+  }
+  const attemptState = classifyPhase3BCampaignAttempt(counters)
   return deepFreeze({
     schema_id: 'oracle-lab-p3b-pre-epoch-admission-prepared.v1', predecessor_expiry: authority.predecessor_expiry,
     admission_input_sha256: sha256Canonical(input), admission_authority_sha256: sha256Canonical(authority),
+    epoch_policy: PHASE3B_EPOCH_CONSUMPTION_POLICY, epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
     cc, sub, predecessors, campaign_container: campaignContainer,
-    epoch_consumed: false, campaign_id_generated: false, signer_starts: 0, signer_signatures: 0, materializer_runs: 0,
-    attestation_writes: 0, authority_writes: 0, official_namespaces: 0, prelaunches: 0, receiver_binds: 0, target_launches: 0, sockets: 0,
+    attempt_state: attemptState, attempt_state_sha256: attemptState.attempt_state_sha256,
+    epoch_consumed: false, campaign_id_generated: false, signer_starts: counters.signer_starts, signer_signatures: counters.signer_signatures,
+    materializer_runs: counters.materializer_runs, attestation_writes: counters.attestation_writes, authority_writes: counters.authority_writes,
+    official_namespaces: counters.official_namespaces, prelaunches: counters.prelaunches, receiver_binds: counters.receiver_binds,
+    target_launches: counters.target_launches, sockets: counters.sockets,
   })
 }
