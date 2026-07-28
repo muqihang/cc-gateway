@@ -7,8 +7,8 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
-import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
+import { SUPPORT_PATHS, deriveCuration, predecessorSupportSourceSha256, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
@@ -42,7 +42,7 @@ function close(server: Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()))
 }
 
-test('prelaunch accepts exact digest-bound canonical Phase 3A predecessor bytes without LF', () => {
+test('prelaunch and conclusion support preserve exact digest-bound Phase 3A bytes without LF', () => {
   const root = privateRoot('p3b-predecessor-transport-')
   const file = path.join(root, 'phase3a-conclusion.json')
   const conclusion = { conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', level: 'Reproduced', phase3b_usable: true }
@@ -52,6 +52,14 @@ test('prelaunch accepts exact digest-bound canonical Phase 3A predecessor bytes 
   const record = readPredecessorConclusion(file, sha256Bytes(bytes))
   assert.deepEqual(record.value, conclusion)
   assert.equal(record.identity.sha256, sha256Bytes(bytes))
+
+  createPrivateDirectory(root, 'control')
+  sealPredecessorConclusion(root, 'control/predecessor-config-auth.json', file, record.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH')
+  const sealed = readCanonical(root, 'control/predecessor-config-auth.json')
+  assert.notEqual(sealed.identity.sha256, record.identity.sha256)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), record.identity.sha256)
+  assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), null)
+  assert.throws(() => predecessorSupportSourceSha256({ ...sealed.value, source_raw_sha256: 'f'.repeat(64) }, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'conclusion_support_invalid')
 
   const newlineFile = path.join(root, 'phase3a-conclusion-newline.json')
   const newlineBytes = Buffer.concat([bytes, Buffer.from('\n')])

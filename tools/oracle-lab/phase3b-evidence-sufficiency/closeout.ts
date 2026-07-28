@@ -56,6 +56,21 @@ function optionalCanonical(root: string, relative: string): { value: Record<stri
   }
 }
 
+export function predecessorSupportSourceSha256(value: Record<string, unknown>, sealedRawSha256: string, conclusionId: string, conclusionSha256: string): string | null {
+  if (value.schema_id === 'oracle-lab-p3b-predecessor-binding.v1') {
+    assertExactKeys(value, ['schema_id', 'conclusion_id', 'source_raw_sha256', 'normalized_conclusion_sha256', 'conclusion', 'binding_sha256'], 'conclusion_support_invalid')
+    assertDigestField(value, 'binding_sha256', 'conclusion_support_invalid')
+    assertSha256(value.source_raw_sha256, 'conclusion_support_invalid', 'predecessor source raw digest')
+    assertSha256(value.normalized_conclusion_sha256, 'conclusion_support_invalid', 'normalized predecessor digest')
+    const conclusion = value.conclusion
+    if (!conclusion || typeof conclusion !== 'object' || Array.isArray(conclusion) || value.normalized_conclusion_sha256 !== sha256Canonical(conclusion)) throw new Phase3BProductionError('conclusion_support_invalid', 'sealed predecessor normalization binding is invalid')
+    return value.conclusion_id === conclusionId && (conclusion as Record<string, unknown>).conclusion_id === conclusionId && value.source_raw_sha256 === conclusionSha256 ? conclusionSha256 : null
+  }
+  if (sealedRawSha256 === conclusionSha256) return conclusionSha256
+  if (value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && value.conclusion_id === conclusionId && value.conclusion_sha256 === conclusionSha256 && value.level === 'Reproduced') return conclusionSha256
+  return null
+}
+
 function inventoryNamespace(root: string): readonly ArtifactEntry[] {
   const entries: ArtifactEntry[] = []
   const walk = (relativeDirectory: string) => {
@@ -670,15 +685,14 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
   const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfigRecord = optionalCanonical(root, 'control/predecessor-config-auth.json')
   const predecessorFailureRecord = optionalCanonical(root, 'control/predecessor-failure-stream.json')
-  const predecessorConfig = predecessorConfigRecord?.entry
-  const predecessorFailure = predecessorFailureRecord?.entry
+  const predecessorConfigSha256 = predecessorConfigRecord ? predecessorSupportSourceSha256(predecessorConfigRecord.value, predecessorConfigRecord.entry.sha256, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH']) : null
+  const predecessorFailureSha256 = predecessorFailureRecord ? predecessorSupportSourceSha256(predecessorFailureRecord.value, predecessorFailureRecord.entry.sha256, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM']) : null
   const mappings = [
-    { predecessor_id: 'CL-P3A-R2-CONFIG-AUTH', predecessor_sha256: predecessorConfig?.sha256 ?? null, schedules: ledger.rows.filter((row) => row.family === 'config' || row.family === 'auth').map((row) => row.schedule_id) },
-    { predecessor_id: 'CL-P3A-R2-FAILURE-STREAM', predecessor_sha256: predecessorFailure?.sha256 ?? null, schedules: ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'] },
+    { predecessor_id: 'CL-P3A-R2-CONFIG-AUTH', predecessor_sha256: predecessorConfigSha256, schedules: ledger.rows.filter((row) => row.family === 'config' || row.family === 'auth').map((row) => row.schedule_id) },
+    { predecessor_id: 'CL-P3A-R2-FAILURE-STREAM', predecessor_sha256: predecessorFailureSha256, schedules: ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'] },
   ].map((mapping) => ({ ...mapping, schedules: [...new Set(mapping.schedules)].sort(utf8Compare), reproduced_schedule_ids: [...new Set(ledger.rows.filter((row) => mapping.schedules.includes(row.schedule_id) && fixtureRows[row.sequence_index].status === 'Reproduced').map((row) => row.schedule_id))].sort(utf8Compare) }))
-  const exactOrSignedTestAttestation = (record: ReturnType<typeof optionalCanonical>, conclusionId: string, conclusionSha256: string): boolean => record !== null && (record.entry.sha256 === conclusionSha256 || (record.value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && record.value.conclusion_id === conclusionId && record.value.conclusion_sha256 === conclusionSha256 && record.value.level === 'Reproduced'))
-  const predecessorPass = exactOrSignedTestAttestation(predecessorConfigRecord, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH']) && exactOrSignedTestAttestation(predecessorFailureRecord, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM']) && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
-  const predecessor = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings, predecessor_config_sha256: predecessorConfig?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'], predecessor_failure_stream_sha256: predecessorFailure?.sha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'], status: predecessorPass ? 'PASS' : 'INCOMPLETE' })
+  const predecessorPass = predecessorConfigSha256 === ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'] && predecessorFailureSha256 === ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'] && mappings.every((mapping) => sha256Canonical(mapping.schedules) === sha256Canonical(mapping.reproduced_schedule_ids))
+  const predecessor = supportRecord({ schema_id: 'oracle-lab-p3b-predecessor-semantic-comparison.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, predecessor_scope: ledger.predecessor.scope, mappings, predecessor_config_sha256: predecessorConfigSha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'], predecessor_failure_stream_sha256: predecessorFailureSha256 ?? ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'], status: predecessorPass ? 'PASS' : 'INCOMPLETE' })
   return deepFreeze([fixtures, fieldClosure, provenance, crossRepo, predecessor])
 }
 

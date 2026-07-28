@@ -154,6 +154,19 @@ export function readPredecessorConclusion(file: string, expectedSha256: string, 
   return { bytes, identity, value: value as Record<string, unknown> }
 }
 
+export function sealPredecessorConclusion(root: string, relative: string, source: string, expectedSha256: string, expectedConclusionId: string): ReturnType<typeof writeExclusiveCanonical> {
+  const record = readPredecessorConclusion(source, expectedSha256)
+  if (record.value.conclusion_id !== expectedConclusionId) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor identity changed before sealing')
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-predecessor-binding.v1',
+    conclusion_id: expectedConclusionId,
+    source_raw_sha256: record.identity.sha256,
+    normalized_conclusion_sha256: sha256Canonical(record.value),
+    conclusion: record.value,
+  }
+  return writeExclusiveCanonical(root, relative, { ...unsigned, binding_sha256: sha256Canonical(unsigned) })
+}
+
 function parseExternalCanonical(file: string, maximumBytes = 1_048_576): Record<string, unknown> {
   return readExternalCanonical(file, maximumBytes).value
 }
@@ -327,12 +340,15 @@ function sealValidatedPrelaunch(input: SealedCampaignInput, authority: SealedOpe
     writeExclusiveCanonical(root, relative, record.value)
   }
   const predecessorControls = [
-    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
-    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+    ['control/predecessor-config-auth.json', input.predecessor_config_auth_path, 'CL-P3A-R2-CONFIG-AUTH', input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-CONFIG-AUTH'] : stableRead(input.predecessor_config_auth_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
+    ['control/predecessor-failure-stream.json', input.predecessor_failure_stream_path, 'CL-P3A-R2-FAILURE-STREAM', input.schema_id === 'oracle-lab-p3b-production-input.v2' ? PREDECESSOR_AUTHORITY.conclusions['CL-P3A-R2-FAILURE-STREAM'] : stableRead(input.predecessor_failure_stream_path, { mode: 0o600, maximumBytes: 1_048_576 }).identity.sha256],
   ] as const
-  for (const [relative, source, sha256] of predecessorControls) {
-    const record = readPredecessorConclusion(source, sha256)
-    writeExclusiveCanonical(root, relative, record.value)
+  for (const [relative, source, conclusionId, sha256] of predecessorControls) {
+    if (input.schema_id === 'oracle-lab-p3b-production-input.v2') sealPredecessorConclusion(root, relative, source, sha256, conclusionId)
+    else {
+      const record = readPredecessorConclusion(source, sha256)
+      writeExclusiveCanonical(root, relative, record.value)
+    }
   }
   const c1Record = readExternalCanonical(input.cross_repo_review_path)
   if (c1Record.identity.sha256 !== input.cross_repo_review_sha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'C1 changed before sealing')
