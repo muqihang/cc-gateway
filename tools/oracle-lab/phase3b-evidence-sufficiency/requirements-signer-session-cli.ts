@@ -22,7 +22,7 @@ function main(): void {
         process.stdout.write(`${canonicalJson({ event: 'registry', registry: session.bind_security_reviewer(command.security_public_entry as never) })}\n`)
       } else if (command.action === 'sign_operator_authority') {
         assertExactKeys(command, ['action', 'campaign_input', 'signed_implementation_review', 'approval_commit', 'approval_tree', 'attestation_commit', 'attestation_tree', 'created_at_ms', 'expires_at_ms'], 'requirements_signer_cli_invalid')
-        const signed = session.sign_operator_authority({ campaign_input: command.campaign_input as Record<string, unknown>, signed_implementation_review: command.signed_implementation_review as Record<string, unknown>, approval_commit: String(command.approval_commit), approval_tree: String(command.approval_tree), attestation_commit: String(command.attestation_commit), attestation_tree: String(command.attestation_tree), created_at_ms: Number(command.created_at_ms), expires_at_ms: Number(command.expires_at_ms) })
+        const signed = session.sign_operator_authority({ campaign_input: command.campaign_input as Record<string, unknown>, signed_implementation_review: command.signed_implementation_review as Record<string, unknown>, approval_commit: String(command.approval_commit), approval_tree: String(command.approval_tree), attestation_commit: String(command.attestation_commit), attestation_tree: String(command.attestation_tree), created_at_ms: command.created_at_ms, expires_at_ms: command.expires_at_ms })
         process.stdout.write(`${canonicalJson({ event: 'operator_authority', ...signed })}\n`)
       } else if (command.action === 'sign_gate_b_decision') {
         assertExactKeys(command, ['action', 'payload'], 'requirements_signer_cli_invalid')

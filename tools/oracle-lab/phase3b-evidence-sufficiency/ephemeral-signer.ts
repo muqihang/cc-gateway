@@ -5,11 +5,13 @@ import path from 'node:path'
 import { reviewedArtifactSetSha256 } from './authority-materializer.js'
 import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { REPOSITORY_AUTHORITY, crossRepoAuthority } from './ledger.js'
-import { IMPLEMENTATION_REVIEW_RELATIVE, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewer, type TrustedReviewerRegistry } from './trust.js'
+import { IMPLEMENTATION_REVIEW_RELATIVE, validateCampaignReviewerRegistry, validateTrustedReviewerPublicEntry, verifyTrustedSignature, type TrustedReviewer, type TrustedReviewerRegistry } from './trust.js'
 import { validateSealedGateBResult } from './gates.js'
 import { validatePostGateLeakReport } from './closeout.js'
 
 const RESERVED = new Set(['reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature'])
+const LEGACY_REVIEW_INPUT_KEYS = ['identity', 'requirements_public_entry', 'campaign_input', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'created_at_ms', 'expires_at_ms'] as const
+const REVIEW_PAYLOAD_KEYS = ['schema_id', 'review_kind', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'repositories', 'c1', 'requirements_public_entry_sha256', 'reviewed_artifact_set_sha256', 'critical', 'important', 'verdict', 'created_at_ms', 'expires_at_ms'] as const
 
 export function signEphemeralRecord(input: Readonly<{ role: TrustedReviewer['reviewer_role']; identity: string; digest_field: string; payload: Readonly<Record<string, unknown>> }>): Readonly<{ public_entry: TrustedReviewer; signed_record: Readonly<Record<string, unknown>> }> {
   if (!/^[A-Za-z0-9._@-]{3,128}$/.test(input.identity) || input.role !== 'security_quality' || !/^[a-z][a-z0-9_]{2,63}$/.test(input.digest_field) || input.digest_field in input.payload || [...RESERVED].some((field) => field in input.payload)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'generic ephemeral signing is restricted to the isolated security-review role')
@@ -22,8 +24,9 @@ export function signEphemeralRecord(input: Readonly<{ role: TrustedReviewer['rev
   return deepFreeze({ public_entry: publicEntry, signed_record: { ...signed, [input.digest_field]: sha256Canonical(signed) } })
 }
 
-function assertWindow(createdAtMs: number, expiresAtMs: number): void {
-  if (!Number.isSafeInteger(createdAtMs) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= createdAtMs || expiresAtMs - createdAtMs > 86_400_000) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'signing window must be positive and at most 24 hours')
+function validatedWindow(createdAtMs: unknown, expiresAtMs: unknown, code = 'ephemeral_signer_input_invalid'): readonly [number, number] {
+  if (typeof createdAtMs !== 'number' || typeof expiresAtMs !== 'number' || !Number.isSafeInteger(createdAtMs) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= createdAtMs || expiresAtMs - createdAtMs > 86_400_000) throw new Phase3BProductionError(code, 'signing window must use integer millisecond timestamps and be positive and at most 24 hours')
+  return [createdAtMs, expiresAtMs]
 }
 
 function assertRequirementsPublicEntry(entry: TrustedReviewer): void {
@@ -37,19 +40,80 @@ function assertRequirementsPublicEntry(entry: TrustedReviewer): void {
   } catch { throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'implementation review requires the pre-existing canonical requirements public entry') }
 }
 
-export function signImplementationReviewEphemeral(input: Readonly<{ identity: string; requirements_public_entry: TrustedReviewer; campaign_input: Readonly<Record<string, unknown>>; reviewed_candidate_commit: string; reviewed_candidate_tree: string; created_at_ms: number; expires_at_ms: number }>): ReturnType<typeof signEphemeralRecord> {
-  assertWindow(input.created_at_ms, input.expires_at_ms)
-  assertRequirementsPublicEntry(input.requirements_public_entry)
-  if (!/^[a-f0-9]{40}$/.test(input.reviewed_candidate_commit) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_tree) || input.identity === input.requirements_public_entry.reviewer_identity) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'security review requires exact candidate identities and an independent reviewer identity')
+export function buildCampaignReviewRequest(input: Readonly<{
+  requirements_public_entry: TrustedReviewer
+  security_public_entry: TrustedReviewer
+  campaign_input: Readonly<Record<string, unknown>>
+  reviewed_candidate_commit: string
+  reviewed_candidate_tree: string
+  created_at_ms: number
+  expires_at_ms: number
+}>): Readonly<{ registry: TrustedReviewerRegistry; review_payload: Readonly<Record<string, unknown>> }> {
+  assertExactKeys(input, ['requirements_public_entry', 'security_public_entry', 'campaign_input', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'created_at_ms', 'expires_at_ms'], 'ephemeral_signer_input_invalid')
+  const requirements = validateTrustedReviewerPublicEntry(input.requirements_public_entry, 'requirements')
+  const security = validateTrustedReviewerPublicEntry(input.security_public_entry, 'security_quality')
+  if (!/^[a-f0-9]{40}$/.test(input.reviewed_candidate_commit) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_tree)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'review request requires exact candidate identities')
+  validatedWindow(input.created_at_ms, input.expires_at_ms)
   assertDigestField(input.campaign_input as Record<string, unknown>, 'input_sha256', 'ephemeral_signer_input_invalid')
-  const c1 = crossRepoAuthority(String(input.campaign_input.cross_repo_review_sha256))
-  return signEphemeralRecord({
-    role: 'security_quality', identity: input.identity, digest_field: 'review_sha256',
-    payload: {
-      schema_id: 'oracle-lab-p3b-implementation-review.v3', review_kind: 'phase3b-production-executor', reviewed_candidate_commit: input.reviewed_candidate_commit, reviewed_candidate_tree: input.reviewed_candidate_tree,
-      repositories: REPOSITORY_AUTHORITY, c1, requirements_public_entry_sha256: sha256Canonical(input.requirements_public_entry), reviewed_artifact_set_sha256: reviewedArtifactSetSha256(input.campaign_input), critical: 0, important: 0, verdict: 'PASS', created_at_ms: input.created_at_ms, expires_at_ms: input.expires_at_ms,
-    },
-  })
+  const registryUnsigned = {
+    schema_id: 'oracle-lab-p3b-campaign-reviewers.v1' as const,
+    reviewed_candidate_commit: input.reviewed_candidate_commit,
+    reviewed_candidate_tree: input.reviewed_candidate_tree,
+    reviewers: [requirements, security] as const,
+  }
+  const registry = validateCampaignReviewerRegistry({ ...registryUnsigned, registry_sha256: sha256Canonical(registryUnsigned) })
+  const reviewPayload = {
+    schema_id: 'oracle-lab-p3b-implementation-review.v3', review_kind: 'phase3b-production-executor', reviewed_candidate_commit: input.reviewed_candidate_commit, reviewed_candidate_tree: input.reviewed_candidate_tree,
+    repositories: REPOSITORY_AUTHORITY, c1: crossRepoAuthority(String(input.campaign_input.cross_repo_review_sha256)), requirements_public_entry_sha256: sha256Canonical(requirements), reviewed_artifact_set_sha256: reviewedArtifactSetSha256(input.campaign_input), critical: 0, important: 0, verdict: 'PASS', created_at_ms: input.created_at_ms, expires_at_ms: input.expires_at_ms,
+  }
+  return deepFreeze({ registry, review_payload: reviewPayload })
+}
+
+export function createSecurityReviewerSignerSession(input: Readonly<{ identity: string; reviewed_candidate_commit: string; reviewed_candidate_tree: string }>): Readonly<{
+  public_entry: TrustedReviewer
+  sign_implementation_review: (request: Readonly<{ registry: TrustedReviewerRegistry; review_payload: Readonly<Record<string, unknown>> }>) => Readonly<Record<string, unknown>>
+  close: () => void
+}> {
+  assertExactKeys(input, ['identity', 'reviewed_candidate_commit', 'reviewed_candidate_tree'], 'ephemeral_signer_input_invalid')
+  if (!/^[A-Za-z0-9._@-]{3,128}$/.test(input.identity) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_commit) || !/^[a-f0-9]{40}$/.test(input.reviewed_candidate_tree)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'security signer identity or candidate is invalid')
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  const publicDer = publicKey.export({ format: 'der', type: 'spki' })
+  const publicEntry = validateTrustedReviewerPublicEntry({ key_id: `sha256:${sha256Bytes(publicDer)}`, public_key_der_base64: publicDer.toString('base64'), reviewer_identity: input.identity, reviewer_role: 'security_quality' }, 'security_quality')
+  let livePrivateKey: typeof privateKey | null = privateKey
+
+  function signImplementationReview(request: Readonly<{ registry: TrustedReviewerRegistry; review_payload: Readonly<Record<string, unknown>> }>): Readonly<Record<string, unknown>> {
+    const key = livePrivateKey
+    if (!key) throw new Phase3BProductionError('ephemeral_signer_session_closed', 'security signer session is closed')
+    try {
+      assertExactKeys(request, ['registry', 'review_payload'], 'ephemeral_signer_input_invalid')
+      const registry = validateCampaignReviewerRegistry(request.registry)
+      const payload = request.review_payload as Record<string, unknown>
+      assertExactKeys(payload, REVIEW_PAYLOAD_KEYS, 'ephemeral_signer_input_invalid')
+      if (registry.reviewed_candidate_commit !== input.reviewed_candidate_commit || registry.reviewed_candidate_tree !== input.reviewed_candidate_tree || sha256Canonical(registry.reviewers[1]) !== sha256Canonical(publicEntry)) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'registry does not contain the exact emitted security signer entry')
+      validatedWindow(payload.created_at_ms, payload.expires_at_ms)
+      const c1 = payload.c1 as Record<string, unknown>
+      if (payload.schema_id !== 'oracle-lab-p3b-implementation-review.v3' || payload.review_kind !== 'phase3b-production-executor' || payload.reviewed_candidate_commit !== input.reviewed_candidate_commit || payload.reviewed_candidate_tree !== input.reviewed_candidate_tree || payload.requirements_public_entry_sha256 !== sha256Canonical(registry.reviewers[0]) || !/^[a-f0-9]{64}$/.test(String(payload.reviewed_artifact_set_sha256)) || payload.critical !== 0 || payload.important !== 0 || payload.verdict !== 'PASS' || sha256Canonical(payload.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || !c1 || c1.verdict !== 'CROSS_REPO_PASS' || sha256Canonical(c1) !== sha256Canonical(crossRepoAuthority(String(c1.review_sha256)))) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'implementation review payload does not bind the exact emitted signer registry')
+      const unsigned = { ...payload, reviewer_identity: publicEntry.reviewer_identity, reviewer_role: publicEntry.reviewer_role, signing_key_id: publicEntry.key_id, signature_algorithm: 'ed25519_canonical_json_v1' }
+      const signature = sign(null, Buffer.concat([canonicalBytes(unsigned), Buffer.from('\n', 'utf8')]), key).toString('base64')
+      const signed = { ...unsigned, signature }
+      livePrivateKey = null
+      return deepFreeze({ ...signed, review_sha256: sha256Canonical(signed) })
+    } catch (error) {
+      livePrivateKey = null
+      throw error
+    }
+  }
+
+  return Object.freeze({ public_entry: publicEntry, sign_implementation_review: signImplementationReview, close: () => { livePrivateKey = null } })
+}
+
+export function signImplementationReviewEphemeral(input: Readonly<{ identity: string; requirements_public_entry: TrustedReviewer; campaign_input: Readonly<Record<string, unknown>>; reviewed_candidate_commit: string; reviewed_candidate_tree: string; created_at_ms: number; expires_at_ms: number }>): ReturnType<typeof signEphemeralRecord> {
+  assertExactKeys(input, LEGACY_REVIEW_INPUT_KEYS, 'ephemeral_signer_input_invalid')
+  assertRequirementsPublicEntry(input.requirements_public_entry)
+  if (input.identity === input.requirements_public_entry.reviewer_identity) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'security review requires an independent reviewer identity')
+  const signer = createSecurityReviewerSignerSession({ identity: input.identity, reviewed_candidate_commit: input.reviewed_candidate_commit, reviewed_candidate_tree: input.reviewed_candidate_tree })
+  const request = buildCampaignReviewRequest({ requirements_public_entry: input.requirements_public_entry, security_public_entry: signer.public_entry, campaign_input: input.campaign_input, reviewed_candidate_commit: input.reviewed_candidate_commit, reviewed_candidate_tree: input.reviewed_candidate_tree, created_at_ms: input.created_at_ms, expires_at_ms: input.expires_at_ms })
+  return deepFreeze({ public_entry: signer.public_entry, signed_record: signer.sign_implementation_review(request) })
 }
 
 const GATE_B_UNSIGNED_KEYS = ['schema_id', 'decision_id', 'decision', 'campaign_id', 'gate_a_path', 'gate_a_sha256', 'gate_a_clock_sha256', 'external_set_path', 'external_set_sha256', 'conclusion_paths', 'conclusion_sha256s', 'implementation_review_sha256', 'issued_at_ms', 'issued_monotonic_ns', 'maximum_evaluation_delay_ms', 'scope', 'prohibited_claims'] as const
@@ -57,7 +121,7 @@ const GATE_B_UNSIGNED_KEYS = ['schema_id', 'decision_id', 'decision', 'campaign_
 export function createRequirementsSignerSession(input: Readonly<{ identity: string; reviewed_candidate_commit: string; reviewed_candidate_tree: string }>): Readonly<{
   public_entry: TrustedReviewer
   bind_security_reviewer: (securityPublicEntry: TrustedReviewer) => TrustedReviewerRegistry
-  sign_operator_authority: (authorityInput: Readonly<{ campaign_input: Readonly<Record<string, unknown>>; signed_implementation_review: Readonly<Record<string, unknown>>; approval_commit: string; approval_tree: string; attestation_commit: string; attestation_tree: string; created_at_ms: number; expires_at_ms: number }>) => Readonly<{ registry: TrustedReviewerRegistry; signed_authority: Readonly<Record<string, unknown>> }>
+  sign_operator_authority: (authorityInput: Readonly<{ campaign_input: Readonly<Record<string, unknown>>; signed_implementation_review: Readonly<Record<string, unknown>>; approval_commit: string; approval_tree: string; attestation_commit: string; attestation_tree: string; created_at_ms: unknown; expires_at_ms: unknown }>) => Readonly<{ registry: TrustedReviewerRegistry; signed_authority: Readonly<Record<string, unknown>> }>
   sign_gate_b_decision: (payload: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>
   confirm_gate_b_result: (input: Readonly<{ evidence_root?: string; result_path?: string } & Record<string, unknown>>) => Readonly<Record<string, unknown>>
   close: () => void
@@ -86,10 +150,10 @@ export function createRequirementsSignerSession(input: Readonly<{ identity: stri
     return registry
   }
 
-  function signOperatorAuthority(authorityInput: Readonly<{ campaign_input: Readonly<Record<string, unknown>>; signed_implementation_review: Readonly<Record<string, unknown>>; approval_commit: string; approval_tree: string; attestation_commit: string; attestation_tree: string; created_at_ms: number; expires_at_ms: number }>): Readonly<{ registry: TrustedReviewerRegistry; signed_authority: Readonly<Record<string, unknown>> }> {
+  function signOperatorAuthority(authorityInput: Readonly<{ campaign_input: Readonly<Record<string, unknown>>; signed_implementation_review: Readonly<Record<string, unknown>>; approval_commit: string; approval_tree: string; attestation_commit: string; attestation_tree: string; created_at_ms: unknown; expires_at_ms: unknown }>): Readonly<{ registry: TrustedReviewerRegistry; signed_authority: Readonly<Record<string, unknown>> }> {
     const key = requireKey()
     if (authoritySigned || !registry) throw new Phase3BProductionError('ephemeral_signer_lifecycle_invalid', 'registry must be fixed once before a single authority signature')
-    assertWindow(authorityInput.created_at_ms, authorityInput.expires_at_ms)
+    const [createdAtMs, expiresAtMs] = validatedWindow(authorityInput.created_at_ms, authorityInput.expires_at_ms)
     if (![authorityInput.approval_commit, authorityInput.approval_tree, authorityInput.attestation_commit, authorityInput.attestation_tree].every((value) => /^[a-f0-9]{40}$/.test(value))) throw new Phase3BProductionError('ephemeral_signer_input_invalid', 'operator authority requires exact approval merge and attestation identities')
     assertDigestField(authorityInput.campaign_input as Record<string, unknown>, 'input_sha256', 'ephemeral_signer_input_invalid')
     assertDigestField(authorityInput.signed_implementation_review as Record<string, unknown>, 'review_sha256', 'ephemeral_signer_input_invalid')
@@ -97,6 +161,7 @@ export function createRequirementsSignerSession(input: Readonly<{ identity: stri
     const expectedArtifactSet = reviewedArtifactSetSha256(authorityInput.campaign_input)
     const expectedC1 = crossRepoAuthority(String(authorityInput.campaign_input.cross_repo_review_sha256))
     const review = authorityInput.signed_implementation_review
+    validatedWindow(review.created_at_ms, review.expires_at_ms, 'implementation_review_failed')
     if (review.schema_id !== 'oracle-lab-p3b-implementation-review.v3' || review.review_kind !== 'phase3b-production-executor' || review.reviewed_candidate_commit !== input.reviewed_candidate_commit || review.reviewed_candidate_tree !== input.reviewed_candidate_tree || review.requirements_public_entry_sha256 !== sha256Canonical(publicEntry) || review.reviewed_artifact_set_sha256 !== expectedArtifactSet || review.critical !== 0 || review.important !== 0 || review.verdict !== 'PASS' || sha256Canonical(review.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(review.c1) !== sha256Canonical(expectedC1)) throw new Phase3BProductionError('implementation_review_failed', 'requirements signer received a non-PASS or drifted implementation review')
     implementationReviewRawSha256 = sha256Bytes(Buffer.concat([canonicalBytes(review), Buffer.from('\n', 'utf8')]))
     const registryRawSha256 = sha256Bytes(Buffer.concat([canonicalBytes(registry), Buffer.from('\n', 'utf8')]))
@@ -105,7 +170,7 @@ export function createRequirementsSignerSession(input: Readonly<{ identity: stri
       schema_id: 'oracle-lab-p3b-production-authority.v2', decision: 'authorize_fresh_phase3b_production_campaign', campaign_id: campaignId, campaign_input_sha256: authorityInput.campaign_input.input_sha256,
       repositories: REPOSITORY_AUTHORITY, c1: expectedC1, reviewed_candidate_commit: input.reviewed_candidate_commit, reviewed_candidate_tree: input.reviewed_candidate_tree, approval_commit: authorityInput.approval_commit, approval_tree: authorityInput.approval_tree, attestation_commit: authorityInput.attestation_commit, attestation_tree: authorityInput.attestation_tree, campaign_registry_sha256: registryRawSha256,
       implementation_review_path: path.join(String(authorityInput.campaign_input.cc_repository), IMPLEMENTATION_REVIEW_RELATIVE), implementation_review_sha256: implementationReviewRawSha256, reviewed_artifact_set_sha256: expectedArtifactSet, critical: 0, important: 0, dynamic_launch_authorized: true,
-      created_at_ms: authorityInput.created_at_ms, expires_at_ms: authorityInput.expires_at_ms, reviewer_identity: publicEntry.reviewer_identity, reviewer_role: publicEntry.reviewer_role, signing_key_id: publicEntry.key_id, signature_algorithm: 'ed25519_canonical_json_v1',
+      created_at_ms: createdAtMs, expires_at_ms: expiresAtMs, reviewer_identity: publicEntry.reviewer_identity, reviewer_role: publicEntry.reviewer_role, signing_key_id: publicEntry.key_id, signature_algorithm: 'ed25519_canonical_json_v1',
     }
     const signature = sign(null, Buffer.concat([canonicalBytes(authorityUnsigned), Buffer.from('\n', 'utf8')]), key).toString('base64')
     const authorityWithSignature = { ...authorityUnsigned, signature }

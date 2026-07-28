@@ -87,6 +87,21 @@ function canonicalRepositoryRecord(repository: string, commit: string, relative:
   return { value: value as Record<string, unknown>, sha256: sha256Bytes(bytes) }
 }
 
+export function validateTrustedReviewerPublicEntry(value: unknown, expectedRole?: TrustedRole): TrustedReviewer {
+  assertExactKeys(value, ['key_id', 'public_key_der_base64', 'reviewer_identity', 'reviewer_role'], 'trusted_reviewer_registry_invalid')
+  const reviewer = value as Record<string, unknown>
+  if (!['requirements', 'security_quality'].includes(String(reviewer.reviewer_role)) || (expectedRole !== undefined && reviewer.reviewer_role !== expectedRole) || typeof reviewer.reviewer_identity !== 'string' || !/^[A-Za-z0-9._@-]{3,128}$/.test(reviewer.reviewer_identity)) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'campaign reviewer identity or role drifted')
+  let der: Buffer
+  try {
+    der = Buffer.from(String(reviewer.public_key_der_base64), 'base64')
+    const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
+    const canonicalDer = publicKey.export({ format: 'der', type: 'spki' })
+    if (der.toString('base64') !== reviewer.public_key_der_base64 || publicKey.asymmetricKeyType !== 'ed25519' || !Buffer.from(canonicalDer).equals(der)) throw new Error('invalid key')
+  } catch { throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'campaign reviewer key is not canonical Ed25519 SPKI') }
+  if (reviewer.key_id !== `sha256:${sha256Bytes(der)}`) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'campaign reviewer key ID does not match its canonical SPKI')
+  return deepFreeze(value as TrustedReviewer)
+}
+
 export function validateCampaignReviewerRegistry(value: unknown): TrustedReviewerRegistry {
   assertExactKeys(value, ['schema_id', 'reviewed_candidate_commit', 'reviewed_candidate_tree', 'reviewers', 'registry_sha256'], 'trusted_reviewer_registry_invalid')
   assertDigestField(value, 'registry_sha256', 'trusted_reviewer_registry_invalid')
@@ -95,17 +110,9 @@ export function validateCampaignReviewerRegistry(value: unknown): TrustedReviewe
   const identities = new Set<string>()
   const keyIds = new Set<string>()
   const publicKeys = new Set<string>()
-  for (const reviewer of value.reviewers) {
-    assertExactKeys(reviewer, ['key_id', 'public_key_der_base64', 'reviewer_identity', 'reviewer_role'], 'trusted_reviewer_registry_invalid')
-    if (!['requirements', 'security_quality'].includes(String(reviewer.reviewer_role)) || typeof reviewer.reviewer_identity !== 'string' || !/^[A-Za-z0-9._@-]{3,128}$/.test(reviewer.reviewer_identity)) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'campaign reviewer identity or role drifted')
-    let der: Buffer
-    try {
-      der = Buffer.from(String(reviewer.public_key_der_base64), 'base64')
-      const publicKey = createPublicKey({ key: der, format: 'der', type: 'spki' })
-      const canonicalDer = publicKey.export({ format: 'der', type: 'spki' })
-      if (der.toString('base64') !== reviewer.public_key_der_base64 || publicKey.asymmetricKeyType !== 'ed25519' || !Buffer.from(canonicalDer).equals(der)) throw new Error('invalid key')
-    } catch { throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'campaign reviewer key is not canonical Ed25519 SPKI') }
-    if (reviewer.key_id !== `sha256:${sha256Bytes(der)}` || roles.has(String(reviewer.reviewer_role)) || identities.has(reviewer.reviewer_identity) || keyIds.has(reviewer.key_id) || publicKeys.has(reviewer.public_key_der_base64)) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'reviewer role, identity, key ID, and SPKI must be pairwise independent')
+  for (const rawReviewer of value.reviewers) {
+    const reviewer = validateTrustedReviewerPublicEntry(rawReviewer)
+    if (roles.has(reviewer.reviewer_role) || identities.has(reviewer.reviewer_identity) || keyIds.has(reviewer.key_id) || publicKeys.has(reviewer.public_key_der_base64)) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'reviewer role, identity, key ID, and SPKI must be pairwise independent')
     roles.add(String(reviewer.reviewer_role)); identities.add(reviewer.reviewer_identity); keyIds.add(reviewer.key_id); publicKeys.add(reviewer.public_key_der_base64)
   }
   if (value.reviewers[0]?.reviewer_role !== 'requirements' || value.reviewers[1]?.reviewer_role !== 'security_quality' || !roles.has('requirements') || !roles.has('security_quality')) throw new Phase3BProductionError('trusted_reviewer_registry_invalid', 'reviewer roles must use fixed deterministic order')
