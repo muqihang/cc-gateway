@@ -36,6 +36,7 @@ export function buildSandboxProfile(runtimeRoot: string, writableRoot: string, r
     '(allow file-read* (subpath "/usr/share/zoneinfo"))',
     '(allow file-read* (literal "/dev/null"))',
     '(allow file-read* (literal "/dev/urandom"))',
-    ...unique.map((port) => `(allow network-outbound (remote tcp "localhost:${port}"))`),
+    ...unique.map((port) => `(allow network-outbound (remote ip "localhost:${port}"))`),
+    '(deny network-outbound (remote udp))',
   ].join(' ')
 }

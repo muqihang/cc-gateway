@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -11,6 +13,7 @@ import { canonicalJson, sha256Canonical } from '../tools/oracle-lab/phase3b-evid
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
+import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
@@ -22,6 +25,21 @@ function privateRoot(prefix: string): string {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)))
   chmodSync(root, 0o700)
   return root
+}
+
+function listen(server: Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') reject(new Error('test listener did not bind'))
+      else resolve(address.port)
+    })
+  })
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()))
 }
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
@@ -104,6 +122,50 @@ test('sealed filesystem rejects symlink runtime components and O_EXCL rewrite', 
   writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 1 })
   assert.deepEqual(readCanonical(parent, 'record.json').value, { schema_id: 'focused.v1', value: 1 })
   assert.throws(() => writeExclusiveCanonical(parent, 'record.json', { schema_id: 'focused.v1', value: 2 }), (error: NodeJS.ErrnoException) => error.code === 'EEXIST')
+})
+
+test('sandbox policy binds the exact loopback endpoint and denies an adjacent listener', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' }, async () => {
+  const root = privateRoot('p3b-sandbox-loopback-')
+  const runRoot = path.join(root, 'run')
+  mkdirSync(runRoot, { mode: 0o700 })
+  const route = createServer((socket) => socket.end())
+  const adjacent = createServer((socket) => socket.end())
+  const routePort = await listen(route)
+  const adjacentPort = await listen(adjacent)
+  try {
+    const profile = buildSandboxProfile(root, runRoot, [routePort])
+    assert.match(profile, new RegExp(`\\(allow network-outbound \\(remote ip "localhost:${routePort}"\\)\\)`))
+    assert.doesNotMatch(profile, /remote (?:ip|tcp) "\*:/)
+    const probe = String.raw`
+require 'socket'
+require 'json'
+def tcp(host, port)
+  Socket.tcp(host, port, connect_timeout: 0.6) { true }
+rescue StandardError
+  false
+end
+def udp(host, port)
+  socket = UDPSocket.new
+  socket.connect(host, port)
+  socket.send("x", 0)
+  true
+rescue StandardError
+  false
+ensure
+  socket&.close
+end
+STDOUT.write(JSON.generate({ route: tcp('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp('127.0.0.1', Integer(ARGV[1])), external: tcp('1.1.1.1', 443) }))`
+    const result = spawnSync('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
+      cwd: runRoot,
+      env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, LANG: 'C', LC_ALL: 'C' },
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false })
+  } finally {
+    await Promise.all([close(route), close(adjacent)])
+  }
 })
 
 test('RED: execute mode claims a sealed namespace before fallible validation and rejects re-entry', async () => {
