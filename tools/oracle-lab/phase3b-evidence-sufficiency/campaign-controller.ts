@@ -1,4 +1,4 @@
-import { chmodSync } from 'node:fs'
+import { chmodSync, lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { bindControllerRuntime, createProductionController, sealControllerNamespace } from './controller.js'
@@ -9,12 +9,13 @@ import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loa
 import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, resolveContained, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, fixedGitBytes, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewerRegistry } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
+import { PHASE3B_EPOCH_CONSUMPTION_POLICY, PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256 } from './pre-epoch-admission.js'
 
 export type CampaignInput = Readonly<{
   schema_id: 'oracle-lab-p3b-production-input.v2'
@@ -371,48 +372,228 @@ export function loadSealedControl(root: string): { input: SealedCampaignInput; a
   return { input, authority, registry }
 }
 
-export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
-  const root = assertPrivateRuntimeRoot(evidenceRoot)
-  const { input, authority } = loadSealedControl(root)
-  const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
-  const imageSet = readCanonical(root, 'launch-images.json', 16_777_216).value as Record<string, any>
-  if (imageSet.schema_id !== 'oracle-lab-p3b-launch-image-set.v1' || imageSet.set_sha256 !== sha256Canonical({ original: imageSet.original, probe: imageSet.probe })) throw new Phase3BProductionError('launch_image_invalid', 'sealed launch image set drifted')
-  const images = { original: loadLaunchImageRecord(imageSet.original), probe: loadLaunchImageRecord(imageSet.probe) }
-  const anchor = loadStaticAnchor(readCanonical(root, 'prelaunch/static-anchor.json').value)
-  if (anchor.original_image_record_sha256 !== images.original.record_sha256 || anchor.probe_image_record_sha256 !== images.probe.record_sha256 || anchor.source_tree_sha256 !== input.source_tree_sha256 || anchor.toolchain_sha256 !== input.toolchain_sha256 || anchor.reviewed_artifact_set_sha256 !== authority.reviewed_artifact_set_sha256 || sha256Canonical(anchor.c1) !== sha256Canonical(crossRepoAuthority(input.cross_repo_review_sha256))) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor image/source/toolchain/review/C1 drifted')
-  const receiverIdentity = captureReceiverRuntimeIdentity()
-  if (anchor.receiver_source_sha256 !== receiverIdentity.receiver_source_sha256 || anchor.receiver_executable_identity_sha256 !== receiverIdentity.receiver_executable_identity_sha256 || anchor.receiver_schema_sha256 !== receiverIdentity.receiver_schema_sha256 || anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256()) throw new Phase3BProductionError('static_anchor_invalid', 'receiver/controller runtime tuple drifted')
-  const controller = createProductionController({ campaign_id: input.campaign_id, c1: crossRepoAuthority(input.cross_repo_review_sha256) })
-  bindControllerRuntime(controller, root, anchor)
-  sealControllerNamespace(controller)
-  const store = openExecutionStore(root, ledger)
-  if (readExecutionReceipts(store).length !== 0) throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode never resumes a partial namespace')
-  for (const row of ledger.rows) {
-    let receiver: ReceiverAuthority | null = null
-    let launchAuthority: LaunchAuthorityReceipt | null = null
-    try {
-      if (row.sequence_index === 20) sealTargetControlTranche(root)
-      receiver = await bindReceiverGroup(controller, row)
-      const image: LaunchImageRecord = row.selected_executable_class === 'original_image' ? images.original : images.probe
-      launchAuthority = deriveLaunchAuthority({ controller, store, row, receiver_authority: receiver, launch_image: image })
-      const result = await executeProductionRow({ controller, store, row, receiver, authority: launchAuthority, image })
-      if (result.terminal_class !== 'success') break
-    } catch (error: unknown) {
-      if (receiver) await abortReceiverGroup(receiver)
-      const receipts = readExecutionReceipts(store)
-      const started = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'started')
-      const terminal = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'terminal')
-      if (started && !terminal && launchAuthority) appendTerminal(store, row, launchAuthority, { terminalClass: 'spawn_error', exitCode: null, signal: null, causeCode: 'runner_ownership_failure' })
-      else if (terminal?.terminal_class === 'success' && readCampaignFailure(store) === null) sealPostTerminalFailure(store, row, error)
-      else if (!started) sealPreSpawnFailure(store, row, error)
-      break
+const PREEXISTING_EXECUTION_MARKERS = [
+  { relative: 'execution-records', mode: 'exists' },
+  { relative: 'receiver-authorities', mode: 'exists' },
+  { relative: 'launch-authorities', mode: 'exists' },
+  { relative: 'campaign-failure.json', mode: 'exists' },
+  { relative: 'execution-result.json', mode: 'exists' },
+  { relative: 'observations', mode: 'nonempty_directory' },
+  { relative: 'receiver-results', mode: 'nonempty_directory' },
+  { relative: 'runs', mode: 'nonempty_directory' },
+  { relative: 'guards', mode: 'nonempty_directory' },
+  { relative: 'cell-results', mode: 'nonempty_directory' },
+] as const
+const PREEXISTING_CONTROL_MARKERS = ['control/execution-attempt-failure.json', 'control/execution-evidence-assessment.json'] as const
+
+function existingMarkers(root: string, relatives: readonly string[]): readonly string[] {
+  const evidence: string[] = []
+  for (const relative of relatives) {
+    try { lstatSync(resolveContained(root, relative)); evidence.push(relative) } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
   }
-  const receipts = readExecutionReceipts(store)
-  const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: receipts.filter((row) => row.state === 'terminal' && row.terminal_class === 'success').length === 340 }
-  const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
-  writeExclusiveCanonical(root, 'execution-result.json', result)
-  return result
+  return deepFreeze(evidence)
+}
+
+function preexistingExecutionEvidence(root: string): readonly string[] {
+  const evidence: string[] = []
+  for (const marker of PREEXISTING_EXECUTION_MARKERS) {
+    const absolute = resolveContained(root, marker.relative)
+    try {
+      const stat = lstatSync(absolute)
+      if (stat.isSymbolicLink() || (marker.mode === 'nonempty_directory' && !stat.isDirectory())) evidence.push(`${marker.relative}:invalid`)
+      else if (marker.mode === 'exists' || readdirSync(absolute).length > 0) evidence.push(marker.relative)
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+  }
+  return deepFreeze(evidence)
+}
+
+function claimExecutionAttempt(root: string): Readonly<Record<string, unknown>> {
+  const preexistingControlEvidence = existingMarkers(root, PREEXISTING_CONTROL_MARKERS)
+  const blocked = preexistingControlEvidence.length > 0
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-execution-attempt-claim.v1',
+    evidence_root: root,
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    consumption_boundary: PHASE3B_EPOCH_CONSUMPTION_POLICY.consumption_boundary,
+    attempt_state_at_claim: blocked ? 'BLOCKED_PREEXISTING_CONTROL_EVIDENCE' : 'UNVERIFIED',
+    preexisting_control_evidence: preexistingControlEvidence,
+    epoch_consumed_at_claim: null,
+    receiver_binds_at_claim: null,
+    target_launches_at_claim: null,
+    sockets_at_claim: null,
+    same_attempt_resume_allowed: false,
+    automatic_retry_allowed: false,
+    failure_disposition_at_claim: blocked ? 'root_cause_review_and_fresh_admission_required' : null,
+    terminal_status_at_claim: blocked ? 'CLOSED_UNVERIFIED_CONTROL_STATE' : null,
+  }
+  const claim = deepFreeze({ ...unsigned, claim_sha256: sha256Canonical(unsigned) })
+  try { writeExclusiveCanonical(root, 'control/execution-attempt.json', claim) } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode may be invoked only once for a sealed namespace')
+    throw error
+  }
+  if (blocked) throw new Phase3BProductionError('execution_control_evidence_preexisting', 'preexisting unbound execution control evidence requires root-cause review and fresh admission')
+  return claim
+}
+
+function executionAttemptFailureCode(cause: unknown): string {
+  if (cause instanceof Phase3BProductionError) return cause.code
+  const code = (cause as NodeJS.ErrnoException | null)?.code
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `filesystem_${code.toLowerCase()}` : 'campaign_execution_failure'
+}
+
+export function executionCompletedAllRows(receipts: readonly Readonly<{ terminal_class: unknown }>[], campaignFailure: unknown): boolean {
+  return campaignFailure === null && receipts.filter((receipt) => receipt.terminal_class === 'success').length === 340
+}
+
+type ExecutionAttemptFailureStage = 'execution_evidence_assessment' | 'external_control_validation' | 'sealed_prelaunch_validation' | 'live_execution' | 'execution_finalization'
+
+export function sealExecutionAttemptFailure(root: string, claim: Readonly<Record<string, unknown>>, assessmentSha256: unknown, executionEvidence: readonly string[], failureStage: ExecutionAttemptFailureStage, cause: unknown): Readonly<Record<string, unknown>> {
+  const currentEvidence = preexistingExecutionEvidence(root)
+  const combinedEvidence = deepFreeze([...new Set([...executionEvidence, ...currentEvidence])].sort())
+  const unverifiedLiveIo = combinedEvidence.length > 0
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-execution-attempt-failure.v1',
+    evidence_root: root,
+    execution_attempt_claim_sha256: claim.claim_sha256,
+    execution_evidence_assessment_sha256: assessmentSha256,
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    failure_stage: failureStage,
+    cause_code: executionAttemptFailureCode(cause),
+    preexisting_execution_evidence: combinedEvidence,
+    consumption_status: unverifiedLiveIo ? 'UNKNOWN_OR_CONSUMED' : 'NOT_CONSUMED',
+    epoch_consumed: unverifiedLiveIo ? null : false,
+    receiver_binds: unverifiedLiveIo ? null : 0,
+    target_launches: unverifiedLiveIo ? null : 0,
+    sockets: unverifiedLiveIo ? null : 0,
+    same_attempt_resume_allowed: false,
+    automatic_retry_allowed: false,
+    failure_disposition: unverifiedLiveIo ? 'root_cause_review_and_fresh_admission_required' : 'close_attempt_and_start_fresh_preparation',
+    terminal_status: unverifiedLiveIo ? 'CLOSED_UNVERIFIED_LIVE_IO_STATE' : 'CLOSED_BEFORE_LIVE_IO',
+  }
+  const failure = deepFreeze({ ...unsigned, failure_sha256: sha256Canonical(unsigned) })
+  writeExclusiveCanonical(root, 'control/execution-attempt-failure.json', failure)
+  return failure
+}
+
+function sealExecutionEvidenceAssessment(root: string, claim: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const before = preexistingExecutionEvidence(root)
+  const unsigned = {
+    schema_id: 'oracle-lab-p3b-execution-evidence-assessment.v1',
+    evidence_root: root,
+    execution_attempt_claim_sha256: claim.claim_sha256,
+    epoch_policy_sha256: PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256,
+    preexisting_execution_evidence: before,
+    status: before.length === 0 ? 'CLEAR' : 'BLOCKED',
+  }
+  const assessment = deepFreeze({ ...unsigned, assessment_sha256: sha256Canonical(unsigned) })
+  writeExclusiveCanonical(root, 'control/execution-evidence-assessment.json', assessment)
+  const after = preexistingExecutionEvidence(root)
+  if (sha256Canonical(after) !== sha256Canonical(before)) {
+    const combined = deepFreeze([...new Set([...before, ...after])].sort())
+    const error = new Phase3BProductionError('execution_evidence_drift', 'execution evidence changed across the sealed assessment')
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, combined, 'execution_evidence_assessment', error)
+    throw error
+  }
+  if (before.length > 0) {
+    const error = new Phase3BProductionError('execution_evidence_preexisting', 'preexisting execution evidence requires root-cause review and fresh admission')
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, before, 'execution_evidence_assessment', error)
+    throw error
+  }
+  return assessment
+}
+
+export function assertExternalMatchesSealed(root: string, authorityPath: string, inputPath: string): void {
+  const evidenceRoot = assertPrivateRuntimeRoot(root)
+  if (path.basename(authorityPath) !== 'phase3b-operator-authority.json' || path.basename(inputPath) !== 'phase3b-campaign-input.json') throw new Phase3BProductionError('fixed_path_invalid', 'authority and input basenames are fixed')
+  const pairs = [[authorityPath, 'control/operator-authority.json'], [inputPath, 'control/campaign-input.json']] as const
+  for (const [external, relative] of pairs) {
+    const externalIdentity = stableRead(path.resolve(external), { mode: 0o600, maximumBytes: 1_048_576 }).identity
+    const sealedIdentity = readCanonical(evidenceRoot, relative).identity
+    if (externalIdentity.sha256 !== sealedIdentity.sha256) throw new Phase3BProductionError('sealed_control_drift', 'CLI authority/input differs from sealed control bytes')
+  }
+  const sealedInput = readCanonical(evidenceRoot, 'control/campaign-input.json').value
+  if (sealedInput.operator_authority_path !== authorityPath || sealedInput.campaign_input_path !== inputPath || sealedInput.evidence_root !== evidenceRoot) throw new Phase3BProductionError('fixed_path_invalid', 'CLI paths do not match the sealed namespace tuple')
+}
+
+async function executeAndFinalizeClaimedCampaign(evidenceRoot: string, claim: Readonly<Record<string, unknown>>, assessment: Readonly<Record<string, unknown>>): Promise<Readonly<Record<string, unknown>>> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  let failureStage: ExecutionAttemptFailureStage = 'sealed_prelaunch_validation'
+  let attemptFailureSealed = false
+  try {
+    const { input, authority } = loadSealedControl(root)
+    const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
+    const imageSet = readCanonical(root, 'launch-images.json', 16_777_216).value as Record<string, any>
+    if (imageSet.schema_id !== 'oracle-lab-p3b-launch-image-set.v1' || imageSet.set_sha256 !== sha256Canonical({ original: imageSet.original, probe: imageSet.probe })) throw new Phase3BProductionError('launch_image_invalid', 'sealed launch image set drifted')
+    const images = { original: loadLaunchImageRecord(imageSet.original), probe: loadLaunchImageRecord(imageSet.probe) }
+    const anchor = loadStaticAnchor(readCanonical(root, 'prelaunch/static-anchor.json').value)
+    if (anchor.original_image_record_sha256 !== images.original.record_sha256 || anchor.probe_image_record_sha256 !== images.probe.record_sha256 || anchor.source_tree_sha256 !== input.source_tree_sha256 || anchor.toolchain_sha256 !== input.toolchain_sha256 || anchor.reviewed_artifact_set_sha256 !== authority.reviewed_artifact_set_sha256 || sha256Canonical(anchor.c1) !== sha256Canonical(crossRepoAuthority(input.cross_repo_review_sha256))) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor image/source/toolchain/review/C1 drifted')
+    const receiverIdentity = captureReceiverRuntimeIdentity()
+    if (anchor.receiver_source_sha256 !== receiverIdentity.receiver_source_sha256 || anchor.receiver_executable_identity_sha256 !== receiverIdentity.receiver_executable_identity_sha256 || anchor.receiver_schema_sha256 !== receiverIdentity.receiver_schema_sha256 || anchor.controller_source_sha256 !== controllerSourceSetSha256() || anchor.controller_executable_sha256 !== controllerExecutableSha256()) throw new Phase3BProductionError('static_anchor_invalid', 'receiver/controller runtime tuple drifted')
+    const controller = createProductionController({ campaign_id: input.campaign_id, c1: crossRepoAuthority(input.cross_repo_review_sha256) })
+    bindControllerRuntime(controller, root, anchor)
+    sealControllerNamespace(controller)
+    const store = openExecutionStore(root, ledger)
+    if (readExecutionReceipts(store).length !== 0) throw new Phase3BProductionError('execution_resume_forbidden', 'execute mode never resumes a partial namespace')
+    failureStage = 'live_execution'
+    for (const row of ledger.rows) {
+      let receiver: ReceiverAuthority | null = null
+      let launchAuthority: LaunchAuthorityReceipt | null = null
+      try {
+        if (row.sequence_index === 20) sealTargetControlTranche(root)
+        receiver = await bindReceiverGroup(controller, row)
+        const image: LaunchImageRecord = row.selected_executable_class === 'original_image' ? images.original : images.probe
+        launchAuthority = deriveLaunchAuthority({ controller, store, row, receiver_authority: receiver, launch_image: image })
+        const result = await executeProductionRow({ controller, store, row, receiver, authority: launchAuthority, image })
+        if (result.terminal_class !== 'success') break
+      } catch (error: unknown) {
+        if (receiver) await abortReceiverGroup(receiver)
+        const receipts = readExecutionReceipts(store)
+        const started = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'started')
+        const terminal = receipts.find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'terminal')
+        if (started && !terminal && launchAuthority) appendTerminal(store, row, launchAuthority, { terminalClass: 'spawn_error', exitCode: null, signal: null, causeCode: 'runner_ownership_failure' })
+        else if (terminal?.terminal_class === 'success' && readCampaignFailure(store) === null) sealPostTerminalFailure(store, row, error)
+        else if (!started) sealPreSpawnFailure(store, row, error)
+        break
+      }
+    }
+    const campaignFailure = readCampaignFailure(store)
+    if (campaignFailure !== null) {
+      sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'live_execution', new Phase3BProductionError(String(campaignFailure.failure_family), 'sealed campaign execution reached a terminal failure'))
+      attemptFailureSealed = true
+    }
+    failureStage = 'execution_finalization'
+    const receipts = readExecutionReceipts(store)
+    const unsigned = { schema_id: 'oracle-lab-p3b-execution-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, authority_sha256: authority.authority_sha256, execution_attempt_claim_sha256: claim.claim_sha256, execution_evidence_assessment_sha256: assessment.assessment_sha256, planned: 340, started: receipts.filter((row) => row.state === 'started').length, spawned: receipts.filter((row) => row.state === 'spawned').length, terminal: receipts.filter((row) => row.state === 'terminal').length, not_executed: receipts.filter((row) => row.state === 'not_executed').length, receipt_set_sha256: sha256Canonical(receipts), completed_all_rows: executionCompletedAllRows(receipts, campaignFailure) }
+    const result = deepFreeze({ ...unsigned, execution_result_sha256: sha256Canonical(unsigned) })
+    writeExclusiveCanonical(root, 'execution-result.json', result)
+    return result
+  } catch (error: unknown) {
+    if (!attemptFailureSealed) sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], failureStage, error)
+    throw error
+  }
+}
+
+export async function runExecuteFromSealedPrelaunch(evidenceRoot: string): Promise<Readonly<Record<string, unknown>>> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const claim = claimExecutionAttempt(root)
+  const assessment = sealExecutionEvidenceAssessment(root, claim)
+  return executeAndFinalizeClaimedCampaign(root, claim, assessment)
+}
+
+export async function runExecuteFromExternalSealedPrelaunch(evidenceRoot: string, authorityPath: string, inputPath: string): Promise<Readonly<Record<string, unknown>>> {
+  const root = assertPrivateRuntimeRoot(evidenceRoot)
+  const claim = claimExecutionAttempt(root)
+  const assessment = sealExecutionEvidenceAssessment(root, claim)
+  try { assertExternalMatchesSealed(root, authorityPath, inputPath) } catch (error: unknown) {
+    sealExecutionAttemptFailure(root, claim, assessment.assessment_sha256, assessment.preexisting_execution_evidence as readonly string[], 'external_control_validation', error)
+    throw error
+  }
+  return executeAndFinalizeClaimedCampaign(root, claim, assessment)
 }
 
 async function waitForExternalCanonical(file: string, timeoutMs = 180_000): Promise<Record<string, unknown>> {
