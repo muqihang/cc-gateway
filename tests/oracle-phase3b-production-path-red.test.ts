@@ -68,10 +68,13 @@ function persistedFiles(root: string): string[] {
 
 test('production path RED: only the real campaign-controller entry is reachable', () => {
   const thisTest = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+  const requirementsFixture = readFileSync(path.join(import.meta.dirname, 'fixtures/phase3b-test-requirements-signer.ts'), 'utf8')
   const productionImports = [...thisTest.matchAll(/from ['\"]\.\.\/tools\/oracle-lab\/phase3b-evidence-sufficiency\/([^'\"]+)['\"]/g)].map((match) => match[1])
   assert.deepEqual(productionImports, ['campaign-controller.js'])
   const reachable = [...reachableTypescriptFiles(ENTRY_SOURCE)].map((file) => path.basename(file))
   assert.deepEqual(reachable.filter((name) => BANNED_SECURITY_PATHS.has(name)), [])
+  assert.match(requirementsFixture, /await waitFor\(externalSetPath\)/)
+  assert.doesNotMatch(requirementsFixture, /await waitFor\(terminalPath\)/)
 })
 
 test('production path RED: the real controller owns the complete sealed lifecycle', async () => {

@@ -140,6 +140,50 @@ test('RED: admission rejects predecessor byte drift before epoch consumption', (
   assert.deepEqual(readdirSync(value.container), [])
 })
 
+test('RED: exact canonical predecessor bytes do not require a transport LF', () => {
+  const value = fixture()
+  const configBytes = Buffer.from(CONFIG_AUTH)
+  const failureBytes = Buffer.from(FAILURE_STREAM)
+  assert.equal(configBytes.at(-1), 0x0a)
+  assert.equal(failureBytes.at(-1), 0x0a)
+  const configCanonical = configBytes.subarray(0, -1)
+  const failureCanonical = failureBytes.subarray(0, -1)
+  writeFileSync(String(value.input.predecessor_config_auth_path), configCanonical, { flag: 'w', mode: 0o600 })
+  writeFileSync(String(value.input.predecessor_failure_stream_path), failureCanonical, { flag: 'w', mode: 0o600 })
+  const authority: PreEpochAdmissionAuthority = {
+    ...value.authority,
+    predecessors: {
+      'CL-P3A-R2-CONFIG-AUTH': sha256Bytes(configCanonical),
+      'CL-P3A-R2-FAILURE-STREAM': sha256Bytes(failureCanonical),
+    },
+  }
+
+  const result = run(value.inputPath, authority)
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(canonicalBytes(JSON.parse(configCanonical.toString('utf8'))), configCanonical)
+  assert.deepEqual(canonicalBytes(JSON.parse(failureCanonical.toString('utf8'))), failureCanonical)
+})
+
+test('RED: digest-matched noncanonical predecessor transports still fail closed', () => {
+  const canonical = Buffer.from(CONFIG_AUTH).subarray(0, -1)
+  const parsed = JSON.parse(canonical.toString('utf8')) as Record<string, unknown>
+  const invalidTransports = [
+    Buffer.from(JSON.stringify(parsed, null, 2)),
+    Buffer.concat([canonical, Buffer.from('\r\n')]),
+  ]
+  for (const bytes of invalidTransports) {
+    const value = fixture()
+    writeFileSync(String(value.input.predecessor_config_auth_path), bytes, { flag: 'w', mode: 0o600 })
+    const authority: PreEpochAdmissionAuthority = {
+      ...value.authority,
+      predecessors: { ...value.authority.predecessors, 'CL-P3A-R2-CONFIG-AUTH': sha256Bytes(bytes) },
+    }
+    const result = run(value.inputPath, authority)
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /pre_epoch_predecessor_invalid/)
+  }
+})
+
 test('RED: admission rejects Sub parent substitution and nonempty campaign containers', () => {
   const parentDrift = fixture()
   const parentAuthority = { ...parentDrift.authority, sub_parents: [...parentDrift.authority.sub_parents].reverse() as [string, string] }
