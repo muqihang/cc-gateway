@@ -119,11 +119,13 @@ function inspectEmptyContainer(directory: string, afterOpen?: () => void): Reado
 
 function validateConclusion(file: string, conclusionId: keyof PreEpochAdmissionAuthority['predecessors'], authority: PreEpochAdmissionAuthority): Readonly<Record<string, unknown>> {
   const record = stableRead(file, { mode: 0o600, maximumBytes: 1_048_576 })
-  if (record.bytes.at(-1) !== 0x0a || record.bytes.subarray(0, -1).includes(0x0a) || record.identity.sha256 !== authority.predecessors[conclusionId]) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion raw bytes drifted')
+  if (record.identity.sha256 !== authority.predecessors[conclusionId]) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion raw bytes drifted')
+  const payload = record.bytes.at(-1) === 0x0a ? record.bytes.subarray(0, -1) : record.bytes
+  if (payload.includes(0x0a)) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion contains noncanonical line breaks')
   let value: unknown
-  try { value = JSON.parse(record.bytes.subarray(0, -1).toString('utf8')) } catch { throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion JSON is invalid') }
+  try { value = JSON.parse(payload.toString('utf8')) } catch { throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion JSON is invalid') }
   assertExactKeys(value, CONCLUSION_KEYS, 'pre_epoch_predecessor_invalid')
-  if (!canonicalBytes(value).equals(record.bytes.subarray(0, -1))) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion is not canonical JSON')
+  if (!canonicalBytes(value).equals(payload)) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion is not canonical JSON')
   const conclusion = value as Record<string, unknown>
   const expiryMs = Date.parse(String(conclusion.expiry))
   if (conclusion.schema_version !== 'oracle-lab-phase3a-conclusion.v1' || conclusion.conclusion_id !== conclusionId || conclusion.level !== 'Reproduced' || conclusion.phase3b_usable !== true || conclusion.scope !== EXPECTED_SCOPE || conclusion.expiry !== authority.predecessor_expiry || !Number.isSafeInteger(expiryMs) || !Array.isArray(conclusion.platform_limits) || sha256Canonical(conclusion.platform_limits) !== sha256Canonical(EXPECTED_PLATFORM_LIMITS) || !Array.isArray(conclusion.contradicting_artifact_ids) || conclusion.contradicting_artifact_ids.length !== 0 || !Array.isArray(conclusion.negative_capabilities) || conclusion.negative_capabilities.length !== 0) throw new Phase3BProductionError('pre_epoch_predecessor_invalid', 'Phase 3A conclusion schema, scope, level, or expiry is inadmissible')
