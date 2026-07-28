@@ -66,14 +66,14 @@ function optionalPredecessorConclusion(root: string, relative: string): { value:
   }
 }
 
-export function predecessorSupportSourceSha256(value: Record<string, unknown>, sealedRawSha256: string, conclusionId: string, conclusionSha256: string): string | null {
+export function predecessorSupportSourceSha256(value: Record<string, unknown>, sealedRawSha256: string, conclusionId: string, conclusionSha256: string, allowTestAttestation = false): string | null {
   if (value.conclusion_id !== conclusionId) return null
   if (sealedRawSha256 === conclusionSha256) return conclusionSha256
-  if (value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && value.conclusion_id === conclusionId && value.conclusion_sha256 === conclusionSha256 && value.level === 'Reproduced') return conclusionSha256
+  if (allowTestAttestation && value.schema_id === 'oracle-lab-p3b-test-predecessor-attestation.v1' && value.conclusion_sha256 === conclusionSha256 && value.level === 'Reproduced') return conclusionSha256
   return null
 }
 
-function inventoryNamespace(root: string): readonly ArtifactEntry[] {
+export function inventoryNamespace(root: string): readonly ArtifactEntry[] {
   const entries: ArtifactEntry[] = []
   const walk = (relativeDirectory: string) => {
     const absolute = relativeDirectory ? path.join(root, relativeDirectory) : root
@@ -87,7 +87,7 @@ function inventoryNamespace(root: string): readonly ArtifactEntry[] {
       if (!stat.isFile() || stat.nlink !== 1) throw new Phase3BProductionError('artifact_index_invalid', 'runtime namespace contains a non-regular or hard-linked leaf')
       const stable = stableRead(file, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes, nonempty: false })
       let schemaId = 'opaque-bytes'
-      try { schemaId = String(readCanonical(root, relative, TARGET_PROFILE.maximum_executable_bytes).value.schema_id ?? 'canonical-json') } catch {}
+      try { schemaId = String(readCanonicalTransport(file, { mode: 0o600, maximumBytes: TARGET_PROFILE.maximum_executable_bytes, nonempty: false }).value.schema_id ?? 'canonical-json') } catch {}
       entries.push({ name: relative, relative_path: relative, schema_id: schemaId, size_bytes: stable.identity.size, sha256: stable.identity.sha256 })
     }
   }
@@ -673,7 +673,7 @@ function deriveCrossRepoSupport(root: string, ledger: CampaignLedger): Readonly<
   return supportRecord({ schema_id: 'oracle-lab-p3b-independent-go-ts-agreement.v2', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, repositories: ledger.authority, c1: ledger.c1, c1_record_raw_sha256: c1.value.review_sha256, go_receipt_raw_sha256: goReceipt.entry.sha256, go_receipt_internal_sha256: goReceipt.value.receipt_digest, ts_agreement_raw_sha256: tsAgreement.entry.sha256, ts_agreement_internal_sha256: tsAgreement.value.agreement_sha256, missing_artifacts: [], agreement: { decisions_sha256: goReceipt.value.decisions_sha256, mutation_results_sha256: goReceipt.value.mutation_results_sha256, required_set_sha256: goReceipt.value.required_set_sha256, stable_code_count: STABLE_CODE_COUNT, stable_code_set_sha256: STABLE_CODE_SET_SHA256, decision: 'PASS' }, status: 'PASS' })
 }
 
-function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
+function deriveSupportRecords(root: string, ledger: CampaignLedger, allowTestAttestation = false): readonly Readonly<Record<string, unknown>>[] {
   const es7Contract = optionalCanonical(root, ES7_TYPED_FIXTURE_PATH)
   if (es7Contract) {
     assertReviewedControlArtifact(root, es7Contract.entry, 'es7_typed_fixtures_sha256')
@@ -687,8 +687,8 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
   const crossRepo = deriveCrossRepoSupport(root, ledger)
   const predecessorConfigRecord = optionalPredecessorConclusion(root, 'control/predecessor-config-auth.json')
   const predecessorFailureRecord = optionalPredecessorConclusion(root, 'control/predecessor-failure-stream.json')
-  const predecessorConfigSha256 = predecessorConfigRecord ? predecessorSupportSourceSha256(predecessorConfigRecord.value, predecessorConfigRecord.entry.sha256, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH']) : null
-  const predecessorFailureSha256 = predecessorFailureRecord ? predecessorSupportSourceSha256(predecessorFailureRecord.value, predecessorFailureRecord.entry.sha256, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM']) : null
+  const predecessorConfigSha256 = predecessorConfigRecord ? predecessorSupportSourceSha256(predecessorConfigRecord.value, predecessorConfigRecord.entry.sha256, 'CL-P3A-R2-CONFIG-AUTH', ledger.predecessor.conclusions['CL-P3A-R2-CONFIG-AUTH'], allowTestAttestation) : null
+  const predecessorFailureSha256 = predecessorFailureRecord ? predecessorSupportSourceSha256(predecessorFailureRecord.value, predecessorFailureRecord.entry.sha256, 'CL-P3A-R2-FAILURE-STREAM', ledger.predecessor.conclusions['CL-P3A-R2-FAILURE-STREAM'], allowTestAttestation) : null
   const mappings = [
     { predecessor_id: 'CL-P3A-R2-CONFIG-AUTH', predecessor_sha256: predecessorConfigSha256, schedules: ledger.rows.filter((row) => row.family === 'config' || row.family === 'auth').map((row) => row.schedule_id) },
     { predecessor_id: 'CL-P3A-R2-FAILURE-STREAM', predecessor_sha256: predecessorFailureSha256, schedules: ['complete_sse', 'http_400_terminal', 'http_401_terminal', 'http_403_terminal', 'http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'partial_sse_then_eof', 'reset_terminal'] },
@@ -698,17 +698,17 @@ function deriveSupportRecords(root: string, ledger: CampaignLedger): readonly Re
   return deepFreeze([fixtures, fieldClosure, provenance, crossRepo, predecessor])
 }
 
-function sealConclusionSupport(root: string, ledger: CampaignLedger): readonly Readonly<Record<string, unknown>>[] {
+function sealConclusionSupport(root: string, ledger: CampaignLedger, allowTestAttestation = false): readonly Readonly<Record<string, unknown>>[] {
   createPrivateDirectory(root, SUPPORT_ROOT)
-  const records = deriveSupportRecords(root, ledger)
+  const records = deriveSupportRecords(root, ledger, allowTestAttestation)
   records.forEach((record, index) => writeExclusiveCanonical(root, SUPPORT_PATHS[index], record))
   return records
 }
 
-export function validateConclusionSupport(root: string, requirePass: boolean): readonly string[] {
+export function validateConclusionSupport(root: string, requirePass: boolean, allowTestAttestation = false): readonly string[] {
   try {
     const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)
-    const expected = deriveSupportRecords(root, ledger)
+    const expected = deriveSupportRecords(root, ledger, allowTestAttestation)
     return SUPPORT_PATHS.map((relative, index) => {
       const value = readCanonical(root, relative, 16_777_216).value
       assertDigestField(value, 'support_sha256', 'conclusion_support_invalid')
@@ -721,7 +721,7 @@ export function validateConclusionSupport(root: string, requirePass: boolean): r
   }
 }
 
-export function deriveCuration(evidenceRoot: string): Readonly<Record<string, unknown>> {
+export function deriveCuration(evidenceRoot: string, allowTestAttestation = false): Readonly<Record<string, unknown>> {
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   createPrivateDirectory(root, CURATION_ROOT)
   createPrivateDirectory(root, `${CURATION_ROOT}/conclusions`)
@@ -742,7 +742,7 @@ export function deriveCuration(evidenceRoot: string): Readonly<Record<string, un
   sealNormativePlanAndScenarioSources(root, ledger)
   materializeCapturedConclusionSources(root, ledger, deriveFixtureRows(root, ledger))
   const openContradictionIds = [...new Set(rows.filter((row) => row.status !== 'Reproduced').map((row) => `P3B-UNKNOWN-${String(row.schedule_id).toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`))].sort(utf8Compare)
-  const support = sealConclusionSupport(root, ledger)
+  const support = sealConclusionSupport(root, ledger, allowTestAttestation)
   const supportSha256s = support.map((value) => value.support_sha256)
   if (support.some((value) => value.status !== 'PASS')) openContradictionIds.push('P3B-CONCLUSION-SUPPORT-INCOMPLETE')
   const normativeResolutionSha256 = typeof support[2]?.normative_resolution_sha256 === 'string' ? support[2].normative_resolution_sha256 : null

@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   await waitFor(externalSetPath)
   const leak = readCanonical(evidenceRoot, 'capsules/P3B-ES1/closure/leak-report.json').value
   if (leak.status !== 'PASS' || !Array.isArray(leak.findings) || leak.findings.length !== 0) throw new Error('requirements signer refused pre-Gate leak report')
-  const gateA = evaluateGateA(evidenceRoot)
+  const gateA = evaluateGateA(evidenceRoot, true)
   const gateAClock = readCanonical(evidenceRoot, 'capsules/P3B-ES1/gates/gate-a-clock.json').value
   const external = readCanonical(evidenceRoot, 'capsules/P3B-ES1/closure/external-digest-set.json').value
   const conclusions = CONCLUSION_IDS.map((id) => readCanonical(evidenceRoot, CONCLUSION_PATHS[id]).value)
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   const postGatePath = path.join(evidenceRoot, 'capsules/P3B-ES1/gates/post-gate-leak-report.json')
   await waitFor(gateBPath)
   await waitFor(postGatePath)
-  const sealed = validateSealedGateBResult(evidenceRoot, gateBPath)
+  const sealed = validateSealedGateBResult(evidenceRoot, gateBPath, true)
   const postGate = validatePostGateLeakReport(evidenceRoot)
   if (!privateKey || sealed.value.decision !== 'PASS' || postGate.status !== 'PASS') throw new Error('requirements signer refused Gate B or post-Gate leak validation')
   const closure = signedRecord({

@@ -88,14 +88,18 @@ export function stableRead(file: string, options: { mode?: number; maximumBytes?
   } finally { closeSync(fd) }
 }
 
-export function readCanonicalTransport(file: string, options: { mode?: number; maximumBytes?: number; nonempty?: boolean } = {}): { bytes: Buffer; identity: StableFileIdentity; value: Record<string, unknown> } {
-  const { bytes, identity } = stableRead(file, options)
+export function parseCanonicalTransport(bytes: Buffer): Record<string, unknown> {
   const payload = bytes.at(-1) === 0x0a ? bytes.subarray(0, -1) : bytes
   if (payload.includes(0x0a) || payload.includes(0x0d)) throw new Phase3BProductionError('canonical_record_invalid', 'canonical transport contains noncanonical line breaks')
   let value: unknown
   try { value = JSON.parse(payload.toString('utf8')) } catch { throw new Phase3BProductionError('canonical_record_invalid', 'canonical transport JSON is invalid') }
   if (!value || typeof value !== 'object' || Array.isArray(value) || !canonicalBytes(value).equals(payload)) throw new Phase3BProductionError('canonical_record_invalid', 'canonical transport is not canonical JSON')
-  return { bytes, identity, value: value as Record<string, unknown> }
+  return value as Record<string, unknown>
+}
+
+export function readCanonicalTransport(file: string, options: { mode?: number; maximumBytes?: number; nonempty?: boolean } = {}): { bytes: Buffer; identity: StableFileIdentity; value: Record<string, unknown> } {
+  const { bytes, identity } = stableRead(file, options)
+  return { bytes, identity, value: parseCanonicalTransport(bytes) }
 }
 
 export function writeExclusiveBytes(root: string, relative: string, bytes: Uint8Array, mode = 0o600): StableFileIdentity {

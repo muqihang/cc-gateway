@@ -9,7 +9,7 @@ import { buildStaticAnchor, createSealedLaunchImages, loadLaunchImageRecord, loa
 import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_PATH, PREDECESSOR_AUTHORITY, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, validateCampaignLedger, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { abortReceiverGroup, bindReceiverGroup, captureReceiverRuntimeIdentity, type ReceiverAuthority } from './receiver.js'
 import { sealTargetControlTranche } from './closeout.js'
-import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
+import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, parseCanonicalTransport, readCanonical, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { executeProductionRow } from './spawn-adapter.js'
 import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-identity.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
@@ -143,10 +143,10 @@ function readExternalCanonical(file: string, maximumBytes = 1_048_576): ReturnTy
 }
 
 export function readPredecessorConclusion(file: string, expectedSha256: string, maximumBytes = 1_048_576): ReturnType<typeof stableRead> & { value: Record<string, unknown> } {
-  const { bytes, identity, value } = readCanonicalTransport(file, { mode: 0o600, maximumBytes })
-  if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'Phase 3A predecessor is not owned by current operator UID')
+  const { bytes, identity } = stableRead(file, { mode: 0o600, maximumBytes })
   if (identity.sha256 !== expectedSha256) throw new Phase3BProductionError('sealed_authority_file_drift', 'Phase 3A predecessor changed before sealing')
-  return { bytes, identity, value }
+  if (typeof process.getuid === 'function' && identity.uid !== process.getuid()) throw new Phase3BProductionError('authority_owner_invalid', 'Phase 3A predecessor is not owned by current operator UID')
+  return { bytes, identity, value: parseCanonicalTransport(bytes) }
 }
 
 export function sealPredecessorConclusion(root: string, relative: string, source: string, expectedSha256: string, expectedConclusionId: string): ReturnType<typeof writeExclusiveBytes> {
@@ -655,6 +655,7 @@ function validateSignerClosure(root: string, closurePath: string, gateBResultPat
 export async function runCampaignController(request: unknown): Promise<Readonly<Record<string, unknown>>> {
   const input = validateControllerRequest(request)
   const root = String(input.evidence_root)
+  const testOwned = input.mode === 'test-owned-offline-full-path'
   let decisionPath: string
   let closurePath: string
   let gateAExternallyOwned = false
@@ -678,7 +679,7 @@ export async function runCampaignController(request: unknown): Promise<Readonly<
   if (execution.completed_all_rows !== true) throw new Phase3BProductionError('campaign_execution_failed', 'campaign execution stopped before all sealed rows reached a successful terminal receipt')
   const closeoutModule = await import('./closeout.js')
   const gatesModule = await import('./gates.js')
-  const curation = closeoutModule.deriveCuration(root)
+  const curation = closeoutModule.deriveCuration(root, testOwned)
   const closeout = closeoutModule.runCloseout(root)
   const gateAPath = path.join(root, 'capsules/P3B-ES1/gates/gate-a-result.json')
   if (gateAExternallyOwned) await waitForExternalCanonical(gateAPath)
@@ -686,10 +687,10 @@ export async function runCampaignController(request: unknown): Promise<Readonly<
   const gateA = readCanonical(root, 'capsules/P3B-ES1/gates/gate-a-result.json').value
   await waitForExternalCanonical(decisionPath)
   gatesModule.importSignedOperatorDecision(root, decisionPath)
-  const gateB = gatesModule.writeGateB(root)
+  const gateB = gatesModule.writeGateB(root, testOwned)
   const postGateLeak = closeoutModule.writePostGateLeakReport(root)
   const gateBPath = path.join(root, 'capsules/P3B-ES1/gates/gate-b-result.json')
-  const validatedGateB = gatesModule.validateSealedGateBResult(root, gateBPath)
+  const validatedGateB = gatesModule.validateSealedGateBResult(root, gateBPath, testOwned)
   await waitForExternalCanonical(closurePath)
   const signerClosure = validateSignerClosure(root, closurePath, gateBPath)
   const ledger = validateCampaignLedger(readCanonical(root, 'prelaunch/run-ledger.json', 16_777_216).value)

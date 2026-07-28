@@ -8,7 +8,7 @@ import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
 import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, predecessorSupportSourceSha256, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { SUPPORT_PATHS, deriveCuration, inventoryNamespace, predecessorSupportSourceSha256, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
@@ -45,7 +45,7 @@ function close(server: Server): Promise<void> {
 test('prelaunch and conclusion support preserve exact digest-bound Phase 3A bytes without LF', () => {
   const root = privateRoot('p3b-predecessor-transport-')
   const file = path.join(root, 'phase3a-conclusion.json')
-  const conclusion = { conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', level: 'Reproduced', phase3b_usable: true }
+  const conclusion = { schema_id: 'oracle-lab-phase3a-conclusion.v1', conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', level: 'Reproduced', phase3b_usable: true }
   const bytes = Buffer.from(canonicalJson(conclusion), 'utf8')
   writeFileSync(file, bytes, { mode: 0o600 })
 
@@ -62,6 +62,10 @@ test('prelaunch and conclusion support preserve exact digest-bound Phase 3A byte
   assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), record.identity.sha256)
   assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-FAILURE-STREAM', record.identity.sha256), null)
   assert.equal(predecessorSupportSourceSha256(sealed.value, sealed.identity.sha256, 'CL-P3A-R2-CONFIG-AUTH', 'f'.repeat(64)), null)
+  const forgedTestFallback = { schema_id: 'oracle-lab-p3b-test-predecessor-attestation.v1', conclusion_id: 'CL-P3A-R2-CONFIG-AUTH', conclusion_sha256: record.identity.sha256, level: 'Reproduced' }
+  assert.equal(predecessorSupportSourceSha256(forgedTestFallback, 'f'.repeat(64), 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256), null)
+  assert.equal(predecessorSupportSourceSha256(forgedTestFallback, 'f'.repeat(64), 'CL-P3A-R2-CONFIG-AUTH', record.identity.sha256, true), record.identity.sha256)
+  assert.equal(inventoryNamespace(root).find((entry) => entry.relative_path === 'control/predecessor-config-auth.json')?.schema_id, 'oracle-lab-phase3a-conclusion.v1')
 
   const newlineFile = path.join(root, 'phase3a-conclusion-newline.json')
   const newlineBytes = Buffer.concat([bytes, Buffer.from('\n')])
@@ -73,6 +77,7 @@ test('prelaunch and conclusion support preserve exact digest-bound Phase 3A byte
   writeFileSync(prettyFile, prettyBytes, { mode: 0o600 })
   assert.throws(() => readPredecessorConclusion(prettyFile, sha256Bytes(prettyBytes)), (error: Error & { code?: string }) => error.code === 'canonical_record_invalid')
   assert.throws(() => readPredecessorConclusion(file, 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'sealed_authority_file_drift')
+  assert.throws(() => readPredecessorConclusion(prettyFile, 'f'.repeat(64)), (error: Error & { code?: string }) => error.code === 'sealed_authority_file_drift')
 })
 
 test('production ledger freezes order, counts, UUIDv4, stdin reference, and family programs', () => {
