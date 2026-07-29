@@ -15,6 +15,7 @@ import { controllerExecutableSha256, controllerSourceSetSha256 } from './source-
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
 import { CAMPAIGN_REVIEWER_REGISTRY_RELATIVE, IMPLEMENTATION_REVIEW_RELATIVE, fixedGit, fixedGitBytes, validateApprovalAttestation, validateCampaignReviewerRegistry, verifyTrustedSignature, type TrustedReviewerRegistry } from './trust.js'
 import { bindMaterializedCrossRepoAuthority, reviewedArtifactSetSha256 } from './authority-materializer.js'
+import { isSafeTaskId } from '../../oracle-contract/check-cross-repo.js'
 import { PHASE3B_EPOCH_CONSUMPTION_POLICY, PHASE3B_EPOCH_CONSUMPTION_POLICY_SHA256 } from './pre-epoch-admission.js'
 
 export type CampaignInput = Readonly<{
@@ -166,7 +167,7 @@ function validateInput(value: Record<string, unknown>): CampaignInput {
   assertDigestField(value, 'input_sha256', 'campaign_input_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-production-input.v2' || typeof value.campaign_id !== 'string') throw new Phase3BProductionError('campaign_input_invalid', 'campaign input schema or ID drifted')
   for (const field of ['cross_review_artifact_sha256', 'cross_repo_review_sha256', 'probe_source_sha256', 'probe_unsigned_source_sha256', 'original_recipe_sha256', 'probe_recipe_sha256', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'schema_bundle_sha256', 'focused_suite_sha256', 'es7_typed_fixtures_sha256', 'es8_go_receipt_sha256', 'es8_ts_c1_agreement_sha256', 'es9_coverage_contract_sha256'] as const) assertSha256(value[field], 'campaign_input_invalid', field)
-  if (typeof value.cross_review_task_id !== 'string' || !/^[A-Za-z0-9._:-]{3,200}$/.test(value.cross_review_task_id)) throw new Phase3BProductionError('campaign_input_invalid', 'cross review task identity drifted')
+  if (!isSafeTaskId(value.cross_review_task_id)) throw new Phase3BProductionError('campaign_input_invalid', 'cross review task identity drifted')
   for (const field of ['campaign_input_path', 'operator_authority_path', 'evidence_root', 'cc_repository', 'sub_repository', 'cross_review_artifact_path', 'cross_repo_review_path', 'original_source', 'probe_source', 'probe_unsigned_source', 'original_recipe', 'probe_recipe', 'platform_archive_path', 'source_tree_path', 'toolchain_path', 'schema_bundle_path', 'focused_suite_path', 'es7_typed_fixtures_path', 'es8_go_receipt_path', 'es8_ts_c1_agreement_path', 'es9_coverage_contract_path', 'predecessor_config_auth_path', 'predecessor_failure_stream_path'] as const) if (typeof value[field] !== 'string' || !path.isAbsolute(value[field] as string) || path.normalize(value[field] as string) !== value[field]) throw new Phase3BProductionError('campaign_input_invalid', `${field} must be an operator-bound normalized absolute path`)
   const fixedAuthorityFiles = [
     ['es7_typed_fixtures_path', 'es7_typed_fixtures_sha256', 'phase3b-es7-typed-fixtures.json'],

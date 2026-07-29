@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { bindMaterializedCrossRepoAuthority, buildEs7TypedFixtureContract, buildEs9CoverageContract, launchRecipe, rebuildProbe, validateCodesignToolchain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
+import { bindMaterializedCrossRepoAuthority, buildEs7TypedFixtureContract, buildEs9CoverageContract, launchRecipe, materializeAuthorityArtifacts, rebuildProbe, validateCodesignToolchain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
 import { main as materializerMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer-cli.js'
 import { validateCoverageContract, validateTypedFixtureContract } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
@@ -17,6 +17,7 @@ import { REQUIRED_PROBE_ENTITLEMENTS_SHA256, TARGET_EXECUTABLE_MAXIMUM_BYTES } f
 import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { materializeRequestAst, normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
+import { runPrelaunchOnly } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
 import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validateAttestationCommit, validateCampaignReviewerRegistry, verifyGithubWebFlowCommit, verifyTrustedSignature, type TrustedReviewer } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
 const REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-phase3b-campaign-reviewers.json'
@@ -275,6 +276,56 @@ test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-
 test('authority GREEN: materializer CLI rejects caller-selected flags before side effects', () => {
   assert.throws(() => materializerMain([]), (error: Error & { code?: string }) => error.code === 'authority_materializer_cli_invalid')
   assert.throws(() => materializerMain(['--input', 'relative.json']), (error: Error & { code?: string }) => error.code === 'authority_materializer_cli_invalid')
+})
+
+test('authority RED: path-like reviewer task IDs reach both materializer and campaign input boundaries', () => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'p3b-task-id-boundary-')))
+  chmodSync(root, 0o700)
+  const repository = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'p3b-task-id-repository-')))
+  chmodSync(repository, 0o700)
+  git(repository, ['init', '-q'])
+  writeFileSync(path.join(repository, 'candidate.txt'), 'candidate\n', 'utf8')
+  execFileSync('git', ['-C', repository, '-c', 'user.name=Phase3B', '-c', 'user.email=phase3b@example.invalid', 'add', 'candidate.txt'])
+  execFileSync('git', ['-C', repository, '-c', 'user.name=Phase3B', '-c', 'user.email=phase3b@example.invalid', 'commit', '-q', '-m', 'candidate'])
+  const candidateCommit = git(repository, ['rev-parse', 'HEAD'])
+  const candidateTree = git(repository, ['rev-parse', 'HEAD^{tree}'])
+  const taskId = '/root/phase3b_probe_entitlements_review'
+  const materializerInput = {
+    output_root: root,
+    evidence_root: path.join(root, 'phase3b-p3b-task-id-boundary'),
+    campaign_id: 'p3b-task-id-boundary',
+    cc_repository: repository,
+    sub_repository: repository,
+    reviewed_candidate_commit: candidateCommit,
+    reviewed_candidate_tree: candidateTree,
+    cross_review_task_id: taskId,
+    cross_review_artifact_path: path.join(root, 'missing-cross-review.json'),
+    original_source: path.join(root, 'missing-original'),
+    probe_source: path.join(root, 'missing-probe'),
+    probe_unsigned_source: path.join(root, 'missing-probe-unsigned'),
+    platform_archive_path: path.join(root, 'missing-archive'),
+    source_tree_path: path.join(root, 'missing-source-tree'),
+    toolchain_path: path.join(root, 'missing-toolchain'),
+    predecessor_config_auth_path: path.join(root, 'missing-config'),
+    predecessor_failure_stream_path: path.join(root, 'missing-failure'),
+  }
+  assert.throws(() => materializeAuthorityArtifacts(materializerInput), (error: Error) => !error.message.includes('candidate, campaign, path, review, or future evidence namespace binding drifted'))
+
+  const campaignInputUnsigned: Record<string, unknown> = {
+    schema_id: 'oracle-lab-p3b-production-input.v2', campaign_id: 'p3b-task-id-boundary',
+    campaign_input_path: path.join(root, 'campaign-input.json'), operator_authority_path: path.join(root, 'operator-authority.json'), evidence_root: path.join(root, 'evidence'),
+    cc_repository: repository, sub_repository: repository, cross_review_task_id: taskId,
+    cross_review_artifact_path: path.join(root, 'missing-cross-review.json'), cross_review_artifact_sha256: 'a'.repeat(64), cross_repo_review_path: path.join(root, 'missing-c1.json'), cross_repo_review_sha256: 'b'.repeat(64),
+    original_source: path.join(root, 'missing-original'), probe_source: path.join(root, 'missing-probe'), probe_source_sha256: 'c'.repeat(64), probe_unsigned_source: path.join(root, 'missing-probe-unsigned'), probe_unsigned_source_sha256: 'd'.repeat(64),
+    original_recipe: path.join(root, 'missing-original-recipe.json'), original_recipe_sha256: 'e'.repeat(64), probe_recipe: path.join(root, 'missing-probe-recipe.json'), probe_recipe_sha256: 'f'.repeat(64),
+    platform_archive_path: path.join(root, 'missing-archive'), platform_archive_sha256: '1'.repeat(64), source_tree_path: path.join(root, 'missing-source-tree'), source_tree_sha256: '2'.repeat(64), toolchain_path: path.join(root, 'missing-toolchain'), toolchain_sha256: '3'.repeat(64),
+    schema_bundle_path: path.join(root, 'missing-schema.json'), schema_bundle_sha256: '4'.repeat(64), focused_suite_path: path.join(root, 'missing-focused.json'), focused_suite_sha256: '5'.repeat(64),
+    es7_typed_fixtures_path: path.join(root, 'phase3b-es7-typed-fixtures.json'), es7_typed_fixtures_sha256: '6'.repeat(64), es8_go_receipt_path: path.join(root, 'phase3b-es8-go-receipt.json'), es8_go_receipt_sha256: '7'.repeat(64), es8_ts_c1_agreement_path: path.join(root, 'phase3b-es8-ts-c1-agreement.json'), es8_ts_c1_agreement_sha256: '8'.repeat(64), es9_coverage_contract_path: path.join(root, 'phase3b-es9-coverage-contract.json'), es9_coverage_contract_sha256: '9'.repeat(64),
+    predecessor_config_auth_path: path.join(root, 'missing-config'), predecessor_failure_stream_path: path.join(root, 'missing-failure'),
+  }
+  const campaignInputPath = path.join(root, 'campaign-input.json')
+  writeFileSync(campaignInputPath, `${canonicalJson({ ...campaignInputUnsigned, input_sha256: sha256Canonical(campaignInputUnsigned) })}\n`, { mode: 0o600 })
+  assert.throws(() => runPrelaunchOnly(path.join(root, 'missing-authority.json'), campaignInputPath, path.join(root, 'evidence')), (error: Error & { code?: string }) => error.code !== 'campaign_input_invalid' || !error.message.includes('cross review task identity drifted'))
 })
 
 test('authority GREEN: ephemeral signer returns only public material and distinct role keys', () => {

@@ -174,7 +174,11 @@ const ALLOWED_CODES = new Set([
 ])
 const SHA256 = /^[0-9a-f]{64}$/
 const OID = /^[0-9a-f]{40}$/
-const SAFE_REF = /^[A-Za-z0-9._:/-]{1,200}$/
+export const SAFE_REF = /^[A-Za-z0-9._:/-]{1,200}$/
+
+export function isSafeTaskId(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_REF.test(value)
+}
 
 function objectValue(value: unknown, label: string): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
