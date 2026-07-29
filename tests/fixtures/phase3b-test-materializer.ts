@@ -6,6 +6,7 @@ import path from 'node:path'
 import { buildCrossRepoRecord, encodeCrossRepoRecord, executeCrossRepoRecord } from '../../tools/oracle-contract/check-cross-repo.js'
 import { buildEs7TypedFixtureContract, buildEs8TsAgreement, buildEs9CoverageContract, launchRecipe, rebuildProbe } from '../../tools/oracle-lab/phase3b-evidence-sufficiency/authority-materializer.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { REQUIRED_PROBE_ENTITLEMENTS_XML } from '../../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
 import { buildCampaignLedger, crossRepoAuthority, immutableNormativeSourceBytes, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256 } from '../../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { stableRead } from '../../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 
@@ -37,9 +38,13 @@ function main(): void {
   const targetSource = path.join(outputRoot, 'synthetic-target')
   const targetC = path.join(ccRepository, 'tests/fixtures/phase3b-synthetic-target.c')
   execFileSync('/usr/bin/clang', ['-O2', '-Wall', '-Wextra', '-o', targetSource, targetC], { stdio: 'pipe' })
-  chmodSync(targetSource, 0o500)
   const unsignedProbeSource = path.join(outputRoot, 'synthetic-probe-unsigned-source')
   const reviewedProbeSource = path.join(outputRoot, 'synthetic-probe-reviewed')
+  const entitlementsPath = path.join(outputRoot, 'synthetic-probe-entitlements.plist')
+  writeFileSync(entitlementsPath, REQUIRED_PROBE_ENTITLEMENTS_XML, { mode: 0o600 })
+  chmodSync(targetSource, 0o700)
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'oracle.phase3b.test.original', '--entitlements', entitlementsPath, '--timestamp=none', targetSource], { stdio: 'pipe' })
+  chmodSync(targetSource, 0o500)
   copyFileSync(targetSource, unsignedProbeSource, 0)
   copyFileSync(targetSource, reviewedProbeSource, 0)
   chmodSync(unsignedProbeSource, 0o700)
@@ -49,7 +54,7 @@ function main(): void {
   execFileSync('/usr/bin/codesign', ['--remove-signature', reviewedProbeSource], { stdio: 'pipe' })
   execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'oracle.phase3b.test.synthetic', '--timestamp=none', reviewedProbeSource], { stdio: 'pipe' })
   chmodSync(reviewedProbeSource, 0o500)
-  const rebuilt = rebuildProbe(outputRoot, unsignedProbeSource, reviewedProbeSource)
+  const rebuilt = rebuildProbe(outputRoot, unsignedProbeSource, reviewedProbeSource, targetSource)
 
   const sourceTreePath = path.join(outputRoot, 'phase3b-test-source-tree.bin')
   writeFileSync(sourceTreePath, immutableNormativeSourceBytes(NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256), { flag: 'wx', mode: 0o600 })
@@ -71,7 +76,7 @@ function main(): void {
   const originalRecipePath = path.join(outputRoot, 'phase3b-original-launch-recipe.json')
   const probeRecipePath = path.join(outputRoot, 'phase3b-probe-launch-recipe.json')
   const originalRecipe = launchRecipe('original', original.sha256, original.sha256, sourceTree.sha256, toolchainSha256, null)
-  const probeRecipe = launchRecipe('probe', rebuilt.rebuilt.sha256, rebuilt.unsigned.sha256, sourceTree.sha256, toolchainSha256, rebuilt.signature, rebuilt.identifier)
+  const probeRecipe = launchRecipe('probe', rebuilt.rebuilt.sha256, rebuilt.unsigned.sha256, sourceTree.sha256, toolchainSha256, rebuilt.signature, rebuilt.identifier, rebuilt.reviewed_signed_source_sha256, rebuilt.entitlements_sha256)
   const originalRecipeSha256 = writeCanonical(originalRecipePath, originalRecipe)
   const probeRecipeSha256 = writeCanonical(probeRecipePath, probeRecipe)
 

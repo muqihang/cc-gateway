@@ -13,7 +13,7 @@ import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../
 import { CROSS_REPO_AUTHORITY, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { buildCampaignLedger, crossRepoAuthority } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { createRequirementsSignerSession, signEphemeralRecord, signImplementationReviewEphemeral } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ephemeral-signer.js'
-import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
+import { REQUIRED_PROBE_ENTITLEMENTS_SHA256, TARGET_EXECUTABLE_MAXIMUM_BYTES } from '../tools/oracle-lab/phase3b-evidence-sufficiency/launch-image.js'
 import { FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { materializeRequestAst, normalizeRequestAst, REQUEST_AST_MATERIALIZER } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
@@ -21,6 +21,7 @@ import { GITHUB_WEB_FLOW_FINGERPRINT, GITHUB_WEB_FLOW_PUBLIC_KEY_SHA256, validat
 
 const REGISTRY_PATH = 'docs/superpowers/registry/oracle-lab-phase3b-campaign-reviewers.json'
 const REVIEW_PATH = 'docs/superpowers/evidence/phase3b/phase3b-implementation-review.json'
+const REQUIRED_PROBE_ENTITLEMENTS_XML = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.automation.apple-events</key><true/><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/><key>com.apple.security.device.audio-input</key><true/></dict></plist>\n'
 
 function git(repository: string, args: readonly string[]): string {
   return execFileSync('git', ['-C', repository, ...args], { encoding: 'utf8' }).trim()
@@ -352,7 +353,9 @@ test('authority RED: probe recipe rebuilds signed output from the unsigned input
   assert.deepEqual(recipe.build_command, [
     ['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'],
     ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT'],
+    ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--entitlements', '$ENTITLEMENTS', '--timestamp=none', '$OUTPUT'],
   ])
+  assert.equal(recipe.code_signature_entitlements_sha256, REQUIRED_PROBE_ENTITLEMENTS_SHA256)
   assert.equal(recipe.rebuild_verified, true)
   assert.equal(recipe.rebuilt_post_sign_sha256, recipe.post_sign_sha256)
 })
@@ -363,16 +366,37 @@ test('authority GREEN: synthetic Mach-O probe is actually rebuilt and toolchain-
   chmodSync(inputRoot, 0o700); chmodSync(outputRoot, 0o700)
   const unsigned = path.join(inputRoot, 'probe-unsigned')
   const reviewed = path.join(inputRoot, 'probe-reviewed')
+  const entitlementSource = path.join(inputRoot, 'entitlement-source')
+  const entitlements = path.join(inputRoot, 'probe-entitlements.plist')
   copyFileSync('/usr/bin/true', unsigned); chmodSync(unsigned, 0o700)
   execFileSync('/usr/bin/codesign', ['--remove-signature', unsigned])
   copyFileSync(unsigned, reviewed); chmodSync(reviewed, 0o700)
-  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--timestamp=none', reviewed])
-  const rebuilt = rebuildProbe(outputRoot, unsigned, reviewed)
-  assert.equal(rebuilt.rebuilt.sha256, sha256Bytes(readFileSync(reviewed)))
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'oracle.phase3b.test.probe', '--timestamp=none', reviewed])
+  copyFileSync(unsigned, entitlementSource); chmodSync(entitlementSource, 0o700)
+  writeFileSync(entitlements, REQUIRED_PROBE_ENTITLEMENTS_XML, { mode: 0o600 })
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'oracle.phase3b.test.original', '--entitlements', entitlements, '--timestamp=none', entitlementSource])
+  const rebuilt = rebuildProbe(outputRoot, unsigned, reviewed, entitlementSource)
+  const entitlementInspection = spawnSync('/usr/bin/codesign', ['-d', '--xml', '--entitlements', '-', rebuilt.rebuilt.path], { encoding: 'utf8' })
+  assert.equal(entitlementInspection.status, 0)
+  assert.match(entitlementInspection.stdout, /<key>com\.apple\.security\.cs\.allow-jit<\/key><true\/>/)
+  assert.match(entitlementInspection.stdout, /<key>com\.apple\.security\.cs\.allow-unsigned-executable-memory<\/key><true\/>/)
+  assert.equal(rebuilt.entitlements_sha256, REQUIRED_PROBE_ENTITLEMENTS_SHA256)
   assert.equal(rebuilt.unsigned.sha256, sha256Bytes(readFileSync(unsigned)))
   const signedAsUnsignedRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'p3b-probe-signed-input-')))
   chmodSync(signedAsUnsignedRoot, 0o700)
-  assert.throws(() => rebuildProbe(signedAsUnsignedRoot, reviewed, reviewed), (error: Error & { code?: string }) => error.code === 'authority_materialization_invalid')
+  assert.throws(() => rebuildProbe(signedAsUnsignedRoot, reviewed, reviewed, entitlementSource), (error: Error & { code?: string }) => error.code === 'authority_materialization_invalid')
+
+  const missingEntitlementsRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'p3b-probe-missing-entitlements-')))
+  chmodSync(missingEntitlementsRoot, 0o700)
+  assert.throws(() => rebuildProbe(missingEntitlementsRoot, unsigned, reviewed, reviewed), (error: Error & { code?: string }) => error.code === 'launch_image_entitlements_invalid')
+  const extraEntitlementsPath = path.join(inputRoot, 'probe-extra-entitlements.plist')
+  const extraEntitlementSource = path.join(inputRoot, 'extra-entitlement-source')
+  writeFileSync(extraEntitlementsPath, REQUIRED_PROBE_ENTITLEMENTS_XML.replace('</dict>', '<key>com.apple.security.network.client</key><true/></dict>'), { mode: 0o600 })
+  copyFileSync(unsigned, extraEntitlementSource); chmodSync(extraEntitlementSource, 0o700)
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'oracle.phase3b.test.extra', '--entitlements', extraEntitlementsPath, '--timestamp=none', extraEntitlementSource])
+  const extraEntitlementsRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'p3b-probe-extra-entitlements-')))
+  chmodSync(extraEntitlementsRoot, 0o700)
+  assert.throws(() => rebuildProbe(extraEntitlementsRoot, unsigned, reviewed, extraEntitlementSource), (error: Error & { code?: string }) => error.code === 'launch_image_entitlements_invalid')
 
   const version = spawnSync('/usr/bin/codesign', ['--version'], { encoding: 'utf8' })
   const versionOutput = `${version.stdout}${version.stderr}`.trim()
