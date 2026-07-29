@@ -18,6 +18,7 @@ export type LaunchImageRecord = Readonly<{
   recipe_identity_sha256: string
   probe_semantics_sha256: string
   code_signature_identity_sha256: string | null
+  code_signature_entitlements_sha256: string | null
   reviewed_artifact_set_sha256: string
   record_sha256: string
 }>
@@ -43,7 +44,7 @@ export type StaticAnchor = Readonly<{
 }>
 
 type Recipe = Readonly<{
-  schema_id: 'oracle-lab-p3b-launch-recipe.v1'
+  schema_id: 'oracle-lab-p3b-launch-recipe.v5'
   kind: 'original' | 'probe'
   source_sha256: string
   source_tree_sha256: string
@@ -57,29 +58,50 @@ type Recipe = Readonly<{
   rebuild_verified: true
   code_signature_identifier: string | null
   code_signature_identity_sha256: string | null
+  code_signature_entitlements_sha256: string | null
+  reviewed_signed_source_sha256: string | null
   recipe_sha256: string
 }>
 
 const images = new WeakSet<object>()
 const anchors = new WeakSet<object>()
 export const TARGET_EXECUTABLE_MAXIMUM_BYTES = TARGET_PROFILE.maximum_executable_bytes
+export const REQUIRED_PROBE_ENTITLEMENTS = deepFreeze({
+  'com.apple.security.automation.apple-events': true,
+  'com.apple.security.cs.allow-jit': true,
+  'com.apple.security.cs.allow-unsigned-executable-memory': true,
+  'com.apple.security.cs.disable-library-validation': true,
+  'com.apple.security.device.audio-input': true,
+})
+export const REQUIRED_PROBE_ENTITLEMENTS_SHA256 = sha256Canonical(REQUIRED_PROBE_ENTITLEMENTS)
+export const REQUIRED_PROBE_ENTITLEMENTS_XML = '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.automation.apple-events</key><true/><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/><key>com.apple.security.device.audio-input</key><true/></dict></plist>\n'
 const ORIGINAL_SEMANTICS = ['byte-identical-copy', 'no-observer-mutation'] as const
 const PROBE_SEMANTICS = ['request-observation-only', 'response-observation-only', 'no-request-mutation', 'no-response-mutation', 'no-retry-mutation', 'no-config-mutation', 'no-auth-mutation'] as const
+
+export function requiredProbeEntitlementsSha256(file: string): string {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Phase3BProductionError('launch_image_platform_invalid', 'probe entitlements support only darwin-arm64')
+  const extracted = spawnSync('/usr/bin/codesign', ['-d', '--xml', '--entitlements', '-', file], { encoding: 'buffer', timeout: 10_000, maxBuffer: 1_048_576 })
+  const expected = Buffer.from(REQUIRED_PROBE_ENTITLEMENTS_XML, 'utf8')
+  if (extracted.status !== 0 || extracted.error || !Buffer.isBuffer(extracted.stdout) || !extracted.stdout.equals(expected)) throw new Phase3BProductionError('launch_image_entitlements_invalid', 'probe code signature entitlements differ from the fixed allowlist')
+  return REQUIRED_PROBE_ENTITLEMENTS_SHA256
+}
 
 function readRecipe(file: string, expectedRecipeSha256: string, kind: Recipe['kind'], sourceSha256: string, preSignSha256: string, sourceTreeSha256: string, toolchainSha256: string): { recipe: Recipe; identity: StableFileIdentity } {
   const root = path.dirname(file)
   const relative = path.basename(file)
   const { value, identity } = readCanonical(root, relative, 32_768)
   if (identity.sha256 !== expectedRecipeSha256) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe bytes differ from the trusted reviewed artifact set')
-  assertExactKeys(value, ['schema_id', 'kind', 'source_sha256', 'source_tree_sha256', 'toolchain_sha256', 'semantics', 'build_command', 'build_command_sha256', 'pre_sign_sha256', 'post_sign_sha256', 'rebuilt_post_sign_sha256', 'rebuild_verified', 'code_signature_identifier', 'code_signature_identity_sha256', 'recipe_sha256'], 'launch_recipe_invalid')
+  assertExactKeys(value, ['schema_id', 'kind', 'source_sha256', 'source_tree_sha256', 'toolchain_sha256', 'semantics', 'build_command', 'build_command_sha256', 'pre_sign_sha256', 'post_sign_sha256', 'rebuilt_post_sign_sha256', 'rebuild_verified', 'code_signature_identifier', 'code_signature_identity_sha256', 'code_signature_entitlements_sha256', 'reviewed_signed_source_sha256', 'recipe_sha256'], 'launch_recipe_invalid')
   assertDigestField(value, 'recipe_sha256', 'launch_recipe_invalid')
   const expectedSemantics = kind === 'probe' ? PROBE_SEMANTICS : ORIGINAL_SEMANTICS
-  const expectedBuildCommand = kind === 'original' ? [['/bin/cp', '$SOURCE', '$OUTPUT']] : [['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT']]
-  if (value.schema_id !== 'oracle-lab-p3b-launch-recipe.v4' || value.kind !== kind || value.source_sha256 !== sourceSha256 || value.pre_sign_sha256 !== preSignSha256 || value.post_sign_sha256 !== sourceSha256 || value.rebuilt_post_sign_sha256 !== sourceSha256 || value.rebuild_verified !== true || value.source_tree_sha256 !== sourceTreeSha256 || value.toolchain_sha256 !== toolchainSha256 || sha256Canonical(value.semantics) !== sha256Canonical(expectedSemantics) || sha256Canonical(value.build_command) !== sha256Canonical(expectedBuildCommand) || value.build_command_sha256 !== sha256Canonical(expectedBuildCommand)) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe rebuild/source/tree/toolchain/probe semantics drifted')
+  const expectedBuildCommand = kind === 'original' ? [['/bin/cp', '$SOURCE', '$OUTPUT']] : [['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--entitlements', '$ENTITLEMENTS', '--timestamp=none', '$OUTPUT']]
+  if (value.schema_id !== 'oracle-lab-p3b-launch-recipe.v5' || value.kind !== kind || value.source_sha256 !== sourceSha256 || value.pre_sign_sha256 !== preSignSha256 || value.post_sign_sha256 !== sourceSha256 || value.rebuilt_post_sign_sha256 !== sourceSha256 || value.rebuild_verified !== true || value.source_tree_sha256 !== sourceTreeSha256 || value.toolchain_sha256 !== toolchainSha256 || sha256Canonical(value.semantics) !== sha256Canonical(expectedSemantics) || sha256Canonical(value.build_command) !== sha256Canonical(expectedBuildCommand) || value.build_command_sha256 !== sha256Canonical(expectedBuildCommand)) throw new Phase3BProductionError('launch_recipe_invalid', 'recipe rebuild/source/tree/toolchain/probe semantics drifted')
   if (kind === 'probe') {
     assertSha256(value.code_signature_identity_sha256, 'launch_recipe_invalid', 'code signature identity')
+    assertSha256(value.reviewed_signed_source_sha256, 'launch_recipe_invalid', 'reviewed signed source')
     if (typeof value.code_signature_identifier !== 'string' || !/^[A-Za-z0-9._-]{1,255}$/.test(value.code_signature_identifier)) throw new Phase3BProductionError('launch_recipe_invalid', 'probe signature identifier is invalid')
-  } else if (value.code_signature_identity_sha256 !== null || value.code_signature_identifier !== null) throw new Phase3BProductionError('launch_recipe_invalid', 'original recipe must not claim a probe signature')
+    if (value.code_signature_entitlements_sha256 !== REQUIRED_PROBE_ENTITLEMENTS_SHA256) throw new Phase3BProductionError('launch_recipe_invalid', 'probe recipe does not bind the fixed entitlement allowlist')
+  } else if (value.code_signature_identity_sha256 !== null || value.code_signature_identifier !== null || value.code_signature_entitlements_sha256 !== null || value.reviewed_signed_source_sha256 !== null) throw new Phase3BProductionError('launch_recipe_invalid', 'original recipe must not claim a probe signature')
   return { recipe: deepFreeze(value as Recipe), identity }
 }
 
@@ -98,7 +120,9 @@ function recordImage(input: { selectedClass: LaunchImageRecord['selected_executa
   const imageIdentity = stableRead(input.imagePath, { mode: 0o500, maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   if (imageIdentity.sha256 !== input.sourceIdentity.sha256 || imageIdentity.size !== input.sourceIdentity.size) throw new Phase3BProductionError('launch_image_drift', 'campaign image is not byte-identical to sealed source')
   const signature = input.selectedClass === 'probe_image' ? codeSignatureIdentity(input.imagePath) : null
+  const entitlements = input.selectedClass === 'probe_image' ? requiredProbeEntitlementsSha256(input.imagePath) : null
   if (signature !== input.recipe.code_signature_identity_sha256) throw new Phase3BProductionError('launch_image_signature_invalid', 'probe signature identity does not match recipe')
+  if (entitlements !== input.recipe.code_signature_entitlements_sha256) throw new Phase3BProductionError('launch_image_entitlements_invalid', 'probe entitlements do not match recipe')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-launch-image.v1' as const,
     selected_executable_class: input.selectedClass,
@@ -111,6 +135,7 @@ function recordImage(input: { selectedClass: LaunchImageRecord['selected_executa
     recipe_identity_sha256: sha256Canonical(input.recipeIdentity),
     probe_semantics_sha256: sha256Canonical(input.recipe.semantics),
     code_signature_identity_sha256: signature,
+    code_signature_entitlements_sha256: entitlements,
     reviewed_artifact_set_sha256: input.reviewedArtifactSetSha256,
   }
   const record = deepFreeze({ ...unsigned, record_sha256: sha256Canonical(unsigned) })
@@ -151,11 +176,12 @@ export function verifyLaunchImage(record: unknown): LaunchImageRecord {
   const recipe = stableRead(value.recipe_identity.path, { mode: 0o600, maximumBytes: 32_768 }).identity
   if (sha256Canonical(current) !== sha256Canonical(value.image_identity) || sha256Canonical(source) !== sha256Canonical(value.source_identity) || sha256Canonical(recipe) !== sha256Canonical(value.recipe_identity) || sha256Canonical(recipe) !== value.recipe_identity_sha256 || value.record_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'record_sha256')))) throw new Phase3BProductionError('launch_image_drift', 'launch image/source/recipe live identity drifted')
   if (value.selected_executable_class === 'probe_image' && codeSignatureIdentity(value.image_identity.path) !== value.code_signature_identity_sha256) throw new Phase3BProductionError('launch_image_signature_invalid', 'probe signature drifted')
+  if (value.selected_executable_class === 'probe_image' && requiredProbeEntitlementsSha256(value.image_identity.path) !== value.code_signature_entitlements_sha256) throw new Phase3BProductionError('launch_image_entitlements_invalid', 'probe entitlements drifted')
   return value
 }
 
 export function loadLaunchImageRecord(value: unknown): LaunchImageRecord {
-  assertExactKeys(value, ['schema_id', 'selected_executable_class', 'image_identity', 'source_identity', 'source_tree_sha256', 'toolchain_sha256', 'recipe_sha256', 'recipe_identity', 'recipe_identity_sha256', 'probe_semantics_sha256', 'code_signature_identity_sha256', 'reviewed_artifact_set_sha256', 'record_sha256'], 'launch_image_invalid')
+  assertExactKeys(value, ['schema_id', 'selected_executable_class', 'image_identity', 'source_identity', 'source_tree_sha256', 'toolchain_sha256', 'recipe_sha256', 'recipe_identity', 'recipe_identity_sha256', 'probe_semantics_sha256', 'code_signature_identity_sha256', 'code_signature_entitlements_sha256', 'reviewed_artifact_set_sha256', 'record_sha256'], 'launch_image_invalid')
   assertDigestField(value, 'record_sha256', 'launch_image_invalid')
   if (value.schema_id !== 'oracle-lab-p3b-launch-image.v1' || !['original_image', 'probe_image'].includes(String(value.selected_executable_class))) throw new Phase3BProductionError('launch_image_invalid', 'launch image schema or class drifted')
   for (const field of ['source_tree_sha256', 'toolchain_sha256', 'recipe_sha256', 'recipe_identity_sha256', 'probe_semantics_sha256', 'reviewed_artifact_set_sha256'] as const) assertSha256(value[field], 'launch_image_invalid', field)

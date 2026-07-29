@@ -7,7 +7,7 @@ import { validateIndependentGoReceipt } from './closeout.js'
 import { Phase3BProductionError, assertDigestField, assertExactKeys, canonicalBytes, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, REPOSITORY_AUTHORITY, TARGET_PROFILE, buildCampaignLedger, crossRepoAuthority, materializeEs7Sources, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger } from './ledger.js'
 import { REQUEST_AST_MATERIALIZER } from './receiver.js'
-import { TARGET_EXECUTABLE_MAXIMUM_BYTES } from './launch-image.js'
+import { REQUIRED_PROBE_ENTITLEMENTS_SHA256, REQUIRED_PROBE_ENTITLEMENTS_XML, TARGET_EXECUTABLE_MAXIMUM_BYTES, requiredProbeEntitlementsSha256 } from './launch-image.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { fixedGit } from './trust.js'
 
@@ -25,7 +25,7 @@ export type MaterializedCrossRepoValidation = Readonly<{
 }>
 
 export const MATERIALIZED_BASENAMES = deepFreeze({
-    campaign_input: 'phase3b-campaign-input.json', operator_authority: 'phase3b-operator-authority.json', cross_review_artifact: 'phase3b-cross-review-artifact.json', c1_record: 'phase3b-c1-cross-repo-record.json', es7_fixtures: 'phase3b-es7-typed-fixtures.json', es8_go_receipt: 'phase3b-es8-go-receipt.json', es8_ts_agreement: 'phase3b-es8-ts-c1-agreement.json', es9_coverage: 'phase3b-es9-coverage-contract.json', focused_suite: 'phase3b-focused-suite.json', original_recipe: 'phase3b-original-launch-recipe.json', probe_recipe: 'phase3b-probe-launch-recipe.json', probe_unsigned: 'phase3b-probe-unsigned', probe_rebuilt: 'phase3b-probe-rebuilt', schema_bundle: 'phase3b-schema-bundle.json',
+    campaign_input: 'phase3b-campaign-input.json', operator_authority: 'phase3b-operator-authority.json', cross_review_artifact: 'phase3b-cross-review-artifact.json', c1_record: 'phase3b-c1-cross-repo-record.json', es7_fixtures: 'phase3b-es7-typed-fixtures.json', es8_go_receipt: 'phase3b-es8-go-receipt.json', es8_ts_agreement: 'phase3b-es8-ts-c1-agreement.json', es9_coverage: 'phase3b-es9-coverage-contract.json', focused_suite: 'phase3b-focused-suite.json', original_recipe: 'phase3b-original-launch-recipe.json', probe_recipe: 'phase3b-probe-launch-recipe.json', probe_unsigned: 'phase3b-probe-unsigned', probe_rebuilt: 'phase3b-probe-rebuilt', probe_entitlements: 'phase3b-probe-entitlements.plist', schema_bundle: 'phase3b-schema-bundle.json',
 })
 
 export type AuthorityMaterializerInput = Readonly<{
@@ -67,10 +67,10 @@ function codeSignatureDetails(file: string): Readonly<{ identity_sha256: string;
   return deepFreeze({ identity_sha256: sha256Bytes(Buffer.from(details.replaceAll(file, '$SEALED_IMAGE'), 'utf8')), identifier })
 }
 
-export function launchRecipe(kind: 'original' | 'probe', sourceSha256: string, preSignSha256: string, sourceTreeSha256: string, toolchainSha256: string, signature: string | null, signatureIdentifier: string | null = kind === 'probe' ? 'reviewed.probe' : null): Readonly<Record<string, unknown>> {
+export function launchRecipe(kind: 'original' | 'probe', sourceSha256: string, preSignSha256: string, sourceTreeSha256: string, toolchainSha256: string, signature: string | null, signatureIdentifier: string | null = kind === 'probe' ? 'reviewed.probe' : null, reviewedSignedSourceSha256: string | null = kind === 'probe' ? sourceSha256 : null, entitlementsSha256: string | null = kind === 'probe' ? REQUIRED_PROBE_ENTITLEMENTS_SHA256 : null): Readonly<Record<string, unknown>> {
   const semantics = kind === 'original' ? ['byte-identical-copy', 'no-observer-mutation'] : ['request-observation-only', 'response-observation-only', 'no-request-mutation', 'no-response-mutation', 'no-retry-mutation', 'no-config-mutation', 'no-auth-mutation']
-  const buildCommand = kind === 'original' ? [['/bin/cp', '$SOURCE', '$OUTPUT']] : [['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT']]
-  const unsigned = { schema_id: 'oracle-lab-p3b-launch-recipe.v4', kind, source_sha256: sourceSha256, source_tree_sha256: sourceTreeSha256, toolchain_sha256: toolchainSha256, semantics, build_command: buildCommand, build_command_sha256: sha256Canonical(buildCommand), pre_sign_sha256: preSignSha256, post_sign_sha256: sourceSha256, rebuilt_post_sign_sha256: sourceSha256, rebuild_verified: true, code_signature_identifier: signatureIdentifier, code_signature_identity_sha256: signature }
+  const buildCommand = kind === 'original' ? [['/bin/cp', '$SOURCE', '$OUTPUT']] : [['/bin/cp', '$UNSIGNED_SOURCE', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--timestamp=none', '$OUTPUT'], ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier', '$CODE_SIGNATURE_IDENTIFIER', '--entitlements', '$ENTITLEMENTS', '--timestamp=none', '$OUTPUT']]
+  const unsigned = { schema_id: 'oracle-lab-p3b-launch-recipe.v5', kind, source_sha256: sourceSha256, source_tree_sha256: sourceTreeSha256, toolchain_sha256: toolchainSha256, semantics, build_command: buildCommand, build_command_sha256: sha256Canonical(buildCommand), pre_sign_sha256: preSignSha256, post_sign_sha256: sourceSha256, rebuilt_post_sign_sha256: sourceSha256, rebuild_verified: true, code_signature_identifier: signatureIdentifier, code_signature_identity_sha256: signature, code_signature_entitlements_sha256: entitlementsSha256, reviewed_signed_source_sha256: reviewedSignedSourceSha256 }
   return deepFreeze({ ...unsigned, recipe_sha256: sha256Canonical(unsigned) })
 }
 
@@ -88,21 +88,30 @@ export function validateCodesignToolchain(file: string): void {
   if (record.bytes.at(-1) !== 0x0a || !canonicalBytes(value).equals(record.bytes.subarray(0, -1)) || value.digest !== sha256Bytes(canonicalBytes(unsigned)) || value.schema_version !== 'oracle-lab-phase3a-toolchain.v1' || !codesign || codesign.status !== 'available' || codesign.executable_path !== '/usr/bin/codesign' || codesign.executable_sha256 !== executable.sha256 || codesign.version_output_sha256 !== sha256Bytes(Buffer.from(probeOutput, 'utf8')) || codesign.version_first_line !== (probeOutput.split(/\r?\n/, 1)[0]?.slice(0, 240) || '(no version output)') || codesign.probe_exit_code !== probe.status || probe.error || probe.status === null) throw new Phase3BProductionError('authority_materialization_invalid', 'toolchain does not canonically pin the exact live codesign executable and version probe')
 }
 
-export function rebuildProbe(root: string, unsignedSource: string, reviewedSignedSource: string): Readonly<{ unsigned: ReturnType<typeof stableRead>['identity']; rebuilt: ReturnType<typeof stableRead>['identity']; signature: string; identifier: string }> {
+export function rebuildProbe(root: string, unsignedSource: string, reviewedSignedSource: string, entitlementSource: string): Readonly<{ unsigned: ReturnType<typeof stableRead>['identity']; rebuilt: ReturnType<typeof stableRead>['identity']; signature: string; identifier: string; entitlements_sha256: string; reviewed_signed_source_sha256: string }> {
   const unsignedBytes = stableRead(unsignedSource, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).bytes
   const unsignedVerification = spawnSync('/usr/bin/codesign', ['--verify', '--strict', '--verbose=4', unsignedSource], { encoding: 'utf8', timeout: 10_000, maxBuffer: 1_048_576 })
   if (unsignedVerification.status === 0 || unsignedVerification.error) throw new Phase3BProductionError('authority_materialization_invalid', 'probe unsigned source is already signed or cannot be verified as unsigned')
+  const sourceEntitlementsSha256 = requiredProbeEntitlementsSha256(entitlementSource)
+  if (sourceEntitlementsSha256 !== REQUIRED_PROBE_ENTITLEMENTS_SHA256) throw new Phase3BProductionError('authority_materialization_invalid', 'entitlement source differs from the fixed probe entitlement allowlist')
   const unsigned = writeExclusiveBytes(root, MATERIALIZED_BASENAMES.probe_unsigned, unsignedBytes, 0o500)
   const writable = writeExclusiveBytes(root, MATERIALIZED_BASENAMES.probe_rebuilt, unsignedBytes, 0o700)
+  const entitlements = writeExclusiveBytes(root, MATERIALIZED_BASENAMES.probe_entitlements, Buffer.from(REQUIRED_PROBE_ENTITLEMENTS_XML, 'utf8'), 0o600)
   const reviewedDetails = codeSignatureDetails(reviewedSignedSource)
-  const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', reviewedDetails.identifier, '--timestamp=none', writable.path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 1_048_576, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } })
-  if (signed.status !== 0 || signed.error) throw new Phase3BProductionError('authority_materialization_invalid', 'deterministic probe codesign rebuild failed')
+  const legacySigned = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', reviewedDetails.identifier, '--timestamp=none', writable.path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 1_048_576, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } })
+  if (legacySigned.status !== 0 || legacySigned.error) throw new Phase3BProductionError('authority_materialization_invalid', 'reviewed probe codesign reconstruction failed')
+  const reviewed = stableRead(reviewedSignedSource, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  const legacyRebuilt = stableRead(writable.path, { mode: 0o700, maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
+  const legacyDetails = codeSignatureDetails(writable.path)
+  if (unsigned.sha256 === reviewed.sha256 || legacyRebuilt.sha256 !== reviewed.sha256 || legacyRebuilt.size !== reviewed.size || legacyDetails.identity_sha256 !== reviewedDetails.identity_sha256 || legacyDetails.identifier !== reviewedDetails.identifier) throw new Phase3BProductionError('authority_materialization_invalid', 'legacy rebuild differs from the independently reviewed signed probe')
+  const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', reviewedDetails.identifier, '--entitlements', entitlements.path, '--timestamp=none', writable.path], { encoding: 'utf8', timeout: 120_000, maxBuffer: 1_048_576, env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' } })
+  if (signed.status !== 0 || signed.error) throw new Phase3BProductionError('authority_materialization_invalid', 'entitlement-preserving probe codesign rebuild failed')
   chmodSync(writable.path, 0o500)
   const rebuilt = stableRead(writable.path, { mode: 0o500, maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
-  const reviewed = stableRead(reviewedSignedSource, { maximumBytes: TARGET_EXECUTABLE_MAXIMUM_BYTES }).identity
   const rebuiltDetails = codeSignatureDetails(writable.path)
-  if (unsigned.sha256 === reviewed.sha256 || rebuilt.sha256 !== reviewed.sha256 || rebuilt.size !== reviewed.size || rebuiltDetails.identity_sha256 !== reviewedDetails.identity_sha256 || rebuiltDetails.identifier !== reviewedDetails.identifier) throw new Phase3BProductionError('authority_materialization_invalid', 'rebuilt probe differs from the independently reviewed signed probe')
-  return deepFreeze({ unsigned, rebuilt, signature: rebuiltDetails.identity_sha256, identifier: rebuiltDetails.identifier })
+  const rebuiltEntitlementsSha256 = requiredProbeEntitlementsSha256(writable.path)
+  if (rebuilt.sha256 === reviewed.sha256 || rebuiltDetails.identifier !== reviewedDetails.identifier || rebuiltEntitlementsSha256 !== REQUIRED_PROBE_ENTITLEMENTS_SHA256) throw new Phase3BProductionError('authority_materialization_invalid', 'final probe signature does not bind the reviewed probe and fixed entitlements')
+  return deepFreeze({ unsigned, rebuilt, signature: rebuiltDetails.identity_sha256, identifier: rebuiltDetails.identifier, entitlements_sha256: rebuiltEntitlementsSha256, reviewed_signed_source_sha256: reviewed.sha256 })
 }
 
 export function buildEs7TypedFixtureContract(campaignId: string, c1ReviewSha256: string): Readonly<Record<string, unknown>> {
@@ -188,10 +197,10 @@ export function materializeAuthorityArtifacts(input: AuthorityMaterializerInput)
   const archive = stableRead(input.platform_archive_path, { maximumBytes: 134_217_728 }).identity
   if (original.sha256 !== TARGET_PROFILE.entrypoint_sha256 || original.size !== TARGET_PROFILE.entrypoint_size || sourceTree.sha256 !== TARGET_PROFILE.platform_tree_sha256 || archive.sha256 !== TARGET_PROFILE.platform_archive_sha256) throw new Phase3BProductionError('authority_materialization_invalid', 'target source/tree/archive identity drifted')
   validateCodesignToolchain(input.toolchain_path)
-  const rebuiltProbe = rebuildProbe(root, input.probe_unsigned_source, input.probe_source)
-  if (rebuiltProbe.unsigned.sha256 !== probeUnsigned.sha256 || rebuiltProbe.rebuilt.sha256 !== probe.sha256) throw new Phase3BProductionError('authority_materialization_invalid', 'probe rebuild source identity drifted')
+  const rebuiltProbe = rebuildProbe(root, input.probe_unsigned_source, input.probe_source, input.original_source)
+  if (rebuiltProbe.unsigned.sha256 !== probeUnsigned.sha256 || rebuiltProbe.reviewed_signed_source_sha256 !== probe.sha256) throw new Phase3BProductionError('authority_materialization_invalid', 'probe rebuild source identity drifted')
   const originalRecipeIdentity = writeExclusiveCanonical(root, MATERIALIZED_BASENAMES.original_recipe, launchRecipe('original', original.sha256, original.sha256, sourceTree.sha256, toolchain.sha256, null))
-  const probeRecipeIdentity = writeExclusiveCanonical(root, MATERIALIZED_BASENAMES.probe_recipe, launchRecipe('probe', rebuiltProbe.rebuilt.sha256, rebuiltProbe.unsigned.sha256, sourceTree.sha256, toolchain.sha256, rebuiltProbe.signature, rebuiltProbe.identifier))
+  const probeRecipeIdentity = writeExclusiveCanonical(root, MATERIALIZED_BASENAMES.probe_recipe, launchRecipe('probe', rebuiltProbe.rebuilt.sha256, rebuiltProbe.unsigned.sha256, sourceTree.sha256, toolchain.sha256, rebuiltProbe.signature, rebuiltProbe.identifier, rebuiltProbe.reviewed_signed_source_sha256, rebuiltProbe.entitlements_sha256))
   const schemaFiles = ['authority-materializer-cli.ts', 'authority-materializer.ts', 'campaign-controller.ts', 'closeout.ts', 'ephemeral-signer.ts', 'requirements-signer-session-cli.ts', 'security-reviewer-session-cli.ts', 'pre-epoch-admission-cli.ts', 'pre-epoch-admission.ts', 'execution-store.ts', 'github-web-flow.gpg', 'github-web-flow-keyring.gpg', 'github-web-flow-keyring.kbx', 'github-web-flow-gnupg/pubring.kbx', 'github-web-flow-gpgv', 'launch-authority.ts', 'launch-image.ts', 'ledger.ts', 'receiver.ts', 'trust.ts'].map((name) => {
     const relative = `tools/oracle-lab/phase3b-evidence-sufficiency/${name}`
     return { relative_path: relative, sha256: stableRead(path.join(input.cc_repository, relative), { maximumBytes: 1_048_576 }).identity.sha256 }
