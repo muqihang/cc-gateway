@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -14,7 +14,7 @@ import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExe
 import { FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { classifySyntheticAuthHeader } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
-import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
+import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 
@@ -196,7 +196,12 @@ rescue StandardError
 ensure
   socket&.close
 end
-STDOUT.write(JSON.generate({ route: tcp_attempts('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp_attempts('127.0.0.1', Integer(ARGV[1])), external: tcp_attempts('1.1.1.1', 443) }))`
+def process_info(pid)
+  system('/bin/ps', '-p', pid.to_s, out: File::NULL, err: File::NULL) == true
+rescue StandardError
+  false
+end
+STDOUT.write(JSON.generate({ route: tcp_attempts('127.0.0.1', Integer(ARGV[0])), route_udp: udp('127.0.0.1', Integer(ARGV[0])), adjacent: tcp_attempts('127.0.0.1', Integer(ARGV[1])), external: tcp_attempts('1.1.1.1', 443), other_process_info: process_info(Process.pid) }))`
     const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, '/usr/bin/ruby', '--disable=gems', '-e', probe, String(routePort), String(adjacentPort)], {
         cwd: runRoot,
@@ -212,10 +217,44 @@ STDOUT.write(JSON.generate({ route: tcp_attempts('127.0.0.1', Integer(ARGV[0])),
       child.once('error', (error) => { clearTimeout(timer); resolve({ status: null, stdout, stderr: `${stderr}${error.message}` }) })
     })
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false })
+    assert.deepEqual(JSON.parse(result.stdout), { route: true, route_udp: false, adjacent: false, external: false, other_process_info: false })
   } finally {
     await Promise.all([close(route), close(adjacent)])
   }
+})
+
+const EXACT_PHASE3B_TARGET = path.join(os.homedir(), '.codex/evidence/claude-code-2.1.215-phase3a-20260720-H3A/intake/platform/2.1.215/unpacked/package/claude')
+
+test('sandbox policy starts the exact Claude Code 2.1.215 target without weakening host isolation', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(EXACT_PHASE3B_TARGET) }, async () => {
+  const root = privateRoot('p3b-sandbox-target-startup-')
+  const runRoot = path.join(root, 'run')
+  mkdirSync(runRoot, { mode: 0o700 })
+  const targetIdentity = stableRead(EXACT_PHASE3B_TARGET, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity
+  assert.equal(targetIdentity.sha256, TARGET_PROFILE.entrypoint_sha256)
+  assert.equal(targetIdentity.size, TARGET_PROFILE.entrypoint_size)
+  const profile = `${buildSandboxProfile(root, runRoot, [65535])} (allow process-exec (literal "${EXACT_PHASE3B_TARGET}")) (allow file-read* (literal "${EXACT_PHASE3B_TARGET}"))`
+  const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve) => {
+    const child = spawn('/usr/bin/sandbox-exec', ['-p', profile, EXACT_PHASE3B_TARGET, '--version'], {
+      cwd: runRoot,
+      env: { PATH: '/usr/bin:/bin', HOME: runRoot, TMPDIR: runRoot, TZ: 'UTC', LANG: 'C', LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
+    child.once('close', (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr }) })
+    child.once('error', (error) => { clearTimeout(timer); resolve({ status: null, signal: null, stdout, stderr: `${stderr}${error.message}` }) })
+  })
+  assert.equal(result.signal, null, result.stderr || `target terminated by ${result.signal}`)
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout, '2.1.215 (Claude Code)\n')
+  assert.match(profile, /\(deny process-info\*\)/)
+  assert.match(profile, /\(allow process-info-pidinfo \(target self\)\)/)
+  assert.doesNotMatch(profile, /\(allow process-info-pidinfo\)/)
+  assert.doesNotMatch(profile, /\(allow process-info\*\)/)
+  assert.match(profile, /\(allow file-read\* \(subpath "\/private\/var\/db\/timezone"\)\)/)
 })
 
 test('RED: execute mode claims a sealed namespace before fallible validation and rejects re-entry', async () => {
