@@ -3,7 +3,7 @@ import { chmodSync } from 'node:fs'
 import path from 'node:path'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
-import { REPOSITORY_AUTHORITY, TARGET_PROFILE, crossRepoAuthority, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
+import { CLAUDE_MESSAGES_REQUEST_CONTRACT, REPOSITORY_AUTHORITY, TARGET_PROFILE, crossRepoAuthority, type CrossRepoAuthority, type TargetProfile } from './ledger.js'
 import { createPrivateDirectory, readCanonical, stableRead, writeExclusiveBytes, writeExclusiveCanonical, type StableFileIdentity } from './sealed-fs.js'
 
 export type LaunchImageRecord = Readonly<{
@@ -36,6 +36,7 @@ export type StaticAnchor = Readonly<{
   receiver_source_sha256: string
   receiver_executable_identity_sha256: string
   receiver_schema_sha256: string
+  request_target: typeof CLAUDE_MESSAGES_REQUEST_CONTRACT
   controller_source_sha256: string
   controller_executable_sha256: string
   schema_bundle_sha256: string
@@ -210,6 +211,7 @@ export function buildStaticAnchor(input: Readonly<{ c1: CrossRepoAuthority; plat
     receiver_source_sha256: input.receiver_source_sha256,
     receiver_executable_identity_sha256: input.receiver_executable_identity_sha256,
     receiver_schema_sha256: input.receiver_schema_sha256,
+    request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT,
     controller_source_sha256: input.controller_source_sha256,
     controller_executable_sha256: input.controller_executable_sha256,
     schema_bundle_sha256: input.schema_bundle_sha256,
@@ -227,13 +229,13 @@ export function assertStaticAnchor(anchor: unknown): asserts anchor is StaticAnc
 }
 
 export function loadStaticAnchor(value: unknown): StaticAnchor {
-  assertExactKeys(value, ['schema_id', 'repositories', 'c1', 'target_profile', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'original_image_record_sha256', 'probe_image_record_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256', 'anchor_sha256'], 'static_anchor_invalid')
+  assertExactKeys(value, ['schema_id', 'repositories', 'c1', 'target_profile', 'platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'original_image_record_sha256', 'probe_image_record_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'request_target', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256', 'anchor_sha256'], 'static_anchor_invalid')
   assertDigestField(value, 'anchor_sha256', 'static_anchor_invalid')
   assertExactKeys(value.c1, ['verdict', 'review_sha256'], 'static_anchor_invalid')
   const targetProfile = value.target_profile as TargetProfile
   if (!targetProfile || typeof targetProfile !== 'object' || targetProfile.platform !== 'darwin' || targetProfile.architecture !== 'arm64' || !Number.isSafeInteger(targetProfile.entrypoint_size) || !Number.isSafeInteger(targetProfile.maximum_executable_bytes) || targetProfile.entrypoint_size <= 0 || targetProfile.maximum_executable_bytes < targetProfile.entrypoint_size || targetProfile.maximum_executable_bytes > TARGET_EXECUTABLE_MAXIMUM_BYTES) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor target profile shape is invalid')
   for (const field of ['platform_archive_sha256', 'platform_tree_sha256', 'entrypoint_sha256'] as const) assertSha256(targetProfile[field], 'static_anchor_invalid', `target profile ${field}`)
-  if (value.schema_id !== 'oracle-lab-p3b-static-anchor.v1' || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(crossRepoAuthority(String(value.c1.review_sha256))) || value.platform_archive_sha256 !== targetProfile.platform_archive_sha256 || value.source_tree_sha256 !== targetProfile.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor authority or target profile drifted')
+  if (value.schema_id !== 'oracle-lab-p3b-static-anchor.v1' || sha256Canonical(value.repositories) !== sha256Canonical(REPOSITORY_AUTHORITY) || sha256Canonical(value.c1) !== sha256Canonical(crossRepoAuthority(String(value.c1.review_sha256))) || sha256Canonical(value.request_target) !== sha256Canonical(CLAUDE_MESSAGES_REQUEST_CONTRACT) || value.platform_archive_sha256 !== targetProfile.platform_archive_sha256 || value.source_tree_sha256 !== targetProfile.platform_tree_sha256) throw new Phase3BProductionError('static_anchor_invalid', 'static anchor authority, request target, or target profile drifted')
   for (const field of ['platform_archive_sha256', 'source_tree_sha256', 'toolchain_sha256', 'original_image_record_sha256', 'probe_image_record_sha256', 'receiver_source_sha256', 'receiver_executable_identity_sha256', 'receiver_schema_sha256', 'controller_source_sha256', 'controller_executable_sha256', 'schema_bundle_sha256', 'reviewed_artifact_set_sha256'] as const) assertSha256(value[field], 'static_anchor_invalid', field)
   const anchor = deepFreeze(value as StaticAnchor)
   anchors.add(anchor)
