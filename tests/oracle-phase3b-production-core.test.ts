@@ -248,11 +248,32 @@ test('validated control observations bind wire identity and preserve nested sema
     return unsigned
   }
   const request = (opaque: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
-    model: 'claude-sonnet-4-6', system: FIXED_STDIN_LITERAL.trimEnd(), messages: [{ role: 'user', content: opaque }], stream: true, max_tokens: 1, ...extra,
+    model: 'claude-sonnet-4-6', system: FIXED_STDIN_LITERAL, messages: [{ role: 'user', content: opaque }], stream: true, max_tokens: 1, ...extra,
   })
+  const literalRefs = (value: unknown): string[] => {
+    if (!value || typeof value !== 'object') return []
+    const record = value as Record<string, unknown>
+    return [
+      ...(typeof record.literal_ref === 'string' ? [record.literal_ref] : []),
+      ...(Array.isArray(value) ? value : Object.values(record)).flatMap(literalRefs),
+    ]
+  }
   const validated = Array.from({ length: 20 }, (_, index) => buildObservation(request(`opaque-${'x'.repeat(index + 1)}`))).map((observation) => validateObservationForControlStability(observation, validationRow))
   assert.equal(new Set(validated.map(({ projection }) => sha256Canonical(projection))).size, 1)
   assert.equal(new Set(validated.map(({ sha256 }) => sha256)).size, 20)
+  assert.ok(literalRefs(buildObservation(request('opaque-exact')).body_ast).includes(FIXED_STDIN_LITERAL_REF))
+
+  for (const nonExactPrompt of [
+    FIXED_STDIN_LITERAL.trimEnd(),
+    `${FIXED_STDIN_LITERAL}\n`,
+    FIXED_STDIN_LITERAL.replace(/\n$/, '\r\n'),
+    `prefix:${FIXED_STDIN_LITERAL}`,
+    `${FIXED_STDIN_LITERAL}:suffix`,
+  ]) {
+    const observation = buildObservation(request('opaque-non-exact', { system: nonExactPrompt }))
+    assert.equal(literalRefs(observation.body_ast).includes(FIXED_STDIN_LITERAL_REF), false)
+    assert.throws(() => validateObservationForControlStability(observation, validationRow), (error: Error & { code?: string }) => error.code === 'observation_invalid')
+  }
 
   const controls = ledger.rows.slice(0, 20)
   const classified = enforcePairAndRepetitionStability(controls, controls.map((row, index) => ({
