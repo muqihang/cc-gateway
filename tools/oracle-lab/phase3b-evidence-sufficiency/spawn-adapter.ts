@@ -6,11 +6,11 @@ import path from 'node:path'
 
 import type { ProductionController } from './controller.js'
 import { controllerState } from './controller.js'
-import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
+import { Phase3BProductionError, assertExactKeys, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { appendSpawned, appendStarted, appendTerminal, type ExecutionStore } from './execution-store.js'
 import { type LaunchAuthorityReceipt, assertLaunchAuthority } from './launch-authority.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES, type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
-import type { RunLedgerRow } from './ledger.js'
+import { LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, isExpectedLocalAuthFailureRow, type RunLedgerRow } from './ledger.js'
 import { type ReceiverAuthority, abortReceiverGroup, assertReceiverAuthority, prepareReceiverLaunch, registerReceiverTarget, sealReceiverGroup } from './receiver.js'
 import { prepareScenarioCell, preparedCellState } from './scenario-input.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
@@ -218,8 +218,8 @@ function externalSocketCount(pids: readonly number[], allowedPorts: readonly num
 
 function expectedExit(row: RunLedgerRow, exitCode: number | null, signal: string | null): boolean {
   if (signal !== null) return false
-  const expectsFailure = (row.family === 'auth' && row.schedule_id === 'auth-missing-credential' && row.arm.startsWith('treatment/'))
-    || (row.family === 'response_failure_recovery' && /_terminal$|^reset_terminal$|^partial_sse_then_eof$/.test(row.schedule_id))
+  if (isExpectedLocalAuthFailureRow(row)) return exitCode === 1
+  const expectsFailure = row.family === 'response_failure_recovery' && /_terminal$|^reset_terminal$|^partial_sse_then_eof$/.test(row.schedule_id)
   return expectsFailure ? exitCode !== null && exitCode !== 0 : exitCode === 0
 }
 
@@ -230,14 +230,59 @@ function safeDiagnostic(bytes: Buffer): Readonly<Record<string, unknown>> {
   return deepFreeze({ categories, normalized_sha256: sha256Bytes(Buffer.from(text, 'utf8')) })
 }
 
-function safeOutputProjection(bytes: Buffer): Readonly<{ safe_output_class: 'synthetic-output-complete' | 'absent' | 'unexpected'; safe_output_sha256: string | null }> {
-  if (bytes.length === 0) return deepFreeze({ safe_output_class: 'absent', safe_output_sha256: null })
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+export type SafeOutputProjection = Readonly<{ safe_output_class: 'synthetic-output-complete' | 'local-auth-missing-credential' | 'absent' | 'unexpected'; safe_output_sha256: string | null; safe_output_profile_sha256: string | null }>
+
+function exactLocalAuthOutput(value: unknown, row: RunLedgerRow): boolean {
+  if (!isExpectedLocalAuthFailureRow(row)) return false
+  try {
+    assertExactKeys(value, ['api_error_status', 'duration_api_ms', 'duration_ms', 'fast_mode_state', 'is_error', 'modelUsage', 'num_turns', 'permission_denials', 'result', 'session_id', 'stop_reason', 'subtype', 'terminal_reason', 'total_cost_usd', 'type', 'usage', 'uuid'], 'target_output_invalid')
+    const usage = value.usage
+    assertExactKeys(usage, ['cache_creation', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'inference_geo', 'input_tokens', 'iterations', 'output_tokens', 'server_tool_use', 'service_tier', 'speed'], 'target_output_invalid')
+    assertExactKeys(usage.server_tool_use, ['web_fetch_requests', 'web_search_requests'], 'target_output_invalid')
+    assertExactKeys(usage.cache_creation, ['ephemeral_1h_input_tokens', 'ephemeral_5m_input_tokens'], 'target_output_invalid')
+    assertExactKeys(value.modelUsage, [], 'target_output_invalid')
+    return value.type === 'result'
+      && value.subtype === 'success'
+      && value.is_error === true
+      && value.result === LOCAL_AUTH_RESULT_LITERAL
+      && value.session_id === row.run_id
+      && typeof value.uuid === 'string' && UUID_V4.test(value.uuid)
+      && value.api_error_status === null
+      && value.stop_reason === 'stop_sequence'
+      && value.terminal_reason === 'api_error'
+      && value.fast_mode_state === 'off'
+      && value.num_turns === 1
+      && value.duration_api_ms === 0
+      && Number.isSafeInteger(value.duration_ms) && Number(value.duration_ms) >= 0 && Number(value.duration_ms) <= MAX_WALL_MS
+      && value.total_cost_usd === 0
+      && Array.isArray(value.permission_denials) && value.permission_denials.length === 0
+      && Object.keys(value.modelUsage as Record<string, unknown>).length === 0
+      && usage.input_tokens === 0
+      && usage.cache_creation_input_tokens === 0
+      && usage.cache_read_input_tokens === 0
+      && usage.output_tokens === 0
+      && usage.server_tool_use.web_search_requests === 0
+      && usage.server_tool_use.web_fetch_requests === 0
+      && usage.service_tier === 'standard'
+      && usage.cache_creation.ephemeral_1h_input_tokens === 0
+      && usage.cache_creation.ephemeral_5m_input_tokens === 0
+      && usage.inference_geo === ''
+      && Array.isArray(usage.iterations) && usage.iterations.length === 0
+      && usage.speed === 'standard'
+  } catch { return false }
+}
+
+export function classifyTargetOutput(row: RunLedgerRow, bytes: Buffer): SafeOutputProjection {
+  if (bytes.length === 0) return deepFreeze({ safe_output_class: 'absent', safe_output_sha256: null, safe_output_profile_sha256: null })
   let value: unknown
-  try { value = JSON.parse(bytes.toString('utf8').trim()) } catch { bytes.fill(0); return deepFreeze({ safe_output_class: 'unexpected', safe_output_sha256: null }) }
+  try { value = JSON.parse(bytes.toString('utf8').trim()) } catch { bytes.fill(0); return deepFreeze({ safe_output_class: 'unexpected', safe_output_sha256: null, safe_output_profile_sha256: null }) }
+  if (exactLocalAuthOutput(value, row)) { bytes.fill(0); return deepFreeze({ safe_output_class: 'local-auth-missing-credential', safe_output_sha256: LOCAL_AUTH_RESULT_SHA256, safe_output_profile_sha256: LOCAL_AUTH_OUTPUT_PROFILE_SHA256 }) }
   const candidate = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>).result : null
   bytes.fill(0)
-  if (candidate !== 'output.complete') return deepFreeze({ safe_output_class: 'unexpected', safe_output_sha256: null })
-  return deepFreeze({ safe_output_class: 'synthetic-output-complete', safe_output_sha256: sha256Bytes(Buffer.from('output.complete', 'utf8')) })
+  if (candidate !== 'output.complete') return deepFreeze({ safe_output_class: 'unexpected', safe_output_sha256: null, safe_output_profile_sha256: null })
+  return deepFreeze({ safe_output_class: 'synthetic-output-complete', safe_output_sha256: sha256Bytes(Buffer.from('output.complete', 'utf8')), safe_output_profile_sha256: null })
 }
 
 function expectsCompleteOutput(row: RunLedgerRow): boolean {
@@ -324,8 +369,10 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
   try { verifyLaunchImage(image) } catch (error: unknown) { imageFailure = (error as { code?: string }).code ?? 'launch_image_drift' }
   const stdoutMaterial = Buffer.concat(stdoutSafe)
   stdoutSafe.forEach((bytes) => bytes.fill(0))
-  const outputProjection = safeOutputProjection(stdoutMaterial)
-  const outputAccepted = expectsCompleteOutput(input.row) ? outputProjection.safe_output_class === 'synthetic-output-complete' : outputProjection.safe_output_class !== 'synthetic-output-complete'
+  const outputProjection = classifyTargetOutput(input.row, stdoutMaterial)
+  const outputAccepted = isExpectedLocalAuthFailureRow(input.row)
+    ? outputProjection.safe_output_class === 'local-auth-missing-credential' && stderrBytes === 0
+    : expectsCompleteOutput(input.row) ? outputProjection.safe_output_class === 'synthetic-output-complete' : outputProjection.safe_output_class !== 'synthetic-output-complete'
   const success = !resourceFailure && !receiverFailure && !imageFailure && expectedExit(input.row, exit.exitCode, exit.signal) && outputAccepted
   const cause = resourceFailure ?? receiverFailure ?? imageFailure ?? (success ? null : 'unexpected_target_terminal')
   const terminalClass = success ? 'success' as const : 'failed_after_spawn' as const
@@ -336,7 +383,7 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
   return writeCellResult(runtimeRoot, input.row, cellBindings, terminalClass, terminal.receipt_sha256, receiverResultSha256, guardReceiptSha256, stdoutBytes, stderrBytes, externalSocketCount([targetPid], cell.routePorts), exit.exitCode, exit.signal, diagnostic, outputProjection)
 }
 
-function writeCellResult(runtimeRoot: string, row: RunLedgerRow, bindings: CellBindings, terminalClass: 'success' | 'spawn_error' | 'failed_after_spawn' | 'not_executed', terminalReceiptSha256: string, receiverResultSha256: string | null, guardReceiptSha256: string, stdoutBytes: number, stderrBytes: number, externalSockets: number, exitCode: number | null, signal: string | null, diagnostic: Readonly<Record<string, unknown>>, outputProjection: Readonly<Record<string, unknown>> = { safe_output_class: 'absent', safe_output_sha256: null }): RowExecutionResult {
+function writeCellResult(runtimeRoot: string, row: RunLedgerRow, bindings: CellBindings, terminalClass: 'success' | 'spawn_error' | 'failed_after_spawn' | 'not_executed', terminalReceiptSha256: string, receiverResultSha256: string | null, guardReceiptSha256: string, stdoutBytes: number, stderrBytes: number, externalSockets: number, exitCode: number | null, signal: string | null, diagnostic: Readonly<Record<string, unknown>>, outputProjection: Readonly<Record<string, unknown>> = { safe_output_class: 'absent', safe_output_sha256: null, safe_output_profile_sha256: null }): RowExecutionResult {
   const unsigned = { schema_id: 'oracle-lab-p3b-cell-result.v1', campaign_id: bindings.campaign_id, ledger_sha256: bindings.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, family: row.family, schedule_id: row.schedule_id, seed: row.seed, repetition: row.repetition, arm: row.arm, row_sha256: row.row_sha256, launch_authority_sha256: bindings.launch_authority_sha256, receiver_authority_sha256: bindings.receiver_authority_sha256, launch_image_record_sha256: bindings.launch_image_record_sha256, executable_identity_sha256: bindings.executable_identity_sha256, input_descriptor_sha256: bindings.input_descriptor_sha256, sandbox_profile_sha256: bindings.sandbox_profile_sha256, terminal_class: terminalClass, terminal_receipt_sha256: terminalReceiptSha256, receiver_result_sha256: receiverResultSha256, guard_receipt_sha256: guardReceiptSha256, target_terminal: { exit_code: exitCode, signal }, stdout: { byte_length: stdoutBytes, ...outputProjection }, stderr: { byte_length: stderrBytes, safe_diagnostic: diagnostic }, external_socket_count: externalSockets, raw_material_persisted: false }
   const cellResultSha256 = sha256Canonical(unsigned)
   writeExclusiveCanonical(runtimeRoot, `cell-results/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}.json`, { ...unsigned, cell_result_sha256: cellResultSha256 })

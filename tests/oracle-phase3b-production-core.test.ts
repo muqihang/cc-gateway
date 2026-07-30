@@ -9,16 +9,17 @@ import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
 import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateObservationForControlStability, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateLocalAuthCellTerminal, validateObservationForControlStability, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { REQUEST_AST_MATERIALIZER, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
+import { classifyTargetOutput } from '../tools/oracle-lab/phase3b-evidence-sufficiency/spawn-adapter.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const TEST_C1 = crossRepoAuthority('c'.repeat(64))
@@ -112,6 +113,127 @@ test('ledger and ES7 bind the exact captured beta query structure', () => {
     query_items: [{ name: 'beta', value: 'true' }],
   })
   assert.deepEqual(ES7_REQUEST_FIELDS.slice(0, 5), ['method', 'path', 'query_present', 'query_order', 'query_items'])
+})
+
+test('auth-missing-credential treatment binds a bootstrap-only local authentication terminal', () => {
+  const ledger = buildCampaignLedger('p3b-auth-local-terminal', TEST_C1)
+  const row = ledger.rows.find((candidate) => candidate.family === 'auth'
+    && candidate.schedule_id === 'auth-missing-credential'
+    && candidate.arm === 'treatment/instrumented')!
+  const bootstrapPeerUnsigned = {
+    target_pid: 16769,
+    local_address: '127.0.0.1',
+    local_port: 43123,
+    remote_address: '127.0.0.1',
+    remote_port: 53123,
+    executable_identity_sha256: TARGET_PROFILE.entrypoint_sha256,
+  }
+  const bootstrapPeer = { ...bootstrapPeerUnsigned, peer_socket_sha256: sha256Canonical(bootstrapPeerUnsigned) }
+  const receiver = {
+    request_count: 0,
+    response_count: 0,
+    attempt_ordinals: [],
+    connection_ordinals: [],
+    raw_socket_ordinals: [],
+    action_ordinals: [],
+    observation_sha256s: [],
+    receiver_terminal: 'sealed_local_auth_failure',
+    bootstrap: {
+      count: 1,
+      raw_socket_ordinal: 0,
+      peer_socket: bootstrapPeer,
+      response_status: 200,
+      response_content_length: 0,
+      response_finished: true,
+      socket_closed: true,
+      socket_close_had_error: false,
+      post_count_effect: 0,
+    },
+  }
+
+  assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, [], row))
+  const coverage = observationCoverageMatrix(ledger)
+  assert.equal(coverage.enabled.filter((entry) => entry.sequence_index === row.sequence_index).length, 0)
+  assert.equal(coverage.disabled.filter((entry) => entry.sequence_index === row.sequence_index && entry.reason_code === 'expected_local_auth_pre_request').length, ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length)
+
+  const control = ledger.rows.find((candidate) => candidate.family === 'auth'
+    && candidate.schedule_id === 'auth-missing-credential'
+    && candidate.arm === 'control/instrumented')!
+  assert.throws(() => validateReceiverOrdinalBindings(receiver, [], control), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
+})
+
+test('auth-missing-credential output classifier accepts only the frozen safe local terminal shape', () => {
+  const ledger = buildCampaignLedger('p3b-auth-local-output', TEST_C1)
+  const row = ledger.rows.find((candidate) => candidate.family === 'auth'
+    && candidate.schedule_id === 'auth-missing-credential'
+    && candidate.arm === 'treatment/uninstrumented')!
+  const output: Record<string, unknown> = {
+    api_error_status: null,
+    duration_api_ms: 0,
+    duration_ms: 104,
+    fast_mode_state: 'off',
+    is_error: true,
+    modelUsage: {},
+    num_turns: 1,
+    permission_denials: [],
+    result: LOCAL_AUTH_RESULT_LITERAL,
+    session_id: row.run_id,
+    stop_reason: 'stop_sequence',
+    subtype: 'success',
+    terminal_reason: 'api_error',
+    total_cost_usd: 0,
+    type: 'result',
+    usage: {
+      input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      output_tokens: 0,
+      server_tool_use: { web_search_requests: 0, web_fetch_requests: 0 },
+      service_tier: 'standard',
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      inference_geo: '',
+      iterations: [],
+      speed: 'standard',
+    },
+    uuid: '11111111-1111-4111-8111-111111111111',
+  }
+  const accepted = classifyTargetOutput(row, Buffer.from(`${JSON.stringify(output)}\n`, 'utf8'))
+  assert.deepEqual({ safe_output_class: accepted.safe_output_class, safe_output_sha256: accepted.safe_output_sha256 }, {
+    safe_output_class: 'local-auth-missing-credential',
+    safe_output_sha256: LOCAL_AUTH_RESULT_SHA256,
+  })
+  assert.match(String((accepted as unknown as Record<string, unknown>).safe_output_profile_sha256 ?? ''), /^[a-f0-9]{64}$/)
+  const cell = {
+    target_terminal: { exit_code: 1, signal: null },
+    stdout: { byte_length: 747, safe_output_class: 'local-auth-missing-credential', safe_output_sha256: LOCAL_AUTH_RESULT_SHA256, safe_output_profile_sha256: (accepted as unknown as Record<string, unknown>).safe_output_profile_sha256 },
+    stderr: { byte_length: 0 },
+  }
+  const terminal = { state: 'terminal', terminal_class: 'success', exit_code: 1, signal: null }
+  assert.doesNotThrow(() => validateLocalAuthCellTerminal(row, cell, terminal))
+  for (const drift of [
+    { cell: { ...cell, stdout: { ...cell.stdout, byte_length: 0 } }, terminal },
+    { cell: { ...cell, stdout: { ...cell.stdout, safe_output_profile_sha256: '0'.repeat(64) } }, terminal },
+    { cell, terminal: { ...terminal, exit_code: 2 } },
+    { cell, terminal: { ...terminal, signal: 'SIGTERM' } },
+    { cell: { ...cell, target_terminal: { exit_code: 2, signal: null } }, terminal },
+    { cell: { ...cell, target_terminal: { exit_code: 1, signal: 'SIGTERM' } }, terminal },
+    { cell: { ...cell, stdout: { ...cell.stdout, safe_output_sha256: '0'.repeat(64) } }, terminal },
+    { cell: { ...cell, stderr: { byte_length: 1 } }, terminal },
+  ]) assert.throws(() => validateLocalAuthCellTerminal(row, drift.cell, drift.terminal), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  const altered = [
+    { ...output, result: 'Not logged in' },
+    { ...output, session_id: '11111111-1111-4111-8111-111111111111' },
+    { ...output, terminal_reason: 'other' },
+    { ...output, extra: true },
+    { ...output, usage: { ...(output.usage as Record<string, unknown>), output_tokens: 1 } },
+    ...[[], 0, '', null, { unexpected: true }].map((modelUsage) => ({ ...output, modelUsage })),
+  ]
+  for (const value of altered) assert.equal(classifyTargetOutput(row, Buffer.from(JSON.stringify(value), 'utf8')).safe_output_class, 'unexpected')
+  const control = ledger.rows.find((candidate) => candidate.family === 'auth'
+    && candidate.schedule_id === 'auth-missing-credential'
+    && candidate.arm === 'control/uninstrumented')!
+  assert.equal(classifyTargetOutput(control, Buffer.from(JSON.stringify({ ...output, session_id: control.run_id }), 'utf8')).safe_output_class, 'unexpected')
+  assert.throws(() => validateLocalAuthCellTerminal(control, cell, terminal), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
 })
 
 test('control stability compares typed semantic shape while retaining per-observation integrity fields', () => {
@@ -394,7 +516,7 @@ test('closeout rejects missing, duplicate, gapped, reordered, extra, or substitu
   const receiver = {
     request_count: 2, response_count: 2,
     bootstrap: { count: 1, raw_socket_ordinal: 0, peer_socket: peer, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 },
-    attempt_ordinals: [0, 1], connection_ordinals: [0, 1], raw_socket_ordinals: [1, 2], action_ordinals: [0, 1], observation_sha256s: observations.map((observation) => observation.observation_sha256),
+    attempt_ordinals: [0, 1], connection_ordinals: [0, 1], raw_socket_ordinals: [1, 2], action_ordinals: [0, 1], observation_sha256s: observations.map((observation) => observation.observation_sha256), receiver_terminal: 'sealed',
   }
   assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, observations, row))
   for (const drift of [
