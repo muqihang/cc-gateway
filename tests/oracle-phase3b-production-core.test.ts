@@ -13,7 +13,7 @@ import { SUPPORT_PATHS, deriveCuration, inventoryNamespace, predecessorSupportSo
 import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { classifyReceiverRequestBoundary, createHardenedReceiverServer, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { classifySyntheticAuthHeader, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
@@ -512,6 +512,7 @@ test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta que
   const requests: Array<{ method: string; url: string; bodyBytes: number }> = []
   let bootstrapCount = 0
   let observationCount = 0
+  const normalizationErrors: string[] = []
   const server = createHttpServer((request, response) => {
     const chunks: Buffer[] = []
     request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
@@ -524,6 +525,14 @@ test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta que
         sendClaudeBootstrapProbeResponse(response)
         return
       }
+      const body = Buffer.concat(chunks)
+      try { normalizeRequestAst(body) } catch (error: unknown) {
+        normalizationErrors.push(`${String((error as { code?: string }).code ?? 'unknown')}:${(error as Error).message}`)
+        body.fill(0)
+        response.destroy()
+        return
+      }
+      body.fill(0)
       observationCount += 1
       response.writeHead(200, { 'content-type': 'text/event-stream', 'content-length': String(complete.length), connection: 'close' })
       response.end(complete)
@@ -561,6 +570,7 @@ test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta que
     assert.equal(result.status, 0, result.stderr)
     assert.equal(JSON.parse(result.stdout).result, 'output.complete')
     assert.deepEqual(requests.map(({ method, url }) => ({ method, url })), [{ method: 'HEAD', url: '/' }, { method: 'POST', url: '/v1/messages?beta=true' }])
+    assert.deepEqual(normalizationErrors, [])
     assert.deepEqual({ bootstrapCount, observationCount }, { bootstrapCount: 1, observationCount: 1 })
     assert.match(profile, /\(allow file-read\* \(literal "\/usr\/share\/icu"\)\)/)
     assert.match(profile, /\(allow file-read\* \(literal "\/usr\/share\/icu\/icudt74l\.dat"\)\)/)
