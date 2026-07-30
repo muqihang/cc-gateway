@@ -175,7 +175,10 @@ export function sendClaudeBootstrapProbeResponse(response: ServerResponse): Prom
 const receivers = new WeakMap<object, ReceiverState>()
 const results = new WeakSet<object>()
 export const REQUEST_AST_MATERIALIZER = 'typed-json-ast-normalized-safe-v3'
-const REQUEST_FIELD_NAMES = ['model', 'messages', 'role', 'content', 'stream', 'max_tokens', 'system', 'tools', 'tool_choice', 'type', 'text', 'name', 'input_schema', 'description', 'input', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata'] as const
+const REQUEST_FIELD_NAMES = [
+  'model', 'messages', 'role', 'content', 'stream', 'max_tokens', 'system', 'tools', 'tool_choice', 'type', 'text', 'name', 'input_schema', 'description', 'input', 'stop_sequences', 'temperature', 'top_p', 'top_k', 'metadata',
+  '$schema', 'additionalProperties', 'cache_control', 'command', 'context_management', 'dangerouslyDisableSandbox', 'default', 'display', 'edits', 'effort', 'exclusiveMinimum', 'file_path', 'keep', 'limit', 'maximum', 'minimum', 'new_string', 'offset', 'old_string', 'output_config', 'pages', 'properties', 'replace_all', 'required', 'run_in_background', 'thinking', 'timeout', 'user_id',
+] as const
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
