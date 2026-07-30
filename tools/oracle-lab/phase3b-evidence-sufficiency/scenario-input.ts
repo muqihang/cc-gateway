@@ -4,7 +4,7 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
 import { FIXED_STDIN_LITERAL, FIXED_LITERAL_TABLE_SHA256, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
 import type { ReceiverTargetBootstrap } from './receiver.js'
-import { expectedSelectedRoute } from './route-policy.js'
+import { configRoutePlanFor } from './route-policy.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
 
@@ -33,18 +33,9 @@ type PreparedState = {
 
 const preparedCells = new WeakMap<object, PreparedState>()
 
-const CONFIG_VALUES: Readonly<Record<string, Readonly<{ control: Readonly<Record<'user' | 'project' | 'local' | 'process-env', 0 | 1 | null>>; treatment: Readonly<Record<'user' | 'project' | 'local' | 'process-env', 0 | 1 | null>> }>>> = {
-  'config-precedence-user-vs-default': { control: { user: 0, project: null, local: null, 'process-env': null }, treatment: { user: 1, project: null, local: null, 'process-env': null } },
-  'config-precedence-project-vs-user': { control: { user: 0, project: null, local: null, 'process-env': null }, treatment: { user: 0, project: 1, local: null, 'process-env': null } },
-  'config-precedence-local-vs-project': { control: { user: null, project: 0, local: null, 'process-env': null }, treatment: { user: null, project: 0, local: 1, 'process-env': null } },
-  'config-precedence-process-env-vs-local': { control: { user: null, project: null, local: 0, 'process-env': null }, treatment: { user: null, project: null, local: 0, 'process-env': 1 } },
-}
-
 export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | null; project: 0 | 1 | null; local: 0 | 1 | null; 'process-env': 0 | 1 | null; request_route: 0 | 1; preflight_route: 0 | 1 | null }> {
-  const definition = CONFIG_VALUES[row.schedule_id]
-  if (row.family !== 'config' || !definition) throw new Phase3BProductionError('scenario_input_invalid', 'config schedule is not frozen')
-  const selected = row.arm.startsWith('treatment/') ? definition.treatment : definition.control
-  return deepFreeze({ ...selected, request_route: expectedSelectedRoute(row), preflight_route: selected['process-env'] })
+  if (row.family !== 'config') throw new Phase3BProductionError('scenario_input_invalid', 'config schedule is not frozen')
+  try { return deepFreeze(configRoutePlanFor(row.schedule_id, row.arm as Extract<RunLedgerRow['arm'], `control/${string}` | `treatment/${string}`>)) } catch { throw new Phase3BProductionError('scenario_input_invalid', 'config schedule is not frozen') }
 }
 
 export function materializeRouteDispatch(row: RunLedgerRow, routeUrls: readonly string[]): Readonly<{ request_route: 0 | 1; preflight_route: 0 | 1 | null; actual_route: 0 | 1; selected_url: string }> {
@@ -121,6 +112,19 @@ function materializeConfig(runtimeRoot: string, runRelative: string, row: RunLed
   return deepFreeze(digests)
 }
 
+function assertBootstrapPolicy(row: RunLedgerRow): void {
+  if (row.family !== 'config') {
+    if (row.bootstrap_policy.expected_count !== 1 || row.bootstrap_policy.policy !== 'exact_one_loopback_head') throw new Phase3BProductionError('scenario_input_invalid', 'non-config row bootstrap policy drifted')
+    return
+  }
+  const plan = configRoutePlan(row)
+  const fileSelected = plan.preflight_route === null && [plan.user, plan.project, plan.local].includes(plan.request_route)
+  const expected = fileSelected
+    ? { expected_count: 0, policy: 'config_file_precedence_no_bootstrap' }
+    : { expected_count: 1, policy: 'exact_one_loopback_head' }
+  if (sha256Canonical(row.bootstrap_policy) !== sha256Canonical(expected)) throw new Phase3BProductionError('scenario_input_invalid', 'config bootstrap policy is not derived from the sealed route plan')
+}
+
 export type PreparedScenarioFilesystem = Readonly<{
   run_relative: string
   cwd: string
@@ -135,6 +139,7 @@ export function prepareScenarioFilesystem(runtimeRoot: string, ledgerInput: Camp
   const ledger = validateCampaignLedger(ledgerInput)
   const exact = ledger.rows[row.sequence_index]
   if (!exact || exact.row_sha256 !== row.row_sha256 || bootstrap.route_urls.length !== row.route_count || bootstrap.route_urls.some((value) => { try { const url = new URL(value); return url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port } catch { return true } })) throw new Phase3BProductionError('scenario_input_invalid', 'scenario filesystem authority is invalid')
+  assertBootstrapPolicy(row)
   const runRelative = `runs/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}`
   for (const relative of [runRelative, `${runRelative}/home`, `${runRelative}/home/.claude`, `${runRelative}/xdg`, `${runRelative}/tmp`, `${runRelative}/cwd`, `${runRelative}/cwd/.claude`]) createPrivateDirectory(runtimeRoot, relative)
   const roots = { home: path.join(runtimeRoot, runRelative, 'home'), xdg: path.join(runtimeRoot, runRelative, 'xdg'), tmp: path.join(runtimeRoot, runRelative, 'tmp'), cwd: path.join(runtimeRoot, runRelative, 'cwd') }
@@ -184,7 +189,7 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
     schema_id: 'oracle-lab-p3b-cell-input-descriptor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256,
     run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, argv_sha256: row.argv_sha256, request_stimulus_sha256: row.request_stimulus_sha256,
     environment_sha256: environmentSha256, cwd_sha256: sha256Canonical(filesystem.cwd), stdin_sha256: row.stdin_sha256,
-    launch_authority_sha256: bootstrap.launch_authority_sha256, route_authorities_sha256: sha256Canonical(bootstrap.route_urls), input_class_sha256s: filesystem.input_class_sha256s, sandbox_profile_sha256: sandboxProfileSha256, unknown_or_omitted: 'disabled', raw_material_persisted: false,
+    launch_authority_sha256: bootstrap.launch_authority_sha256, route_authorities_sha256: sha256Canonical(bootstrap.route_urls), bootstrap_policy: row.bootstrap_policy, input_class_sha256s: filesystem.input_class_sha256s, sandbox_profile_sha256: sandboxProfileSha256, unknown_or_omitted: 'disabled', raw_material_persisted: false,
   }
   const inputDescriptorSha256 = sha256Canonical(descriptorUnsigned)
   writeExclusiveCanonical(state.runtimeRoot, `${filesystem.run_relative}/input-descriptor.json`, { ...descriptorUnsigned, input_descriptor_sha256: inputDescriptorSha256 })
