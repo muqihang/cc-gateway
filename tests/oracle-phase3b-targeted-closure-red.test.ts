@@ -139,8 +139,9 @@ test('targeted C1 authority: ES9 accepts only the authority-bound fixed E/C/D co
   const ledger = buildCampaignLedger('p3b-targeted-es9-authority', TEST_C1)
   const contract = buildEs9CoverageContract(ledger) as Record<string, unknown>
   const validated = validateCoverageContract(contract, ledger)
-  assert.equal(validated.enabled.length, 340 * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
-  assert.equal(validated.disabled.length, 340 * 2)
+  const localAuthRows = ledger.rows.filter((row) => row.family === 'auth' && row.schedule_id === 'auth-missing-credential' && row.arm.startsWith('treatment/')).length
+  assert.equal(validated.enabled.length, (340 - localAuthRows) * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
+  assert.equal(validated.disabled.length, 340 * 2 + localAuthRows * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
   assert.equal((contract.normative_e_rows as unknown[]).length, 20)
   assert.equal((contract.normative_c_rows as unknown[]).length, 3)
   assert.equal((contract.normative_d_rows as unknown[]).length, 3)

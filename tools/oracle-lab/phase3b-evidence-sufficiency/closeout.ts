@@ -2,7 +2,7 @@ import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha25
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
-import { CLAUDE_MESSAGES_REQUEST_CONTRACT, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, immutableNormativeSourceBytes, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
+import { CLAUDE_MESSAGES_REQUEST_CONTRACT, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, expectedReceiverAttempts, immutableNormativeSourceBytes, isExpectedLocalAuthFailureRow, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -247,7 +247,7 @@ function unknownRow(row: RunLedgerRow, reasonCode: string): Readonly<Record<stri
 }
 
 export function validateReceiverOrdinalBindings(receiver: Readonly<Record<string, unknown>>, observations: readonly Readonly<Record<string, unknown>>[], row: RunLedgerRow): void {
-  const maximumAttempts = row.response_program.maximum_attempts
+  const maximumAttempts = expectedReceiverAttempts(row)
   const exactVector = (value: unknown, offset = 0): value is unknown[] => Array.isArray(value) && value.length === maximumAttempts && value.every((ordinal, index) => Number.isSafeInteger(ordinal) && ordinal === index + offset)
   const attempts = receiver.attempt_ordinals
   const connections = receiver.connection_ordinals
@@ -257,13 +257,34 @@ export function validateReceiverOrdinalBindings(receiver: Readonly<Record<string
   const bootstrap = receiver.bootstrap as Record<string, unknown> | undefined
   const bootstrapPeer = bootstrap?.peer_socket as Record<string, unknown> | undefined
   if (bootstrapPeer) assertExactKeys(bootstrapPeer, ['target_pid', 'local_address', 'local_port', 'remote_address', 'remote_port', 'executable_identity_sha256', 'peer_socket_sha256'], 'receiver_terminal_invalid')
-  if (receiver.request_count !== maximumAttempts || receiver.response_count !== maximumAttempts || !exactVector(attempts) || !exactVector(connections) || !exactVector(rawSockets, 1) || !Array.isArray(actions) || actions.length !== maximumAttempts || !Array.isArray(digests) || digests.length !== maximumAttempts || observations.length !== maximumAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal) || !bootstrap || !bootstrapPeer || bootstrapPeer.peer_socket_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(bootstrapPeer).filter(([key]) => key !== 'peer_socket_sha256'))) || bootstrap.count !== 1 || bootstrap.raw_socket_ordinal !== 0 || bootstrap.response_status !== 200 || bootstrap.response_content_length !== 0 || bootstrap.response_finished !== true || bootstrap.socket_closed !== true || bootstrap.socket_close_had_error !== false || bootstrap.post_count_effect !== 0) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver result cardinality, bootstrap, or ordinal vector drifted')
+  const expectedTerminal = maximumAttempts === 0 ? 'sealed_local_auth_failure' : 'sealed'
+  if (receiver.receiver_terminal !== expectedTerminal || receiver.request_count !== maximumAttempts || receiver.response_count !== maximumAttempts || !exactVector(attempts) || !exactVector(connections) || !exactVector(rawSockets, 1) || !Array.isArray(actions) || actions.length !== maximumAttempts || !Array.isArray(digests) || digests.length !== maximumAttempts || observations.length !== maximumAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal) || !bootstrap || !bootstrapPeer || bootstrapPeer.peer_socket_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(bootstrapPeer).filter(([key]) => key !== 'peer_socket_sha256'))) || bootstrap.count !== 1 || bootstrap.raw_socket_ordinal !== 0 || bootstrap.response_status !== 200 || bootstrap.response_content_length !== 0 || bootstrap.response_finished !== true || bootstrap.socket_closed !== true || bootstrap.socket_close_had_error !== false || bootstrap.post_count_effect !== 0) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver result cardinality, terminal, bootstrap, or ordinal vector drifted')
   for (let index = 0; index < maximumAttempts; index += 1) {
     const observation = observations[index]
     const observationPeer = observation.peer_socket as Record<string, unknown> | undefined
     if (observationPeer) assertExactKeys(observationPeer, ['target_pid', 'local_address', 'local_port', 'remote_address', 'remote_port', 'executable_identity_sha256', 'peer_socket_sha256'], 'receiver_terminal_invalid')
     if (observation.attempt_ordinal !== index || observation.connection_ordinal !== index || observation.raw_socket_ordinal !== index + 1 || observation.action_ordinal !== actions[index] || observation.observation_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(observation).filter(([key]) => key !== 'observation_sha256'))) || observation.observation_sha256 !== digests[index] || !observationPeer || observationPeer.peer_socket_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(observationPeer).filter(([key]) => key !== 'peer_socket_sha256'))) || observationPeer.target_pid !== bootstrapPeer.target_pid || observationPeer.local_address !== bootstrapPeer.local_address || observationPeer.local_port !== bootstrapPeer.local_port || observationPeer.executable_identity_sha256 !== bootstrapPeer.executable_identity_sha256 || sha256Canonical(observation.query_order) !== sha256Canonical(row.request_target.query_order) || sha256Canonical(observation.query_items) !== sha256Canonical(row.request_target.query_items)) throw new Phase3BProductionError('receiver_terminal_invalid', 'receiver result does not cross-bind the exact sealed observation order, peer, and digest')
   }
+}
+
+export function validateLocalAuthCellTerminal(row: RunLedgerRow, cell: Readonly<Record<string, unknown>>, terminal: Readonly<Record<string, unknown>>): void {
+  const targetTerminal = cell.target_terminal as Record<string, unknown> | undefined
+  const stdout = cell.stdout as Record<string, unknown> | undefined
+  const stderr = cell.stderr as Record<string, unknown> | undefined
+  if (!isExpectedLocalAuthFailureRow(row)
+    || targetTerminal?.exit_code !== 1
+    || targetTerminal.signal !== null
+    || terminal.state !== 'terminal'
+    || terminal.terminal_class !== 'success'
+    || terminal.exit_code !== targetTerminal.exit_code
+    || terminal.signal !== targetTerminal.signal
+    || !Number.isSafeInteger(stdout?.byte_length)
+    || Number(stdout?.byte_length) <= 0
+    || Number(stdout?.byte_length) > 1_048_576
+    || stdout?.safe_output_class !== 'local-auth-missing-credential'
+    || stdout.safe_output_sha256 !== LOCAL_AUTH_RESULT_SHA256
+    || stdout.safe_output_profile_sha256 !== LOCAL_AUTH_OUTPUT_PROFILE_SHA256
+    || stderr?.byte_length !== 0) throw new Phase3BProductionError('target_terminal_invalid', 'local authentication terminal does not bind the exact treatment row, exit, and safe output projection')
 }
 
 export function validateReceiverAuthorityClosureBindings(input: Readonly<{ ledger: CampaignLedger; row: RunLedgerRow; receiver: Readonly<Record<string, unknown>>; receiver_authority: Readonly<Record<string, unknown>>; launch_authority: Readonly<Record<string, unknown>>; static_anchor: Readonly<Record<string, unknown>>; prelaunch: Readonly<Record<string, unknown>>; operator_authority: Readonly<Record<string, unknown>>; campaign_input: Readonly<Record<string, unknown>> }>): void {
@@ -298,7 +319,7 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   assertExactKeys(guard.value, ['schema_id', 'run_id', 'sequence_index', 'profile_sha256', 'allowed_loopback_ports', 'allowed_write_sha256', 'denied_host_read', 'denied_credential_read', 'denied_process_info', 'external_socket_budget', 'same_scope_probe', 'status', 'guard_receipt_sha256'], 'guard_receipt_invalid')
   assertExactKeys(cell.value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'family', 'schedule_id', 'seed', 'repetition', 'arm', 'row_sha256', 'launch_authority_sha256', 'receiver_authority_sha256', 'launch_image_record_sha256', 'executable_identity_sha256', 'input_descriptor_sha256', 'sandbox_profile_sha256', 'terminal_class', 'terminal_receipt_sha256', 'receiver_result_sha256', 'guard_receipt_sha256', 'target_terminal', 'stdout', 'stderr', 'external_socket_count', 'raw_material_persisted', 'cell_result_sha256'], 'cell_result_invalid')
   assertExactKeys(cell.value.target_terminal, ['exit_code', 'signal'], 'cell_result_invalid')
-  assertExactKeys(cell.value.stdout, ['byte_length', 'safe_output_class', 'safe_output_sha256'], 'cell_result_invalid')
+  assertExactKeys(cell.value.stdout, ['byte_length', 'safe_output_class', 'safe_output_sha256', 'safe_output_profile_sha256'], 'cell_result_invalid')
   assertExactKeys(cell.value.stderr, ['byte_length', 'safe_diagnostic'], 'cell_result_invalid')
   assertExactKeys((cell.value.stderr as Record<string, unknown>).safe_diagnostic, ['categories', 'normalized_sha256'], 'cell_result_invalid')
   assertDigestField(receiver.value, 'result_sha256', 'receiver_terminal_invalid')
@@ -322,22 +343,32 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   const actions = receiver.value.action_ordinals
   const observationSha256s = receiver.value.observation_sha256s
   const stdout = cell.value.stdout as Record<string, unknown> | undefined
+  const localAuthFailure = isExpectedLocalAuthFailureRow(row)
   const expectsComplete = row.response_program.actions.at(-1)?.body_kind === 'complete_sse'
-  const outputValid = stdout && (expectsComplete
-    ? stdout.safe_output_class === 'synthetic-output-complete' && stdout.safe_output_sha256 === sha256Bytes(Buffer.from('output.complete', 'utf8'))
-    : stdout.safe_output_class !== 'synthetic-output-complete' && stdout.safe_output_sha256 === null)
-  const expectedAttempts = row.response_program.maximum_attempts
+  const targetTerminal = cell.value.target_terminal as Record<string, unknown> | undefined
+  const stderr = cell.value.stderr as Record<string, unknown> | undefined
+  let localAuthTerminalValid = false
+  if (localAuthFailure) {
+    try { validateLocalAuthCellTerminal(row, cell.value, terminal); localAuthTerminalValid = true } catch {}
+  }
+  const outputValid = stdout && (localAuthFailure
+    ? localAuthTerminalValid
+    : expectsComplete
+      ? stdout.safe_output_class === 'synthetic-output-complete' && stdout.safe_output_sha256 === sha256Bytes(Buffer.from('output.complete', 'utf8')) && stdout.safe_output_profile_sha256 === null
+      : stdout.safe_output_class !== 'synthetic-output-complete' && stdout.safe_output_class !== 'local-auth-missing-credential' && stdout.safe_output_sha256 === null && stdout.safe_output_profile_sha256 === null)
+  const expectedAttempts = expectedReceiverAttempts(row)
   const exactOrdinalVector = (value: unknown, offset = 0): value is unknown[] => Array.isArray(value) && value.length === expectedAttempts && value.every((ordinal, index) => Number.isSafeInteger(ordinal) && ordinal === index + offset)
   const connectionOrderValid = exactOrdinalVector(connections)
   const routeCounts = receiver.value.route_request_counts
   const selectedRoute = expectedSelectedRoute(row)
-  const routeCountsValid = Array.isArray(routeCounts) && routeCounts.length === row.route_count && routeCounts.every((value, index) => value === (index === selectedRoute ? row.response_program.maximum_attempts : 0))
+  const routeCountsValid = Array.isArray(routeCounts) && routeCounts.length === row.route_count && routeCounts.every((value, index) => value === (index === selectedRoute ? expectedAttempts : 0))
   const selectedAuthorityRoute = Array.isArray(receiverAuthority.value.routes) ? receiverAuthority.value.routes[expectedSelectedRoute(row)] as Record<string, unknown> | undefined : undefined
   try { validateReceiverAuthorityClosureBindings({ ledger, row, receiver: receiver.value, receiver_authority: receiverAuthority.value, launch_authority: launchAuthority.value, static_anchor: staticAnchor.value, prelaunch: prelaunch.value, operator_authority: operatorAuthority.value, campaign_input: campaignInput.value }) } catch { return unknownRow(row, 'receiver_authority_binding_mismatch') }
-  if (launchAuthority.value.row_sha256 !== row.row_sha256 || launchAuthority.value.run_id !== row.run_id || launchAuthority.value.argv_sha256 !== row.argv_sha256 || launchAuthority.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || launchAuthority.value.guard_profile_sha256 !== guard.value.profile_sha256 || inputDescriptor.value.campaign_id !== ledger.campaign_id || inputDescriptor.value.ledger_sha256 !== ledger.ledger_sha256 || inputDescriptor.value.run_id !== row.run_id || inputDescriptor.value.row_sha256 !== row.row_sha256 || inputDescriptor.value.argv_sha256 !== row.argv_sha256 || inputDescriptor.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || inputDescriptor.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || inputDescriptor.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || receiver.value.receiver_terminal !== 'sealed' || cell.value.campaign_id !== ledger.campaign_id || cell.value.ledger_sha256 !== ledger.ledger_sha256 || cell.value.run_id !== row.run_id || cell.value.row_sha256 !== row.row_sha256 || cell.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || cell.value.receiver_authority_sha256 !== receiverAuthority.value.authority_sha256 || cell.value.input_descriptor_sha256 !== inputDescriptor.value.input_descriptor_sha256 || cell.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || cell.value.terminal_class !== 'success' || cell.value.terminal_receipt_sha256 !== terminal.receipt_sha256 || cell.value.guard_receipt_sha256 !== guard.value.guard_receipt_sha256 || !outputValid || !routeCountsValid || cell.value.receiver_result_sha256 !== receiver.value.result_sha256 || !exactOrdinalVector(attempts) || !connectionOrderValid || !exactOrdinalVector(rawSockets, 1) || !Array.isArray(actions) || actions.length !== expectedAttempts || !Array.isArray(observationSha256s) || observationSha256s.length !== expectedAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal)) return unknownRow(row, 'receiver_attempt_or_terminal_mismatch')
+  const expectedReceiverTerminal = localAuthFailure ? 'sealed_local_auth_failure' : 'sealed'
+  if (launchAuthority.value.row_sha256 !== row.row_sha256 || launchAuthority.value.run_id !== row.run_id || launchAuthority.value.argv_sha256 !== row.argv_sha256 || launchAuthority.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || launchAuthority.value.guard_profile_sha256 !== guard.value.profile_sha256 || inputDescriptor.value.campaign_id !== ledger.campaign_id || inputDescriptor.value.ledger_sha256 !== ledger.ledger_sha256 || inputDescriptor.value.run_id !== row.run_id || inputDescriptor.value.row_sha256 !== row.row_sha256 || inputDescriptor.value.argv_sha256 !== row.argv_sha256 || inputDescriptor.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || inputDescriptor.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || inputDescriptor.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || receiver.value.receiver_terminal !== expectedReceiverTerminal || cell.value.campaign_id !== ledger.campaign_id || cell.value.ledger_sha256 !== ledger.ledger_sha256 || cell.value.run_id !== row.run_id || cell.value.row_sha256 !== row.row_sha256 || cell.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || cell.value.receiver_authority_sha256 !== receiverAuthority.value.authority_sha256 || cell.value.input_descriptor_sha256 !== inputDescriptor.value.input_descriptor_sha256 || cell.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || cell.value.terminal_class !== 'success' || cell.value.terminal_receipt_sha256 !== terminal.receipt_sha256 || cell.value.guard_receipt_sha256 !== guard.value.guard_receipt_sha256 || !outputValid || !routeCountsValid || cell.value.receiver_result_sha256 !== receiver.value.result_sha256 || !exactOrdinalVector(attempts) || !connectionOrderValid || !exactOrdinalVector(rawSockets, 1) || !Array.isArray(actions) || actions.length !== expectedAttempts || !Array.isArray(observationSha256s) || observationSha256s.length !== expectedAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal)) return unknownRow(row, 'receiver_attempt_or_terminal_mismatch')
   const observationProjections: Readonly<Record<string, unknown>>[] = []
   const sealedObservations: Readonly<Record<string, unknown>>[] = []
-  for (let attempt = 0; attempt < row.response_program.maximum_attempts; attempt += 1) {
+  for (let attempt = 0; attempt < expectedAttempts; attempt += 1) {
     const observation = optionalCanonical(root, `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`)
     if (!observation) return unknownRow(row, 'observation_missing')
     if (observation.value.attempt_ordinal !== attempts[attempt] || observation.value.connection_ordinal !== connections[attempt] || observation.value.raw_socket_ordinal !== rawSockets[attempt] || observation.value.action_ordinal !== actions[attempt] || observation.value.receiver_instance_id !== selectedAuthorityRoute?.receiver_instance_id || observation.value.receiver_authority_sha256 !== receiverAuthority.value.authority_sha256 || observation.value.executable_identity_sha256 !== cell.value.executable_identity_sha256) return unknownRow(row, 'observation_binding_mismatch')
@@ -347,14 +378,12 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
     observationProjections.push(validated.projection)
   }
   try { validateReceiverOrdinalBindings(receiver.value, sealedObservations, row) } catch { return unknownRow(row, 'observation_binding_mismatch') }
-  const stderr = cell.value.stderr as Record<string, unknown> | undefined
-  const targetTerminal = cell.value.target_terminal as Record<string, unknown> | undefined
   const projection = {
     schedule_id: row.schedule_id,
     semantic_arm: row.arm.includes('/') ? row.arm.split('/')[0] : 'single',
     observations: observationProjections,
     target_terminal: targetTerminal,
-    safe_output: { safe_output_class: stdout?.safe_output_class, safe_output_sha256: stdout?.safe_output_sha256 },
+    safe_output: { safe_output_class: stdout?.safe_output_class, safe_output_sha256: stdout?.safe_output_sha256, safe_output_profile_sha256: stdout?.safe_output_profile_sha256 },
     safe_diagnostic_categories: (stderr?.safe_diagnostic as Record<string, unknown> | undefined)?.categories ?? [],
     external_socket_count: cell.value.external_socket_count,
   }
@@ -428,7 +457,7 @@ function deriveFixtureRows(root: string, ledger: CampaignLedger): readonly Reado
   return deepFreeze(ledger.rows.map((row) => {
     const classified = classifyRow(root, ledger, row, terminalByRow.get(row.sequence_index) ?? null)
     if (classified.status !== 'Reproduced') return unknownFixture(row)
-    const observations = row.response_program.actions.map((_, attempt) => {
+    const observations = Array.from({ length: expectedReceiverAttempts(row) }, (_, attempt) => {
       const relativePath = `observations/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}-${String(attempt).padStart(2, '0')}.json`
       const record = readCanonical(root, relativePath)
       validateObservation(record.value, row)
@@ -626,7 +655,7 @@ function deriveCapturedSourceValue(descriptor: Record<string, unknown>, leaf: st
   if (leaf === '/request/target/query_order' || leaf === '/request/target/query_items') {
     const field: 'query_order' | 'query_items' = leaf.endsWith('query_order') ? 'query_order' : 'query_items'
     const captured = fixtureRows.flatMap((row) => Array.isArray(row.requests) ? row.requests.map((request) => ((request as Record<string, unknown>).typed_fixture as Record<string, unknown> | undefined)?.[field]) : [])
-    const expectedCaptureCount = ledger.rows.reduce((count, row) => count + row.response_program.maximum_attempts, 0)
+    const expectedCaptureCount = ledger.rows.reduce((count, row) => count + expectedReceiverAttempts(row), 0)
     const reproduced = fixtureRows.filter((row) => row.status === 'Reproduced').length
     if ((reproduced !== 0 && captured.length !== expectedCaptureCount) || captured.some((value) => sha256Canonical(value) !== sha256Canonical(ledger.request_target[field]))) throw new Phase3BProductionError('conclusion_support_invalid', 'captured request query provenance is incomplete or drifted from the sealed ledger')
     return ledger.request_target[field]
@@ -738,7 +767,8 @@ function deriveProvenance(root: string, ledger: CampaignLedger, fixtureRows: rea
         sources.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
       }
       for (const exclusion of contract.disabled.filter((entry) => entry.sequence_index === row.sequence_index)) {
-        const unsigned = { json_pointer: `/rows/${row.sequence_index}/attempts/${attempt}/${exclusion.source_class}/raw_body`, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: 'excluded', normative_source_pointer: exclusion.source_pointer, normative_source_sha256: exclusion.source_sha256, enabled: false, reason_code: exclusion.reason_code, source_relative_path: null, source_raw_sha256: null, source_observation_sha256: null, source_value_sha256: null }
+        const observationSuffix = exclusion.source_class === 'response' && exclusion.observation_pointer.startsWith('/response/') ? exclusion.observation_pointer.slice('/response'.length) : exclusion.observation_pointer
+        const unsigned = { json_pointer: `/rows/${row.sequence_index}/attempts/${attempt}/${exclusion.source_class}${observationSuffix}`, sequence_index: row.sequence_index, attempt_ordinal: attempt, source_class: 'excluded', normative_source_pointer: exclusion.source_pointer, normative_source_sha256: exclusion.source_sha256, enabled: false, reason_code: exclusion.reason_code, source_relative_path: null, source_raw_sha256: null, source_observation_sha256: null, source_value_sha256: null }
         sources.push({ ...unsigned, source_binding_sha256: sha256Canonical(unsigned) })
       }
     }

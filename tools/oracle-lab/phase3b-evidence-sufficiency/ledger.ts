@@ -8,6 +8,16 @@ import { fixedGit, fixedGitBytes } from './trust.js'
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
 export const FIXED_STDIN_LITERAL = 'Return exactly the synthetic marker output.complete.\n'
 export const FIXED_STDIN_LITERAL_REF = 'synthetic-literals/control_prompt_v1'
+export const LOCAL_AUTH_RESULT_LITERAL = 'Not logged in \u00b7 Please run /login'
+export const LOCAL_AUTH_RESULT_SHA256 = sha256Bytes(Buffer.from(LOCAL_AUTH_RESULT_LITERAL, 'utf8'))
+export const LOCAL_AUTH_OUTPUT_PROFILE_SHA256 = sha256Canonical({
+  schema_id: 'oracle-lab-p3b-local-auth-output-profile.v1',
+  top_level: ['api_error_status', 'duration_api_ms', 'duration_ms', 'fast_mode_state', 'is_error', 'modelUsage', 'num_turns', 'permission_denials', 'result', 'session_id', 'stop_reason', 'subtype', 'terminal_reason', 'total_cost_usd', 'type', 'usage', 'uuid'],
+  constants: { api_error_status: null, duration_api_ms: 0, fast_mode_state: 'off', is_error: true, num_turns: 1, permission_denials: 'exact-empty-array', result_sha256: LOCAL_AUTH_RESULT_SHA256, session_id: 'exact-run-id', stop_reason: 'stop_sequence', subtype: 'success', terminal_reason: 'api_error', total_cost_usd: 0, type: 'result' },
+  dynamic: { duration_ms: 'safe-integer-0-through-120000', uuid: 'uuid-v4' },
+  model_usage: 'exact-empty-object',
+  usage: { token_counts: 0, server_tool_counts: 0, service_tier: 'standard', cache_creation_counts: 0, inference_geo: '', iterations: 'exact-empty-array', speed: 'standard' },
+})
 export const CLAUDE_MESSAGES_PATH = '/v1/messages'
 export const CLAUDE_MESSAGES_QUERY = 'beta=true'
 export const CLAUDE_MESSAGES_REQUEST_TARGET = `${CLAUDE_MESSAGES_PATH}?${CLAUDE_MESSAGES_QUERY}`
@@ -126,6 +136,16 @@ export type RunLedgerRow = Readonly<{
   state: 'planned'
   row_sha256: string
 }>
+
+export function isExpectedLocalAuthFailureRow(row: RunLedgerRow): boolean {
+  return row.family === 'auth'
+    && row.schedule_id === 'auth-missing-credential'
+    && (row.arm === 'treatment/instrumented' || row.arm === 'treatment/uninstrumented')
+}
+
+export function expectedReceiverAttempts(row: RunLedgerRow): number {
+  return isExpectedLocalAuthFailureRow(row) ? 0 : row.response_program.maximum_attempts
+}
 
 export type CampaignLedger = Readonly<{
   schema_id: 'oracle-lab-p3b-production-ledger.v1'
@@ -271,7 +291,9 @@ export function observationCoverageMatrix(ledger: CampaignLedger): Readonly<{ en
       for (const field of fields) {
         const sourceObject = { schema_id: 'oracle-lab-p3b-es9-source.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field, authority_sha256: sourceClass === 'request' ? row.request_stimulus_sha256 : row.response_program_sha256 }
         const sourceBytes = canonicalLine(sourceObject)
-        enabled.push({ sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_byte_length: sourceBytes.byteLength, source_sha256: sha256Bytes(sourceBytes) })
+        const binding = { sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_byte_length: sourceBytes.byteLength, source_sha256: sha256Bytes(sourceBytes) }
+        if (isExpectedLocalAuthFailureRow(row)) disabled.push({ ...binding, reason_code: 'expected_local_auth_pre_request' })
+        else enabled.push(binding)
       }
     }
     for (const sourceClass of ['request', 'response'] as const) {
