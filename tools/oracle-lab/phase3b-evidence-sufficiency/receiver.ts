@@ -8,7 +8,7 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, assertExactKeys, canonicalBytes, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical } from './core.js'
 import type { LaunchAuthorityReceipt } from './launch-authority.js'
 import { assertControllerLaunchPrerequisites, assertLaunchAuthority } from './launch-authority.js'
-import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY, CLAUDE_MESSAGES_REQUEST_CONTRACT, CLAUDE_MESSAGES_REQUEST_TARGET, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, expectedReceiverAttempts, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
+import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY, CLAUDE_MESSAGES_REQUEST_CONTRACT, CLAUDE_MESSAGES_REQUEST_TARGET, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, expectedBootstrapCount, expectedReceiverAttempts, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -57,6 +57,7 @@ export type ReceiverResult = Readonly<{
   receiver_authority_sha256: string
   bootstrap: Readonly<{
     count: 1
+    policy: 'exact_one_loopback_head'
     route_ordinal: number
     receiver_instance_id: string
     raw_socket_ordinal: number
@@ -66,6 +67,20 @@ export type ReceiverResult = Readonly<{
     response_finished: true
     socket_closed: true
     socket_close_had_error: false
+    post_count_effect: 0
+    bootstrap_sha256: string
+  }> | Readonly<{
+    count: 0
+    policy: 'config_file_precedence_no_bootstrap'
+    route_ordinal: null
+    receiver_instance_id: null
+    raw_socket_ordinal: null
+    peer_socket: null
+    response_status: null
+    response_content_length: null
+    response_finished: null
+    socket_closed: null
+    socket_close_had_error: null
     post_count_effect: 0
     bootstrap_sha256: string
   }>
@@ -141,8 +156,13 @@ function assertRawRequestFraming(request: IncomingMessage): void {
   assertRequestFraming(request)
 }
 
-export function classifyReceiverRequestBoundary(request: Pick<IncomingMessage, 'method' | 'url' | 'headers'>, bootstrapCount: number, observationCount: number): ReceiverRequestKind {
+export function classifyReceiverRequestBoundary(request: Pick<IncomingMessage, 'method' | 'url' | 'headers'>, row: RunLedgerRow, bootstrapCount: number, observationCount: number): ReceiverRequestKind {
   assertRequestFraming(request)
+  const expectedBootstrap = expectedBootstrapCount(row)
+  if (expectedBootstrap === 0) {
+    if (request.method !== 'POST' || parseCanonicalMessagesTarget(request.url) === null || bootstrapCount !== 0 || observationCount >= row.response_program.maximum_attempts) throw new Phase3BProductionError('receiver_request_invalid', 'config file-precedence row accepts only its canonical messages attempts without a bootstrap probe')
+    return 'messages'
+  }
   if (request.method === 'HEAD' && request.url === '/') {
     if (bootstrapCount !== 0 || observationCount !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe must occur exactly once before messages')
     return 'bootstrap_probe'
@@ -182,7 +202,7 @@ const REQUEST_FIELD_NAMES = [
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_probe: 'exact-one-head-root-empty-before-messages-finish-bound', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_probe: 'ledger-bound-exact-one-head-or-config-file-precedence-zero', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -562,7 +582,7 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
   try {
     await Promise.race([state.targetReady, new Promise((_, reject) => setTimeout(() => reject(new Phase3BProductionError('receiver_target_unbound', 'target PID was not registered in time')), 10_000))])
     assertRawRequestFraming(request)
-    const requestKind = classifyReceiverRequestBoundary(request, state.bootstrapCount, state.observations.length)
+    const requestKind = classifyReceiverRequestBoundary(request, state.row, state.bootstrapCount, state.observations.length)
     const route = state.routes[routeOrdinal]
     const peerSocket = verifyPeerOwnership(state.targetPid!, request.socket, state.executableIdentitySha256!)
     const rawConnectionOrdinal = state.connectionOrdinals.get(request.socket)
@@ -574,7 +594,7 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
         if (body.length !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe carried a body')
       } finally { body.fill(0) }
       const completion = await sendClaudeBootstrapProbeResponse(response)
-      const bootstrapUnsigned = { count: 1 as const, route_ordinal: routeOrdinal, receiver_instance_id: route.receiver_instance_id, raw_socket_ordinal: rawConnectionOrdinal, peer_socket: peerSocket, response_status: 200 as const, response_content_length: 0 as const, ...completion, post_count_effect: 0 as const }
+      const bootstrapUnsigned = { count: 1 as const, policy: 'exact_one_loopback_head' as const, route_ordinal: routeOrdinal, receiver_instance_id: route.receiver_instance_id, raw_socket_ordinal: rawConnectionOrdinal, peer_socket: peerSocket, response_status: 200 as const, response_content_length: 0 as const, ...completion, post_count_effect: 0 as const }
       state.bootstrapCount = 1
       state.bootstrapConnectionOrdinals.push(rawConnectionOrdinal)
       state.bootstrapEvidence = deepFreeze({ ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) })
@@ -701,9 +721,16 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
   const routeCounts = state.routes.map((route) => route.requestCount)
   const selected = state.routes.findIndex((route) => route.expected_selected)
   const expectedAttempts = expectedReceiverAttempts(state.row)
+  const expectedBootstrap = expectedBootstrapCount(state.row)
+  const noBootstrapUnsigned = { count: 0 as const, policy: 'config_file_precedence_no_bootstrap' as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 as const }
+  const bootstrap = state.bootstrapEvidence ?? (expectedBootstrap === 0 ? deepFreeze({ ...noBootstrapUnsigned, bootstrap_sha256: sha256Canonical(noBootstrapUnsigned) }) : null)
   const observedConnections = [...new Set(state.observations.map((observation) => Number(observation.connection_ordinal)))].sort((left, right) => left - right)
   const accountedConnections = [...state.bootstrapConnectionOrdinals, ...state.messageConnectionOrdinals].sort((left, right) => left - right)
-  if (state.violationCode !== null || state.bootstrapCount !== 1 || state.bootstrapEvidence === null || state.bootstrapEvidence.bootstrap_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.bootstrapEvidence).filter(([key]) => key !== 'bootstrap_sha256'))) || state.bootstrapConnectionOrdinals.length !== 1 || state.bootstrapEvidence.raw_socket_ordinal !== state.bootstrapConnectionOrdinals[0] || state.messageConnectionOrdinals.length !== state.observations.length || observedConnections.length !== state.observations.length || observedConnections.some((value, index) => value !== index) || routeCounts.some((count, index) => count !== (index === selected ? expectedAttempts : 0)) || state.observations.length !== expectedAttempts || accountedConnections.length !== state.nextConnectionOrdinal || accountedConnections.some((value, index) => value !== index) || state.messageConnectionOrdinals.some((value, index) => value !== index + 1)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, bootstrap, route selection, connection, or exact attempt predicate failed')
+  const bootstrapValid = bootstrap !== null && bootstrap.bootstrap_sha256 === sha256Canonical(Object.fromEntries(Object.entries(bootstrap).filter(([key]) => key !== 'bootstrap_sha256')))
+    && (expectedBootstrap === 1
+      ? bootstrap.count === 1 && bootstrap.policy === 'exact_one_loopback_head' && state.bootstrapCount === 1 && state.bootstrapConnectionOrdinals.length === 1 && bootstrap.raw_socket_ordinal === state.bootstrapConnectionOrdinals[0]
+      : bootstrap.count === 0 && bootstrap.policy === 'config_file_precedence_no_bootstrap' && state.bootstrapCount === 0 && state.bootstrapConnectionOrdinals.length === 0 && bootstrap.raw_socket_ordinal === null && bootstrap.peer_socket === null)
+  if (state.violationCode !== null || !bootstrapValid || state.messageConnectionOrdinals.length !== state.observations.length || observedConnections.length !== state.observations.length || observedConnections.some((value, index) => value !== index) || routeCounts.some((count, index) => count !== (index === selected ? expectedAttempts : 0)) || state.observations.length !== expectedAttempts || accountedConnections.length !== state.nextConnectionOrdinal || accountedConnections.some((value, index) => value !== index) || state.messageConnectionOrdinals.some((value, index) => value !== index + expectedBootstrap)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, bootstrap, route selection, connection, or exact attempt predicate failed')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-result.v1' as const,
     campaign_id: authority.campaign_id,
@@ -712,7 +739,7 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
     sequence_index: state.row.sequence_index,
     receiver_group_id: authority.receiver_group_id,
     receiver_authority_sha256: authority.authority_sha256,
-    bootstrap: state.bootstrapEvidence,
+    bootstrap,
     request_count: state.observations.length,
     response_count: state.observations.length,
     route_request_counts: routeCounts,

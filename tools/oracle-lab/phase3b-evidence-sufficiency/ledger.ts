@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalJson, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
+import { isConfigFilePrecedenceNoBootstrap } from './route-policy.js'
 import { fixedGit, fixedGitBytes } from './trust.js'
 
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
@@ -119,6 +120,7 @@ export type RunLedgerRow = Readonly<{
   guard_profile_sha256: string
   target_launch_cost: 1
   external_socket_budget: 0
+  bootstrap_policy: Readonly<{ expected_count: 0 | 1; policy: 'config_file_precedence_no_bootstrap' | 'exact_one_loopback_head' }>
   request_target: typeof CLAUDE_MESSAGES_REQUEST_CONTRACT
   argv: readonly string[]
   argv_sha256: string
@@ -145,6 +147,10 @@ export function isExpectedLocalAuthFailureRow(row: RunLedgerRow): boolean {
 
 export function expectedReceiverAttempts(row: RunLedgerRow): number {
   return isExpectedLocalAuthFailureRow(row) ? 0 : row.response_program.maximum_attempts
+}
+
+export function expectedBootstrapCount(row: RunLedgerRow): 0 | 1 {
+  return row.bootstrap_policy.expected_count
 }
 
 export type CampaignLedger = Readonly<{
@@ -234,7 +240,7 @@ function canonicalLine(value: unknown): Buffer {
 }
 
 export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string, unknown>> {
-  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
+  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, bootstrap_policy: row.bootstrap_policy, argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
   const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => { const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8'); return { ...action, body_byte_length: body.byteLength, body_sha256: sha256Bytes(body) } }), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
   return deepFreeze({
     sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, request_stimulus_sha256: row.request_stimulus_sha256, response_program_sha256: row.response_program_sha256, maximum_attempts: row.response_program.maximum_attempts,
@@ -289,7 +295,7 @@ export function observationCoverageMatrix(ledger: CampaignLedger): Readonly<{ en
   for (const row of ledger.rows) {
     for (const [sourceClass, fields] of [['request', ES7_REQUEST_FIELDS], ['response', ES7_RESPONSE_FIELDS]] as const) {
       for (const field of fields) {
-        const sourceObject = { schema_id: 'oracle-lab-p3b-es9-source.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field, authority_sha256: sourceClass === 'request' ? row.request_stimulus_sha256 : row.response_program_sha256 }
+        const sourceObject = { schema_id: 'oracle-lab-p3b-es9-source.v1', sequence_index: row.sequence_index, row_sha256: row.row_sha256, source_class: sourceClass, field, authority_sha256: sourceClass === 'request' ? row.request_stimulus_sha256 : row.response_program_sha256, ...(sourceClass === 'request' ? { bootstrap_policy_sha256: sha256Canonical(row.bootstrap_policy) } : {}) }
         const sourceBytes = canonicalLine(sourceObject)
         const binding = { sequence_index: row.sequence_index, source_class: sourceClass, source_pointer: `/rows/${row.sequence_index}/${sourceClass === 'request' ? 'request_stimulus' : 'response_program'}/${field}`, observation_pointer: sourceClass === 'request' ? `/${field}` : `/response/${field}`, source_byte_length: sourceBytes.byteLength, source_sha256: sha256Bytes(sourceBytes) }
         if (isExpectedLocalAuthFailureRow(row)) disabled.push({ ...binding, reason_code: 'expected_local_auth_pre_request' })
@@ -383,6 +389,10 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
   const stimulus = requestStimulus(family, scheduleId)
   const argv = ['--bare', '--print', '--output-format', 'json', '--no-session-persistence', '--session-id', runId, '--model', 'claude-sonnet-4-6', '--permission-mode', 'bypassPermissions', ...stimulus.argv_suffix]
   const responseProgram = buildResponseProgram(family === 'target_control' || family === 'config' || family === 'auth' || family === 'request_wire' ? 'complete_sse' : scheduleId)
+  const noBootstrap = family === 'config' && isConfigFilePrecedenceNoBootstrap(scheduleId, arm as Extract<ExecutableArm, `control/${string}` | `treatment/${string}`>)
+  const bootstrapPolicy = noBootstrap
+    ? deepFreeze({ expected_count: 0 as const, policy: 'config_file_precedence_no_bootstrap' as const })
+    : deepFreeze({ expected_count: 1 as const, policy: 'exact_one_loopback_head' as const })
   const unsigned = {
     run_id: runId,
     sequence_index: sequenceIndex,
@@ -397,6 +407,7 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
     guard_profile_sha256: sha256Canonical({ profile: 'phase3b-darwin-loopback-no-egress-v1', parallel_target_launches: 1, external_socket_budget: 0 }),
     target_launch_cost: 1 as const,
     external_socket_budget: 0 as const,
+    bootstrap_policy: bootstrapPolicy,
     request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT,
     argv,
     argv_sha256: sha256Canonical(argv),
