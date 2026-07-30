@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { type ProductionController, assertProductionController, controllerState } from './controller.js'
 import { Phase3BProductionError, deepFreeze, sha256Bytes, sha256Canonical } from './core.js'
-import { FIXED_STDIN_LITERAL, FIXED_LITERAL_TABLE_SHA256, type RunLedgerRow } from './ledger.js'
+import { FIXED_STDIN_LITERAL, FIXED_LITERAL_TABLE_SHA256, type CampaignLedger, type RunLedgerRow, validateCampaignLedger } from './ledger.js'
 import type { ReceiverTargetBootstrap } from './receiver.js'
 import { expectedSelectedRoute } from './route-policy.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
@@ -121,15 +121,23 @@ function materializeConfig(runtimeRoot: string, runRelative: string, row: RunLed
   return deepFreeze(digests)
 }
 
-export function prepareScenarioCell(controller: ProductionController, row: RunLedgerRow, bootstrap: ReceiverTargetBootstrap): PreparedCell {
-  assertProductionController(controller)
-  const state = controllerState(controller)
-  if (!state.namespaceSealed || state.runtimeRoot === null) throw new Phase3BProductionError('scenario_input_invalid', 'sealed controller namespace is required')
-  const exact = state.ledger.rows[row.sequence_index]
-  if (!exact || exact.row_sha256 !== row.row_sha256 || bootstrap.route_urls.length !== row.route_count || bootstrap.route_urls.some((value) => { try { const url = new URL(value); return url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port } catch { return true } })) throw new Phase3BProductionError('scenario_input_invalid', 'row or loopback route binding drifted')
+export type PreparedScenarioFilesystem = Readonly<{
+  run_relative: string
+  cwd: string
+  env: NodeJS.ProcessEnv
+  stdin: Buffer
+  profile: string
+  route_ports: readonly number[]
+  input_class_sha256s: Readonly<Record<string, string>>
+}>
+
+export function prepareScenarioFilesystem(runtimeRoot: string, ledgerInput: CampaignLedger, row: RunLedgerRow, bootstrap: ReceiverTargetBootstrap): PreparedScenarioFilesystem {
+  const ledger = validateCampaignLedger(ledgerInput)
+  const exact = ledger.rows[row.sequence_index]
+  if (!exact || exact.row_sha256 !== row.row_sha256 || bootstrap.route_urls.length !== row.route_count || bootstrap.route_urls.some((value) => { try { const url = new URL(value); return url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port } catch { return true } })) throw new Phase3BProductionError('scenario_input_invalid', 'scenario filesystem authority is invalid')
   const runRelative = `runs/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}`
-  for (const relative of [runRelative, `${runRelative}/home`, `${runRelative}/home/.claude`, `${runRelative}/xdg`, `${runRelative}/tmp`, `${runRelative}/cwd`, `${runRelative}/cwd/.claude`]) createPrivateDirectory(state.runtimeRoot, relative)
-  const roots = { home: path.join(state.runtimeRoot, runRelative, 'home'), xdg: path.join(state.runtimeRoot, runRelative, 'xdg'), tmp: path.join(state.runtimeRoot, runRelative, 'tmp'), cwd: path.join(state.runtimeRoot, runRelative, 'cwd') }
+  for (const relative of [runRelative, `${runRelative}/home`, `${runRelative}/home/.claude`, `${runRelative}/xdg`, `${runRelative}/tmp`, `${runRelative}/cwd`, `${runRelative}/cwd/.claude`]) createPrivateDirectory(runtimeRoot, relative)
+  const roots = { home: path.join(runtimeRoot, runRelative, 'home'), xdg: path.join(runtimeRoot, runRelative, 'xdg'), tmp: path.join(runtimeRoot, runRelative, 'tmp'), cwd: path.join(runtimeRoot, runRelative, 'cwd') }
   const env: NodeJS.ProcessEnv = {
     PATH: '/usr/bin:/bin', HOME: roots.home, CLAUDE_CONFIG_DIR: path.join(roots.home, '.claude'), XDG_CONFIG_HOME: path.join(roots.xdg, 'config'),
     XDG_CACHE_HOME: path.join(roots.xdg, 'cache'), XDG_DATA_HOME: path.join(roots.xdg, 'data'), XDG_STATE_HOME: path.join(roots.xdg, 'state'),
@@ -140,11 +148,11 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
     ORACLE_PHASE3B_EXPECT_COMPLETE: row.response_program.actions.at(-1)?.body_kind === 'complete_sse' ? '1' : '0',
     ORACLE_PHASE3B_EXPECT_FAILURE: (row.family === 'auth' && row.schedule_id === 'auth-missing-credential' && row.arm.startsWith('treatment/')) || (row.family === 'response_failure_recovery' && /_terminal$|^reset_terminal$|^partial_sse_then_eof$/.test(row.schedule_id)) ? '1' : '0',
   }
-  for (const relative of [`${runRelative}/xdg/config`, `${runRelative}/xdg/cache`, `${runRelative}/xdg/data`, `${runRelative}/xdg/state`]) createPrivateDirectory(state.runtimeRoot, relative)
+  for (const relative of [`${runRelative}/xdg/config`, `${runRelative}/xdg/cache`, `${runRelative}/xdg/data`, `${runRelative}/xdg/state`]) createPrivateDirectory(runtimeRoot, relative)
   let inputClasses: Readonly<Record<string, string>> = {}
   if (row.family === 'config') {
     env.ANTHROPIC_API_KEY = 'oracle-phase3b-placeholder:config-precedence'
-    inputClasses = materializeConfig(state.runtimeRoot, runRelative, row, bootstrap.route_urls, env)
+    inputClasses = materializeConfig(runtimeRoot, runRelative, row, bootstrap.route_urls, env)
   } else {
     env.ANTHROPIC_BASE_URL = bootstrap.selected_base_url
     if (row.family === 'auth') {
@@ -159,19 +167,29 @@ export function prepareScenarioCell(controller: ProductionController, row: RunLe
     } else env.ANTHROPIC_API_KEY = 'oracle-phase3b-placeholder:campaign'
   }
   const routePorts = bootstrap.route_urls.map((value) => Number(new URL(value).port))
-  const profile = buildSandboxProfile(state.runtimeRoot, path.join(state.runtimeRoot, runRelative), routePorts)
-  const environmentSha256 = sha256Canonical(env)
-  const sandboxProfileSha256 = sha256Bytes(Buffer.from(profile, 'utf8'))
+  const profile = buildSandboxProfile(runtimeRoot, path.join(runtimeRoot, runRelative), routePorts)
+  return Object.freeze({ run_relative: runRelative, cwd: roots.cwd, env: deepFreeze(env), stdin: Buffer.from(FIXED_STDIN_LITERAL, 'utf8'), profile, route_ports: deepFreeze(routePorts), input_class_sha256s: inputClasses })
+}
+
+export function prepareScenarioCell(controller: ProductionController, row: RunLedgerRow, bootstrap: ReceiverTargetBootstrap): PreparedCell {
+  assertProductionController(controller)
+  const state = controllerState(controller)
+  if (!state.namespaceSealed || state.runtimeRoot === null) throw new Phase3BProductionError('scenario_input_invalid', 'sealed controller namespace is required')
+  const exact = state.ledger.rows[row.sequence_index]
+  if (!exact || exact.row_sha256 !== row.row_sha256 || bootstrap.route_urls.length !== row.route_count || bootstrap.route_urls.some((value) => { try { const url = new URL(value); return url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port } catch { return true } })) throw new Phase3BProductionError('scenario_input_invalid', 'row or loopback route binding drifted')
+  const filesystem = prepareScenarioFilesystem(state.runtimeRoot, state.ledger, row, bootstrap)
+  const environmentSha256 = sha256Canonical(filesystem.env)
+  const sandboxProfileSha256 = sha256Bytes(Buffer.from(filesystem.profile, 'utf8'))
   const descriptorUnsigned = {
     schema_id: 'oracle-lab-p3b-cell-input-descriptor.v1', campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256,
     run_id: row.run_id, sequence_index: row.sequence_index, row_sha256: row.row_sha256, argv_sha256: row.argv_sha256, request_stimulus_sha256: row.request_stimulus_sha256,
-    environment_sha256: environmentSha256, cwd_sha256: sha256Canonical(roots.cwd), stdin_sha256: row.stdin_sha256,
-    launch_authority_sha256: bootstrap.launch_authority_sha256, route_authorities_sha256: sha256Canonical(bootstrap.route_urls), input_class_sha256s: inputClasses, sandbox_profile_sha256: sandboxProfileSha256, unknown_or_omitted: 'disabled', raw_material_persisted: false,
+    environment_sha256: environmentSha256, cwd_sha256: sha256Canonical(filesystem.cwd), stdin_sha256: row.stdin_sha256,
+    launch_authority_sha256: bootstrap.launch_authority_sha256, route_authorities_sha256: sha256Canonical(bootstrap.route_urls), input_class_sha256s: filesystem.input_class_sha256s, sandbox_profile_sha256: sandboxProfileSha256, unknown_or_omitted: 'disabled', raw_material_persisted: false,
   }
   const inputDescriptorSha256 = sha256Canonical(descriptorUnsigned)
-  writeExclusiveCanonical(state.runtimeRoot, `${runRelative}/input-descriptor.json`, { ...descriptorUnsigned, input_descriptor_sha256: inputDescriptorSha256 })
-  const cell = deepFreeze({ schema_id: 'oracle-lab-p3b-prepared-cell.v1' as const, campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, cwd: roots.cwd, argv: row.argv, environment_sha256: environmentSha256, sandbox_profile_sha256: sandboxProfileSha256, input_descriptor_sha256: inputDescriptorSha256 })
-  preparedCells.set(cell, { row, env, stdin: Buffer.from(FIXED_STDIN_LITERAL, 'utf8'), cwd: roots.cwd, runtimeRoot: state.runtimeRoot, profile, routePorts })
+  writeExclusiveCanonical(state.runtimeRoot, `${filesystem.run_relative}/input-descriptor.json`, { ...descriptorUnsigned, input_descriptor_sha256: inputDescriptorSha256 })
+  const cell = deepFreeze({ schema_id: 'oracle-lab-p3b-prepared-cell.v1' as const, campaign_id: state.ledger.campaign_id, ledger_sha256: state.ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, cwd: filesystem.cwd, argv: row.argv, environment_sha256: environmentSha256, sandbox_profile_sha256: sandboxProfileSha256, input_descriptor_sha256: inputDescriptorSha256 })
+  preparedCells.set(cell, { row, env: filesystem.env, stdin: filesystem.stdin, cwd: filesystem.cwd, runtimeRoot: state.runtimeRoot, profile: filesystem.profile, routePorts: [...filesystem.route_ports] })
   return cell
 }
 

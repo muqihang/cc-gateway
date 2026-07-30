@@ -34,6 +34,8 @@ export function buildSandboxProfile(runtimeRoot: string, writableRoot: string, r
     '(allow file-read* (subpath "/System/Library"))',
     '(allow file-read* (subpath "/usr/lib"))',
     `(allow file-read* (literal "${profileEscape(process.execPath)}"))`,
+    '(allow file-read* (literal "/usr/share/icu"))',
+    '(allow file-read* (literal "/usr/share/icu/icudt74l.dat"))',
     '(allow file-read* (subpath "/usr/share/zoneinfo"))',
     '(allow file-read* (subpath "/private/var/db/timezone"))',
     '(allow file-read* (literal "/dev/null"))',
