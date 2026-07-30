@@ -15,7 +15,7 @@ export const CLAUDE_MESSAGES_QUERY_ORDER = deepFreeze(['beta'] as const)
 export const CLAUDE_MESSAGES_QUERY_ITEMS = deepFreeze([{ name: 'beta', value: 'true' }] as const)
 export const CLAUDE_MESSAGES_REQUEST_CONTRACT = deepFreeze({ method: 'POST' as const, path: CLAUDE_MESSAGES_PATH, query_present: true as const, query_order: CLAUDE_MESSAGES_QUERY_ORDER, query_items: CLAUDE_MESSAGES_QUERY_ITEMS })
 export const FIXED_LITERAL_TABLE_PATH = 'synthetic-literals/phase3b-v1.json'
-export const FIXED_LITERAL_TABLE = deepFreeze({ schema_id: 'oracle-lab-p3b-synthetic-literals.v1', control_prompt_v1: FIXED_STDIN_LITERAL.trimEnd(), request_model_v1: 'claude-sonnet-4-6', 'model.test': 'model.test', 'output.complete': 'output.complete' })
+export const FIXED_LITERAL_TABLE = deepFreeze({ schema_id: 'oracle-lab-p3b-synthetic-literals.v1', control_prompt_v1: FIXED_STDIN_LITERAL, request_model_v1: 'claude-sonnet-4-6', 'model.test': 'model.test', 'output.complete': 'output.complete' })
 export const FIXED_LITERAL_TABLE_SHA256 = sha256Bytes(Buffer.from(`${canonicalJson(FIXED_LITERAL_TABLE)}\n`, 'utf8'))
 
 export const REPOSITORY_AUTHORITY = deepFreeze({
