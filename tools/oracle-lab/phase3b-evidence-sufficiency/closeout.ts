@@ -101,6 +101,38 @@ export function validateArtifactIndexCoverage(root: string, artifactIndex: Recor
   if (artifactIndex.schema_id !== 'oracle-lab-p3b-artifact-index.v1' || !Array.isArray(artifactIndex.entries) || sha256Canonical(artifactIndex.entries) !== sha256Canonical(inventoryNamespace(root))) throw new Phase3BProductionError('artifact_index_invalid', 'artifact index does not cover every live non-closure namespace leaf')
 }
 
+const CONTROL_STABILITY_BODY_INTEGRITY_FIELDS = new Set([
+  'body_byte_length',
+  'body_sha256',
+  'body_ast_sha256',
+  'body_normalized_byte_length',
+  'body_normalized_sha256',
+  'body_roundtrip_sha256',
+])
+const CONTROL_STABILITY_AST_INTEGRITY_FIELDS = new Set(['wire_byte_length', 'wire_sha256', 'normalized_byte_length', 'normalized_sha256'])
+
+function typedSemanticShape(value: unknown, astRoot = false): unknown {
+  if (Array.isArray(value)) return value.map((child) => typedSemanticShape(child))
+  if (value === null || typeof value !== 'object') return value
+  const record = value as Record<string, unknown>
+  if (record.type === 'redacted_string') {
+    assertExactKeys(record, ['type', 'byte_length', 'value_sha256'], 'observation_invalid')
+    if (!Number.isSafeInteger(record.byte_length) || Number(record.byte_length) < 0) throw new Phase3BProductionError('observation_invalid', 'redacted request string length is invalid')
+    assertSha256(record.value_sha256, 'observation_invalid', 'redacted request string')
+    return { type: 'redacted_string' }
+  }
+  return Object.fromEntries(Object.entries(record)
+    .filter(([field]) => !astRoot || !CONTROL_STABILITY_AST_INTEGRITY_FIELDS.has(field))
+    .map(([field, child]) => [field, typedSemanticShape(child)]))
+}
+
+export function projectValidatedObservationForControlStability(projection: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  const stable = Object.fromEntries(Object.entries(projection)
+    .filter(([field]) => !CONTROL_STABILITY_BODY_INTEGRITY_FIELDS.has(field))
+    .map(([field, value]) => [field, field === 'body_ast' ? typedSemanticShape(value, true) : value]))
+  return deepFreeze(stable)
+}
+
 function validateObservation(value: Record<string, unknown>, row: RunLedgerRow): Readonly<{ sha256: string; projection: Readonly<Record<string, unknown>> }> {
   assertExactKeys(value, OBSERVATION_FIELDS, 'observation_invalid')
   assertDigestField(value, 'observation_sha256', 'observation_invalid')
@@ -126,6 +158,8 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   const exactRequestModel = modelNodes.length === 1 && modelNodes[0] && typeof modelNodes[0] === 'object' && (modelNodes[0] as Record<string, unknown>).type === 'string' && (modelNodes[0] as Record<string, unknown>).literal_ref === 'synthetic-literals/request_model_v1'
   const requiredLiteralDigests = [FIXED_LITERAL_TABLE.request_model_v1, FIXED_LITERAL_TABLE.control_prompt_v1].map((literal) => sha256Bytes(Buffer.from(literal, 'utf8')))
   const astBytes = Buffer.concat([canonicalBytes(value.body_ast), Buffer.from('\n', 'utf8')])
+  const bodyAst = value.body_ast as Record<string, unknown>
+  const rootWireIdentityMatches = bodyAst.wire_byte_length === value.body_byte_length && bodyAst.wire_sha256 === value.body_sha256
   let materializedRequest: Buffer
   try { materializedRequest = materializeRequestAst(value.body_ast as Record<string, unknown>) } catch { throw new Phase3BProductionError('observation_invalid', 'request AST cannot reproduce the receiver wire bytes') }
   const receiverMatch = materializedRequest.length === value.body_normalized_byte_length && sha256Bytes(materializedRequest) === value.body_normalized_sha256
@@ -171,7 +205,7 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   const peer = value.peer_socket as Record<string, unknown> | undefined
   if (peer) assertExactKeys(peer, ['target_pid', 'local_address', 'local_port', 'remote_address', 'remote_port', 'executable_identity_sha256', 'peer_socket_sha256'], 'observation_invalid')
   const peerUnsigned = peer ? Object.fromEntries(Object.entries(peer).filter(([key]) => key !== 'peer_socket_sha256')) : null
-  if (!action || !response || !exactRequestModel || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== CLAUDE_MESSAGES_REQUEST_CONTRACT.method || value.path !== CLAUDE_MESSAGES_REQUEST_CONTRACT.path || value.query_present !== true || sha256Canonical(value.query_order) !== sha256Canonical(CLAUDE_MESSAGES_REQUEST_CONTRACT.query_order) || sha256Canonical(value.query_items) !== sha256Canonical(CLAUDE_MESSAGES_REQUEST_CONTRACT.query_items) || !peer || peer.target_pid !== value.target_pid || peer.executable_identity_sha256 !== value.executable_identity_sha256 || peer.local_address !== '127.0.0.1' || peer.remote_address !== '127.0.0.1' || !Number.isSafeInteger(peer.local_port) || !Number.isSafeInteger(peer.remote_port) || peer.peer_socket_sha256 !== sha256Canonical(peerUnsigned) || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || !Number.isSafeInteger(value.body_normalized_byte_length) || Number(value.body_normalized_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_normalized_sha256)) || value.body_ast_sha256 !== sha256Bytes(astBytes) || value.body_roundtrip_sha256 !== expectedRoundtripSha256 || !receiverMatch || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route/query/peer or response bytes/status/headers/events/timing/terminal drifted from sealed program')
+  if (!action || !response || !exactRequestModel || value.route_ordinal !== expectedSelectedRoute(row) || value.method !== CLAUDE_MESSAGES_REQUEST_CONTRACT.method || value.path !== CLAUDE_MESSAGES_REQUEST_CONTRACT.path || value.query_present !== true || sha256Canonical(value.query_order) !== sha256Canonical(CLAUDE_MESSAGES_REQUEST_CONTRACT.query_order) || sha256Canonical(value.query_items) !== sha256Canonical(CLAUDE_MESSAGES_REQUEST_CONTRACT.query_items) || !peer || peer.target_pid !== value.target_pid || peer.executable_identity_sha256 !== value.executable_identity_sha256 || peer.local_address !== '127.0.0.1' || peer.remote_address !== '127.0.0.1' || !Number.isSafeInteger(peer.local_port) || !Number.isSafeInteger(peer.remote_port) || peer.peer_socket_sha256 !== sha256Canonical(peerUnsigned) || !Number.isSafeInteger(value.body_byte_length) || Number(value.body_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_sha256)) || !rootWireIdentityMatches || !Number.isSafeInteger(value.body_normalized_byte_length) || Number(value.body_normalized_byte_length) <= 0 || !/^[a-f0-9]{64}$/.test(String(value.body_normalized_sha256)) || value.body_ast_sha256 !== sha256Bytes(astBytes) || value.body_roundtrip_sha256 !== expectedRoundtripSha256 || !receiverMatch || requiredLiteralDigests.some((digest) => !astStringDigests.includes(digest)) || elapsed < 0n || response.status !== action.status || response.transport_terminal !== action.transport_terminal || expectedTimingBucket !== (action.delay_class === 'bounded_before_headers' ? 'at_or_after_boundary' : 'not_delayed') || response.timing_bucket !== expectedTimingBucket || response.body_byte_length !== expectedBody.length || response.body_sha256 !== sha256Bytes(expectedBody) || sha256Canonical(response.ordered_header_classes) !== sha256Canonical(action.ordered_headers) || sha256Canonical(response.sse_event_order) !== sha256Canonical(expectedEvents)) throw new Phase3BProductionError('observation_invalid', 'measured request literal/AST/route/query/peer or response bytes/status/headers/events/timing/terminal drifted from sealed program')
   if (row.family === 'auth' && value.auth_marker_winner_class !== expectedAuthMarkerClass(row)) throw new Phase3BProductionError('observation_invalid', 'actual synthetic auth marker does not match the sealed auth arm')
   const stableResponse = {
     ...Object.fromEntries(Object.entries(response).filter(([field]) => field !== 'delay_elapsed_ns' && field !== 'wire_event_sha256' && field !== 'wire_events')),
@@ -179,7 +213,7 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
   }
   return deepFreeze({
     sha256: String(value.observation_sha256),
-    projection: {
+    projection: projectValidatedObservationForControlStability({
       route_ordinal: value.route_ordinal,
       connection_ordinal: value.connection_ordinal,
       attempt_ordinal: value.attempt_ordinal,
@@ -200,8 +234,12 @@ function validateObservation(value: Record<string, unknown>, row: RunLedgerRow):
       body_normalized_sha256: value.body_normalized_sha256,
       body_roundtrip_sha256: value.body_roundtrip_sha256,
       response: stableResponse,
-    },
+    }),
   })
+}
+
+export function validateObservationForControlStability(value: Record<string, unknown>, row: RunLedgerRow): Readonly<{ sha256: string; projection: Readonly<Record<string, unknown>> }> {
+  return validateObservation(value, row)
 }
 
 function unknownRow(row: RunLedgerRow, reasonCode: string): Readonly<Record<string, unknown>> {
@@ -323,7 +361,7 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   return deepFreeze({ run_id: row.run_id, sequence_index: row.sequence_index, family: row.family, schedule_id: row.schedule_id, arm: row.arm, repetition: row.repetition, status: 'Reproduced', enabled: true, reason_code: 'sealed_receipt_projection', projection_sha256: sha256Canonical(projection) })
 }
 
-function enforcePairAndRepetitionStability(ledgerRows: readonly RunLedgerRow[], inputRows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
+export function enforcePairAndRepetitionStability(ledgerRows: readonly RunLedgerRow[], inputRows: readonly Readonly<Record<string, unknown>>[]): readonly Readonly<Record<string, unknown>>[] {
   const rows = inputRows.map((row) => ({ ...row }))
   const bySequence = new Map(rows.map((row) => [Number(row.sequence_index), row]))
   const markUnknown = (members: readonly RunLedgerRow[]) => {
