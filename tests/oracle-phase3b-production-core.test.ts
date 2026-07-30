@@ -9,12 +9,12 @@ import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
 import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, inventoryNamespace, predecessorSupportSourceSha256, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
-import { canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
+import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateObservationForControlStability, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
-import { classifySyntheticAuthHeader, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
+import { REQUEST_AST_MATERIALIZER, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { classifySyntheticAuthHeader, expectedAuthMarkerClass, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
@@ -112,6 +112,204 @@ test('ledger and ES7 bind the exact captured beta query structure', () => {
     query_items: [{ name: 'beta', value: 'true' }],
   })
   assert.deepEqual(ES7_REQUEST_FIELDS.slice(0, 5), ['method', 'path', 'query_present', 'query_order', 'query_items'])
+})
+
+test('control stability compares typed semantic shape while retaining per-observation integrity fields', () => {
+  const digest = (value: number): string => value.toString(16).padStart(64, '0')
+  const projection = (index: number): Record<string, unknown> => ({
+    route_ordinal: 0,
+    connection_ordinal: 0,
+    attempt_ordinal: 0,
+    action_ordinal: 0,
+    method: 'POST',
+    path: '/v1/messages',
+    query_present: true,
+    query_order: ['beta'],
+    query_items: [{ name: 'beta', value: 'true' }],
+    ordered_header_classes: [{ name: 'content-type', ordinal: 0, value_class: 'application-json' }],
+    header_presence: [{ count: 1, header_ref: 'header_content_type' }],
+    auth_marker_winner_class: 'x-api-key:campaign-placeholder',
+    body_byte_length: 4000 + index,
+    body_sha256: digest(100 + index),
+    body_ast: {
+      schema_id: 'oracle-lab-p3b-request-ast.v3',
+      value: {
+        fields: [
+          { field_ref: 'field_00', value: { type: 'string', literal_ref: 'synthetic-literals/request_model_v1', byte_length: 17, value_sha256: digest(1) } },
+          { field_ref: 'field_01', value: { type: 'redacted_string', byte_length: 20 + index, value_sha256: digest(200 + index) } },
+          { field_ref: 'field_02', value: { type: 'array', length: 2, items: [
+            { type: 'redacted_string', byte_length: 30 + index, value_sha256: digest(300 + index) },
+            { type: 'object', fields: [
+              { field_ref: 'field_03', value: { type: 'boolean', value: true } },
+              { field_ref: 'field_04', value: { type: 'number', finite: true, value_text: '1' } },
+              { field_ref: 'field_05', value: { type: 'null' } },
+            ] },
+          ] } },
+        ],
+        type: 'object',
+      },
+    },
+    body_ast_sha256: digest(400 + index),
+    body_normalized_byte_length: 5000 + index,
+    body_normalized_sha256: digest(500 + index),
+    body_roundtrip_sha256: digest(600 + index),
+    response: { status: 200, transport_terminal: 'http_complete', timing_bucket: 'not_delayed', ordered_header_classes: [{ name: 'content-type', value_class: 'text/event-stream' }], sse_event_order: ['message_start', 'message_stop'] },
+  })
+  const observations = Array.from({ length: 20 }, (_, index) => projection(index))
+  const stable = observations.map((value) => projectValidatedObservationForControlStability(value))
+
+  assert.equal(new Set(stable.map((value) => sha256Canonical(value))).size, 1)
+  assert.equal((observations[0].body_ast as Record<string, unknown>).schema_id, 'oracle-lab-p3b-request-ast.v3')
+  assert.equal(observations[0].body_sha256, digest(100))
+  assert.equal(observations[19].body_normalized_sha256, digest(519))
+
+  const baseline = stable[0]
+  const ast = baseline.body_ast as Record<string, unknown>
+  const value = ast.value as Record<string, unknown>
+  const fields = value.fields as Array<Record<string, unknown>>
+  const nestedArray = fields[2].value as Record<string, unknown>
+  const nestedItems = nestedArray.items as Array<Record<string, unknown>>
+  const nestedObject = nestedItems[1]
+  const nestedFields = nestedObject.fields as Array<Record<string, unknown>>
+  const replaceNestedField = (index: number, replacement: Record<string, unknown>): Record<string, unknown> => ({
+    ...baseline,
+    body_ast: { ...ast, value: { ...value, fields: [...fields.slice(0, 2), { ...fields[2], value: { ...nestedArray, items: [nestedItems[0], { ...nestedObject, fields: nestedFields.map((field, fieldIndex) => fieldIndex === index ? replacement : field) }] } }] } },
+  })
+  const variants = [
+    { ...baseline, query_items: [{ name: 'beta', value: 'false' }] },
+    { ...baseline, response: { ...(baseline.response as Record<string, unknown>), status: 429 } },
+    { ...baseline, body_ast: { ...ast, value: { ...value, fields: [{ ...fields[0], field_ref: 'field_changed' }, ...fields.slice(1)] } } },
+    { ...baseline, body_ast: { ...ast, value: { ...value, fields: [{ ...fields[0], value: { ...(fields[0].value as Record<string, unknown>), literal_ref: 'synthetic-literals/changed' } }, ...fields.slice(1)] } } },
+    { ...baseline, body_ast: { ...ast, value: { ...value, fields: [...fields.slice(0, 2), { ...fields[2], value: { ...nestedArray, items: [...(nestedArray.items as unknown[])].reverse() } }] } } },
+    replaceNestedField(0, { field_ref: 'field_03', value: { type: 'boolean', value: false } }),
+    replaceNestedField(1, { field_ref: 'field_04', value: { type: 'number', finite: true, value_text: '2' } }),
+    replaceNestedField(2, { field_ref: 'field_05', value: { type: 'string', literal_ref: 'synthetic-literals/not_null', byte_length: 8, value_sha256: digest(700) } }),
+    { ...baseline, body_ast: { ...ast, value: { ...value, fields: [...fields, { field_ref: 'field_extra', value: { type: 'boolean', value: true } }] } } },
+  ]
+  for (const variant of variants) assert.notEqual(sha256Canonical(variant), sha256Canonical(baseline))
+})
+
+test('validated control observations bind wire identity and preserve nested semantic shape', () => {
+  const ledger = buildCampaignLedger('p3b-control-semantic-shape', TEST_C1)
+  const validationRow = ledger.rows.find((row) => row.response_program.maximum_attempts === 1 && row.response_program.actions[0].body_kind === 'complete_sse' && row.response_program.actions[0].delay_class === 'none')!
+  const buildObservation = (requestBody: Record<string, unknown>, mutate?: (observation: Record<string, unknown>) => void): Record<string, unknown> => {
+    const wireBody = Buffer.from(canonicalJson(requestBody), 'utf8')
+    const bodyAst = normalizeRequestAst(wireBody)
+    const bodyAstBytes = Buffer.concat([canonicalBytes(bodyAst), Buffer.from('\n', 'utf8')])
+    const action = validationRow.response_program.actions[0]
+    const responseBody = Buffer.from(materializeResponseBody(action.body_kind), 'utf8')
+    const headerBytes = Buffer.from('HTTP/1.1 200 OK\r\n', 'utf8')
+    const wireEvents = [
+      { kind: 'headers', monotonic_ns: '1', byte_length: headerBytes.length, bytes_sha256: sha256Bytes(headerBytes) },
+      { kind: 'body', monotonic_ns: '2', byte_length: responseBody.length, bytes_sha256: sha256Bytes(responseBody) },
+      { kind: 'response_finish', monotonic_ns: '3' },
+      { kind: 'socket_end', monotonic_ns: '4' },
+      { kind: 'socket_close', monotonic_ns: '5', had_error: false },
+    ]
+    const peerUnsigned = { target_pid: 123, local_address: '127.0.0.1', local_port: 41000, remote_address: '127.0.0.1', remote_port: 42000, executable_identity_sha256: 'a'.repeat(64) }
+    const peer = { ...peerUnsigned, peer_socket_sha256: sha256Canonical(peerUnsigned) }
+    const bodyRoundtripSha256 = sha256Canonical({
+      materializer: REQUEST_AST_MATERIALIZER,
+      literal_table_sha256: bodyAst.literal_table_sha256,
+      body_byte_length: wireBody.length,
+      body_sha256: sha256Bytes(wireBody),
+      body_ast_sha256: sha256Bytes(bodyAstBytes),
+      normalized_byte_length: bodyAst.normalized_byte_length,
+      normalized_sha256: bodyAst.normalized_sha256,
+    })
+    const response = {
+      status: action.status,
+      ordered_header_classes: action.ordered_headers,
+      body_byte_length: responseBody.length,
+      body_sha256: sha256Bytes(responseBody),
+      sse_event_order: ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'],
+      transport_terminal: action.transport_terminal,
+      delay_elapsed_ns: '0',
+      timing_bucket: 'not_delayed',
+      wire_events: wireEvents,
+      wire_event_sha256: sha256Canonical(wireEvents),
+      socket_close_had_error: false,
+    }
+    const unsigned: Record<string, unknown> = {
+      schema_id: 'oracle-lab-p3b-wire-observation.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256,
+      run_id: validationRow.run_id, sequence_index: validationRow.sequence_index, receiver_group_id: validationRow.receiver_group_id,
+      receiver_instance_id: '11111111-1111-4111-8111-111111111111', receiver_authority_sha256: 'b'.repeat(64),
+      target_pid: 123, target_instance_id: '22222222-2222-4222-8222-222222222222', executable_identity_sha256: peer.executable_identity_sha256,
+      route_ordinal: expectedSelectedRoute(validationRow), connection_ordinal: 0, raw_socket_ordinal: 1, attempt_ordinal: 0, action_ordinal: 0,
+      peer_socket: peer, method: 'POST', path: CLAUDE_MESSAGES_PATH, query_present: true, query_order: CLAUDE_MESSAGES_QUERY_ORDER,
+      query_items: CLAUDE_MESSAGES_QUERY_ITEMS, ordered_header_classes: [{ ordinal: 0, name: 'content-type', value_class: 'application-json' }],
+      header_presence: [{ header_ref: 'header_content_type', count: 1 }], auth_marker_winner_class: expectedAuthMarkerClass(validationRow),
+      body_byte_length: wireBody.length, body_sha256: sha256Bytes(wireBody), body_ast: bodyAst, body_ast_sha256: sha256Bytes(bodyAstBytes),
+      body_normalized_byte_length: bodyAst.normalized_byte_length, body_normalized_sha256: bodyAst.normalized_sha256, body_roundtrip_sha256: bodyRoundtripSha256,
+      response_program_sha256: validationRow.response_program_sha256, response,
+    }
+    mutate?.(unsigned)
+    unsigned.observation_sha256 = sha256Canonical(unsigned)
+    return unsigned
+  }
+  const request = (opaque: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+    model: 'claude-sonnet-4-6', system: FIXED_STDIN_LITERAL.trimEnd(), messages: [{ role: 'user', content: opaque }], stream: true, max_tokens: 1, ...extra,
+  })
+  const validated = Array.from({ length: 20 }, (_, index) => buildObservation(request(`opaque-${'x'.repeat(index + 1)}`))).map((observation) => validateObservationForControlStability(observation, validationRow))
+  assert.equal(new Set(validated.map(({ projection }) => sha256Canonical(projection))).size, 1)
+  assert.equal(new Set(validated.map(({ sha256 }) => sha256)).size, 20)
+
+  const controls = ledger.rows.slice(0, 20)
+  const classified = enforcePairAndRepetitionStability(controls, controls.map((row, index) => ({
+    run_id: row.run_id, sequence_index: row.sequence_index, family: row.family, schedule_id: row.schedule_id, arm: row.arm, repetition: row.repetition,
+    status: 'Reproduced', enabled: true, reason_code: 'validated-test-observation', projection_sha256: sha256Canonical(validated[index].projection),
+  })))
+  assert.ok(classified.every((row) => row.status === 'Reproduced'))
+
+  const baselineProjectionSha256 = sha256Canonical(validated[0].projection)
+  for (const variant of [
+    request('opaque-a', { stream: false }),
+    request('opaque-a', { max_tokens: 2 }),
+    request('opaque-a', { top_p: 1 }),
+    request('opaque-a', { messages: [{ role: 'assistant', content: 'opaque-b' }, { role: 'user', content: 'opaque-a' }] }),
+    request('opaque-a', { messages: [{ role: 'user', content: ['opaque-a'] }] }),
+    request('opaque-a', { metadata: null }),
+  ]) assert.notEqual(sha256Canonical(validateObservationForControlStability(buildObservation(variant), validationRow).projection), baselineProjectionSha256)
+  const ordered = request('opaque-a', { messages: [{ role: 'user', content: 'opaque-a' }, { role: 'assistant', content: ['opaque-b'] }] })
+  const reordered = request('opaque-a', { messages: [...(ordered.messages as unknown[])].reverse() })
+  assert.notEqual(sha256Canonical(validateObservationForControlStability(buildObservation(ordered), validationRow).projection), sha256Canonical(validateObservationForControlStability(buildObservation(reordered), validationRow).projection))
+  assert.throws(() => buildObservation({ ...request('opaque-a'), model: FIXED_STDIN_LITERAL.trimEnd() }), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+
+  assert.throws(() => validateObservationForControlStability(buildObservation(request('opaque-a'), (observation) => { observation.query_items = [{ name: 'beta', value: 'false' }] }), validationRow), (error: Error & { code?: string }) => error.code === 'observation_invalid')
+  assert.throws(() => validateObservationForControlStability(buildObservation(request('opaque-a'), (observation) => { (observation.response as Record<string, unknown>).status = 429 }), validationRow), (error: Error & { code?: string }) => error.code === 'observation_invalid')
+
+  const driftRootWireIdentity = buildObservation(request('opaque-a'), (observation) => {
+    const ast = structuredClone(observation.body_ast as Record<string, unknown>)
+    ast.wire_byte_length = Number(ast.wire_byte_length) + 7
+    ast.wire_sha256 = 'b'.repeat(64)
+    observation.body_ast = ast
+    observation.body_ast_sha256 = sha256Bytes(Buffer.concat([canonicalBytes(ast), Buffer.from('\n', 'utf8')]))
+    observation.body_roundtrip_sha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: ast.literal_table_sha256, body_byte_length: observation.body_byte_length, body_sha256: observation.body_sha256, body_ast_sha256: observation.body_ast_sha256, normalized_byte_length: observation.body_normalized_byte_length, normalized_sha256: observation.body_normalized_sha256 })
+  })
+  assert.throws(() => validateObservationForControlStability(driftRootWireIdentity, validationRow), (error: Error & { code?: string }) => error.code === 'observation_invalid')
+
+  const injectIntoAst = (observation: Record<string, unknown>, injector: (field: Record<string, unknown>) => void): void => {
+    const ast = structuredClone(observation.body_ast as Record<string, unknown>)
+    const root = ast.value as Record<string, unknown>
+    const fields = root.fields as Array<Record<string, unknown>>
+    injector(fields.find((field) => field.field_ref === 'field_01')!)
+    observation.body_ast = ast
+    observation.body_ast_sha256 = sha256Bytes(Buffer.concat([canonicalBytes(ast), Buffer.from('\n', 'utf8')]))
+    observation.body_roundtrip_sha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: ast.literal_table_sha256, body_byte_length: observation.body_byte_length, body_sha256: observation.body_sha256, body_ast_sha256: observation.body_ast_sha256, normalized_byte_length: observation.body_normalized_byte_length, normalized_sha256: observation.body_normalized_sha256 })
+  }
+  const nestedIntegrityInjection = buildObservation(request('opaque-a'), (observation) => injectIntoAst(observation, (field) => { field.wire_sha256 = 'c'.repeat(64) }))
+  assert.notEqual(sha256Canonical(validateObservationForControlStability(nestedIntegrityInjection, validationRow).projection), baselineProjectionSha256)
+  assert.throws(() => validateObservationForControlStability(buildObservation(request('opaque-a'), (observation) => {
+    injectIntoAst(observation, (field) => {
+      const visit = (node: unknown): boolean => {
+        if (!node || typeof node !== 'object') return false
+        const record = node as Record<string, unknown>
+        if (record.type === 'redacted_string') { record.extra = true; return true }
+        return (Array.isArray(node) ? node : Object.values(record)).some(visit)
+      }
+      assert.equal(visit(field.value), true)
+    })
+  }), validationRow), (error: Error & { code?: string }) => error.code === 'observation_invalid')
 })
 
 test('hardened receiver emits no automatic interim response for Expect or upgrade framing', async () => {
