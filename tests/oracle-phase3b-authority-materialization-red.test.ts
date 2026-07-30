@@ -261,8 +261,9 @@ test('authority RED: ES9 is the exhaustive normative E/C/D matrix, not a caller-
   assert.equal(contract.normative_c_rows.length, 3)
   assert.equal(contract.normative_d_rows.length, 3)
   assert.ok([...contract.normative_e_rows, ...contract.normative_c_rows, ...contract.normative_d_rows].every((row: Record<string, unknown>) => !Object.hasOwn(row, 'source_bytes_base64') && !Object.hasOwn(row, 'source_sha256')))
-  assert.equal(contract.observation_enabled_sources.length, 340 * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
-  assert.equal(contract.observation_disabled_exclusions.length, 340 * 2)
+  const localAuthRows = ledger.rows.filter((row) => row.family === 'auth' && row.schedule_id === 'auth-missing-credential' && row.arm.startsWith('treatment/')).length
+  assert.equal(contract.observation_enabled_sources.length, (340 - localAuthRows) * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
+  assert.equal(contract.observation_disabled_exclusions.length, 340 * 2 + localAuthRows * (ES7_REQUEST_FIELDS.length + ES7_RESPONSE_FIELDS.length))
   for (const entry of [...contract.observation_enabled_sources, ...contract.observation_disabled_exclusions]) {
     assert.match(entry.source_pointer, /^\/rows\/\d+\/(request_stimulus|response_program)\//)
     assert.match(entry.source_sha256, /^[a-f0-9]{64}$/)
