@@ -8,7 +8,7 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, assertExactKeys, canonicalBytes, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical } from './core.js'
 import type { LaunchAuthorityReceipt } from './launch-authority.js'
 import { assertControllerLaunchPrerequisites, assertLaunchAuthority } from './launch-authority.js'
-import { FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
+import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY, CLAUDE_MESSAGES_REQUEST_CONTRACT, CLAUDE_MESSAGES_REQUEST_TARGET, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedSelectedRoute } from './route-policy.js'
@@ -55,11 +55,26 @@ export type ReceiverResult = Readonly<{
   sequence_index: number
   receiver_group_id: string
   receiver_authority_sha256: string
+  bootstrap: Readonly<{
+    count: 1
+    route_ordinal: number
+    receiver_instance_id: string
+    raw_socket_ordinal: number
+    peer_socket: Readonly<{ target_pid: number; local_address: '127.0.0.1'; local_port: number; remote_address: '127.0.0.1'; remote_port: number; executable_identity_sha256: string; peer_socket_sha256: string }>
+    response_status: 200
+    response_content_length: 0
+    response_finished: true
+    socket_closed: true
+    socket_close_had_error: false
+    post_count_effect: 0
+    bootstrap_sha256: string
+  }>
   request_count: number
   response_count: number
   route_request_counts: readonly number[]
   attempt_ordinals: readonly number[]
   connection_ordinals: readonly number[]
+  raw_socket_ordinals: readonly number[]
   action_ordinals: readonly number[]
   observation_sha256s: readonly string[]
   receiver_terminal: 'sealed'
@@ -82,10 +97,79 @@ type ReceiverState = {
   targetReady: Promise<void>
   resolveTargetReady: (() => void) | null
   observations: Array<Readonly<Record<string, unknown>>>
+  bootstrapCount: number
+  bootstrapConnectionOrdinals: number[]
+  bootstrapEvidence: ReceiverResult['bootstrap'] | null
+  messageConnectionOrdinals: number[]
   activeRequests: number
   nextConnectionOrdinal: number
   connectionOrdinals: WeakMap<Socket, number>
   violationCode: string | null
+}
+
+export type ReceiverRequestKind = 'bootstrap_probe' | 'messages'
+
+type CapturedMessagesTarget = Readonly<{ path: string; query_present: true; query_order: readonly string[]; query_items: readonly Readonly<{ name: string; value: string }>[] }>
+
+function parseCanonicalMessagesTarget(value: string | undefined): CapturedMessagesTarget | null {
+  if (value !== CLAUDE_MESSAGES_REQUEST_TARGET) return null
+  try {
+    const parsed = new URL(value, 'http://receiver.invalid')
+    const query = [...parsed.searchParams.entries()]
+    if (parsed.origin !== 'http://receiver.invalid' || parsed.pathname !== CLAUDE_MESSAGES_PATH || parsed.search !== `?${CLAUDE_MESSAGES_QUERY}` || parsed.hash !== '' || query.length !== 1 || query[0][0] !== 'beta' || query[0][1] !== 'true') return null
+    return deepFreeze({ path: parsed.pathname, query_present: true, query_order: query.map(([name]) => name), query_items: query.map(([name, itemValue]) => ({ name, value: itemValue })) })
+  } catch { return null }
+}
+
+function singleHeader(headers: IncomingMessage['headers'], name: string): string | undefined {
+  const value = headers[name]
+  if (Array.isArray(value)) throw new Phase3BProductionError('receiver_request_invalid', `${name} must be singular`)
+  return value
+}
+
+function assertRequestFraming(request: Pick<IncomingMessage, 'method' | 'headers'>): void {
+  if (singleHeader(request.headers, 'expect') !== undefined || singleHeader(request.headers, 'upgrade') !== undefined || /(?:^|,)\s*upgrade\s*(?:,|$)/i.test(singleHeader(request.headers, 'connection') ?? '')) throw new Phase3BProductionError('receiver_request_invalid', 'interim or upgraded HTTP is forbidden')
+  if (singleHeader(request.headers, 'transfer-encoding') !== undefined) throw new Phase3BProductionError('receiver_request_invalid', 'transfer encoding is forbidden')
+  const contentLength = singleHeader(request.headers, 'content-length')
+  if (contentLength !== undefined && !/^(?:0|[1-9][0-9]{0,6})$/.test(contentLength)) throw new Phase3BProductionError('receiver_request_invalid', 'content length is ambiguous or invalid')
+  if (request.method === 'HEAD' && contentLength !== undefined && contentLength !== '0') throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe must have empty framing')
+}
+
+function assertRawRequestFraming(request: IncomingMessage): void {
+  const names = request.rawHeaders.filter((_value, index) => index % 2 === 0).map((name) => name.toLowerCase())
+  for (const name of ['content-length', 'transfer-encoding', 'expect', 'upgrade']) if (names.filter((candidate) => candidate === name).length > 1) throw new Phase3BProductionError('receiver_request_invalid', `${name} framing is duplicated`)
+  assertRequestFraming(request)
+}
+
+export function classifyReceiverRequestBoundary(request: Pick<IncomingMessage, 'method' | 'url' | 'headers'>, bootstrapCount: number, observationCount: number): ReceiverRequestKind {
+  assertRequestFraming(request)
+  if (request.method === 'HEAD' && request.url === '/') {
+    if (bootstrapCount !== 0 || observationCount !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe must occur exactly once before messages')
+    return 'bootstrap_probe'
+  }
+  if (request.method !== 'POST' || parseCanonicalMessagesTarget(request.url) === null || bootstrapCount !== 1) throw new Phase3BProductionError('receiver_request_invalid', 'only canonical POST /v1/messages?beta=true after the exact bootstrap probe is accepted')
+  return 'messages'
+}
+
+export function sendClaudeBootstrapProbeResponse(response: ServerResponse): Promise<Readonly<{ response_finished: true; socket_closed: true; socket_close_had_error: false }>> {
+  const socket = response.socket
+  if (!socket) throw new Phase3BProductionError('receiver_wire_invalid', 'bootstrap response has no owned socket')
+  response.sendDate = false
+  response.shouldKeepAlive = false
+  response.statusCode = 200
+  response.setHeader('content-length', '0')
+  response.setHeader('connection', 'close')
+  return new Promise((resolve, reject) => {
+    let finished = false
+    response.once('finish', () => { finished = true })
+    response.once('error', reject)
+    socket.once('error', reject)
+    socket.once('close', (hadError: boolean) => {
+      if (!finished || hadError) { reject(new Phase3BProductionError('receiver_wire_invalid', 'bootstrap response did not finish with a clean socket close')); return }
+      resolve(deepFreeze({ response_finished: true as const, socket_closed: true as const, socket_close_had_error: false as const }))
+    })
+    response.end()
+  })
 }
 
 const receivers = new WeakMap<object, ReceiverState>()
@@ -95,7 +179,7 @@ const REQUEST_FIELD_NAMES = ['model', 'messages', 'role', 'content', 'stream', '
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound', bootstrap_probe: 'exact-one-head-root-empty-before-messages-finish-bound', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -214,6 +298,23 @@ async function listen(server: Server): Promise<number> {
   return address.port
 }
 
+export function createHardenedReceiverServer(onRequest: (request: IncomingMessage, response: ServerResponse) => void, onProtocolViolation: (code: string, socket?: Socket) => void): Server {
+  const server = createServer(onRequest)
+  server.on('checkContinue', (_request, response) => {
+    onProtocolViolation('receiver_request_invalid')
+    response.sendDate = false
+    response.shouldKeepAlive = false
+    response.writeHead(417, { 'content-length': '0', connection: 'close' })
+    response.end()
+  })
+  server.on('upgrade', (_request, socket) => onProtocolViolation('receiver_request_invalid', socket as Socket))
+  server.on('clientError', (_error, socket) => onProtocolViolation('receiver_request_invalid', socket as Socket))
+  server.maxHeadersCount = 64
+  server.requestTimeout = 30_000
+  server.headersTimeout = 10_000
+  return server
+}
+
 export async function bindReceiverGroup(controller: ProductionController, row: RunLedgerRow): Promise<ReceiverAuthority> {
   assertProductionController(controller)
   assertControllerLaunchPrerequisites(controller)
@@ -226,12 +327,19 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
   createPrivateDirectory(control.runtimeRoot, 'receiver-authorities')
   let boundAuthority: ReceiverAuthority | undefined
   const mutableRoutes: MutableRoute[] = []
+  const rejectProtocolBoundary = (code: string, socket?: Socket): void => {
+    if (boundAuthority) {
+      const state = receivers.get(boundAuthority)
+      if (state && !state.sealed) state.violationCode ??= code
+    }
+    socket?.destroy()
+  }
   try {
     for (let routeOrdinal = 0; routeOrdinal < row.route_count; routeOrdinal += 1) {
-      const server = createServer((request, response) => {
+      const server = createHardenedReceiverServer((request, response) => {
       if (!boundAuthority) { response.destroy(); return }
       void handleRequest(boundAuthority, routeOrdinal, request, response)
-      })
+      }, rejectProtocolBoundary)
       server.on('connection', (socket) => {
       if (!boundAuthority) return
       const state = receivers.get(boundAuthority)
@@ -239,9 +347,6 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
       state.connectionOrdinals.set(socket, state.nextConnectionOrdinal)
       state.nextConnectionOrdinal += 1
       })
-      server.maxHeadersCount = 64
-      server.requestTimeout = 30_000
-      server.headersTimeout = 10_000
       const port = await listen(server)
       mutableRoutes.push({ route_ordinal: routeOrdinal, receiver_instance_id: deterministicUuidV4({ campaign_id: control.ledger.campaign_id, run_id: row.run_id, route_ordinal: routeOrdinal, kind: 'receiver-instance' }), host: '127.0.0.1', port, expected_selected: routeOrdinal === expectedSelectedRoute(row), listener_identity_sha256: verifyListenerOwnership(port), server, requestCount: 0 })
     }
@@ -264,7 +369,7 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
     boundAuthority = authority
     let resolveTargetReady: (() => void) | null = null
     const targetReady = new Promise<void>((resolve) => { resolveTargetReady = resolve })
-    receivers.set(authority, { controller, row, authority, routes: mutableRoutes, armed: false, sealed: false, launchAuthority: null, targetPid: null, executableIdentitySha256: null, targetInstanceId: null, capability: null, targetReady, resolveTargetReady, observations: [], activeRequests: 0, nextConnectionOrdinal: 0, connectionOrdinals: new WeakMap(), violationCode: null })
+    receivers.set(authority, { controller, row, authority, routes: mutableRoutes, armed: false, sealed: false, launchAuthority: null, targetPid: null, executableIdentitySha256: null, targetInstanceId: null, capability: null, targetReady, resolveTargetReady, observations: [], bootstrapCount: 0, bootstrapConnectionOrdinals: [], bootstrapEvidence: null, messageConnectionOrdinals: [], activeRequests: 0, nextConnectionOrdinal: 0, connectionOrdinals: new WeakMap(), violationCode: null })
     writeExclusiveCanonical(control.runtimeRoot, `receiver-authorities/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}.json`, authority)
     return authority
   } catch (error: unknown) {
@@ -311,15 +416,25 @@ export function registerReceiverTarget(authority: ReceiverAuthority, targetPid: 
   return state.targetInstanceId
 }
 
-function verifyPeerOwnership(pid: number, receiverPort: number, executableIdentitySha256: string): void {
+type PeerSocketBinding = Readonly<{ target_pid: number; local_address: '127.0.0.1'; local_port: number; remote_address: '127.0.0.1'; remote_port: number; executable_identity_sha256: string; peer_socket_sha256: string }>
+
+function verifyPeerOwnership(pid: number, socket: Socket, executableIdentitySha256: string): PeerSocketBinding {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Phase3BProductionError('receiver_peer_identity_invalid', 'production receiver supports only darwin-arm64')
+  const localAddress = socket.localAddress === '::ffff:127.0.0.1' ? '127.0.0.1' : socket.localAddress
+  const remoteAddress = socket.remoteAddress === '::ffff:127.0.0.1' ? '127.0.0.1' : socket.remoteAddress
+  const localPort = socket.localPort
+  const remotePort = socket.remotePort
+  if (localAddress !== '127.0.0.1' || remoteAddress !== '127.0.0.1' || !Number.isSafeInteger(localPort) || !Number.isSafeInteger(remotePort) || !localPort || !remotePort) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'accepted request socket is not an exact IPv4 loopback tuple')
   const lsof = existsSync('/usr/sbin/lsof') ? '/usr/sbin/lsof' : '/usr/bin/lsof'
   let output: string
   try { output = execFileSync(lsof, ['-nP', '-a', '-p', String(pid), '-iTCP', '-Fn'], { encoding: 'utf8', timeout: 3_000 }) } catch { throw new Phase3BProductionError('receiver_peer_identity_invalid', 'OS could not bind receiver connection to target PID') }
-  if (!output.includes(`->127.0.0.1:${receiverPort}`) && !output.includes(`->localhost:${receiverPort}`)) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'receiver connection is not owned by the sealed target PID')
+  const exactTuple = `n127.0.0.1:${remotePort}->127.0.0.1:${localPort}`
+  if (!output.split('\n').includes(exactTuple)) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'accepted socket tuple is not owned by the sealed target PID')
   let textFiles: string[]
   try { textFiles = execFileSync(lsof, ['-nP', '-a', '-p', String(pid), '-d', 'txt', '-Fn'], { encoding: 'utf8', timeout: 3_000 }).split('\n').filter((line) => line.startsWith('n/')).map((line) => line.slice(1)) } catch { throw new Phase3BProductionError('receiver_peer_identity_invalid', 'OS could not revalidate target executable identity') }
   if (!textFiles.some((file) => { try { return sha256Canonical(stableRead(file, { maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity) === executableIdentitySha256 } catch { return false } })) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request PID no longer owns the sealed target executable')
+  const unsigned = { target_pid: pid, local_address: localAddress, local_port: localPort, remote_address: remoteAddress, remote_port: remotePort, executable_identity_sha256: executableIdentitySha256 }
+  return deepFreeze({ ...unsigned, peer_socket_sha256: sha256Canonical(unsigned) } as PeerSocketBinding)
 }
 
 function semanticRequestAst(value: unknown): unknown {
@@ -439,20 +554,38 @@ async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
 async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const state = receivers.get(authority)
   if (!state || !state.armed) { response.destroy(); return }
-  if (state.sealed || state.activeRequests !== 0) { state.violationCode ??= state.sealed ? 'late_observation' : 'multiple_writer'; response.destroy(); return }
+  if (state.sealed || state.activeRequests !== 0 || state.violationCode !== null) { state.violationCode ??= state.sealed ? 'late_observation' : 'multiple_writer'; response.destroy(); return }
   state.activeRequests += 1
   try {
     await Promise.race([state.targetReady, new Promise((_, reject) => setTimeout(() => reject(new Phase3BProductionError('receiver_target_unbound', 'target PID was not registered in time')), 10_000))])
-    if (request.method !== 'POST' || request.url !== '/v1/messages') throw new Phase3BProductionError('receiver_request_invalid', 'only POST /v1/messages is accepted')
-    if (request.headers['x-oracle-launch-authority'] !== state.launchAuthority!.receipt_sha256 || request.headers['x-oracle-target-capability'] !== state.capability || request.headers['x-oracle-run-id'] !== state.row.run_id) throw new Phase3BProductionError('receiver_request_invalid', 'request does not carry the controller-installed authority headers')
+    assertRawRequestFraming(request)
+    const requestKind = classifyReceiverRequestBoundary(request, state.bootstrapCount, state.observations.length)
     const route = state.routes[routeOrdinal]
-    verifyPeerOwnership(state.targetPid!, route.port, state.executableIdentitySha256!)
+    const peerSocket = verifyPeerOwnership(state.targetPid!, request.socket, state.executableIdentitySha256!)
+    const rawConnectionOrdinal = state.connectionOrdinals.get(request.socket)
+    if (rawConnectionOrdinal === undefined) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request socket was not accepted in the armed receiver epoch')
+    if (requestKind === 'bootstrap_probe') {
+      if (!route.expected_selected) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe reached the unselected route')
+      const body = await readBoundedBody(request)
+      try {
+        if (body.length !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe carried a body')
+      } finally { body.fill(0) }
+      const completion = await sendClaudeBootstrapProbeResponse(response)
+      const bootstrapUnsigned = { count: 1 as const, route_ordinal: routeOrdinal, receiver_instance_id: route.receiver_instance_id, raw_socket_ordinal: rawConnectionOrdinal, peer_socket: peerSocket, response_status: 200 as const, response_content_length: 0 as const, ...completion, post_count_effect: 0 as const }
+      state.bootstrapCount = 1
+      state.bootstrapConnectionOrdinals.push(rawConnectionOrdinal)
+      state.bootstrapEvidence = deepFreeze({ ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) })
+      return
+    }
+    if (request.headers['x-oracle-launch-authority'] !== state.launchAuthority!.receipt_sha256 || request.headers['x-oracle-target-capability'] !== state.capability || request.headers['x-oracle-run-id'] !== state.row.run_id) throw new Phase3BProductionError('receiver_request_invalid', 'request does not carry the controller-installed authority headers')
     const attemptOrdinal = state.observations.length
     if (attemptOrdinal >= state.row.response_program.maximum_attempts) throw new Phase3BProductionError('receiver_attempt_overflow', 'request exceeds fixed scenario attempts')
+    const connectionOrdinal = state.messageConnectionOrdinals.length
+    state.messageConnectionOrdinals.push(rawConnectionOrdinal)
+    const target = parseCanonicalMessagesTarget(request.url)
+    if (target === null) throw new Phase3BProductionError('receiver_request_invalid', 'accepted request target could not be captured exactly')
     const action = state.row.response_program.actions[attemptOrdinal]
     const body = await readBoundedBody(request)
-    const connectionOrdinal = state.connectionOrdinals.get(request.socket)
-    if (connectionOrdinal === undefined) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request socket was not accepted in the armed receiver epoch')
     const bodyByteLength = body.length
     const bodySha256 = sha256Bytes(body)
     let bodyAst: Readonly<Record<string, unknown>>
@@ -468,8 +601,8 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
       run_id: state.row.run_id, sequence_index: state.row.sequence_index, receiver_group_id: authority.receiver_group_id,
       receiver_instance_id: route.receiver_instance_id, receiver_authority_sha256: authority.authority_sha256,
       target_pid: state.targetPid, target_instance_id: state.targetInstanceId, executable_identity_sha256: state.executableIdentitySha256,
-      route_ordinal: routeOrdinal, connection_ordinal: connectionOrdinal, attempt_ordinal: attemptOrdinal, action_ordinal: action.action_ordinal,
-      method: 'POST', path: '/v1/messages', query_present: false, ordered_header_classes: headers.ordered, header_presence: headers.presence, auth_marker_winner_class: headers.authMarkerClass,
+      route_ordinal: routeOrdinal, connection_ordinal: connectionOrdinal, raw_socket_ordinal: rawConnectionOrdinal, attempt_ordinal: attemptOrdinal, action_ordinal: action.action_ordinal, peer_socket: peerSocket,
+      method: 'POST', path: target.path, query_present: target.query_present, query_order: target.query_order, query_items: target.query_items, ordered_header_classes: headers.ordered, header_presence: headers.presence, auth_marker_winner_class: headers.authMarkerClass,
       body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast: bodyAst, body_ast_sha256: bodyAstSha256, body_normalized_byte_length: normalized.length, body_normalized_sha256: sha256Bytes(normalized), body_roundtrip_sha256: bodyRoundtripSha256, response_program_sha256: state.row.response_program_sha256,
       response: responseObservation,
     }
@@ -565,7 +698,8 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
   const routeCounts = state.routes.map((route) => route.requestCount)
   const selected = state.routes.findIndex((route) => route.expected_selected)
   const observedConnections = [...new Set(state.observations.map((observation) => Number(observation.connection_ordinal)))].sort((left, right) => left - right)
-  if (state.violationCode !== null || state.observations.length === 0 || routeCounts[selected] === 0 || routeCounts.some((count, index) => index === selected ? false : count !== 0) || state.observations.length !== state.row.response_program.maximum_attempts || observedConnections.length !== state.nextConnectionOrdinal || observedConnections.some((value, index) => value !== index)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, zero-request, route selection, connection, or exact attempt predicate failed')
+  const accountedConnections = [...state.bootstrapConnectionOrdinals, ...state.messageConnectionOrdinals].sort((left, right) => left - right)
+  if (state.violationCode !== null || state.bootstrapCount !== 1 || state.bootstrapEvidence === null || state.bootstrapEvidence.bootstrap_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.bootstrapEvidence).filter(([key]) => key !== 'bootstrap_sha256'))) || state.bootstrapConnectionOrdinals.length !== 1 || state.bootstrapEvidence.raw_socket_ordinal !== state.bootstrapConnectionOrdinals[0] || state.messageConnectionOrdinals.length !== state.observations.length || observedConnections.length !== state.observations.length || observedConnections.some((value, index) => value !== index) || state.observations.length === 0 || routeCounts[selected] === 0 || routeCounts.some((count, index) => index === selected ? false : count !== 0) || state.observations.length !== state.row.response_program.maximum_attempts || accountedConnections.length !== state.nextConnectionOrdinal || accountedConnections.some((value, index) => value !== index) || state.messageConnectionOrdinals.some((value, index) => value !== index + 1)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, bootstrap, zero-request, route selection, connection, or exact attempt predicate failed')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-result.v1' as const,
     campaign_id: authority.campaign_id,
@@ -574,11 +708,13 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
     sequence_index: state.row.sequence_index,
     receiver_group_id: authority.receiver_group_id,
     receiver_authority_sha256: authority.authority_sha256,
+    bootstrap: state.bootstrapEvidence,
     request_count: state.observations.length,
     response_count: state.observations.length,
     route_request_counts: routeCounts,
     attempt_ordinals: state.observations.map((observation) => Number(observation.attempt_ordinal)),
     connection_ordinals: state.observations.map((observation) => Number(observation.connection_ordinal)),
+    raw_socket_ordinals: state.messageConnectionOrdinals,
     action_ordinals: state.observations.map((observation) => Number(observation.action_ordinal)),
     observation_sha256s: state.observations.map((observation) => String(observation.observation_sha256)),
     receiver_terminal: 'sealed' as const,

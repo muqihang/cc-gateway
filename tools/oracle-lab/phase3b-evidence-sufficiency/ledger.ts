@@ -8,6 +8,12 @@ import { fixedGit, fixedGitBytes } from './trust.js'
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
 export const FIXED_STDIN_LITERAL = 'Return exactly the synthetic marker output.complete.\n'
 export const FIXED_STDIN_LITERAL_REF = 'synthetic-literals/control_prompt_v1'
+export const CLAUDE_MESSAGES_PATH = '/v1/messages'
+export const CLAUDE_MESSAGES_QUERY = 'beta=true'
+export const CLAUDE_MESSAGES_REQUEST_TARGET = `${CLAUDE_MESSAGES_PATH}?${CLAUDE_MESSAGES_QUERY}`
+export const CLAUDE_MESSAGES_QUERY_ORDER = deepFreeze(['beta'] as const)
+export const CLAUDE_MESSAGES_QUERY_ITEMS = deepFreeze([{ name: 'beta', value: 'true' }] as const)
+export const CLAUDE_MESSAGES_REQUEST_CONTRACT = deepFreeze({ method: 'POST' as const, path: CLAUDE_MESSAGES_PATH, query_present: true as const, query_order: CLAUDE_MESSAGES_QUERY_ORDER, query_items: CLAUDE_MESSAGES_QUERY_ITEMS })
 export const FIXED_LITERAL_TABLE_PATH = 'synthetic-literals/phase3b-v1.json'
 export const FIXED_LITERAL_TABLE = deepFreeze({ schema_id: 'oracle-lab-p3b-synthetic-literals.v1', control_prompt_v1: FIXED_STDIN_LITERAL.trimEnd(), request_model_v1: 'claude-sonnet-4-6', 'model.test': 'model.test', 'output.complete': 'output.complete' })
 export const FIXED_LITERAL_TABLE_SHA256 = sha256Bytes(Buffer.from(`${canonicalJson(FIXED_LITERAL_TABLE)}\n`, 'utf8'))
@@ -103,6 +109,7 @@ export type RunLedgerRow = Readonly<{
   guard_profile_sha256: string
   target_launch_cost: 1
   external_socket_budget: 0
+  request_target: typeof CLAUDE_MESSAGES_REQUEST_CONTRACT
   argv: readonly string[]
   argv_sha256: string
   request_stimulus: Readonly<{ stimulus_id: string; tool_policy: string; argv_suffix: readonly string[]; stimulus_sha256: string }>
@@ -131,6 +138,7 @@ export type CampaignLedger = Readonly<{
   target_launch_ceiling: 340
   parallel_target_launches: 1
   external_socket_budget: 0
+  request_target: typeof CLAUDE_MESSAGES_REQUEST_CONTRACT
   schedule_descriptors: readonly Readonly<Record<string, unknown>>[]
   rows: readonly RunLedgerRow[]
   ledger_sha256: string
@@ -198,7 +206,7 @@ export function materializeResponseBody(kind: ResponseAction['body_kind']): stri
   return ''
 }
 
-export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_normalized_byte_length', 'body_normalized_sha256', 'body_roundtrip_sha256'] as const)
+export const ES7_REQUEST_FIELDS = deepFreeze(['method', 'path', 'query_present', 'query_order', 'query_items', 'ordered_header_classes', 'header_presence', 'auth_marker_winner_class', 'body_byte_length', 'body_sha256', 'body_ast', 'body_ast_sha256', 'body_normalized_byte_length', 'body_normalized_sha256', 'body_roundtrip_sha256'] as const)
 export const ES7_RESPONSE_FIELDS = deepFreeze(['status', 'ordered_header_classes', 'body_byte_length', 'body_sha256', 'sse_event_order', 'transport_terminal', 'delay_elapsed_ns', 'timing_bucket', 'wire_events', 'wire_event_sha256', 'socket_close_had_error'] as const)
 
 function canonicalLine(value: unknown): Buffer {
@@ -206,7 +214,7 @@ function canonicalLine(value: unknown): Buffer {
 }
 
 export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string, unknown>> {
-  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
+  const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
   const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => { const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8'); return { ...action, body_byte_length: body.byteLength, body_sha256: sha256Bytes(body) } }), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
   return deepFreeze({
     sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, request_stimulus_sha256: row.request_stimulus_sha256, response_program_sha256: row.response_program_sha256, maximum_attempts: row.response_program.maximum_attempts,
@@ -367,6 +375,7 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
     guard_profile_sha256: sha256Canonical({ profile: 'phase3b-darwin-loopback-no-egress-v1', parallel_target_launches: 1, external_socket_budget: 0 }),
     target_launch_cost: 1 as const,
     external_socket_budget: 0 as const,
+    request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT,
     argv,
     argv_sha256: sha256Canonical(argv),
     request_stimulus: stimulus,
@@ -410,6 +419,7 @@ export function buildCampaignLedger(campaignId: string, c1: CrossRepoAuthority):
     target_launch_ceiling: 340 as const,
     parallel_target_launches: 1 as const,
     external_socket_budget: 0 as const,
+    request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT,
     schedule_descriptors: scheduleDescriptors,
     rows,
   }
@@ -418,7 +428,7 @@ export function buildCampaignLedger(campaignId: string, c1: CrossRepoAuthority):
 }
 
 export function validateCampaignLedger(value: unknown): CampaignLedger {
-  assertExactKeys(value, ['schema_id', 'campaign_id', 'authority', 'c1', 'predecessor', 'fixed_seeds', 'counts', 'target_launch_ceiling', 'parallel_target_launches', 'external_socket_budget', 'schedule_descriptors', 'rows', 'ledger_sha256'], 'launch_ledger_invalid')
+  assertExactKeys(value, ['schema_id', 'campaign_id', 'authority', 'c1', 'predecessor', 'fixed_seeds', 'counts', 'target_launch_ceiling', 'parallel_target_launches', 'external_socket_budget', 'request_target', 'schedule_descriptors', 'rows', 'ledger_sha256'], 'launch_ledger_invalid')
   assertSha256(value.ledger_sha256, 'launch_ledger_invalid', 'ledger_sha256')
   assertDigestField(value, 'ledger_sha256', 'launch_ledger_invalid')
   assertExactKeys(value.c1, ['verdict', 'review_sha256'], 'launch_ledger_invalid')
