@@ -12,7 +12,7 @@ import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSea
 import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateLocalAuthCellTerminal, validateObservationForControlStability, validateObservationRouteAuthorityBindings, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
-import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
+import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { REQUEST_AST_MATERIALIZER, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
@@ -105,28 +105,38 @@ test('receiver rejects malformed, repeated, out-of-order, or non-exact bootstrap
   }
 })
 
-test('config file-precedence rows seal an explicit no-bootstrap contract without weakening other rows', () => {
-  const ledger = buildCampaignLedger('p3b-config-bootstrap-contract', TEST_C1)
-  const config = ledger.rows.find((row) => row.family === 'config'
-    && row.schedule_id === 'config-precedence-local-vs-project'
+test('bootstrap contract derives exact HEAD count and route from the winning config source', () => {
+  const ledger = buildCampaignLedger('p3b-official-da1d2d2d-4168-4e37-af7f-f668944861f2', TEST_C1)
+  const userWinner = ledger.rows.find((row) => row.family === 'config'
+    && row.schedule_id === 'config-precedence-project-vs-user'
     && row.arm === 'control/instrumented')!
+  const projectWinner = ledger.rows.find((row) => row.family === 'config'
+    && row.schedule_id === 'config-precedence-project-vs-user'
+    && row.arm === 'treatment/instrumented')!
+  const localWinner = ledger.rows.find((row) => row.family === 'config'
+    && row.schedule_id === 'config-precedence-local-vs-project'
+    && row.arm === 'treatment/instrumented')!
   const processEnv = ledger.rows.find((row) => row.family === 'config'
     && row.schedule_id === 'config-precedence-process-env-vs-local'
     && row.arm === 'treatment/instrumented')!
-  const auth = ledger.rows.find((row) => row.family === 'auth'
-    && row.schedule_id === 'auth-api-key-rotation'
-    && row.arm === 'control/instrumented')!
   const request = (method: string, requestPath: string, headers: Record<string, string> = {}) => ({ method, url: requestPath, headers })
-  const contract = (config as unknown as { bootstrap_policy?: unknown }).bootstrap_policy
+  const contract = (row: typeof userWinner): unknown => (row as unknown as { bootstrap_contract?: unknown }).bootstrap_contract
 
-  assert.deepEqual(contract, { expected_count: 0, policy: 'config_file_precedence_no_bootstrap' })
-  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), config, 0, 0), 'messages')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), config, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.equal(userWinner.sequence_index, 150)
+  assert.equal(processEnv.sequence_index, 130)
+  assert.deepEqual(contract(userWinner), { expected_count: 1, expected_route_ordinal: 0 })
+  assert.deepEqual(contract(projectWinner), { expected_count: 0, expected_route_ordinal: null })
+  assert.deepEqual(contract(localWinner), { expected_count: 0, expected_route_ordinal: null })
+  assert.deepEqual(contract(processEnv), { expected_count: 1, expected_route_ordinal: 1 })
+  assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), userWinner, 0, 0), 'bootstrap_probe')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), userWinner, 1, 0), 'messages')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), projectWinner, 0, 0), 'messages')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), localWinner, 0, 0), 'messages')
   assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), processEnv, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), auth, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=false'), config, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.equal(processEnv.family, 'config')
-  assert.equal(auth.family, 'auth')
+  assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), processEnv, 0, 0), 'bootstrap_probe')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), processEnv, 1, 0), 'messages')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), userWinner, 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), projectWinner, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
 })
 
 test('ledger and ES7 bind the exact captured beta query structure', () => {
@@ -157,7 +167,8 @@ test('auth-missing-credential treatment binds a bootstrap-only local authenticat
   const bootstrapPeer = { ...bootstrapPeerUnsigned, peer_socket_sha256: sha256Canonical(bootstrapPeerUnsigned) }
   const bootstrapUnsigned = {
     count: 1 as const,
-    policy: 'exact_one_loopback_head' as const,
+    route_ordinal: 0,
+    receiver_instance_id: '11111111-1111-4111-8111-111111111111',
     raw_socket_ordinal: 0,
     peer_socket: bootstrapPeer,
     response_status: 200,
@@ -170,6 +181,8 @@ test('auth-missing-credential treatment binds a bootstrap-only local authenticat
   const receiver = {
     request_count: 0,
     response_count: 0,
+    selected_route_ordinal: 0,
+    bootstrap_contract: row.bootstrap_contract,
     attempt_ordinals: [],
     connection_ordinals: [],
     raw_socket_ordinals: [],
@@ -546,9 +559,11 @@ test('closeout rejects missing, duplicate, gapped, reordered, extra, or substitu
     const unsigned = { attempt_ordinal: index, connection_ordinal: index, raw_socket_ordinal: index + 1, action_ordinal: action.action_ordinal, peer_socket: { ...peer, remote_port: peer.remote_port + index + 1, peer_socket_sha256: sha256Canonical({ ...peerUnsigned, remote_port: peerUnsigned.remote_port + index + 1 }) }, query_order: ledger.request_target.query_order, query_items: ledger.request_target.query_items }
     return { ...unsigned, observation_sha256: sha256Canonical(unsigned) }
   })
-  const bootstrapUnsigned = { count: 1 as const, policy: 'exact_one_loopback_head' as const, raw_socket_ordinal: 0, peer_socket: peer, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
+  const bootstrapUnsigned = { count: 1 as const, route_ordinal: 0, receiver_instance_id: '11111111-1111-4111-8111-111111111111', raw_socket_ordinal: 0, peer_socket: peer, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
   const receiver = {
     request_count: 2, response_count: 2,
+    selected_route_ordinal: 0,
+    bootstrap_contract: row.bootstrap_contract,
     bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) },
     attempt_ordinals: [0, 1], connection_ordinals: [0, 1], raw_socket_ordinals: [1, 2], action_ordinals: [0, 1], observation_sha256s: observations.map((observation) => observation.observation_sha256), receiver_terminal: 'sealed',
   }
@@ -580,11 +595,13 @@ test('closeout requires explicit self-bound zero-bootstrap evidence and a canoni
   const peer = { ...peerUnsigned, peer_socket_sha256: sha256Canonical(peerUnsigned) }
   const observationUnsigned = { attempt_ordinal: 0, connection_ordinal: 0, raw_socket_ordinal: 0, action_ordinal: action.action_ordinal, peer_socket: peer, query_order: ledger.request_target.query_order, query_items: ledger.request_target.query_items }
   const observation = { ...observationUnsigned, observation_sha256: sha256Canonical(observationUnsigned) }
-  const bootstrapUnsigned = { count: 0 as const, policy: 'config_file_precedence_no_bootstrap' as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 }
+  const bootstrapUnsigned = { count: 0 as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 }
   const bootstrap = { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) }
   const receiver = {
     request_count: 1,
     response_count: 1,
+    selected_route_ordinal: 1,
+    bootstrap_contract: row.bootstrap_contract,
     bootstrap,
     attempt_ordinals: [0],
     connection_ordinals: [0],
@@ -600,7 +617,7 @@ test('closeout requires explicit self-bound zero-bootstrap evidence and a canoni
     { ...receiver, raw_socket_ordinals: [1] },
     { ...receiver, bootstrap: { ...bootstrap, bootstrap_sha256: 'f'.repeat(64) } },
     { ...receiver, bootstrap: { ...bootstrap, count: 1 } },
-    { ...receiver, bootstrap: { ...bootstrap, policy: 'exact_one_loopback_head' } },
+    { ...receiver, bootstrap_contract: { expected_count: 1, expected_route_ordinal: 1 } },
   ]) assert.throws(() => validateReceiverOrdinalBindings(drift, drift.request_count === 0 ? [] : [observation], row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
 })
 
@@ -608,10 +625,10 @@ test('closeout independently binds receiver authority to campaign ledger, static
   const ledger = buildCampaignLedger('p3b-closeout-identity', TEST_C1)
   const row = ledger.rows[0]
   const receiverInstanceId = '11111111-1111-4111-8111-111111111111'
-  const anchor = { schema_id: 'oracle-lab-p3b-static-anchor.v1', anchor_sha256: 'a'.repeat(64), receiver_source_sha256: 'b'.repeat(64), receiver_executable_identity_sha256: 'c'.repeat(64), receiver_schema_sha256: 'd'.repeat(64), request_target: ledger.request_target }
-  const authority = { schema_id: 'oracle-lab-p3b-receiver-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, response_program_sha256: row.response_program_sha256, anchor_sha256: anchor.anchor_sha256, receiver_source_sha256: anchor.receiver_source_sha256, receiver_executable_identity_sha256: anchor.receiver_executable_identity_sha256, receiver_schema_sha256: anchor.receiver_schema_sha256, authority_sha256: 'e'.repeat(64), routes: [{ route_ordinal: 0, receiver_instance_id: receiverInstanceId, host: '127.0.0.1', port: 41000, expected_selected: true, expected_bootstrap: true }] }
+  const anchor = { schema_id: 'oracle-lab-p3b-static-anchor.v1', anchor_sha256: 'a'.repeat(64), receiver_source_sha256: 'b'.repeat(64), receiver_executable_identity_sha256: 'c'.repeat(64), receiver_schema_sha256: 'd'.repeat(64), request_target: ledger.request_target, bootstrap_contract_schema: BOOTSTRAP_CONTRACT_SCHEMA }
+  const authority = { schema_id: 'oracle-lab-p3b-receiver-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, response_program_sha256: row.response_program_sha256, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract, anchor_sha256: anchor.anchor_sha256, receiver_source_sha256: anchor.receiver_source_sha256, receiver_executable_identity_sha256: anchor.receiver_executable_identity_sha256, receiver_schema_sha256: anchor.receiver_schema_sha256, authority_sha256: 'e'.repeat(64), routes: [{ route_ordinal: 0, receiver_instance_id: receiverInstanceId, host: '127.0.0.1', port: 41000 }] }
   const peerSocket = { target_pid: 123, local_address: '127.0.0.1', local_port: 41000, remote_address: '127.0.0.1', remote_port: 42000, executable_identity_sha256: '1'.repeat(64), peer_socket_sha256: '2'.repeat(64) }
-  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, bootstrap: { count: 1, policy: 'exact_one_loopback_head', route_ordinal: 0, receiver_instance_id: receiverInstanceId, peer_socket: peerSocket } }
+  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract, bootstrap: { count: 1, route_ordinal: 0, receiver_instance_id: receiverInstanceId, peer_socket: peerSocket } }
   const launch = { schema_id: 'oracle-lab-p3b-launch-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, anchor_sha256: anchor.anchor_sha256, response_program_sha256: row.response_program_sha256, receiver_authority_sha256: authority.authority_sha256, executable_identity_sha256: peerSocket.executable_identity_sha256 }
   const campaignInput = { campaign_id: ledger.campaign_id, input_sha256: '3'.repeat(64) }
   const operatorAuthority = { campaign_id: ledger.campaign_id, campaign_input_sha256: campaignInput.input_sha256, authority_sha256: '4'.repeat(64) }
@@ -637,13 +654,13 @@ test('closeout binds the row130 preflight route one separately from request rout
     && candidate.repetition === 0)!
   const routeZeroInstance = '11111111-1111-4111-8111-111111111111'
   const routeOneInstance = '22222222-2222-4222-8222-222222222222'
-  const anchor = { schema_id: 'oracle-lab-p3b-static-anchor.v1', anchor_sha256: 'a'.repeat(64), receiver_source_sha256: 'b'.repeat(64), receiver_executable_identity_sha256: 'c'.repeat(64), receiver_schema_sha256: 'd'.repeat(64), request_target: ledger.request_target }
-  const authority = { schema_id: 'oracle-lab-p3b-receiver-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, response_program_sha256: row.response_program_sha256, anchor_sha256: anchor.anchor_sha256, receiver_source_sha256: anchor.receiver_source_sha256, receiver_executable_identity_sha256: anchor.receiver_executable_identity_sha256, receiver_schema_sha256: anchor.receiver_schema_sha256, authority_sha256: 'e'.repeat(64), routes: [
-    { route_ordinal: 0, receiver_instance_id: routeZeroInstance, host: '127.0.0.1', port: 41000, expected_selected: true, expected_bootstrap: false },
-    { route_ordinal: 1, receiver_instance_id: routeOneInstance, host: '127.0.0.1', port: 41001, expected_selected: false, expected_bootstrap: true },
+  const anchor = { schema_id: 'oracle-lab-p3b-static-anchor.v1', anchor_sha256: 'a'.repeat(64), receiver_source_sha256: 'b'.repeat(64), receiver_executable_identity_sha256: 'c'.repeat(64), receiver_schema_sha256: 'd'.repeat(64), request_target: ledger.request_target, bootstrap_contract_schema: BOOTSTRAP_CONTRACT_SCHEMA }
+  const authority = { schema_id: 'oracle-lab-p3b-receiver-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, response_program_sha256: row.response_program_sha256, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract, anchor_sha256: anchor.anchor_sha256, receiver_source_sha256: anchor.receiver_source_sha256, receiver_executable_identity_sha256: anchor.receiver_executable_identity_sha256, receiver_schema_sha256: anchor.receiver_schema_sha256, authority_sha256: 'e'.repeat(64), routes: [
+    { route_ordinal: 0, receiver_instance_id: routeZeroInstance, host: '127.0.0.1', port: 41000 },
+    { route_ordinal: 1, receiver_instance_id: routeOneInstance, host: '127.0.0.1', port: 41001 },
   ] }
   const peerSocket = { target_pid: 123, local_address: '127.0.0.1', local_port: 41001, remote_address: '127.0.0.1', remote_port: 42000, executable_identity_sha256: '1'.repeat(64), peer_socket_sha256: '2'.repeat(64) }
-  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, bootstrap: { count: 1, policy: 'exact_one_loopback_head', route_ordinal: 1, receiver_instance_id: routeOneInstance, peer_socket: peerSocket } }
+  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract, bootstrap: { count: 1, route_ordinal: 1, receiver_instance_id: routeOneInstance, peer_socket: peerSocket } }
   const launch = { schema_id: 'oracle-lab-p3b-launch-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, anchor_sha256: anchor.anchor_sha256, response_program_sha256: row.response_program_sha256, receiver_authority_sha256: authority.authority_sha256, executable_identity_sha256: peerSocket.executable_identity_sha256 }
   const campaignInput = { campaign_id: ledger.campaign_id, input_sha256: '3'.repeat(64) }
   const operatorAuthority = { campaign_id: ledger.campaign_id, campaign_input_sha256: campaignInput.input_sha256, authority_sha256: '4'.repeat(64) }
@@ -652,18 +669,32 @@ test('closeout binds the row130 preflight route one separately from request rout
 
   assert.doesNotThrow(() => validateReceiverAuthorityClosureBindings(bindings))
   for (const drift of [
-    { ...bindings, receiver_authority: { ...authority, routes: authority.routes.map((route, index) => ({ ...route, expected_selected: index === 1, expected_bootstrap: index === 1 })) } },
+    { ...bindings, receiver_authority: { ...authority, selected_route_ordinal: 1 } },
+    { ...bindings, receiver_authority: { ...authority, bootstrap_contract: { expected_count: 1, expected_route_ordinal: 0 } } },
+    { ...bindings, receiver: { ...receiver, selected_route_ordinal: 1 } },
+    { ...bindings, receiver: { ...receiver, bootstrap_contract: { expected_count: 1, expected_route_ordinal: 0 } } },
     { ...bindings, receiver: { ...receiver, bootstrap: { ...receiver.bootstrap, route_ordinal: 0, receiver_instance_id: routeZeroInstance, peer_socket: { ...peerSocket, local_port: 41000 } } } },
     { ...bindings, receiver: { ...receiver, bootstrap: { ...receiver.bootstrap, receiver_instance_id: routeZeroInstance } } },
     { ...bindings, static_anchor: { ...anchor, request_target: { ...ledger.request_target, query_items: [{ name: 'beta', value: 'false' }] } } },
+    { ...bindings, static_anchor: { ...anchor, bootstrap_contract_schema: { ...BOOTSTRAP_CONTRACT_SCHEMA, derivation: 'caller-selected' } } },
   ]) assert.throws(() => validateReceiverAuthorityClosureBindings(drift), (error: Error & { code?: string }) => error.code === 'receiver_authority_invalid')
+
+  const userWinner = ledger.rows.find((candidate) => candidate.sequence_index === 150
+    && candidate.schedule_id === 'config-precedence-project-vs-user'
+    && candidate.arm === 'control/instrumented')!
+  const userAuthority = { ...authority, run_id: userWinner.run_id, sequence_index: userWinner.sequence_index, receiver_group_id: userWinner.receiver_group_id, response_program_sha256: userWinner.response_program_sha256, bootstrap_contract: userWinner.bootstrap_contract }
+  const userPeer = { ...peerSocket, local_port: 41000 }
+  const userReceiver = { ...receiver, run_id: userWinner.run_id, sequence_index: userWinner.sequence_index, receiver_group_id: userWinner.receiver_group_id, receiver_authority_sha256: userAuthority.authority_sha256, bootstrap_contract: userWinner.bootstrap_contract, bootstrap: { ...receiver.bootstrap, route_ordinal: 0, receiver_instance_id: routeZeroInstance, peer_socket: userPeer } }
+  const userLaunch = { ...launch, run_id: userWinner.run_id, sequence_index: userWinner.sequence_index, response_program_sha256: userWinner.response_program_sha256, receiver_authority_sha256: userAuthority.authority_sha256 }
+  assert.doesNotThrow(() => validateReceiverAuthorityClosureBindings({ ...bindings, row: userWinner, receiver: userReceiver, receiver_authority: userAuthority, launch_authority: userLaunch }))
+  assert.throws(() => validateReceiverAuthorityClosureBindings({ ...bindings, row: userWinner, receiver: { ...userReceiver, bootstrap: { ...userReceiver.bootstrap, route_ordinal: 1, receiver_instance_id: routeOneInstance } }, receiver_authority: userAuthority, launch_authority: userLaunch }), (error: Error & { code?: string }) => error.code === 'receiver_authority_invalid')
 
   const postPeerUnsigned = { target_pid: peerSocket.target_pid, local_address: peerSocket.local_address, local_port: 41000, remote_address: peerSocket.remote_address, remote_port: 42001, executable_identity_sha256: peerSocket.executable_identity_sha256 }
   const postPeer = { ...postPeerUnsigned, peer_socket_sha256: sha256Canonical(postPeerUnsigned) }
   const observationUnsigned = { route_ordinal: 0, receiver_instance_id: routeZeroInstance, attempt_ordinal: 0, connection_ordinal: 0, raw_socket_ordinal: 1, action_ordinal: row.response_program.actions[0].action_ordinal, peer_socket: postPeer, query_order: ledger.request_target.query_order, query_items: ledger.request_target.query_items }
   const observation = { ...observationUnsigned, observation_sha256: sha256Canonical(observationUnsigned) }
-  const bootstrapUnsigned = { count: 1, policy: 'exact_one_loopback_head', route_ordinal: 1, receiver_instance_id: routeOneInstance, raw_socket_ordinal: 0, peer_socket: { ...peerSocket, peer_socket_sha256: sha256Canonical(Object.fromEntries(Object.entries(peerSocket).filter(([key]) => key !== 'peer_socket_sha256'))) }, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
-  const ordinalReceiver = { request_count: 1, response_count: 1, bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) }, attempt_ordinals: [0], connection_ordinals: [0], raw_socket_ordinals: [1], action_ordinals: [row.response_program.actions[0].action_ordinal], observation_sha256s: [observation.observation_sha256], receiver_terminal: 'sealed' }
+  const bootstrapUnsigned = { count: 1, route_ordinal: 1, receiver_instance_id: routeOneInstance, raw_socket_ordinal: 0, peer_socket: { ...peerSocket, peer_socket_sha256: sha256Canonical(Object.fromEntries(Object.entries(peerSocket).filter(([key]) => key !== 'peer_socket_sha256'))) }, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
+  const ordinalReceiver = { request_count: 1, response_count: 1, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract, bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) }, attempt_ordinals: [0], connection_ordinals: [0], raw_socket_ordinals: [1], action_ordinals: [row.response_program.actions[0].action_ordinal], observation_sha256s: [observation.observation_sha256], receiver_terminal: 'sealed' }
   assert.doesNotThrow(() => validateReceiverOrdinalBindings(ordinalReceiver, [observation], row))
   assert.doesNotThrow(() => validateObservationRouteAuthorityBindings([observation], row, authority.routes[0], peerSocket.executable_identity_sha256))
   const sameAsBootstrapPeerUnsigned = { ...postPeerUnsigned, local_port: 41001 }
@@ -1091,7 +1122,7 @@ test('exact sealed Claude probe resolves file precedence without a receiver boot
       custom_headers: `x-oracle-launch-authority: ${'a'.repeat(64)}\nx-oracle-target-capability: ${'b'.repeat(64)}\nx-oracle-run-id: ${row.run_id}`,
     })
     assert.equal(filesystem.env.ANTHROPIC_BASE_URL, undefined)
-    assert.deepEqual(row.bootstrap_policy, { expected_count: 0, policy: 'config_file_precedence_no_bootstrap' })
+    assert.deepEqual(row.bootstrap_contract, { expected_count: 0, expected_route_ordinal: null })
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.local.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[1] } })
     let externalSocketCount = 0
@@ -1188,7 +1219,7 @@ test('exact sealed Claude probe selects local route zero over process-env route 
     })
     assert.equal(filesystem.env.ANTHROPIC_BASE_URL, routeUrls[1])
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.local.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
-    assert.deepEqual(row.bootstrap_policy, { expected_count: 1, policy: 'exact_one_loopback_head' })
+    assert.deepEqual(row.bootstrap_contract, { expected_count: 1, expected_route_ordinal: 1 })
     let externalSocketCount = 0
     const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
       const child = spawn('/usr/bin/sandbox-exec', ['-p', filesystem.profile, executable, ...row.argv], {
