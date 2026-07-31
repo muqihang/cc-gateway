@@ -2,7 +2,7 @@ import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha25
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, type ExecutionReceipt } from './execution-store.js'
-import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_REQUEST_CONTRACT, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, expectedBootstrapCount, expectedReceiverAttempts, immutableNormativeSourceBytes, isExpectedLocalAuthFailureRow, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
+import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_REQUEST_CONTRACT, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_SHA256, NORMATIVE_COVERAGE_PLAN_RELATIVE, NORMATIVE_COVERAGE_PLAN_SHA256, TARGET_PROFILE, expectedBootstrapCount, expectedReceiverAttempts, immutableNormativeSourceBytes, isExpectedLocalAuthFailureRow, matchesTargetTerminalContract, materializeEs7Sources, materializeResponseBody, normativeCoverageMatrix, observationCoverageMatrix, type CampaignLedger, type RunLedgerRow, type TargetProfile, validateCampaignLedger } from './ledger.js'
 import { expectedAuthMarkerClass } from './scenario-input.js'
 import { assertDirectoryEmpty, assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, resolveContained, stableRead, writeExclusiveBytes, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedBootstrapRoute, expectedSelectedRoute } from './route-policy.js'
@@ -287,6 +287,7 @@ export function validateLocalAuthCellTerminal(row: RunLedgerRow, cell: Readonly<
   const stdout = cell.stdout as Record<string, unknown> | undefined
   const stderr = cell.stderr as Record<string, unknown> | undefined
   if (!isExpectedLocalAuthFailureRow(row)
+    || targetTerminal?.lifecycle_class !== 'process_exit'
     || targetTerminal?.exit_code !== 1
     || targetTerminal.signal !== null
     || terminal.state !== 'terminal'
@@ -300,6 +301,36 @@ export function validateLocalAuthCellTerminal(row: RunLedgerRow, cell: Readonly<
     || stdout.safe_output_sha256 !== LOCAL_AUTH_RESULT_SHA256
     || stdout.safe_output_profile_sha256 !== LOCAL_AUTH_OUTPUT_PROFILE_SHA256
     || stderr?.byte_length !== 0) throw new Phase3BProductionError('target_terminal_invalid', 'local authentication terminal does not bind the exact treatment row, exit, and safe output projection')
+}
+
+export function validateTargetTerminalProjection(row: RunLedgerRow, cell: Readonly<Record<string, unknown>>, terminal: Readonly<Record<string, unknown>>): void {
+  const targetTerminal = cell.target_terminal as Record<string, unknown> | undefined
+  const stdout = cell.stdout as Record<string, unknown> | undefined
+  const stderr = cell.stderr as Record<string, unknown> | undefined
+  const exactReceiptTerminal = targetTerminal !== undefined
+    && terminal.exit_code === targetTerminal.exit_code
+    && terminal.signal === targetTerminal.signal
+  let elapsedMonotonicNs: bigint | null = null
+  if (typeof terminal.started_monotonic_ns === 'string' && /^\d+$/.test(terminal.started_monotonic_ns)
+    && typeof terminal.terminal_monotonic_ns === 'string' && /^\d+$/.test(terminal.terminal_monotonic_ns)) {
+    const started = BigInt(terminal.started_monotonic_ns)
+    const ended = BigInt(terminal.terminal_monotonic_ns)
+    if (ended >= started) elapsedMonotonicNs = ended - started
+  }
+  const valid = row.response_program.target_terminal_contract === null
+    ? exactReceiptTerminal && targetTerminal?.lifecycle_class === 'process_exit'
+    : exactReceiptTerminal && matchesTargetTerminalContract(row, {
+      lifecycle_class: String(targetTerminal?.lifecycle_class),
+      resource_failure: targetTerminal?.lifecycle_class === 'controller_wall_timeout' ? 'wall_timeout' : null,
+      exit_code: targetTerminal?.exit_code as number | null,
+      signal: targetTerminal?.signal as string | null,
+      stdout_safe_class: String(stdout?.safe_output_class ?? 'absent'),
+      stdout_byte_length: Number(stdout?.byte_length ?? -1),
+      stderr_byte_length: Number(stderr?.byte_length ?? -1),
+      cause_code: typeof terminal.cause_code === 'string' ? terminal.cause_code : null,
+      elapsed_monotonic_ns: elapsedMonotonicNs,
+    })
+  if (!valid) throw new Phase3BProductionError('target_terminal_invalid', 'sealed target terminal does not match the exact response-program lifecycle')
 }
 
 export function validateReceiverAuthorityClosureBindings(input: Readonly<{ ledger: CampaignLedger; row: RunLedgerRow; receiver: Readonly<Record<string, unknown>>; receiver_authority: Readonly<Record<string, unknown>>; launch_authority: Readonly<Record<string, unknown>>; static_anchor: Readonly<Record<string, unknown>>; prelaunch: Readonly<Record<string, unknown>>; operator_authority: Readonly<Record<string, unknown>>; campaign_input: Readonly<Record<string, unknown>> }>): void {
@@ -343,7 +374,7 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   assertExactKeys(inputDescriptor.value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'row_sha256', 'argv_sha256', 'request_stimulus_sha256', 'environment_sha256', 'cwd_sha256', 'stdin_sha256', 'launch_authority_sha256', 'route_authorities_sha256', 'bootstrap_contract', 'input_class_sha256s', 'sandbox_profile_sha256', 'unknown_or_omitted', 'raw_material_persisted', 'input_descriptor_sha256'], 'scenario_input_invalid')
   assertExactKeys(guard.value, ['schema_id', 'run_id', 'sequence_index', 'profile_sha256', 'allowed_loopback_ports', 'allowed_write_sha256', 'denied_host_read', 'denied_credential_read', 'denied_process_info', 'external_socket_budget', 'same_scope_probe', 'status', 'guard_receipt_sha256'], 'guard_receipt_invalid')
   assertExactKeys(cell.value, ['schema_id', 'campaign_id', 'ledger_sha256', 'run_id', 'sequence_index', 'family', 'schedule_id', 'seed', 'repetition', 'arm', 'row_sha256', 'launch_authority_sha256', 'receiver_authority_sha256', 'launch_image_record_sha256', 'executable_identity_sha256', 'input_descriptor_sha256', 'sandbox_profile_sha256', 'terminal_class', 'terminal_receipt_sha256', 'receiver_result_sha256', 'guard_receipt_sha256', 'target_terminal', 'stdout', 'stderr', 'external_socket_count', 'raw_material_persisted', 'cell_result_sha256'], 'cell_result_invalid')
-  assertExactKeys(cell.value.target_terminal, ['exit_code', 'signal'], 'cell_result_invalid')
+  assertExactKeys(cell.value.target_terminal, ['lifecycle_class', 'exit_code', 'signal'], 'cell_result_invalid')
   assertExactKeys(cell.value.stdout, ['byte_length', 'safe_output_class', 'safe_output_sha256', 'safe_output_profile_sha256'], 'cell_result_invalid')
   assertExactKeys(cell.value.stderr, ['byte_length', 'safe_diagnostic'], 'cell_result_invalid')
   assertExactKeys((cell.value.stderr as Record<string, unknown>).safe_diagnostic, ['categories', 'normalized_sha256'], 'cell_result_invalid')
@@ -372,6 +403,8 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   const expectsComplete = row.response_program.actions.at(-1)?.body_kind === 'complete_sse'
   const targetTerminal = cell.value.target_terminal as Record<string, unknown> | undefined
   const stderr = cell.value.stderr as Record<string, unknown> | undefined
+  let targetTerminalValid = false
+  try { validateTargetTerminalProjection(row, cell.value, terminal); targetTerminalValid = true } catch {}
   let localAuthTerminalValid = false
   if (localAuthFailure) {
     try { validateLocalAuthCellTerminal(row, cell.value, terminal); localAuthTerminalValid = true } catch {}
@@ -390,7 +423,7 @@ function classifyRow(root: string, ledger: CampaignLedger, row: RunLedgerRow, te
   const selectedAuthorityRoute = Array.isArray(receiverAuthority.value.routes) ? receiverAuthority.value.routes[expectedSelectedRoute(row)] as Record<string, unknown> | undefined : undefined
   try { validateReceiverAuthorityClosureBindings({ ledger, row, receiver: receiver.value, receiver_authority: receiverAuthority.value, launch_authority: launchAuthority.value, static_anchor: staticAnchor.value, prelaunch: prelaunch.value, operator_authority: operatorAuthority.value, campaign_input: campaignInput.value }) } catch { return unknownRow(row, 'receiver_authority_binding_mismatch') }
   const expectedReceiverTerminal = localAuthFailure ? 'sealed_local_auth_failure' : 'sealed'
-  if (launchAuthority.value.row_sha256 !== row.row_sha256 || launchAuthority.value.run_id !== row.run_id || launchAuthority.value.argv_sha256 !== row.argv_sha256 || launchAuthority.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || launchAuthority.value.guard_profile_sha256 !== guard.value.profile_sha256 || inputDescriptor.value.campaign_id !== ledger.campaign_id || inputDescriptor.value.ledger_sha256 !== ledger.ledger_sha256 || inputDescriptor.value.run_id !== row.run_id || inputDescriptor.value.row_sha256 !== row.row_sha256 || inputDescriptor.value.argv_sha256 !== row.argv_sha256 || inputDescriptor.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || inputDescriptor.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || sha256Canonical(inputDescriptor.value.bootstrap_contract) !== sha256Canonical(row.bootstrap_contract) || inputDescriptor.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || receiver.value.receiver_terminal !== expectedReceiverTerminal || cell.value.campaign_id !== ledger.campaign_id || cell.value.ledger_sha256 !== ledger.ledger_sha256 || cell.value.run_id !== row.run_id || cell.value.row_sha256 !== row.row_sha256 || cell.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || cell.value.receiver_authority_sha256 !== receiverAuthority.value.authority_sha256 || cell.value.input_descriptor_sha256 !== inputDescriptor.value.input_descriptor_sha256 || cell.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || cell.value.terminal_class !== 'success' || cell.value.terminal_receipt_sha256 !== terminal.receipt_sha256 || cell.value.guard_receipt_sha256 !== guard.value.guard_receipt_sha256 || !outputValid || !routeCountsValid || cell.value.receiver_result_sha256 !== receiver.value.result_sha256 || !exactOrdinalVector(attempts) || !connectionOrderValid || !exactOrdinalVector(rawSockets, expectedBootstrapCount(row)) || !Array.isArray(actions) || actions.length !== expectedAttempts || !Array.isArray(observationSha256s) || observationSha256s.length !== expectedAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal)) return unknownRow(row, 'receiver_attempt_or_terminal_mismatch')
+  if (launchAuthority.value.row_sha256 !== row.row_sha256 || launchAuthority.value.run_id !== row.run_id || launchAuthority.value.argv_sha256 !== row.argv_sha256 || launchAuthority.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || launchAuthority.value.guard_profile_sha256 !== guard.value.profile_sha256 || inputDescriptor.value.campaign_id !== ledger.campaign_id || inputDescriptor.value.ledger_sha256 !== ledger.ledger_sha256 || inputDescriptor.value.run_id !== row.run_id || inputDescriptor.value.row_sha256 !== row.row_sha256 || inputDescriptor.value.argv_sha256 !== row.argv_sha256 || inputDescriptor.value.request_stimulus_sha256 !== row.request_stimulus_sha256 || inputDescriptor.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || sha256Canonical(inputDescriptor.value.bootstrap_contract) !== sha256Canonical(row.bootstrap_contract) || inputDescriptor.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || receiver.value.receiver_terminal !== expectedReceiverTerminal || cell.value.campaign_id !== ledger.campaign_id || cell.value.ledger_sha256 !== ledger.ledger_sha256 || cell.value.run_id !== row.run_id || cell.value.row_sha256 !== row.row_sha256 || cell.value.launch_authority_sha256 !== launchAuthority.value.receipt_sha256 || cell.value.receiver_authority_sha256 !== receiverAuthority.value.authority_sha256 || cell.value.input_descriptor_sha256 !== inputDescriptor.value.input_descriptor_sha256 || cell.value.sandbox_profile_sha256 !== guard.value.profile_sha256 || cell.value.terminal_class !== 'success' || cell.value.terminal_receipt_sha256 !== terminal.receipt_sha256 || cell.value.guard_receipt_sha256 !== guard.value.guard_receipt_sha256 || !outputValid || !targetTerminalValid || !routeCountsValid || cell.value.receiver_result_sha256 !== receiver.value.result_sha256 || !exactOrdinalVector(attempts) || !connectionOrderValid || !exactOrdinalVector(rawSockets, expectedBootstrapCount(row)) || !Array.isArray(actions) || actions.length !== expectedAttempts || !Array.isArray(observationSha256s) || observationSha256s.length !== expectedAttempts || actions.some((value, index) => value !== row.response_program.actions[index].action_ordinal)) return unknownRow(row, 'receiver_attempt_or_terminal_mismatch')
   const observationProjections: Readonly<Record<string, unknown>>[] = []
   const sealedObservations: Readonly<Record<string, unknown>>[] = []
   for (let attempt = 0; attempt < expectedAttempts; attempt += 1) {
