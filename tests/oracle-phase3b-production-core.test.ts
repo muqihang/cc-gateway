@@ -125,7 +125,7 @@ test('bootstrap contract derives exact HEAD count and route from the winning con
   assert.equal(userWinner.sequence_index, 150)
   assert.equal(processEnv.sequence_index, 130)
   assert.deepEqual(contract(userWinner), { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
-  assert.deepEqual(contract(projectWinner), { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
+  assert.deepEqual(contract(projectWinner), { winner_source: 'project', selected_route_ordinal: 1, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
   assert.deepEqual(contract(localWinner), { winner_source: 'local', selected_route_ordinal: 1, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null })
   assert.deepEqual(contract(processEnv), { winner_source: 'local', selected_route_ordinal: 0, bootstrap_source: 'process-env', expected_count: 1, expected_route_ordinal: 1 })
   assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), userWinner, 0, 0), 'bootstrap_probe')
@@ -870,7 +870,8 @@ test('config route policy seals the observed process-env-vs-local route zero win
   assert.equal(expectedSelectedRoute(localFile), 1)
   assert.equal(expectedSelectedRoute(control), 0)
   assert.ok(rows.filter((row) => row.family !== 'config' || !['config-precedence-process-env-vs-local', 'config-precedence-project-vs-user'].includes(row.schedule_id)).every((row) => expectedSelectedRoute(row) === (row.route_count === 1 || row.family !== 'config' ? 0 : row.arm.startsWith('treatment/') ? 1 : 0)))
-  assert.ok(rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user').every((row) => expectedSelectedRoute(row) === 0))
+  assert.ok(rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user' && row.arm.startsWith('control/')).every((row) => expectedSelectedRoute(row) === 0))
+  assert.ok(rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user' && row.arm.startsWith('treatment/')).every((row) => expectedSelectedRoute(row) === 1))
 })
 
 test('config source precedence contract is derived from staged sources rather than semantic arms', () => {
@@ -882,7 +883,7 @@ test('config source precedence contract is derived from staged sources rather th
     },
     'config-precedence-project-vs-user': {
       control: { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
-      treatment: { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
+      treatment: { winner_source: 'project', selected_route_ordinal: 1, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
     },
     'config-precedence-local-vs-project': {
       control: { winner_source: 'project', selected_route_ordinal: 0, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null },
@@ -902,10 +903,11 @@ test('config source precedence contract is derived from staged sources rather th
 
   const projectVsUser = rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user')
   assert.equal(projectVsUser.length, 20)
-  assert.ok(projectVsUser.every((row) => row.bootstrap_contract.winner_source === 'user' && expectedSelectedRoute(row) === 0))
+  assert.ok(projectVsUser.filter((row) => row.arm.startsWith('control/')).every((row) => row.bootstrap_contract.winner_source === 'user' && expectedSelectedRoute(row) === 0))
+  assert.ok(projectVsUser.filter((row) => row.arm.startsWith('treatment/')).every((row) => row.bootstrap_contract.winner_source === 'project' && expectedSelectedRoute(row) === 1))
   const treatment = projectVsUser.find((row) => row.arm === 'treatment/uninstrumented')!
   const control = projectVsUser.find((row) => row.arm === 'control/instrumented')!
-  assert.deepEqual(treatment.bootstrap_contract, control.bootstrap_contract)
+  assert.notDeepEqual(treatment.bootstrap_contract, control.bootstrap_contract)
 
   const frozenRow150 = [
     buildCampaignLedger('p3b-official-ad7c420b-f360-4368-aa85-a4b02868d900', TEST_C1).rows[150],
@@ -1294,6 +1296,95 @@ test('exact sealed Claude probe resolves user over default from staged source id
     assert.deepEqual(routeZeroRequests, [])
     assert.deepEqual(routeOneRequests, [{ method: 'HEAD', url: '/' }, { method: 'POST', url: '/v1/messages?beta=true' }])
     assert.deepEqual({ bootstrapCount, observationCount, externalSocketCount }, { bootstrapCount: 1, observationCount: 1, externalSocketCount: 0 })
+  } finally {
+    await Promise.all([close(routeZero), close(routeOne)])
+  }
+})
+
+test('exact sealed Claude probe bootstraps from user then sends project-over-user messages to project', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(EXACT_PHASE3B_PROBE) }, async () => {
+  const root = privateRoot('p3b-sandbox-project-user-source-')
+  const launchRoot = path.join(root, 'launch-images')
+  mkdirSync(launchRoot, { mode: 0o700 })
+  const executable = path.join(launchRoot, 'probe-image')
+  copyFileSync(EXACT_PHASE3B_PROBE, executable)
+  chmodSync(executable, 0o500)
+  const identity = stableRead(executable, { mode: 0o500, maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity
+  assert.equal(identity.sha256, 'e542635cba20126337a0e1ea0ef78932df56283c940fef6cd6cc0736f46e23d5')
+
+  const ledger = buildCampaignLedger('p3b-official-3eca6837-a5b5-48eb-99bc-2c1a302c51a5', TEST_C1)
+  const row = ledger.rows[150]
+  assert.equal(row.schedule_id, 'config-precedence-project-vs-user')
+  assert.equal(row.arm, 'treatment/uninstrumented')
+  const complete = Buffer.from(materializeResponseBody('complete_sse'), 'utf8')
+  const routeZeroRequests: Array<{ method: string; url: string }> = []
+  const routeOneRequests: Array<{ method: string; url: string }> = []
+  let externalSocketCount = 0
+  const routeZero = createHttpServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      const body = Buffer.concat(chunks)
+      routeZeroRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+      try {
+        assert.equal(request.method, 'HEAD')
+        assert.equal(request.url, '/')
+        assert.equal(body.length, 0)
+        sendClaudeBootstrapProbeResponse(response)
+      } catch { response.destroy() } finally { body.fill(0) }
+    })
+  })
+  const routeOne = createHttpServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      const body = Buffer.concat(chunks)
+      routeOneRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+      try {
+        assert.equal(request.method, 'POST')
+        assert.equal(request.url, CLAUDE_MESSAGES_REQUEST_TARGET)
+        normalizeRequestAst(body)
+        response.writeHead(200, { 'content-type': 'text/event-stream', 'content-length': String(complete.length), connection: 'close' })
+        response.end(complete)
+      } catch { response.destroy() } finally { body.fill(0) }
+    })
+  })
+  const routeZeroPort = await listen(routeZero)
+  const routeOnePort = await listen(routeOne)
+  try {
+    const routeUrls = [`http://127.0.0.1:${routeZeroPort}`, `http://127.0.0.1:${routeOnePort}`]
+    const filesystem = prepareScenarioFilesystem(root, ledger, row, {
+      launch_authority_sha256: 'a'.repeat(64),
+      selected_base_url: routeUrls[1],
+      alternate_base_url: routeUrls[0],
+      route_urls: routeUrls,
+      custom_headers: `x-oracle-launch-authority: ${'a'.repeat(64)}\nx-oracle-target-capability: ${'b'.repeat(64)}\nx-oracle-run-id: ${row.run_id}`,
+    })
+    assert.equal(filesystem.env.ANTHROPIC_BASE_URL, undefined)
+    assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '..', 'home', '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
+    assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[1] } })
+    const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', filesystem.profile, executable, ...row.argv], { cwd: filesystem.cwd, env: filesystem.env, stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      let timedOut = false
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      child.stdin.end(filesystem.stdin)
+      const sampler = setInterval(() => {
+        if (child.pid) externalSocketCount = Math.max(externalSocketCount, sampleOwnedExternalSocketCount(child.pid, [routeZeroPort, routeOnePort]))
+      }, 50)
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, 30_000)
+      child.once('close', (status, signal) => { clearTimeout(timer); clearInterval(sampler); resolve({ status, signal, stdout, stderr, timedOut }) })
+      child.once('error', (error) => { clearTimeout(timer); clearInterval(sampler); resolve({ status: null, signal: null, stdout, stderr: `${stderr}${error.message}`, timedOut }) })
+    })
+    assert.equal(result.timedOut, false, JSON.stringify({ routeZeroRequests, routeOneRequests, result }))
+    assert.equal(result.signal, null, result.stderr)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).result, 'output.complete')
+    assert.deepEqual(routeZeroRequests, [{ method: 'HEAD', url: '/' }])
+    assert.deepEqual(routeOneRequests, [{ method: 'POST', url: CLAUDE_MESSAGES_REQUEST_TARGET }])
+    assert.deepEqual(row.bootstrap_contract, { winner_source: 'project', selected_route_ordinal: 1, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
+    assert.equal(externalSocketCount, 0)
   } finally {
     await Promise.all([close(routeZero), close(routeOne)])
   }
