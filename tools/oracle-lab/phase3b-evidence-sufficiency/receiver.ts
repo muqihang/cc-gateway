@@ -8,7 +8,7 @@ import { type ProductionController, assertProductionController, controllerState 
 import { Phase3BProductionError, assertExactKeys, canonicalBytes, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical } from './core.js'
 import type { LaunchAuthorityReceipt } from './launch-authority.js'
 import { assertControllerLaunchPrerequisites, assertLaunchAuthority } from './launch-authority.js'
-import { CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY, CLAUDE_MESSAGES_REQUEST_CONTRACT, CLAUDE_MESSAGES_REQUEST_TARGET, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, expectedBootstrapCount, expectedReceiverAttempts, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
+import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY, CLAUDE_MESSAGES_REQUEST_CONTRACT, CLAUDE_MESSAGES_REQUEST_TARGET, FIXED_LITERAL_TABLE, FIXED_LITERAL_TABLE_SHA256, TARGET_PROFILE, expectedBootstrapCount, expectedReceiverAttempts, type ResponseAction, type RunLedgerRow, materializeResponseBody } from './ledger.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedBootstrapRoute, expectedSelectedRoute } from './route-policy.js'
@@ -203,7 +203,7 @@ const REQUEST_FIELD_NAMES = [
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_contract: { expected_count: [0, 1], expected_route_ordinal: [null, 0, 1], derivation: 'exact-winning-config-source-v1' }, bootstrap_probe: 'ledger-bound-exact-count-and-route', request_route: 'ledger-bound-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_contract: BOOTSTRAP_CONTRACT_SCHEMA, bootstrap_probe: 'ledger-bound-exact-count-source-and-route', request_route: 'ledger-bound-winner-source-and-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
