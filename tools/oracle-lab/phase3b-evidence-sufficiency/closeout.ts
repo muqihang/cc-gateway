@@ -1014,11 +1014,17 @@ export function writePostGateLeakReport(evidenceRoot: string): Readonly<Record<s
   const relative = 'capsules/P3B-ES1/gates/post-gate-leak-report.json'
   const gateB = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-result.json').value
   assertDigestField(gateB, 'gate_result_sha256', 'gate_b_result_invalid')
+  const gateBClock = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-clock.json').value
+  assertDigestField(gateBClock, 'clock_sha256', 'gate_clock_invalid')
+  if (gateB.gate_clock_sha256 !== gateBClock.clock_sha256) throw new Phase3BProductionError('gate_b_result_invalid', 'post-Gate scan requires the exact sealed Gate B clock')
   const preGate = readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value
   assertDigestField(preGate, 'leak_report_sha256', 'leak_report_invalid')
   const entries = leakScanEntries(root, relative)
   const findings = entries.filter((entry) => entry.forbidden).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
-  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v1', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
+  const scannedAt = Date.now()
+  const scannedMonotonic = process.hrtime.bigint()
+  if (!Number.isSafeInteger(scannedAt) || scannedAt < Number(gateBClock.wall_clock_ms) || scannedMonotonic < BigInt(String(gateBClock.monotonic_ns))) throw new Phase3BProductionError('leak_report_invalid', 'post-Gate scan predates the sealed Gate B result')
+  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v2', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, gate_b_clock_sha256: gateBClock.clock_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_at_ms: scannedAt, scanned_monotonic_ns: scannedMonotonic.toString(), scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
   const report = deepFreeze({ ...unsigned, post_gate_leak_report_sha256: sha256Canonical(unsigned) })
   writeExclusiveCanonical(root, relative, report)
   return report
@@ -1028,14 +1034,23 @@ export function validatePostGateLeakReport(evidenceRoot: string): Readonly<Recor
   const root = assertPrivateRuntimeRoot(evidenceRoot)
   const relative = 'capsules/P3B-ES1/gates/post-gate-leak-report.json'
   const report = readCanonical(root, relative, 16_777_216).value
-  assertExactKeys(report, ['schema_id', 'campaign_id', 'gate_b_result_sha256', 'pre_gate_leak_report_sha256', 'scanned_entries', 'findings', 'status', 'post_gate_leak_report_sha256'], 'leak_report_invalid')
+  assertExactKeys(report, ['schema_id', 'campaign_id', 'gate_b_result_sha256', 'gate_b_clock_sha256', 'pre_gate_leak_report_sha256', 'scanned_at_ms', 'scanned_monotonic_ns', 'scanned_entries', 'findings', 'status', 'post_gate_leak_report_sha256'], 'leak_report_invalid')
   assertDigestField(report, 'post_gate_leak_report_sha256', 'leak_report_invalid')
   const gateB = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-result.json').value
+  assertDigestField(gateB, 'gate_result_sha256', 'gate_b_result_invalid')
+  const gateBClock = readCanonical(root, 'capsules/P3B-ES1/gates/gate-b-clock.json').value
+  assertDigestField(gateBClock, 'clock_sha256', 'gate_clock_invalid')
   const preGate = readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value
+  assertDigestField(preGate, 'leak_report_sha256', 'leak_report_invalid')
   const entries = leakScanEntries(root, relative)
   const findings = entries.filter((entry) => entry.forbidden).map((entry) => ({ relative_path: entry.relative_path, finding: 'forbidden_material' }))
-  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v1', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
-  if (report.schema_id !== unsigned.schema_id || report.status !== 'PASS' || findings.length !== 0 || sha256Canonical(report) !== sha256Canonical({ ...unsigned, post_gate_leak_report_sha256: sha256Canonical(unsigned) })) throw new Phase3BProductionError('leak_report_invalid', 'post-Gate leak report does not match a fresh recursive persisted-tree scan')
+  const scannedAt = report.scanned_at_ms
+  const scannedMonotonicText = report.scanned_monotonic_ns
+  const now = Date.now()
+  const nowMonotonic = process.hrtime.bigint()
+  if (!Number.isSafeInteger(scannedAt) || typeof scannedMonotonicText !== 'string' || !/^\d+$/.test(scannedMonotonicText) || Number(scannedAt) < Number(gateBClock.wall_clock_ms) || Number(scannedAt) > now || BigInt(scannedMonotonicText) < BigInt(String(gateBClock.monotonic_ns)) || BigInt(scannedMonotonicText) > nowMonotonic) throw new Phase3BProductionError('leak_report_invalid', 'post-Gate scan clock is future or predates Gate B')
+  const unsigned = { schema_id: 'oracle-lab-p3b-post-gate-leak-report.v2', campaign_id: gateB.campaign_id, gate_b_result_sha256: gateB.gate_result_sha256, gate_b_clock_sha256: gateBClock.clock_sha256, pre_gate_leak_report_sha256: preGate.leak_report_sha256, scanned_at_ms: scannedAt as number, scanned_monotonic_ns: scannedMonotonicText, scanned_entries: entries, findings, status: findings.length === 0 && preGate.status === 'PASS' ? 'PASS' : 'BLOCKED' }
+  if (gateB.gate_clock_sha256 !== gateBClock.clock_sha256 || report.schema_id !== unsigned.schema_id || report.status !== 'PASS' || findings.length !== 0 || sha256Canonical(report) !== sha256Canonical({ ...unsigned, post_gate_leak_report_sha256: sha256Canonical(unsigned) })) throw new Phase3BProductionError('leak_report_invalid', 'post-Gate leak report does not match a fresh recursive persisted-tree scan')
   return deepFreeze(report)
 }
 

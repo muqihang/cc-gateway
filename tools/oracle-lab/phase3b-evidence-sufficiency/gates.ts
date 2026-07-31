@@ -16,6 +16,56 @@ const CLOSURE_ROOT = 'capsules/P3B-ES1/closure'
 const GATE_ROOT = 'capsules/P3B-ES1/gates'
 const CLOSURE_FILES = ['artifact-index.json', 'external-digest-set.json', 'exit-report.json', 'handoff.json', 'leak-report.json', 'terminal-manifest.json'] as const
 
+type GateBIssuanceOrder = Readonly<{
+  decision_wall_clock_ms: number
+  decision_monotonic_ns: string
+  gate_b_wall_clock_ms: number
+  gate_b_monotonic_ns: string
+}>
+
+type GateBArchivalOrder = GateBIssuanceOrder & Readonly<{
+  post_gate_scan_wall_clock_ms: number
+  post_gate_scan_monotonic_ns: string
+  confirmation_wall_clock_ms: number
+  confirmation_monotonic_ns: string
+}>
+
+function parseMonotonic(value: string, code: string): bigint {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) throw new Phase3BProductionError(code, 'Gate B monotonic clock is malformed')
+  return BigInt(value)
+}
+
+export function validateGateBIssuanceOrder(input: GateBIssuanceOrder): void {
+  const decisionMonotonic = parseMonotonic(input.decision_monotonic_ns, 'gate_b_clock_invalid')
+  const gateBMonotonic = parseMonotonic(input.gate_b_monotonic_ns, 'gate_b_clock_invalid')
+  if (!Number.isSafeInteger(input.decision_wall_clock_ms)
+    || !Number.isSafeInteger(input.gate_b_wall_clock_ms)
+    || input.decision_wall_clock_ms < 0
+    || input.gate_b_wall_clock_ms < 0
+    || input.decision_wall_clock_ms > input.gate_b_wall_clock_ms
+    || input.gate_b_wall_clock_ms - input.decision_wall_clock_ms > OPERATOR_MAX_DELAY_MS
+    || decisionMonotonic > gateBMonotonic) {
+    throw new Phase3BProductionError('gate_b_clock_invalid', 'Gate B was not issued inside the fixed operator decision window')
+  }
+}
+
+export function validateGateBArchivalOrder(input: GateBArchivalOrder): void {
+  validateGateBIssuanceOrder(input)
+  const gateBMonotonic = parseMonotonic(input.gate_b_monotonic_ns, 'gate_b_result_invalid')
+  const scanMonotonic = parseMonotonic(input.post_gate_scan_monotonic_ns, 'gate_b_result_invalid')
+  const confirmationMonotonic = parseMonotonic(input.confirmation_monotonic_ns, 'gate_b_result_invalid')
+  if (!Number.isSafeInteger(input.post_gate_scan_wall_clock_ms)
+    || !Number.isSafeInteger(input.confirmation_wall_clock_ms)
+    || input.post_gate_scan_wall_clock_ms < 0
+    || input.confirmation_wall_clock_ms < 0
+    || input.post_gate_scan_wall_clock_ms < input.gate_b_wall_clock_ms
+    || input.confirmation_wall_clock_ms < input.post_gate_scan_wall_clock_ms
+    || scanMonotonic < gateBMonotonic
+    || confirmationMonotonic < scanMonotonic) {
+    throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B, post-Gate scan, and confirmation clocks are not ordered')
+  }
+}
+
 type GateClock = Readonly<{
   schema_id: 'oracle-lab-p3b-gate-clock.v1'
   gate: 'A' | 'B'
@@ -190,7 +240,8 @@ export function evaluateGateB(input: GateBEvaluationInput): Readonly<Record<stri
   const issuedWall = input.issued_wall_clock_ms
   const evaluationMono = input.evaluation_monotonic_ns
   const issuedMono = input.issued_monotonic_ns
-  if (!Number.isSafeInteger(evaluationWall) || !Number.isSafeInteger(issuedWall) || Number(issuedWall) > Number(evaluationWall) || typeof evaluationMono !== 'string' || typeof issuedMono !== 'string' || BigInt(issuedMono) > BigInt(evaluationMono)) throw new Phase3BProductionError('gate_b_clock_invalid', 'Gate B trusted wall and monotonic clocks are not ordered')
+  if (typeof evaluationMono !== 'string' || typeof issuedMono !== 'string') throw new Phase3BProductionError('gate_b_clock_invalid', 'Gate B trusted wall and monotonic clocks are not ordered')
+  validateGateBIssuanceOrder({ decision_wall_clock_ms: issuedWall as number, decision_monotonic_ns: issuedMono, gate_b_wall_clock_ms: evaluationWall as number, gate_b_monotonic_ns: evaluationMono })
   const evaluationInput = { gate_a_sha256: input.gate_a_sha256, gate_a_clock_sha256: input.gate_a_clock_sha256, external_set_sha256: input.external_set_sha256, operator_decision_sha256: input.operator_decision_sha256, conclusion_sha256s: [...input.conclusion_sha256s], gate_clock_sha256: input.gate_clock_sha256, controller_source_set_sha256: input.controller_source_set_sha256, controller_executable_sha256: input.controller_executable_sha256, toolchain_sha256: input.toolchain_sha256, support_status: input.support_status, leak_status: input.leak_status, leak_finding_count: input.leak_finding_count, conclusion_states: input.conclusion_states, evaluation_wall_clock_ms: input.evaluation_wall_clock_ms, issued_wall_clock_ms: input.issued_wall_clock_ms, evaluation_monotonic_ns: input.evaluation_monotonic_ns, issued_monotonic_ns: input.issued_monotonic_ns }
   const unsigned = { schema_id: 'oracle-lab-p3b-gate-result.v1', gate: 'B', decision: 'PASS', campaign_id: input.campaign_id, gate_a_sha256: input.gate_a_sha256, external_set_sha256: input.external_set_sha256, operator_decision_sha256: input.operator_decision_sha256, conclusion_sha256s: [...input.conclusion_sha256s], gate_clock_sha256: input.gate_clock_sha256, evaluation_input_sha256: sha256Canonical(evaluationInput), phase3b_usable: true }
   return deepFreeze({ ...unsigned, gate_result_sha256: sha256Canonical(unsigned) })
@@ -216,8 +267,9 @@ export function writeGateB(evidenceRoot: string, allowTestAttestation = false): 
   const supportSha256s = validateConclusionSupport(root, true, allowTestAttestation)
   const now = Date.now()
   const nowMonotonic = process.hrtime.bigint()
-  const issued = Number(decision.issued_at_ms)
-  if (!Number.isSafeInteger(issued) || now < issued || now - issued > OPERATOR_MAX_DELAY_MS || nowMonotonic < BigInt(String(decision.issued_monotonic_ns)) || issued < Number(gateAClock.wall_clock_ms) || BigInt(String(decision.issued_monotonic_ns)) < BigInt(String(gateAClock.monotonic_ns))) throw new Phase3BProductionError('operator_decision_stale', 'operator decision is future, stale, monotonic-invalid, or predates Gate A')
+  const issued = decision.issued_at_ms
+  const issuedMonotonic = parseMonotonic(decision.issued_monotonic_ns as string, 'operator_decision_stale')
+  if (!Number.isSafeInteger(issued) || Number(issued) < 0 || now < Number(issued) || now - Number(issued) > OPERATOR_MAX_DELAY_MS || nowMonotonic < issuedMonotonic || Number(issued) < Number(gateAClock.wall_clock_ms) || issuedMonotonic < parseMonotonic(String(gateAClock.monotonic_ns), 'gate_clock_invalid')) throw new Phase3BProductionError('operator_decision_stale', 'operator decision is future, stale, monotonic-invalid, or predates Gate A')
   for (const conclusion of conclusionRows) {
     const createdAt = Number(conclusion.created_at_ms); const issuedAt = Number(conclusion.issued_at_ms); const expiresAt = Number(conclusion.expires_at_ms)
     if (conclusion.level !== 'Reproduced' || conclusion.enabled !== true || createdAt !== issuedAt || issuedAt !== Number(curationClock.created_at_ms) || !Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) || expiresAt !== issuedAt + SUCCESSOR_TTL_MS || issuedAt > now || now >= expiresAt || !Array.isArray(conclusion.contradiction_ids) || conclusion.contradiction_ids.length !== 0 || sha256Canonical(conclusion.supporting_evidence_sha256s) !== sha256Canonical(supportSha256s)) throw new Phase3BProductionError('conclusion_expiry_invalid', 'conclusion is Unknown, future, stale, expired, contradicted, or unsupported')
@@ -228,9 +280,9 @@ export function writeGateB(evidenceRoot: string, allowTestAttestation = false): 
   verifyTrustedSignature(decision, registry, 'requirements', 'decision_sha256', 'operator_decision_invalid')
   if (gateA.gate_clock_sha256 !== gateAClock.clock_sha256 || gateA.external_set_sha256 !== external.external_set_sha256 || gateAClock.gate !== 'A' || gateAClock.campaign_id !== gateA.campaign_id || gateAClock.external_set_sha256 !== external.external_set_sha256 || gateAClock.controller_source_set_sha256 !== controllerSourceSetSha256() || gateAClock.controller_executable_sha256 !== controllerExecutableSha256() || gateAClock.toolchain_sha256 !== input.toolchain_sha256 || decision.gate_a_clock_sha256 !== gateAClock.clock_sha256 || decision.implementation_review_sha256 !== authority.implementation_review_sha256 || decision.gate_a_path !== `${GATE_ROOT}/gate-a-result.json` || decision.external_set_path !== `${CLOSURE_ROOT}/external-digest-set.json`) throw new Phase3BProductionError('gate_a_invalid', 'Gate A clock/result/operator bindings drifted')
   const clock = captureClock(root, 'B', { sha256: String(gateAClock.clock_sha256), wall: Number(gateAClock.wall_clock_ms), monotonic: String(gateAClock.monotonic_ns) }, String(external.external_set_sha256), expectedDigests.map(String), input.toolchain_sha256)
-  if (clock.wall_clock_ms < issued) throw new Phase3BProductionError('gate_clock_rollback', 'Gate B clock predates operator decision')
+  if (clock.wall_clock_ms < Number(issued)) throw new Phase3BProductionError('gate_clock_rollback', 'Gate B clock predates operator decision')
   writeGate(root, `${GATE_ROOT}/gate-b-clock.json`, clock)
-  const result = evaluateGateB({ campaign_id: String(gateA.campaign_id), gate_a_sha256: String(gateA.gate_result_sha256), gate_a_clock_sha256: String(gateAClock.clock_sha256), external_set_sha256: String(external.external_set_sha256), operator_decision_sha256: String(decision.decision_sha256), conclusion_sha256s: expectedDigests.map(String), gate_clock_sha256: String(clock.clock_sha256), controller_source_set_sha256: String(clock.controller_source_set_sha256), controller_executable_sha256: String(clock.controller_executable_sha256), toolchain_sha256: String(clock.toolchain_sha256), support_status: 'PASS', leak_status: String(readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value.status) as 'PASS' | 'BLOCKED', leak_finding_count: (readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value.findings as unknown[]).length, conclusion_states: conclusionRows.map((row) => ({ level: row.level, enabled: row.enabled, contradiction_count: (row.contradiction_ids as unknown[]).length })), evaluation_wall_clock_ms: clock.wall_clock_ms, issued_wall_clock_ms: Number(decision.issued_at_ms), evaluation_monotonic_ns: String(clock.monotonic_ns), issued_monotonic_ns: String(decision.issued_monotonic_ns) })
+  const result = evaluateGateB({ campaign_id: String(gateA.campaign_id), gate_a_sha256: String(gateA.gate_result_sha256), gate_a_clock_sha256: String(gateAClock.clock_sha256), external_set_sha256: String(external.external_set_sha256), operator_decision_sha256: String(decision.decision_sha256), conclusion_sha256s: expectedDigests.map(String), gate_clock_sha256: String(clock.clock_sha256), controller_source_set_sha256: String(clock.controller_source_set_sha256), controller_executable_sha256: String(clock.controller_executable_sha256), toolchain_sha256: String(clock.toolchain_sha256), support_status: 'PASS', leak_status: String(readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value.status) as 'PASS' | 'BLOCKED', leak_finding_count: (readCanonical(root, `${CLOSURE_ROOT}/leak-report.json`).value.findings as unknown[]).length, conclusion_states: conclusionRows.map((row) => ({ level: row.level, enabled: row.enabled, contradiction_count: (row.contradiction_ids as unknown[]).length })), evaluation_wall_clock_ms: clock.wall_clock_ms, issued_wall_clock_ms: issued as number, evaluation_monotonic_ns: String(clock.monotonic_ns), issued_monotonic_ns: String(decision.issued_monotonic_ns) })
   const resultIdentity = writeGate(root, `${GATE_ROOT}/gate-b-result.json`, result)
   const evaluationReceiptUnsigned = { schema_id: 'oracle-lab-p3b-gate-b-evaluation-receipt.v1', campaign_id: gateA.campaign_id, result_raw_sha256: resultIdentity.sha256, result_canonical_sha256: result.gate_result_sha256, evaluation_input_sha256: result.evaluation_input_sha256, evaluator_nonce: sha256Canonical({ result_raw_sha256: resultIdentity.sha256, evaluation_input_sha256: result.evaluation_input_sha256 }) }
   writeGate(root, `${GATE_ROOT}/gate-b-evaluation-receipt.json`, { ...evaluationReceiptUnsigned, receipt_sha256: sha256Canonical(evaluationReceiptUnsigned) })
@@ -244,7 +296,7 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   assertFixedDirectory(root, GATE_ROOT, ['gate-a-clock.json', 'gate-a-result.json', 'successor-amendment-decision.json', 'gate-b-clock.json', 'gate-b-result.json', 'gate-b-evaluation-receipt.json', 'post-gate-leak-report.json'])
   assertFixedDirectory(root, CLOSURE_ROOT, CLOSURE_FILES)
   const external = validateExternalSet(root)
-  validatePostGateLeakReport(root)
+  const postGateLeak = validatePostGateLeakReport(root)
   validateArtifactIndexCoverage(root, readCanonical(root, `${CLOSURE_ROOT}/artifact-index.json`, 16_777_216).value)
   const gateA = readCanonical(root, `${GATE_ROOT}/gate-a-result.json`).value
   const gateAClock = readCanonical(root, `${GATE_ROOT}/gate-a-clock.json`).value
@@ -255,14 +307,21 @@ export function validateSealedGateBResult(evidenceRoot: string, resultPath: stri
   assertExactKeys(decision, ['schema_id', 'decision_id', 'decision', 'campaign_id', 'gate_a_path', 'gate_a_sha256', 'gate_a_clock_sha256', 'external_set_path', 'external_set_sha256', 'conclusion_paths', 'conclusion_sha256s', 'implementation_review_sha256', 'issued_at_ms', 'issued_monotonic_ns', 'maximum_evaluation_delay_ms', 'scope', 'prohibited_claims', 'reviewer_identity', 'reviewer_role', 'signing_key_id', 'signature_algorithm', 'signature', 'decision_sha256'], 'operator_decision_invalid')
   assertExactKeys(gateBClock, ['schema_id', 'gate', 'campaign_id', 'external_set_sha256', 'conclusion_sha256s', 'controller_source_set_sha256', 'controller_executable_sha256', 'toolchain_sha256', 'predecessor_clock_sha256', 'predecessor_wall_clock_ms', 'predecessor_monotonic_ns', 'wall_clock_ms', 'monotonic_ns', 'clock_sha256'], 'gate_clock_invalid')
   for (const [value, digest, code] of [[gateA, 'gate_result_sha256', 'gate_a_invalid'], [gateAClock, 'clock_sha256', 'gate_clock_invalid'], [decision, 'decision_sha256', 'operator_decision_invalid'], [gateBClock, 'clock_sha256', 'gate_clock_invalid']] as const) assertDigestField(value, digest, code)
-  if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || gateA.external_set_sha256 !== external.external_set_sha256 || gateA.gate_clock_sha256 !== gateAClock.clock_sha256 || gateAClock.gate !== 'A' || gateAClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.gate !== 'B' || gateBClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.predecessor_clock_sha256 !== gateAClock.clock_sha256 || Number(gateBClock.wall_clock_ms) < Number(gateAClock.wall_clock_ms) || BigInt(String(gateBClock.monotonic_ns)) < BigInt(String(gateAClock.monotonic_ns))) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate A/B clock provenance or verdict is not the exact evaluator chain')
+  if (gateA.gate !== 'A' || gateA.decision !== 'PASS' || gateA.phase3b_usable !== false || gateA.external_set_sha256 !== external.external_set_sha256 || gateA.gate_clock_sha256 !== gateAClock.clock_sha256 || gateAClock.gate !== 'A' || gateAClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.gate !== 'B' || gateBClock.external_set_sha256 !== external.external_set_sha256 || gateBClock.predecessor_clock_sha256 !== gateAClock.clock_sha256 || Number(gateBClock.wall_clock_ms) < Number(gateAClock.wall_clock_ms) || parseMonotonic(gateBClock.monotonic_ns as string, 'gate_b_result_invalid') < parseMonotonic(gateAClock.monotonic_ns as string, 'gate_b_result_invalid')) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate A/B clock provenance or verdict is not the exact evaluator chain')
   const validationNow = Date.now()
   const validationMonotonic = process.hrtime.bigint()
-  const gateBWall = Number(gateBClock.wall_clock_ms)
-  const gateBMonotonic = BigInt(String(gateBClock.monotonic_ns))
-  const decisionIssuedAt = Number(decision.issued_at_ms)
-  const decisionIssuedMonotonic = BigInt(String(decision.issued_monotonic_ns))
-  if (!Number.isSafeInteger(gateBWall) || gateBWall > validationNow || validationNow - gateBWall > OPERATOR_MAX_DELAY_MS || gateBMonotonic > validationMonotonic || !Number.isSafeInteger(decisionIssuedAt) || decisionIssuedAt > validationNow || validationNow - decisionIssuedAt > OPERATOR_MAX_DELAY_MS || decisionIssuedMonotonic > validationMonotonic || decisionIssuedAt > gateBWall || decisionIssuedMonotonic > gateBMonotonic) throw new Phase3BProductionError('gate_b_result_invalid', 'Gate B clock or operator decision is future, stale, or not ordered against trusted current time')
+  const gateBWall = gateBClock.wall_clock_ms as number
+  const gateBMonotonic = parseMonotonic(gateBClock.monotonic_ns as string, 'gate_b_result_invalid')
+  validateGateBArchivalOrder({
+    decision_wall_clock_ms: decision.issued_at_ms as number,
+    decision_monotonic_ns: decision.issued_monotonic_ns as string,
+    gate_b_wall_clock_ms: gateBWall,
+    gate_b_monotonic_ns: gateBMonotonic.toString(),
+    post_gate_scan_wall_clock_ms: postGateLeak.scanned_at_ms as number,
+    post_gate_scan_monotonic_ns: postGateLeak.scanned_monotonic_ns as string,
+    confirmation_wall_clock_ms: validationNow,
+    confirmation_monotonic_ns: validationMonotonic.toString(),
+  })
   const conclusionRows = conclusions(root)
   validateCurationClock(root, conclusionRows, allowTestAttestation)
   const supportSha256s = validateConclusionSupport(root, true, allowTestAttestation)
