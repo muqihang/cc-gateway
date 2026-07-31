@@ -13,7 +13,7 @@ import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inven
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { REQUEST_AST_MATERIALIZER, captureReceiverRuntimeIdentity, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { REQUEST_AST_MATERIALIZER, assertReceiverListenerPortUnowned, captureReceiverRuntimeIdentity, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, retireSealedPartialSseListener, sendClaudeBootstrapProbeResponse, sendSealedResponseAction } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
@@ -903,6 +903,93 @@ test('http 401 terminal seals the exact Claude 2.1.215 bounded retry lifecycle',
   }
   assert.equal((buildResponseProgram('http_403_terminal') as unknown as Record<string, unknown>).target_terminal_contract, null)
   assert.equal(buildResponseProgram('http_403_terminal').maximum_attempts, 1)
+})
+
+test('partial SSE EOF seals one receiver attempt and the reviewed controller wall-timeout terminal', () => {
+  const row = buildCampaignLedger('p3b-partial-sse-wall-timeout', TEST_C1).rows.find((candidate) => candidate.schedule_id === 'partial_sse_then_eof')!
+  assert.equal(row.response_program.maximum_attempts, 1)
+  assert.deepEqual(row.response_program.target_terminal_contract, {
+    lifecycle_class: 'controller_wall_timeout',
+    wall_timeout_ms: 120_000,
+    exit_code: null,
+    signal: 'SIGKILL',
+    stdout_safe_class: 'absent',
+    stderr_byte_length: 0,
+    retry_timing_class: 'no_retry_clean_partial_eof',
+  })
+
+  const startedMonotonicNs = 5_000_000_000n
+  const terminal = {
+    started_monotonic_ns: startedMonotonicNs.toString(),
+    terminal_monotonic_ns: (startedMonotonicNs + 120_000_000_000n).toString(),
+    exit_code: null,
+    signal: 'SIGKILL',
+    terminal_class: 'success',
+    cause_code: 'wall_timeout',
+  }
+  const cell = {
+    target_terminal: { lifecycle_class: 'controller_wall_timeout', exit_code: null, signal: 'SIGKILL' },
+    stdout: { byte_length: 0, safe_output_class: 'absent' },
+    stderr: { byte_length: 0 },
+  }
+  assert.doesNotThrow(() => validateTargetTerminalProjection(row, cell, terminal))
+  assert.throws(() => validateTargetTerminalProjection(row, cell, { ...terminal, terminal_monotonic_ns: (startedMonotonicNs + 119_999_999_999n).toString() }), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  assert.throws(() => validateTargetTerminalProjection(row, cell, { ...terminal, signal: 'SIGTERM' }), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary({ method: 'POST', url: CLAUDE_MESSAGES_REQUEST_TARGET, headers: {} }, row, row.bootstrap_contract.expected_count, 1), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+})
+
+test('partial SSE production wire seam retires before retry and proves a rebound listener', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' }, async () => {
+  const row = buildCampaignLedger('p3b-partial-sse-wire-retirement', TEST_C1).rows.find((candidate) => candidate.schedule_id === 'partial_sse_then_eof')!
+  const action = row.response_program.actions[0]!
+  const instanceId = '11111111-1111-4111-8111-111111111111'
+  const protocolViolations: string[] = []
+  let retirement: ReturnType<typeof retireSealedPartialSseListener> | null = null
+  let wire: Readonly<Record<string, unknown>> | null = null
+  const server = createHardenedReceiverServer((request, response) => {
+    request.resume()
+    request.once('end', () => {
+      void sendSealedResponseAction(response, action, () => {
+        retirement = retireSealedPartialSseListener(row, { route_ordinal: 0, receiver_instance_id: instanceId, port, listener_identity_sha256: 'a'.repeat(64) }, server)
+      }).then((observed) => { wire = observed }).catch(() => { protocolViolations.push('wire') })
+    })
+  }, (code, socket) => { protocolViolations.push(code); socket?.destroy() })
+  const port = await listen(server)
+  try {
+    const first = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+      const request = httpRequest({ host: '127.0.0.1', port, method: 'POST', path: CLAUDE_MESSAGES_REQUEST_TARGET, headers: { 'content-length': '2', connection: 'close' } }, (response) => {
+        let body = ''
+        response.setEncoding('utf8')
+        response.on('data', (chunk: string) => { body += chunk })
+        response.once('end', () => resolve({ status: response.statusCode, body }))
+      })
+      request.once('error', reject)
+      request.end('{}')
+    })
+    assert.equal(first.status, 200)
+    assert.ok(first.body.length > 0)
+    assert.ok(retirement)
+    const proof = await (retirement as ReturnType<typeof retireSealedPartialSseListener>)
+    assert.equal(proof.route_ordinal, 0)
+    assert.equal(proof.listener_unowned, true)
+    await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    await new Promise<void>((resolve) => {
+      const request = httpRequest({ host: '127.0.0.1', port, method: 'POST', path: CLAUDE_MESSAGES_REQUEST_TARGET }, () => resolve())
+      request.once('error', () => resolve())
+      request.end('{}')
+    })
+    assert.deepEqual(protocolViolations, [])
+    const capturedWire = wire as unknown as Readonly<Record<string, unknown>>
+    assert.ok(capturedWire)
+    assert.equal(capturedWire.status, 200)
+    assert.equal(capturedWire.transport_terminal, 'eof_after_partial')
+    assert.equal(capturedWire.socket_close_had_error, false)
+    assert.deepEqual(capturedWire.sse_event_order, ['message_start', 'content_block_start', 'content_block_delta'])
+    const rebound = createHttpServer((_request, response) => { response.end() })
+    await new Promise<void>((resolve, reject) => { rebound.once('error', reject); rebound.listen({ host: '127.0.0.1', port }, () => resolve()) })
+    try { assert.throws(() => assertReceiverListenerPortUnowned(port), (error: Error & { code?: string }) => error.code === 'receiver_authority_invalid') } finally { await close(rebound) }
+  } finally {
+    if (!retirement) await close(server)
+  }
 })
 
 test('http 401 terminal closeout requires all nine ordered attempts and the exact bounded target terminal', () => {
