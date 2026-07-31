@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { connect, createServer, type Server } from 'node:net'
 import os from 'node:os'
@@ -13,11 +13,12 @@ import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inven
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
-import { REQUEST_AST_MATERIALIZER, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
+import { REQUEST_AST_MATERIALIZER, captureReceiverRuntimeIdentity, classifyReceiverRequestBoundary, createHardenedReceiverServer, normalizeRequestAst, sendClaudeBootstrapProbeResponse } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass, prepareScenarioFilesystem } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
 import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sandbox-policy.js'
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedBootstrapRoute, expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
+import { RUNTIME_EXECUTABLE_MAXIMUM_BYTES, assertRuntimeExecutableIdentity, controllerExecutableSha256, runtimeExecutableIdentity, runtimeExecutableIdentitySha256 } from '../tools/oracle-lab/phase3b-evidence-sufficiency/source-identity.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
 import { classifyTargetOutput, sampleOwnedExternalSocketCount } from '../tools/oracle-lab/phase3b-evidence-sufficiency/spawn-adapter.js'
 
@@ -44,6 +45,30 @@ function listen(server: Server): Promise<number> {
 function close(server: Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()))
 }
+
+test('receiver and controller identity accept the exact reviewed platform runtime executable', () => {
+  const executable = runtimeExecutableIdentity()
+  assert.equal(process.execPath, '/usr/local/bin/node')
+  assert.equal(executable.size, 224_341_744)
+  assert.equal(RUNTIME_EXECUTABLE_MAXIMUM_BYTES, TARGET_PROFILE.maximum_executable_bytes)
+  assert.equal(captureReceiverRuntimeIdentity().receiver_executable_identity_sha256, runtimeExecutableIdentitySha256())
+  assert.equal(controllerExecutableSha256(), executable.sha256)
+
+  const root = privateRoot('phase3b-runtime-executable-')
+  const ordinary = path.join(root, 'ordinary')
+  const symlink = path.join(root, 'symlink')
+  const drifted = path.join(root, 'drifted')
+  const oversized = path.join(root, 'oversized')
+  writeFileSync(ordinary, 'ordinary', { mode: 0o600 })
+  symlinkSync(process.execPath, symlink)
+  writeFileSync(drifted, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  writeFileSync(oversized, '', { mode: 0o755 })
+  truncateSync(oversized, RUNTIME_EXECUTABLE_MAXIMUM_BYTES + 1)
+
+  for (const file of [ordinary, oversized]) assert.throws(() => runtimeExecutableIdentity(file), (error: Error & { code?: string }) => error.code === 'sealed_file_invalid')
+  assert.throws(() => runtimeExecutableIdentity(symlink), (error: Error & { code?: string }) => error.code === 'sealed_path_invalid')
+  assert.throws(() => assertRuntimeExecutableIdentity(runtimeExecutableIdentitySha256(), drifted), (error: Error & { code?: string }) => error.code === 'controller_identity_invalid')
+})
 
 test('receiver accepts one empty Claude bootstrap HEAD before the counted messages POST', async () => {
   const row = buildCampaignLedger('p3b-bootstrap-boundary', TEST_C1).rows[0]
