@@ -12,6 +12,7 @@ import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY,
 import { classifySyntheticAuthHeader, expectedAuthMarkerClass } from './scenario-input.js'
 import { createPrivateDirectory, stableRead, writeExclusiveCanonical } from './sealed-fs.js'
 import { expectedBootstrapRoute, expectedSelectedRoute } from './route-policy.js'
+import { assertRuntimeExecutableIdentity, runtimeExecutableIdentitySha256 } from './source-identity.js'
 
 type Route = Readonly<{
   route_ordinal: number
@@ -291,8 +292,7 @@ export function deriveResponseObservationFromWire(events: readonly ResponseWireE
 }
 
 function executableIdentity(): string {
-  const identity = stableRead(process.execPath, { maximumBytes: 134_217_728 }).identity
-  return sha256Canonical(identity)
+  return runtimeExecutableIdentitySha256()
 }
 
 function verifyListenerOwnership(port: number): string {
@@ -407,7 +407,8 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
 export function assertReceiverAuthority(authority: unknown, row?: RunLedgerRow): asserts authority is ReceiverAuthority {
   const state = authority && typeof authority === 'object' ? receivers.get(authority as object) : undefined
   if (!state) throw new Phase3BProductionError('receiver_authority_invalid', 'opaque bound receiver authority is required')
-  if (sourceSha256() !== state.authority.receiver_source_sha256 || executableIdentity() !== state.authority.receiver_executable_identity_sha256 || state.authority.selected_route_ordinal !== expectedSelectedRoute(state.row) || sha256Canonical(state.authority.bootstrap_contract) !== sha256Canonical(state.row.bootstrap_contract) || state.authority.authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.authority).filter(([key]) => key !== 'authority_sha256')))) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver source/executable/route/authority identity drifted')
+  assertRuntimeExecutableIdentity(state.authority.receiver_executable_identity_sha256)
+  if (sourceSha256() !== state.authority.receiver_source_sha256 || state.authority.selected_route_ordinal !== expectedSelectedRoute(state.row) || sha256Canonical(state.authority.bootstrap_contract) !== sha256Canonical(state.row.bootstrap_contract) || state.authority.authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.authority).filter(([key]) => key !== 'authority_sha256')))) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver source/executable/route/authority identity drifted')
   if (!state.sealed && state.authority.routes.some((route) => verifyListenerOwnership(route.port) !== route.listener_identity_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver listener PID/executable identity drifted')
   if (row && (state.row.run_id !== row.run_id || state.row.row_sha256 !== row.row_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver does not bind row')
 }
