@@ -134,7 +134,7 @@ test('production path RED: the real controller owns the complete sealed lifecycl
   const observationName = readdirSync(path.join(root, 'observations')).find((name) => name.startsWith(`${String(processEnvRow.sequence_index).padStart(3, '0')}-`))
   assert.ok(observationName)
   const observation = JSON.parse(readFileSync(path.join(root, 'observations', observationName), 'utf8')) as Record<string, unknown>
-  assert.equal(observation.route_ordinal, 1)
+  assert.equal(observation.route_ordinal, 0)
   assert.equal(Number(observation.target_pid) > 0, true)
   assert.match(String(observation.executable_identity_sha256), /^[a-f0-9]{64}$/)
 

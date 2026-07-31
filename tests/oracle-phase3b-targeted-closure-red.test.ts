@@ -10,7 +10,8 @@ import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../
 import { openExecutionStore, readExecutionReceipts } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { buildCampaignLedger, crossRepoAuthority, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, TARGET_PROFILE, type RunLedgerRow } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
 import { deriveResponseObservationFromWire, type ResponseWireEvent } from '../tools/oracle-lab/phase3b-evidence-sufficiency/receiver.js'
-import { configRoutePlan } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
+import { configRoutePlan, expectedAuthMarkerClass, materializeRouteDispatch } from '../tools/oracle-lab/phase3b-evidence-sufficiency/scenario-input.js'
+import { expectedBootstrapRoute, expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { createPrivateDirectory, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { FROZEN_DECISIONS_SHA256, FROZEN_MUTATION_RESULTS_SHA256, FROZEN_REQUIRED_SET_SHA256, FROZEN_SUB_EXECUTION_DECISIONS_SHA256, FROZEN_SUB_EXECUTION_MUTATIONS_SHA256, SUB_RECEIPT_REQUIRED_TESTS } from '../tools/oracle-contract/check-cross-repo.js'
 import { CONTRACT_FILES, CONTRACT_FILE_SHA256 } from '../tools/oracle-contract/check-shared-contract.js'
@@ -165,12 +166,18 @@ test('targeted I3: every Phase3B Git caller is config/replace isolated and launc
   assert.doesNotMatch(launch, /stableRead\(String\(authority\.implementation_review_path\)/)
 })
 
-test('targeted I1 route: process env controls preflight while local route zero controls the real request', () => {
+test('row130 precedence: process env controls preflight while exact local route zero wins the real request', () => {
   const rows = buildCampaignLedger('p3b-targeted-route-plan', TEST_C1).rows
-  const processEnv = rows.find((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local' && candidate.arm.startsWith('treatment/'))!
+  const processEnvRows = rows.filter((candidate) => candidate.schedule_id === 'config-precedence-process-env-vs-local')
+  const processEnv = processEnvRows.find((candidate) => candidate.arm === 'treatment/instrumented' && candidate.repetition === 0)!
   const localFile = rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project' && candidate.arm.startsWith('treatment/'))!
-  assert.deepEqual(configRoutePlan(processEnv), { user: null, project: null, local: 0, 'process-env': 1, request_route: 1, preflight_route: 1 })
+  assert.deepEqual(configRoutePlan(processEnv), { user: null, project: null, local: 0, 'process-env': 1, request_route: 0, preflight_route: 1 })
+  assert.deepEqual(materializeRouteDispatch(processEnv, ['http://127.0.0.1:49480', 'http://127.0.0.1:49481']), { request_route: 0, preflight_route: 1, actual_route: 0, selected_url: 'http://127.0.0.1:49480' })
+  assert.equal(expectedAuthMarkerClass(processEnv), 'x-api-key:campaign-config-placeholder')
+  assert.ok(processEnvRows.filter((row) => row.arm.startsWith('treatment/')).every((row) => expectedSelectedRoute(row) === 0 && expectedBootstrapRoute(row) === 1))
+  assert.ok(processEnvRows.filter((row) => row.arm.startsWith('control/')).every((row) => expectedSelectedRoute(row) === 0 && expectedBootstrapRoute(row) === null))
   assert.deepEqual(configRoutePlan(localFile), { user: null, project: 0, local: 1, 'process-env': null, request_route: 1, preflight_route: null })
+  assert.equal(expectedSelectedRoute(localFile), 1)
 })
 
 test('targeted I1: wire observation is derived from bytes, EOF, ordering, and monotonic header timing', () => {
