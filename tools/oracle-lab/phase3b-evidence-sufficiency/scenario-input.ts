@@ -41,12 +41,8 @@ export function configRoutePlan(row: RunLedgerRow): Readonly<{ user: 0 | 1 | nul
 export function materializeRouteDispatch(row: RunLedgerRow, routeUrls: readonly string[]): Readonly<{ request_route: 0 | 1; preflight_route: 0 | 1 | null; actual_route: 0 | 1; selected_url: string }> {
   if (routeUrls.length !== 2 || routeUrls.some((value) => !/^http:\/\/127\.0\.0\.1:\d+$/.test(value))) throw new Phase3BProductionError('scenario_input_invalid', 'synthetic route dispatch requires the exact two loopback URLs')
   const plan = configRoutePlan(row)
-  const sourceRoute = plan['process-env'] ?? plan.request_route
-  const plannedUrl = routeUrls[sourceRoute]
-  const selectedUrl = plan['process-env'] !== null && process.env.ANTHROPIC_BASE_URL !== undefined
-    ? process.env.ANTHROPIC_BASE_URL
-    : plannedUrl
-  if (!routeUrls.includes(selectedUrl)) throw new Phase3BProductionError('scenario_input_invalid', 'process environment selected a URL outside the sealed route set')
+  if (plan.preflight_route !== null && process.env.ANTHROPIC_BASE_URL !== undefined && process.env.ANTHROPIC_BASE_URL !== routeUrls[plan.preflight_route]) throw new Phase3BProductionError('scenario_input_invalid', 'process environment preflight URL drifted from the sealed route plan')
+  const selectedUrl = routeUrls[plan.request_route]
   const actualRoute = routeUrls.indexOf(selectedUrl)
   if (actualRoute !== 0 && actualRoute !== 1) throw new Phase3BProductionError('scenario_input_invalid', 'materialized route URL is not in the sealed route set')
   return deepFreeze({ request_route: plan.request_route, preflight_route: plan.preflight_route, actual_route: actualRoute as 0 | 1, selected_url: selectedUrl })
@@ -80,6 +76,7 @@ export function classifySyntheticAuthHeader(name: string, value: string): string
 }
 
 export function expectedAuthMarkerClass(row: RunLedgerRow): string {
+  if (row.family === 'config') return 'x-api-key:campaign-config-placeholder'
   if (row.family !== 'auth') return 'none'
   const values = AUTH_VALUES[row.schedule_id]?.[row.arm.startsWith('treatment/') ? 'treatment' : 'control']
   if (!values) throw new Phase3BProductionError('scenario_input_invalid', 'auth schedule is not frozen')
