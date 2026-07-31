@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Phase3BProductionError, assertDigestField, assertExactKeys, assertSha256, canonicalJson, deepFreeze, deterministicUuidV4, sha256Bytes, sha256Canonical, utf8Compare } from './core.js'
-import { isConfigFilePrecedenceNoBootstrap } from './route-policy.js'
+import { configRoutePlanFor, isConfigFilePrecedenceNoBootstrap } from './route-policy.js'
 import { fixedGit, fixedGitBytes } from './trust.js'
 
 export const FIXED_SEEDS = [215001, 215002, 215003, 215004, 215005] as const
@@ -413,7 +413,14 @@ function expandRow(campaignId: string, family: LedgerFamily, scheduleId: string,
     argv_sha256: sha256Canonical(argv),
     request_stimulus: stimulus,
     request_stimulus_sha256: stimulus.stimulus_sha256,
-    environment_sha256: sha256Canonical({ fixed_policy: 'closed-isolated-environment-v1', unknown_or_omitted: 'disabled' }),
+    environment_sha256: sha256Canonical({
+      fixed_policy: 'closed-isolated-environment-v1',
+      unknown_or_omitted: 'disabled',
+      ...(family === 'config' ? {
+        config_route_plan: configRoutePlanFor(scheduleId, arm as Extract<ExecutableArm, `control/${string}` | `treatment/${string}`>),
+        auth_marker_winner_class: 'x-api-key:campaign-config-placeholder',
+      } : {}),
+    }),
     cwd_ref: '$SEALED_RUNTIME_ROOT' as const,
     cwd_sha256: sha256Canonical('$SEALED_RUNTIME_ROOT'),
     stdin_literal_ref: FIXED_STDIN_LITERAL_REF as typeof FIXED_STDIN_LITERAL_REF,

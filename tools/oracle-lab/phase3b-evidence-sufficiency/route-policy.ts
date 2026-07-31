@@ -15,7 +15,7 @@ export function configRoutePlanFor(scheduleId: string, arm: ConfigArm): ConfigRo
   const definition = CONFIG_VALUES[scheduleId]
   if (!definition) throw new Phase3BProductionError('scenario_input_invalid', 'config route plan is not frozen')
   const selected = arm.startsWith('treatment/') ? definition.treatment : definition.control
-  const requestRoute = scheduleId === 'config-precedence-process-env-vs-local' ? 1 : arm.startsWith('treatment/') ? 1 : 0
+  const requestRoute = scheduleId === 'config-precedence-process-env-vs-local' ? 0 : arm.startsWith('treatment/') ? 1 : 0
   return Object.freeze({ ...selected, request_route: requestRoute as 0 | 1, preflight_route: selected['process-env'] })
 }
 
@@ -27,4 +27,11 @@ export function isConfigFilePrecedenceNoBootstrap(scheduleId: string, arm: Confi
 export function expectedSelectedRoute(row: RunLedgerRow): 0 | 1 {
   if (row.route_count === 1 || row.family !== 'config') return 0
   return configRoutePlanFor(row.schedule_id, row.arm as ConfigArm).request_route
+}
+
+export function expectedBootstrapRoute(row: RunLedgerRow): 0 | 1 | null {
+  if (row.bootstrap_policy.expected_count === 0) return null
+  if (row.route_count === 1 || row.family !== 'config') return 0
+  const plan = configRoutePlanFor(row.schedule_id, row.arm as ConfigArm)
+  return plan.preflight_route ?? plan.request_route
 }
