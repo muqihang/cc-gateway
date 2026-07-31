@@ -24,7 +24,7 @@ export function configRoutePlanFor(scheduleId: string, arm: ConfigArm): ConfigRo
   const definition = CONFIG_VALUES[scheduleId]
   if (!definition) throw new Phase3BProductionError('scenario_input_invalid', 'config route plan is not frozen')
   const selected = arm.startsWith('treatment/') ? definition.treatment : definition.control
-  const winnerSource = (['local', 'user', 'project'] as const).find((source) => selected[source] !== null)
+  const winnerSource = (['local', 'project', 'user'] as const).find((source) => selected[source] !== null)
   if (!winnerSource) throw new Phase3BProductionError('scenario_input_invalid', 'config route plan has no staged request source')
   const requestRoute = selected[winnerSource]
   if (requestRoute === null) throw new Phase3BProductionError('scenario_input_invalid', 'winning config source has no route')
@@ -34,10 +34,10 @@ export function configRoutePlanFor(scheduleId: string, arm: ConfigArm): ConfigRo
 export function bootstrapContractFor(family: LedgerFamily, scheduleId: string, arm: ExecutableArm): BootstrapContract {
   if (family !== 'config') return Object.freeze({ winner_source: 'direct', selected_route_ordinal: 0, bootstrap_source: 'direct', expected_count: 1, expected_route_ordinal: 0 })
   const plan = configRoutePlanFor(scheduleId, arm as ConfigArm)
-  const winnerSource = (['local', 'user', 'project'] as const).find((source) => plan[source] !== null)
+  const winnerSource = (['local', 'project', 'user'] as const).find((source) => plan[source] !== null)
   if (!winnerSource) throw new Phase3BProductionError('scenario_input_invalid', 'winning config source could not be derived')
   if (plan.preflight_route !== null) return Object.freeze({ winner_source: winnerSource, selected_route_ordinal: plan.request_route, bootstrap_source: 'process-env', expected_count: 1, expected_route_ordinal: plan.preflight_route })
-  if (winnerSource === 'user') return Object.freeze({ winner_source: winnerSource, selected_route_ordinal: plan.request_route, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: plan.request_route })
+  if (plan.user !== null) return Object.freeze({ winner_source: winnerSource, selected_route_ordinal: plan.request_route, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: plan.user })
   return Object.freeze({ winner_source: winnerSource, selected_route_ordinal: plan.request_route, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null })
 }
 
