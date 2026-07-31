@@ -18,8 +18,6 @@ type Route = Readonly<{
   receiver_instance_id: string
   host: '127.0.0.1'
   port: number
-  expected_selected: boolean
-  expected_bootstrap: boolean
   listener_identity_sha256: string
 }>
 
@@ -36,6 +34,8 @@ export type ReceiverAuthority = Readonly<{
   receiver_schema_sha256: string
   anchor_sha256: string
   response_program_sha256: string
+  selected_route_ordinal: 0 | 1
+  bootstrap_contract: RunLedgerRow['bootstrap_contract']
   routes: readonly Route[]
   authority_sha256: string
 }>
@@ -56,9 +56,10 @@ export type ReceiverResult = Readonly<{
   sequence_index: number
   receiver_group_id: string
   receiver_authority_sha256: string
+  selected_route_ordinal: 0 | 1
+  bootstrap_contract: RunLedgerRow['bootstrap_contract']
   bootstrap: Readonly<{
     count: 1
-    policy: 'exact_one_loopback_head'
     route_ordinal: number
     receiver_instance_id: string
     raw_socket_ordinal: number
@@ -72,7 +73,6 @@ export type ReceiverResult = Readonly<{
     bootstrap_sha256: string
   }> | Readonly<{
     count: 0
-    policy: 'config_file_precedence_no_bootstrap'
     route_ordinal: null
     receiver_instance_id: null
     raw_socket_ordinal: null
@@ -203,7 +203,7 @@ const REQUEST_FIELD_NAMES = [
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_probe: 'ledger-bound-exact-one-head-on-preflight-route-or-config-file-precedence-zero', request_route: 'ledger-bound-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_contract: { expected_count: [0, 1], expected_route_ordinal: [null, 0, 1], derivation: 'exact-winning-config-source-v1' }, bootstrap_probe: 'ledger-bound-exact-count-and-route', request_route: 'ledger-bound-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -372,7 +372,7 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
       state.nextConnectionOrdinal += 1
       })
       const port = await listen(server)
-      mutableRoutes.push({ route_ordinal: routeOrdinal, receiver_instance_id: deterministicUuidV4({ campaign_id: control.ledger.campaign_id, run_id: row.run_id, route_ordinal: routeOrdinal, kind: 'receiver-instance' }), host: '127.0.0.1', port, expected_selected: routeOrdinal === expectedSelectedRoute(row), expected_bootstrap: routeOrdinal === expectedBootstrapRoute(row), listener_identity_sha256: verifyListenerOwnership(port), server, requestCount: 0 })
+      mutableRoutes.push({ route_ordinal: routeOrdinal, receiver_instance_id: deterministicUuidV4({ campaign_id: control.ledger.campaign_id, run_id: row.run_id, route_ordinal: routeOrdinal, kind: 'receiver-instance' }), host: '127.0.0.1', port, listener_identity_sha256: verifyListenerOwnership(port), server, requestCount: 0 })
     }
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-authority.v1' as const,
@@ -387,6 +387,8 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
     receiver_schema_sha256: RECEIVER_SCHEMA_SHA256,
     anchor_sha256: control.anchorSha256,
     response_program_sha256: row.response_program_sha256,
+    selected_route_ordinal: expectedSelectedRoute(row),
+    bootstrap_contract: row.bootstrap_contract,
     routes: mutableRoutes.map(({ server: _server, requestCount: _count, ...route }) => route),
   }
     const authority = deepFreeze({ ...unsigned, authority_sha256: sha256Canonical(unsigned) })
@@ -405,7 +407,7 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
 export function assertReceiverAuthority(authority: unknown, row?: RunLedgerRow): asserts authority is ReceiverAuthority {
   const state = authority && typeof authority === 'object' ? receivers.get(authority as object) : undefined
   if (!state) throw new Phase3BProductionError('receiver_authority_invalid', 'opaque bound receiver authority is required')
-  if (sourceSha256() !== state.authority.receiver_source_sha256 || executableIdentity() !== state.authority.receiver_executable_identity_sha256 || state.authority.authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.authority).filter(([key]) => key !== 'authority_sha256')))) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver source/executable/authority identity drifted')
+  if (sourceSha256() !== state.authority.receiver_source_sha256 || executableIdentity() !== state.authority.receiver_executable_identity_sha256 || state.authority.selected_route_ordinal !== expectedSelectedRoute(state.row) || sha256Canonical(state.authority.bootstrap_contract) !== sha256Canonical(state.row.bootstrap_contract) || state.authority.authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.authority).filter(([key]) => key !== 'authority_sha256')))) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver source/executable/route/authority identity drifted')
   if (!state.sealed && state.authority.routes.some((route) => verifyListenerOwnership(route.port) !== route.listener_identity_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver listener PID/executable identity drifted')
   if (row && (state.row.run_id !== row.run_id || state.row.row_sha256 !== row.row_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver does not bind row')
 }
@@ -418,8 +420,8 @@ export function prepareReceiverLaunch(authority: ReceiverAuthority, launchAuthor
   state.armed = true
   state.launchAuthority = launchAuthority
   state.capability = sha256Canonical({ launch_authority_sha256: launchAuthority.receipt_sha256, receiver_authority_sha256: authority.authority_sha256, nonce: process.hrtime.bigint().toString() })
-  const selected = state.routes.find((route) => route.expected_selected)!
-  const alternate = state.routes.find((route) => !route.expected_selected)
+  const selected = state.routes[state.authority.selected_route_ordinal]!
+  const alternate = state.routes.find((route) => route.route_ordinal !== state.authority.selected_route_ordinal)
   const headers = [
     `x-oracle-launch-authority: ${launchAuthority.receipt_sha256}`,
     `x-oracle-target-capability: ${state.capability}`,
@@ -589,18 +591,19 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
     const rawConnectionOrdinal = state.connectionOrdinals.get(request.socket)
     if (rawConnectionOrdinal === undefined) throw new Phase3BProductionError('receiver_peer_identity_invalid', 'request socket was not accepted in the armed receiver epoch')
     if (requestKind === 'bootstrap_probe') {
-      if (!route.expected_bootstrap) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe reached the wrong preflight route')
+      if (routeOrdinal !== expectedBootstrapRoute(state.row)) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe reached the wrong preflight route')
       const body = await readBoundedBody(request)
       try {
         if (body.length !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe carried a body')
       } finally { body.fill(0) }
       const completion = await sendClaudeBootstrapProbeResponse(response)
-      const bootstrapUnsigned = { count: 1 as const, policy: 'exact_one_loopback_head' as const, route_ordinal: routeOrdinal, receiver_instance_id: route.receiver_instance_id, raw_socket_ordinal: rawConnectionOrdinal, peer_socket: peerSocket, response_status: 200 as const, response_content_length: 0 as const, ...completion, post_count_effect: 0 as const }
+      const bootstrapUnsigned = { count: 1 as const, route_ordinal: routeOrdinal, receiver_instance_id: route.receiver_instance_id, raw_socket_ordinal: rawConnectionOrdinal, peer_socket: peerSocket, response_status: 200 as const, response_content_length: 0 as const, ...completion, post_count_effect: 0 as const }
       state.bootstrapCount = 1
       state.bootstrapConnectionOrdinals.push(rawConnectionOrdinal)
       state.bootstrapEvidence = deepFreeze({ ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) })
       return
     }
+    if (routeOrdinal !== state.authority.selected_route_ordinal) throw new Phase3BProductionError('receiver_request_invalid', 'messages request reached a route other than the sealed selected route')
     if (request.headers['x-oracle-launch-authority'] !== state.launchAuthority!.receipt_sha256 || request.headers['x-oracle-target-capability'] !== state.capability || request.headers['x-oracle-run-id'] !== state.row.run_id) throw new Phase3BProductionError('receiver_request_invalid', 'request does not carry the controller-installed authority headers')
     const attemptOrdinal = state.observations.length
     if (attemptOrdinal >= state.row.response_program.maximum_attempts) throw new Phase3BProductionError('receiver_attempt_overflow', 'request exceeds fixed scenario attempts')
@@ -720,18 +723,18 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
   await Promise.all(state.routes.map((route) => new Promise<void>((resolve, reject) => route.server.close((error) => error ? reject(error) : resolve()))))
   assertReceiverAuthority(authority, state.row)
   const routeCounts = state.routes.map((route) => route.requestCount)
-  const selected = state.routes.findIndex((route) => route.expected_selected)
+  const selected = state.authority.selected_route_ordinal
   const bootstrapRoute = expectedBootstrapRoute(state.row)
   const expectedAttempts = expectedReceiverAttempts(state.row)
   const expectedBootstrap = expectedBootstrapCount(state.row)
-  const noBootstrapUnsigned = { count: 0 as const, policy: 'config_file_precedence_no_bootstrap' as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 as const }
+  const noBootstrapUnsigned = { count: 0 as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 as const }
   const bootstrap = state.bootstrapEvidence ?? (expectedBootstrap === 0 ? deepFreeze({ ...noBootstrapUnsigned, bootstrap_sha256: sha256Canonical(noBootstrapUnsigned) }) : null)
   const observedConnections = [...new Set(state.observations.map((observation) => Number(observation.connection_ordinal)))].sort((left, right) => left - right)
   const accountedConnections = [...state.bootstrapConnectionOrdinals, ...state.messageConnectionOrdinals].sort((left, right) => left - right)
   const bootstrapValid = bootstrap !== null && bootstrap.bootstrap_sha256 === sha256Canonical(Object.fromEntries(Object.entries(bootstrap).filter(([key]) => key !== 'bootstrap_sha256')))
     && (expectedBootstrap === 1
-      ? bootstrap.count === 1 && bootstrap.policy === 'exact_one_loopback_head' && bootstrap.route_ordinal === bootstrapRoute && bootstrap.receiver_instance_id === state.routes[bootstrapRoute!]?.receiver_instance_id && state.bootstrapCount === 1 && state.bootstrapConnectionOrdinals.length === 1 && bootstrap.raw_socket_ordinal === state.bootstrapConnectionOrdinals[0]
-      : bootstrap.count === 0 && bootstrap.policy === 'config_file_precedence_no_bootstrap' && state.bootstrapCount === 0 && state.bootstrapConnectionOrdinals.length === 0 && bootstrap.raw_socket_ordinal === null && bootstrap.peer_socket === null)
+      ? bootstrap.count === 1 && bootstrap.route_ordinal === bootstrapRoute && bootstrap.receiver_instance_id === state.routes[bootstrapRoute!]?.receiver_instance_id && state.bootstrapCount === 1 && state.bootstrapConnectionOrdinals.length === 1 && bootstrap.raw_socket_ordinal === state.bootstrapConnectionOrdinals[0]
+      : bootstrap.count === 0 && bootstrap.route_ordinal === null && state.bootstrapCount === 0 && state.bootstrapConnectionOrdinals.length === 0 && bootstrap.raw_socket_ordinal === null && bootstrap.peer_socket === null)
   if (state.violationCode !== null || !bootstrapValid || state.messageConnectionOrdinals.length !== state.observations.length || observedConnections.length !== state.observations.length || observedConnections.some((value, index) => value !== index) || routeCounts.some((count, index) => count !== (index === selected ? expectedAttempts : 0)) || state.observations.length !== expectedAttempts || accountedConnections.length !== state.nextConnectionOrdinal || accountedConnections.some((value, index) => value !== index) || state.messageConnectionOrdinals.some((value, index) => value !== index + expectedBootstrap)) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver violation, bootstrap, route selection, connection, or exact attempt predicate failed')
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-result.v1' as const,
@@ -741,6 +744,8 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
     sequence_index: state.row.sequence_index,
     receiver_group_id: authority.receiver_group_id,
     receiver_authority_sha256: authority.authority_sha256,
+    selected_route_ordinal: authority.selected_route_ordinal,
+    bootstrap_contract: authority.bootstrap_contract,
     bootstrap,
     request_count: state.observations.length,
     response_count: state.observations.length,
