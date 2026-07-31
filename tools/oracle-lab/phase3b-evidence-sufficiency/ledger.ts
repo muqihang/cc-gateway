@@ -101,7 +101,7 @@ export type TargetTerminalContract = Readonly<{
   signal: 'SIGKILL'
   stdout_safe_class: 'absent'
   stderr_byte_length: 0
-  retry_timing_class: 'target_managed_backoff'
+  retry_timing_class: 'target_managed_backoff' | 'no_retry_clean_partial_eof'
 }>
 
 export type ResponseProgram = Readonly<{
@@ -265,8 +265,9 @@ export function buildResponseProgram(programId: string): ResponseProgram {
     materialized_literal_refs: ['synthetic-literals/model.test', 'synthetic-literals/output.complete'] as const,
     materialized_response_sha256: sha256Bytes(Buffer.from(COMPLETE_RESPONSE, 'utf8')),
   }) : null
-  const targetTerminalContract: TargetTerminalContract | null = programId === 'http_401_terminal' ? {
-    lifecycle_class: 'controller_wall_timeout', wall_timeout_ms: TARGET_WALL_TIMEOUT_MS, exit_code: null, signal: 'SIGKILL', stdout_safe_class: 'absent', stderr_byte_length: 0, retry_timing_class: 'target_managed_backoff',
+  const targetTerminalContract: TargetTerminalContract | null = programId === 'http_401_terminal' || programId === 'partial_sse_then_eof' ? {
+    lifecycle_class: 'controller_wall_timeout', wall_timeout_ms: TARGET_WALL_TIMEOUT_MS, exit_code: null, signal: 'SIGKILL', stdout_safe_class: 'absent', stderr_byte_length: 0,
+    retry_timing_class: programId === 'partial_sse_then_eof' ? 'no_retry_clean_partial_eof' : 'target_managed_backoff',
   } : null
   const unsigned = { schema_id: 'oracle-lab-p3b-response-program.v1' as const, program_id: programId, maximum_attempts: actionCount, actions, target_terminal_contract: targetTerminalContract, complete_sse: completeSse }
   return deepFreeze({ ...unsigned, program_sha256: sha256Canonical(unsigned) })

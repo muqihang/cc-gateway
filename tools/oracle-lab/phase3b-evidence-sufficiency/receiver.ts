@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Socket } from 'node:net'
@@ -49,6 +49,17 @@ export type ReceiverTargetBootstrap = Readonly<{
   custom_headers: string
 }>
 
+export type ReceiverListenerRetirement = Readonly<{
+  route_ordinal: 0 | 1
+  receiver_instance_id: string
+  port: number
+  prior_listener_identity_sha256: string
+  retired: true
+  listener_unowned: true
+  retired_monotonic_ns: string
+  retirement_sha256: string
+}>
+
 export type ReceiverResult = Readonly<{
   schema_id: 'oracle-lab-p3b-receiver-result.v1'
   campaign_id: string
@@ -86,6 +97,7 @@ export type ReceiverResult = Readonly<{
     post_count_effect: 0
     bootstrap_sha256: string
   }>
+  listener_retirement: ReceiverListenerRetirement | null
   request_count: number
   response_count: number
   route_request_counts: readonly number[]
@@ -98,7 +110,7 @@ export type ReceiverResult = Readonly<{
   result_sha256: string
 }>
 
-type MutableRoute = Route & { server: Server; requestCount: number }
+type MutableRoute = Route & { server: Server; requestCount: number; retired: boolean; closePromise: Promise<void> | null }
 type ReceiverState = {
   controller: ProductionController
   row: RunLedgerRow
@@ -117,6 +129,7 @@ type ReceiverState = {
   bootstrapCount: number
   bootstrapConnectionOrdinals: number[]
   bootstrapEvidence: ReceiverResult['bootstrap'] | null
+  listenerRetirement: ReceiverListenerRetirement | null
   messageConnectionOrdinals: number[]
   activeRequests: number
   nextConnectionOrdinal: number
@@ -204,7 +217,7 @@ const REQUEST_FIELD_NAMES = [
 const REQUEST_FIELD_IDS = new Map<string, string>(REQUEST_FIELD_NAMES.map((name, index) => [name, `field_${String(index).padStart(2, '0')}`]))
 const REQUEST_FIELD_NAMES_BY_ID = new Map<string, string>([...REQUEST_FIELD_IDS].map(([name, id]) => [id, name]))
 const SENSITIVE_FIELD_NAME = /(?:secret|token|password|credential|api[_-]?key|cookie|authorization|raw|prompt|home|private)/i
-const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', bootstrap_contract: BOOTSTRAP_CONTRACT_SCHEMA, bootstrap_probe: 'ledger-bound-exact-count-source-and-route', request_route: 'ledger-bound-winner-source-and-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
+const RECEIVER_SCHEMA_SHA256 = sha256Canonical({ schema_id: 'oracle-lab-p3b-receiver-wire.v1', body_limit: 1_048_576, header_limit: 64, attempts: 'program-bound-with-exact-local-auth-pre-request-terminal', partial_sse_terminal: 'one-clean-eof-retire-selected-listener-before-target-retry', bootstrap_contract: BOOTSTRAP_CONTRACT_SCHEMA, bootstrap_probe: 'ledger-bound-exact-count-source-and-route', request_route: 'ledger-bound-winner-source-and-selected-route-independent-of-preflight-route', zero_bootstrap: 'canonical-messages-first-selected-route-with-empty-explicit-evidence', messages_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, interim_http: 'fail-closed', raw_body_buffer_persistence: false, reversible_wire_persistence: false, typed_normalized_persistence: true, request_ast_materializer: REQUEST_AST_MATERIALIZER })
 
 export type ResponseWireEvent = Readonly<
   | { kind: 'headers'; monotonic_ns: string; bytes: Uint8Array }
@@ -304,6 +317,33 @@ function verifyListenerOwnership(port: number): string {
   return sha256Canonical({ receiver_pid: process.pid, receiver_executable_identity_sha256: executableIdentity(), host: '127.0.0.1', port, transport: 'tcp', state: 'LISTEN' })
 }
 
+export function assertReceiverListenerPortUnowned(port: number): void {
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Phase3BProductionError('receiver_not_loopback', 'production listener retirement supports only darwin-arm64')
+  const lsof = existsSync('/usr/sbin/lsof') ? '/usr/sbin/lsof' : '/usr/bin/lsof'
+  const inspection = spawnSync(lsof, ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fpn'], { encoding: 'utf8', timeout: 3_000 })
+  if (inspection.error || inspection.status !== 1 || inspection.stdout.trim() !== '') throw new Phase3BProductionError('receiver_authority_invalid', 'retired receiver listener port is owned or could not be proven unowned')
+}
+
+function assertListenerRetirement(state: ReceiverState, route: MutableRoute): ReceiverListenerRetirement {
+  const proof = state.listenerRetirement
+  const unsigned = proof ? Object.fromEntries(Object.entries(proof).filter(([key]) => key !== 'retirement_sha256')) : null
+  if (!proof
+    || state.row.schedule_id !== 'partial_sse_then_eof'
+    || state.row.route_count !== 1
+    || state.row.response_program.maximum_attempts !== 1
+    || route.route_ordinal !== state.authority.selected_route_ordinal
+    || proof.route_ordinal !== route.route_ordinal
+    || proof.receiver_instance_id !== route.receiver_instance_id
+    || proof.port !== route.port
+    || proof.prior_listener_identity_sha256 !== route.listener_identity_sha256
+    || proof.retired !== true
+    || proof.listener_unowned !== true
+    || !/^\d+$/.test(proof.retired_monotonic_ns)
+    || proof.retirement_sha256 !== sha256Canonical(unsigned)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver listener retirement proof is missing or drifted')
+  assertReceiverListenerPortUnowned(route.port)
+  return proof
+}
+
 function sourceSha256(): string {
   return stableRead(fileURLToPath(import.meta.url), { maximumBytes: 1_048_576 }).identity.sha256
 }
@@ -372,7 +412,7 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
       state.nextConnectionOrdinal += 1
       })
       const port = await listen(server)
-      mutableRoutes.push({ route_ordinal: routeOrdinal, receiver_instance_id: deterministicUuidV4({ campaign_id: control.ledger.campaign_id, run_id: row.run_id, route_ordinal: routeOrdinal, kind: 'receiver-instance' }), host: '127.0.0.1', port, listener_identity_sha256: verifyListenerOwnership(port), server, requestCount: 0 })
+      mutableRoutes.push({ route_ordinal: routeOrdinal, receiver_instance_id: deterministicUuidV4({ campaign_id: control.ledger.campaign_id, run_id: row.run_id, route_ordinal: routeOrdinal, kind: 'receiver-instance' }), host: '127.0.0.1', port, listener_identity_sha256: verifyListenerOwnership(port), server, requestCount: 0, retired: false, closePromise: null })
     }
   const unsigned = {
     schema_id: 'oracle-lab-p3b-receiver-authority.v1' as const,
@@ -389,13 +429,13 @@ export async function bindReceiverGroup(controller: ProductionController, row: R
     response_program_sha256: row.response_program_sha256,
     selected_route_ordinal: expectedSelectedRoute(row),
     bootstrap_contract: row.bootstrap_contract,
-    routes: mutableRoutes.map(({ server: _server, requestCount: _count, ...route }) => route),
+    routes: mutableRoutes.map(({ server: _server, requestCount: _count, retired: _retired, closePromise: _closePromise, ...route }) => route),
   }
-    const authority = deepFreeze({ ...unsigned, authority_sha256: sha256Canonical(unsigned) })
+  const authority = deepFreeze({ ...unsigned, authority_sha256: sha256Canonical(unsigned) })
     boundAuthority = authority
     let resolveTargetReady: (() => void) | null = null
     const targetReady = new Promise<void>((resolve) => { resolveTargetReady = resolve })
-    receivers.set(authority, { controller, row, authority, routes: mutableRoutes, armed: false, sealed: false, launchAuthority: null, targetPid: null, executableIdentitySha256: null, targetInstanceId: null, capability: null, targetReady, resolveTargetReady, observations: [], bootstrapCount: 0, bootstrapConnectionOrdinals: [], bootstrapEvidence: null, messageConnectionOrdinals: [], activeRequests: 0, nextConnectionOrdinal: 0, connectionOrdinals: new WeakMap(), violationCode: null })
+    receivers.set(authority, { controller, row, authority, routes: mutableRoutes, armed: false, sealed: false, launchAuthority: null, targetPid: null, executableIdentitySha256: null, targetInstanceId: null, capability: null, targetReady, resolveTargetReady, observations: [], bootstrapCount: 0, bootstrapConnectionOrdinals: [], bootstrapEvidence: null, listenerRetirement: null, messageConnectionOrdinals: [], activeRequests: 0, nextConnectionOrdinal: 0, connectionOrdinals: new WeakMap(), violationCode: null })
     writeExclusiveCanonical(control.runtimeRoot, `receiver-authorities/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}.json`, authority)
     return authority
   } catch (error: unknown) {
@@ -409,7 +449,13 @@ export function assertReceiverAuthority(authority: unknown, row?: RunLedgerRow):
   if (!state) throw new Phase3BProductionError('receiver_authority_invalid', 'opaque bound receiver authority is required')
   assertRuntimeExecutableIdentity(state.authority.receiver_executable_identity_sha256)
   if (sourceSha256() !== state.authority.receiver_source_sha256 || state.authority.selected_route_ordinal !== expectedSelectedRoute(state.row) || sha256Canonical(state.authority.bootstrap_contract) !== sha256Canonical(state.row.bootstrap_contract) || state.authority.authority_sha256 !== sha256Canonical(Object.fromEntries(Object.entries(state.authority).filter(([key]) => key !== 'authority_sha256')))) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver source/executable/route/authority identity drifted')
-  if (!state.sealed && state.authority.routes.some((route) => verifyListenerOwnership(route.port) !== route.listener_identity_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver listener PID/executable identity drifted')
+  if (!state.sealed && state.routes.some((route) => {
+    if (route.retired) {
+      assertListenerRetirement(state, route)
+      return false
+    }
+    return verifyListenerOwnership(route.port) !== route.listener_identity_sha256
+  })) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver listener PID/executable identity drifted')
   if (row && (state.row.run_id !== row.run_id || state.row.row_sha256 !== row.row_sha256)) throw new Phase3BProductionError('receiver_authority_invalid', 'receiver does not bind row')
 }
 
@@ -623,7 +669,9 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
     const bodyRoundtripSha256 = sha256Canonical({ materializer: REQUEST_AST_MATERIALIZER, literal_table_sha256: FIXED_LITERAL_TABLE_SHA256, body_byte_length: bodyByteLength, body_sha256: bodySha256, body_ast_sha256: bodyAstSha256, normalized_byte_length: normalized.length, normalized_sha256: sha256Bytes(normalized) })
     const headers = safeHeaderProjection(request)
     if ((state.row.family === 'auth' || state.row.family === 'config') && headers.authMarkerClass !== expectedAuthMarkerClass(state.row)) throw new Phase3BProductionError('receiver_request_invalid', 'synthetic auth marker does not match the sealed arm')
-    const responseObservation = await sendAction(response, action)
+    const responseObservation = await sendSealedResponseAction(response, action, () => {
+      if (action.transport_terminal === 'eof_after_partial') retireExpectedPartialRoute(state, route)
+    })
     const requestObservation = {
       schema_id: 'oracle-lab-p3b-wire-observation.v1', campaign_id: authority.campaign_id, ledger_sha256: authority.ledger_sha256,
       run_id: state.row.run_id, sequence_index: state.row.sequence_index, receiver_group_id: authority.receiver_group_id,
@@ -645,7 +693,7 @@ async function handleRequest(authority: ReceiverAuthority, routeOrdinal: number,
   } finally { state.activeRequests -= 1 }
 }
 
-function observeResponseLifecycle(response: ServerResponse, socket: Socket, events: ResponseWireEvent[]): Promise<void> {
+function observeResponseLifecycle(response: ServerResponse, socket: Socket, events: ResponseWireEvent[], onCleanClose?: () => void): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Phase3BProductionError('receiver_wire_invalid', 'response socket did not reach observed close')), 5_000)
     response.once('finish', () => events.push({ kind: 'response_finish', monotonic_ns: process.hrtime.bigint().toString() }))
@@ -657,19 +705,48 @@ function observeResponseLifecycle(response: ServerResponse, socket: Socket, even
     socket.once('close', (hadError: boolean) => {
       clearTimeout(timer)
       events.push({ kind: 'socket_close', monotonic_ns: process.hrtime.bigint().toString(), had_error: hadError })
+      if (!hadError && !events.some((event) => event.kind === 'socket_error')) onCleanClose?.()
       resolve()
     })
   })
 }
 
-async function sendAction(response: ServerResponse, action: ResponseAction): Promise<Readonly<Record<string, unknown>>> {
+export function retireSealedPartialSseListener(row: RunLedgerRow, route: Readonly<Pick<Route, 'route_ordinal' | 'receiver_instance_id' | 'port' | 'listener_identity_sha256'>>, server: Server): Promise<ReceiverListenerRetirement> {
+  if (row.schedule_id !== 'partial_sse_then_eof' || row.route_count !== 1 || route.route_ordinal !== expectedSelectedRoute(row) || row.response_program.maximum_attempts !== 1) return Promise.reject(new Phase3BProductionError('receiver_terminal_invalid', 'listener retirement is outside the exact partial EOF contract'))
+  return new Promise<ReceiverListenerRetirement>((resolve, reject) => server.close((error) => {
+    if (error) { reject(error); return }
+    try {
+      assertReceiverListenerPortUnowned(route.port)
+      const unsigned = {
+        route_ordinal: route.route_ordinal as 0 | 1,
+        receiver_instance_id: route.receiver_instance_id,
+        port: route.port,
+        prior_listener_identity_sha256: route.listener_identity_sha256,
+        retired: true as const,
+        listener_unowned: true as const,
+        retired_monotonic_ns: process.hrtime.bigint().toString(),
+      }
+      resolve(deepFreeze({ ...unsigned, retirement_sha256: sha256Canonical(unsigned) }))
+    } catch (retirementError) { reject(retirementError) }
+  }))
+}
+
+function retireExpectedPartialRoute(state: ReceiverState, route: MutableRoute): void {
+  if (route.retired) return
+  route.retired = true
+  route.closePromise = retireSealedPartialSseListener(state.row, route, route.server)
+    .then((proof) => { state.listenerRetirement = proof })
+    .catch(() => { state.violationCode ??= 'receiver_authority_invalid' })
+}
+
+export async function sendSealedResponseAction(response: ServerResponse, action: ResponseAction, onCleanClose?: () => void): Promise<Readonly<Record<string, unknown>>> {
   const started = process.hrtime.bigint()
   if (action.delay_ms > 0) await new Promise((resolve) => setTimeout(resolve, action.delay_ms))
   const socket = response.socket
   if (!socket) throw new Phase3BProductionError('receiver_wire_invalid', 'response has no owned socket')
   if (action.kind === 'reset') {
     const events: ResponseWireEvent[] = [{ kind: 'reset_requested', monotonic_ns: process.hrtime.bigint().toString() }]
-    const closed = observeResponseLifecycle(response, socket, events)
+    const closed = observeResponseLifecycle(response, socket, events, onCleanClose)
     socket.destroy()
     await closed
     return deriveResponseObservationFromWire(events, started, action.delay_ms)
@@ -679,7 +756,7 @@ async function sendAction(response: ServerResponse, action: ResponseAction): Pro
   let pendingHeaders = Buffer.alloc(0)
   let headersCaptured = false
   const originalWrite = socket.write
-  const closed = observeResponseLifecycle(response, socket, events)
+  const closed = observeResponseLifecycle(response, socket, events, onCleanClose)
   socket.write = function (this: Socket, chunk: Uint8Array | string, ...args: unknown[]): boolean {
     const encoding = typeof args[0] === 'string' && Buffer.isEncoding(args[0]) ? args[0] : 'utf8'
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : Buffer.from(chunk)
@@ -720,8 +797,9 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
   const drainDeadline = Date.now() + 10_000
   while (state.activeRequests !== 0 && state.violationCode === null && Date.now() < drainDeadline) await new Promise((resolve) => setTimeout(resolve, 5))
   if (state.activeRequests !== 0) throw new Phase3BProductionError(state.violationCode ?? 'receiver_terminal_invalid', 'receiver request handling did not reach a sealed terminal state')
+  await Promise.all(state.routes.map((route) => route.closePromise ?? new Promise<void>((resolve, reject) => route.server.close((error) => error ? reject(error) : resolve()))))
+  for (const route of state.routes.filter((candidate) => candidate.retired)) assertListenerRetirement(state, route)
   state.sealed = true
-  await Promise.all(state.routes.map((route) => new Promise<void>((resolve, reject) => route.server.close((error) => error ? reject(error) : resolve()))))
   assertReceiverAuthority(authority, state.row)
   const routeCounts = state.routes.map((route) => route.requestCount)
   const selected = state.authority.selected_route_ordinal
@@ -748,6 +826,7 @@ export async function sealReceiverGroup(authority: ReceiverAuthority): Promise<R
     selected_route_ordinal: authority.selected_route_ordinal,
     bootstrap_contract: authority.bootstrap_contract,
     bootstrap,
+    listener_retirement: state.listenerRetirement,
     request_count: state.observations.length,
     response_count: state.observations.length,
     route_request_counts: routeCounts,
@@ -768,7 +847,7 @@ export async function abortReceiverGroup(authority: ReceiverAuthority): Promise<
   const state = receivers.get(authority as object)
   if (!state || state.sealed) return
   state.sealed = true
-  await Promise.all(state.routes.map((route) => new Promise<void>((resolve) => route.server.close(() => resolve()))))
+  await Promise.all(state.routes.map((route) => route.closePromise ?? new Promise<void>((resolve) => route.server.close(() => resolve()))))
 }
 
 export function assertReceiverResult(result: unknown, row?: RunLedgerRow): asserts result is ReceiverResult {
