@@ -9,7 +9,7 @@ import test from 'node:test'
 
 import { main as campaignMain } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign.js'
 import { executionCompletedAllRows, readPredecessorConclusion, runExecuteFromSealedPrelaunch, sealExecutionAttemptFailure, sealPredecessorConclusion } from '../tools/oracle-lab/phase3b-evidence-sufficiency/campaign-controller.js'
-import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateLocalAuthCellTerminal, validateObservationForControlStability, validateObservationRouteAuthorityBindings, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
+import { SUPPORT_PATHS, deriveCuration, enforcePairAndRepetitionStability, inventoryNamespace, predecessorSupportSourceSha256, projectValidatedObservationForControlStability, runCloseout, validateArtifactIndexCoverage, validateConclusionSupport, validateExternalSet, validateLocalAuthCellTerminal, validateObservationForControlStability, validateObservationRouteAuthorityBindings, validateReceiverAuthorityClosureBindings, validateReceiverOrdinalBindings, validateTargetTerminalProjection } from '../tools/oracle-lab/phase3b-evidence-sufficiency/closeout.js'
 import { canonicalBytes, canonicalJson, sha256Bytes, sha256Canonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/core.js'
 import { deriveExecutionCounts, openExecutionStore, readCampaignFailure, readExecutionReceipts, sealPreSpawnFailure } from '../tools/oracle-lab/phase3b-evidence-sufficiency/execution-store.js'
 import { BOOTSTRAP_CONTRACT_SCHEMA, CLAUDE_MESSAGES_PATH, CLAUDE_MESSAGES_QUERY_ITEMS, CLAUDE_MESSAGES_QUERY_ORDER, CLAUDE_MESSAGES_REQUEST_TARGET, ES7_REQUEST_FIELDS, ES7_RESPONSE_FIELDS, FIXED_STDIN_LITERAL, FIXED_STDIN_LITERAL_REF, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_PROFILE, buildCampaignLedger, buildResponseProgram, crossRepoAuthority, materializeResponseBody, observationCoverageMatrix, validateCampaignLedger } from '../tools/oracle-lab/phase3b-evidence-sufficiency/ledger.js'
@@ -247,7 +247,7 @@ test('auth-missing-credential output classifier accepts only the frozen safe loc
   })
   assert.match(String((accepted as unknown as Record<string, unknown>).safe_output_profile_sha256 ?? ''), /^[a-f0-9]{64}$/)
   const cell = {
-    target_terminal: { exit_code: 1, signal: null },
+    target_terminal: { lifecycle_class: 'process_exit', exit_code: 1, signal: null },
     stdout: { byte_length: 747, safe_output_class: 'local-auth-missing-credential', safe_output_sha256: LOCAL_AUTH_RESULT_SHA256, safe_output_profile_sha256: (accepted as unknown as Record<string, unknown>).safe_output_profile_sha256 },
     stderr: { byte_length: 0 },
   }
@@ -258,8 +258,8 @@ test('auth-missing-credential output classifier accepts only the frozen safe loc
     { cell: { ...cell, stdout: { ...cell.stdout, safe_output_profile_sha256: '0'.repeat(64) } }, terminal },
     { cell, terminal: { ...terminal, exit_code: 2 } },
     { cell, terminal: { ...terminal, signal: 'SIGTERM' } },
-    { cell: { ...cell, target_terminal: { exit_code: 2, signal: null } }, terminal },
-    { cell: { ...cell, target_terminal: { exit_code: 1, signal: 'SIGTERM' } }, terminal },
+    { cell: { ...cell, target_terminal: { lifecycle_class: 'process_exit', exit_code: 2, signal: null } }, terminal },
+    { cell: { ...cell, target_terminal: { lifecycle_class: 'process_exit', exit_code: 1, signal: 'SIGTERM' } }, terminal },
     { cell: { ...cell, stdout: { ...cell.stdout, safe_output_sha256: '0'.repeat(64) } }, terminal },
     { cell: { ...cell, stderr: { byte_length: 1 } }, terminal },
   ]) assert.throws(() => validateLocalAuthCellTerminal(row, drift.cell, drift.terminal), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
@@ -853,6 +853,96 @@ test('retryable terminal and recovery programs share the trigger then diverge de
   assert.deepEqual(terminal.actions.map((action) => [action.status, action.body_kind]), [[429, 'error_json'], [400, 'error_json']])
   assert.deepEqual(recovery.actions.map((action) => [action.status, action.body_kind]), [[429, 'error_json'], [200, 'complete_sse']])
   assert.deepEqual(buildResponseProgram('reset_terminal').actions.map((action) => [action.kind, action.status]), [['reset', null], ['http', 400]])
+})
+
+test('http 401 terminal seals the exact Claude 2.1.215 bounded retry lifecycle', () => {
+  const ledger = buildCampaignLedger('p3b-http401-terminal-lifecycle', TEST_C1)
+  const rows = ledger.rows.filter((row) => row.schedule_id === 'http_401_terminal')
+  assert.equal(rows.length, 10)
+  for (const row of rows) {
+    assert.equal(row.response_program.maximum_attempts, 9)
+    assert.deepEqual(row.response_program.actions.map((action) => [action.action_ordinal, action.status, action.body_kind, action.delay_class]),
+      Array.from({ length: 9 }, (_, ordinal) => [ordinal, 401, 'error_json', 'none']))
+    assert.deepEqual((row.response_program as unknown as Record<string, unknown>).target_terminal_contract, {
+      lifecycle_class: 'controller_wall_timeout',
+      wall_timeout_ms: 120_000,
+      exit_code: null,
+      signal: 'SIGKILL',
+      stdout_safe_class: 'absent',
+      stderr_byte_length: 0,
+      retry_timing_class: 'target_managed_backoff',
+    })
+    const request = { method: 'POST', url: '/v1/messages?beta=true', headers: {} }
+    for (let attempt = 0; attempt < 9; attempt += 1) assert.equal(classifyReceiverRequestBoundary(request, row, 1, attempt), 'messages')
+    assert.throws(() => classifyReceiverRequestBoundary(request, row, 1, 9), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  }
+  assert.equal((buildResponseProgram('http_403_terminal') as unknown as Record<string, unknown>).target_terminal_contract, null)
+  assert.equal(buildResponseProgram('http_403_terminal').maximum_attempts, 1)
+})
+
+test('http 401 terminal closeout requires all nine ordered attempts and the exact bounded target terminal', () => {
+  const row = buildCampaignLedger('p3b-http401-terminal-closeout', TEST_C1).rows.find((candidate) => candidate.schedule_id === 'http_401_terminal')!
+  const peer = (remotePort: number) => {
+    const unsigned = { target_pid: 123, local_address: '127.0.0.1' as const, local_port: 41000, remote_address: '127.0.0.1' as const, remote_port: remotePort, executable_identity_sha256: 'a'.repeat(64) }
+    return { ...unsigned, peer_socket_sha256: sha256Canonical(unsigned) }
+  }
+  const observations = row.response_program.actions.map((action, index) => {
+    const unsigned = { attempt_ordinal: index, connection_ordinal: index, raw_socket_ordinal: index + 1, action_ordinal: action.action_ordinal, peer_socket: peer(42001 + index), query_order: row.request_target.query_order, query_items: row.request_target.query_items }
+    return { ...unsigned, observation_sha256: sha256Canonical(unsigned) }
+  })
+  const bootstrapUnsigned = { count: 1 as const, route_ordinal: 0, receiver_instance_id: '11111111-1111-4111-8111-111111111111', raw_socket_ordinal: 0, peer_socket: peer(42000), response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
+  const receiver = {
+    request_count: 9, response_count: 9, selected_route_ordinal: 0, bootstrap_contract: row.bootstrap_contract,
+    bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) },
+    attempt_ordinals: row.response_program.actions.map((_, index) => index),
+    connection_ordinals: row.response_program.actions.map((_, index) => index),
+    raw_socket_ordinals: row.response_program.actions.map((_, index) => index + 1),
+    action_ordinals: row.response_program.actions.map((action) => action.action_ordinal),
+    observation_sha256s: observations.map((observation) => observation.observation_sha256),
+    receiver_terminal: 'sealed',
+  }
+  assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, observations, row))
+  for (const drift of [
+    { ...receiver, request_count: 8, response_count: 8, attempt_ordinals: receiver.attempt_ordinals.slice(0, -1), connection_ordinals: receiver.connection_ordinals.slice(0, -1), raw_socket_ordinals: receiver.raw_socket_ordinals.slice(0, -1), action_ordinals: receiver.action_ordinals.slice(0, -1), observation_sha256s: receiver.observation_sha256s.slice(0, -1) },
+    { ...receiver, request_count: 10, response_count: 10, attempt_ordinals: [...receiver.attempt_ordinals, 9], connection_ordinals: [...receiver.connection_ordinals, 9], raw_socket_ordinals: [...receiver.raw_socket_ordinals, 10], action_ordinals: [...receiver.action_ordinals, 9], observation_sha256s: [...receiver.observation_sha256s, 'f'.repeat(64)] },
+    { ...receiver, attempt_ordinals: [0, 1, 2, 3, 4, 5, 7, 6, 8] },
+  ]) assert.throws(() => validateReceiverOrdinalBindings(drift, observations, row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
+  assert.throws(() => validateReceiverOrdinalBindings(receiver, observations.slice(0, -1), row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
+  assert.throws(() => validateReceiverOrdinalBindings(receiver, [observations[1], observations[0], ...observations.slice(2)], row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
+
+  const receiptRoot = privateRoot('p3b-http401-receipt-roundtrip-')
+  const store = openExecutionStore(receiptRoot, buildCampaignLedger('p3b-http401-terminal-closeout', TEST_C1))
+  let previousReceiptSha256: string | null = null
+  const writeReceipt = (candidate: typeof row, state: 'started' | 'spawned' | 'terminal', fields: Readonly<Record<string, unknown>>) => {
+    const unsigned = { schema_id: 'oracle-lab-p3b-execution-receipt.v1', campaign_id: store.campaign_id, ledger_sha256: store.ledger_sha256, run_id: candidate.run_id, sequence_index: candidate.sequence_index, state, previous_receipt_sha256: previousReceiptSha256, ...fields }
+    const receipt = { ...unsigned, receipt_sha256: sha256Canonical(unsigned) }
+    writeExclusiveCanonical(receiptRoot, `execution-records/${String(candidate.sequence_index).padStart(3, '0')}-${candidate.run_id}-${state}.json`, receipt)
+    previousReceiptSha256 = receipt.receipt_sha256
+  }
+  const roundtripLedger = buildCampaignLedger('p3b-http401-terminal-closeout', TEST_C1)
+  for (const candidate of roundtripLedger.rows.slice(0, row.sequence_index + 1)) {
+    const startedMonotonicNs = BigInt(candidate.sequence_index + 1) * 1_000_000_000_000n
+    const launchAuthoritySha256 = sha256Canonical({ row_sha256: candidate.row_sha256 })
+    const blank = { triggering_terminal_receipt_sha256: null, failure_sha256: null, sandbox_pid: null, target_pid: null, executable_identity_sha256: null, terminal_monotonic_ns: null, exit_code: null, signal: null, terminal_class: null, cause_code: null }
+    writeReceipt(candidate, 'started', { ...blank, launch_authority_sha256: launchAuthoritySha256, started_monotonic_ns: startedMonotonicNs.toString() })
+    writeReceipt(candidate, 'spawned', { ...blank, launch_authority_sha256: launchAuthoritySha256, sandbox_pid: 10_000 + candidate.sequence_index, target_pid: 20_000 + candidate.sequence_index, executable_identity_sha256: 'a'.repeat(64), started_monotonic_ns: startedMonotonicNs.toString() })
+    const timeoutContract = candidate.response_program.target_terminal_contract !== null
+    writeReceipt(candidate, 'terminal', { ...blank, launch_authority_sha256: launchAuthoritySha256, started_monotonic_ns: startedMonotonicNs.toString(), terminal_monotonic_ns: (startedMonotonicNs + (timeoutContract ? 120_000_000_000n : 1_000_000n)).toString(), exit_code: timeoutContract ? null : 0, signal: timeoutContract ? 'SIGKILL' : null, terminal_class: 'success', cause_code: timeoutContract ? 'wall_timeout' : null })
+  }
+  const terminal = readExecutionReceipts(store).find((receipt) => receipt.sequence_index === row.sequence_index && receipt.state === 'terminal')!
+  const cell = { target_terminal: { lifecycle_class: 'controller_wall_timeout', exit_code: null, signal: 'SIGKILL' }, stdout: { byte_length: 0, safe_output_class: 'absent' }, stderr: { byte_length: 0 } }
+  assert.doesNotThrow(() => validateTargetTerminalProjection(row, cell, terminal))
+  for (const drift of [
+    { ...cell, target_terminal: { ...cell.target_terminal, lifecycle_class: 'process_exit' } },
+    { ...cell, target_terminal: { ...cell.target_terminal, signal: 'SIGTERM' } },
+    { ...cell, stdout: { byte_length: 1, safe_output_class: 'unexpected' } },
+    { ...cell, stderr: { byte_length: 1 } },
+  ]) assert.throws(() => validateTargetTerminalProjection(row, drift, terminal), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  assert.throws(() => validateTargetTerminalProjection(row, cell, { exit_code: 1, signal: null }), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  assert.throws(() => validateTargetTerminalProjection(row, cell, { ...terminal, terminal_monotonic_ns: (BigInt(terminal.started_monotonic_ns!) + 119_999_999_999n).toString() }), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  assert.throws(() => validateTargetTerminalProjection(row, cell, { ...terminal, cause_code: 'controller_signal' }), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
+  const other = buildCampaignLedger('p3b-http401-terminal-other', TEST_C1).rows.find((candidate) => candidate.schedule_id === 'http_403_terminal')!
+  assert.throws(() => validateTargetTerminalProjection(other, cell, terminal), (error: Error & { code?: string }) => error.code === 'target_terminal_invalid')
 })
 
 test('config route policy seals the observed process-env-vs-local route zero winner without widening other schedules', () => {

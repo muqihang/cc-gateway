@@ -10,7 +10,7 @@ import { Phase3BProductionError, assertExactKeys, deepFreeze, sha256Bytes, sha25
 import { appendSpawned, appendStarted, appendTerminal, type ExecutionStore } from './execution-store.js'
 import { type LaunchAuthorityReceipt, assertLaunchAuthority } from './launch-authority.js'
 import { TARGET_EXECUTABLE_MAXIMUM_BYTES, type LaunchImageRecord, verifyLaunchImage } from './launch-image.js'
-import { LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, isExpectedLocalAuthFailureRow, type RunLedgerRow } from './ledger.js'
+import { LOCAL_AUTH_OUTPUT_PROFILE_SHA256, LOCAL_AUTH_RESULT_LITERAL, LOCAL_AUTH_RESULT_SHA256, TARGET_WALL_TIMEOUT_MS, isExpectedLocalAuthFailureRow, matchesTargetTerminalContract, type RunLedgerRow } from './ledger.js'
 import { type ReceiverAuthority, abortReceiverGroup, assertReceiverAuthority, prepareReceiverLaunch, registerReceiverTarget, sealReceiverGroup } from './receiver.js'
 import { prepareScenarioCell, preparedCellState } from './scenario-input.js'
 import { buildSandboxProfile } from './sandbox-policy.js'
@@ -34,7 +34,7 @@ type CellBindings = Readonly<{
   sandbox_profile_sha256: string
 }>
 
-const MAX_WALL_MS = 120_000
+const MAX_WALL_MS = TARGET_WALL_TIMEOUT_MS
 const MAX_OUTPUT_BYTES = 1_048_576
 const MAX_PROCESSES = 32
 
@@ -314,11 +314,14 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
   if (cell.profile !== preArmProfile) throw new Phase3BProductionError('guard_profile_invalid', 'guard profile differs from target launch profile')
   verifyLaunchImage(image)
   const cellBindings: CellBindings = deepFreeze({ campaign_id: prepared.campaign_id, ledger_sha256: prepared.ledger_sha256, launch_authority_sha256: input.authority.receipt_sha256, receiver_authority_sha256: input.receiver.authority_sha256, launch_image_record_sha256: image.record_sha256, executable_identity_sha256: input.authority.executable_identity_sha256, input_descriptor_sha256: prepared.input_descriptor_sha256, sandbox_profile_sha256: prepared.sandbox_profile_sha256 })
-  appendStarted(input.store, input.row, input.authority)
+  const startedReceipt = appendStarted(input.store, input.row, input.authority)
+  const startedMonotonicNs = startedReceipt.started_monotonic_ns!
   let child: ChildProcess | null = null
   let wait: Promise<{ exitCode: number | null; signal: string | null }> | null = null
   let removeSignalHandlers = () => {}
   const controllerTermination: { signal: NodeJS.Signals | null } = { signal: null }
+  let resourceFailure: string | null = null
+  let timer: NodeJS.Timeout | null = setTimeout(() => { resourceFailure ??= 'wall_timeout'; if (child) killOwnedTree(child) }, MAX_WALL_MS)
   try {
     child = spawn('/usr/bin/sandbox-exec', ['-p', cell.profile, image.image_identity.path, ...input.row.argv], { cwd: cell.cwd, env: cell.env, detached: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] })
     wait = waitChild(child)
@@ -326,6 +329,7 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
     if (!child.pid) throw new Phase3BProductionError('spawn_pid_missing', 'sandbox process has no PID')
     try { child.stdin!.end(cell.stdin) } finally { cell.stdin.fill(0) }
   } catch (error: unknown) {
+    if (timer !== null) { clearTimeout(timer); timer = null }
     let exit: { exitCode: number | null; signal: string | null } = { exitCode: null, signal: null }
     if (child) {
       killOwnedTree(child)
@@ -335,7 +339,7 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
     cell.stdin.fill(0)
     await abortReceiverGroup(input.receiver)
     const terminal = appendTerminal(input.store, input.row, input.authority, { terminalClass: 'spawn_error', exitCode: exit.exitCode, signal: exit.signal, causeCode: (error as NodeJS.ErrnoException).code ?? 'spawn_exception' })
-    return writeCellResult(runtimeRoot, input.row, cellBindings, terminal.terminal_class!, terminal.receipt_sha256, null, guardReceiptSha256, 0, 0, 0, exit.exitCode, exit.signal, { categories: ['spawn'], normalized_sha256: sha256Canonical('spawn') })
+    return writeCellResult(runtimeRoot, input.row, cellBindings, terminal.terminal_class!, terminal.receipt_sha256, null, guardReceiptSha256, 0, 0, 0, exit.exitCode, exit.signal, 'process_exit', { categories: ['spawn'], normalized_sha256: sha256Canonical('spawn') })
   }
   const ownedChild = child
   const ownedWait = wait
@@ -345,17 +349,17 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
     appendSpawned(input.store, input.row, input.authority, ownedChild.pid!, targetPid, sha256Canonical(image.image_identity))
     registerReceiverTarget(input.receiver, targetPid, sha256Canonical(image.image_identity))
   } catch (error: unknown) {
+    if (timer !== null) { clearTimeout(timer); timer = null }
     killOwnedTree(ownedChild)
     const exit = await ownedWait
     removeSignalHandlers()
     await abortReceiverGroup(input.receiver)
     const terminal = appendTerminal(input.store, input.row, input.authority, { terminalClass: 'spawn_error', exitCode: exit.exitCode, signal: exit.signal, causeCode: controllerTermination.signal === null ? ((error as { code?: string }).code ?? 'spawn_ownership_failure') : 'controller_signal' })
-    return writeCellResult(runtimeRoot, input.row, cellBindings, terminal.terminal_class!, terminal.receipt_sha256, null, guardReceiptSha256, 0, 0, 0, exit.exitCode, exit.signal, { categories: ['spawn'], normalized_sha256: sha256Canonical('spawn') })
+    return writeCellResult(runtimeRoot, input.row, cellBindings, terminal.terminal_class!, terminal.receipt_sha256, null, guardReceiptSha256, 0, 0, 0, exit.exitCode, exit.signal, 'process_exit', { categories: ['spawn'], normalized_sha256: sha256Canonical('spawn') })
   }
-  let stdoutBytes = 0; let stderrBytes = 0; const stdoutSafe: Buffer[] = []; const stderrSafe: Buffer[] = []; let stdoutSafeBytes = 0; let stderrSafeBytes = 0; let resourceFailure: string | null = null
+  let stdoutBytes = 0; let stderrBytes = 0; const stdoutSafe: Buffer[] = []; const stderrSafe: Buffer[] = []; let stdoutSafeBytes = 0; let stderrSafeBytes = 0
   ownedChild.stdout!.on('data', (chunk: Buffer) => { const bytes = Buffer.from(chunk); stdoutBytes += bytes.length; if (stdoutSafeBytes < MAX_OUTPUT_BYTES) { const kept = Buffer.from(bytes.subarray(0, MAX_OUTPUT_BYTES - stdoutSafeBytes)); stdoutSafe.push(kept); stdoutSafeBytes += kept.length } bytes.fill(0); if (stdoutBytes + stderrBytes > MAX_OUTPUT_BYTES) { resourceFailure ??= 'output_limit'; killOwnedTree(ownedChild) } })
   ownedChild.stderr!.on('data', (chunk: Buffer) => { const bytes = Buffer.from(chunk); stderrBytes += bytes.length; if (stderrSafeBytes < 16_384) { const kept = Buffer.from(bytes.subarray(0, 16_384 - stderrSafeBytes)); stderrSafe.push(kept); stderrSafeBytes += kept.length } bytes.fill(0); if (stdoutBytes + stderrBytes > MAX_OUTPUT_BYTES) { resourceFailure ??= 'output_limit'; killOwnedTree(ownedChild) } })
-  const timer = setTimeout(() => { resourceFailure ??= 'wall_timeout'; killOwnedTree(ownedChild) }, MAX_WALL_MS)
   const sampler = setInterval(() => {
     try {
       const pids = descendants(ownedChild.pid!)
@@ -364,7 +368,8 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
     } catch { resourceFailure ??= 'process_sampler_failure'; killOwnedTree(ownedChild) }
   }, 100)
   const exit = await ownedWait
-  clearTimeout(timer); clearInterval(sampler)
+  if (timer !== null) { clearTimeout(timer); timer = null }
+  clearInterval(sampler)
   removeSignalHandlers()
   resourceFailure ??= controllerTermination.signal === null ? null : 'controller_signal'
   let receiverResultSha256: string | null = null
@@ -378,18 +383,23 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
   const outputAccepted = isExpectedLocalAuthFailureRow(input.row)
     ? outputProjection.safe_output_class === 'local-auth-missing-credential' && stderrBytes === 0
     : expectsCompleteOutput(input.row) ? outputProjection.safe_output_class === 'synthetic-output-complete' : outputProjection.safe_output_class !== 'synthetic-output-complete'
-  const success = !resourceFailure && !receiverFailure && !imageFailure && expectedExit(input.row, exit.exitCode, exit.signal) && outputAccepted
-  const cause = resourceFailure ?? receiverFailure ?? imageFailure ?? (success ? null : 'unexpected_target_terminal')
+  const lifecycleClass = resourceFailure === 'wall_timeout' && input.row.response_program.target_terminal_contract !== null ? 'controller_wall_timeout' as const : 'process_exit' as const
+  const projectedCause = resourceFailure ?? receiverFailure ?? imageFailure ?? 'unexpected_target_terminal'
+  const elapsedMonotonicNs = process.hrtime.bigint() - BigInt(startedMonotonicNs)
+  const contractTerminal = matchesTargetTerminalContract(input.row, { lifecycle_class: lifecycleClass, resource_failure: resourceFailure, exit_code: exit.exitCode, signal: exit.signal, stdout_safe_class: outputProjection.safe_output_class, stdout_byte_length: stdoutBytes, stderr_byte_length: stderrBytes, cause_code: projectedCause, elapsed_monotonic_ns: elapsedMonotonicNs })
+  const processTerminal = input.row.response_program.target_terminal_contract === null && !resourceFailure && expectedExit(input.row, exit.exitCode, exit.signal)
+  const success = !receiverFailure && !imageFailure && (contractTerminal || processTerminal) && outputAccepted
+  const cause = success ? (contractTerminal ? 'wall_timeout' : null) : projectedCause
   const terminalClass = success ? 'success' as const : 'failed_after_spawn' as const
   const terminal = appendTerminal(input.store, input.row, input.authority, { terminalClass, exitCode: exit.exitCode, signal: exit.signal, causeCode: cause })
   const stderrMaterial = Buffer.concat(stderrSafe)
   stderrSafe.forEach((bytes) => bytes.fill(0))
   const diagnostic = safeDiagnostic(stderrMaterial)
-  return writeCellResult(runtimeRoot, input.row, cellBindings, terminalClass, terminal.receipt_sha256, receiverResultSha256, guardReceiptSha256, stdoutBytes, stderrBytes, externalSocketCount([targetPid], cell.routePorts), exit.exitCode, exit.signal, diagnostic, outputProjection)
+  return writeCellResult(runtimeRoot, input.row, cellBindings, terminalClass, terminal.receipt_sha256, receiverResultSha256, guardReceiptSha256, stdoutBytes, stderrBytes, externalSocketCount([targetPid], cell.routePorts), exit.exitCode, exit.signal, lifecycleClass, diagnostic, outputProjection)
 }
 
-function writeCellResult(runtimeRoot: string, row: RunLedgerRow, bindings: CellBindings, terminalClass: 'success' | 'spawn_error' | 'failed_after_spawn' | 'not_executed', terminalReceiptSha256: string, receiverResultSha256: string | null, guardReceiptSha256: string, stdoutBytes: number, stderrBytes: number, externalSockets: number, exitCode: number | null, signal: string | null, diagnostic: Readonly<Record<string, unknown>>, outputProjection: Readonly<Record<string, unknown>> = { safe_output_class: 'absent', safe_output_sha256: null, safe_output_profile_sha256: null }): RowExecutionResult {
-  const unsigned = { schema_id: 'oracle-lab-p3b-cell-result.v1', campaign_id: bindings.campaign_id, ledger_sha256: bindings.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, family: row.family, schedule_id: row.schedule_id, seed: row.seed, repetition: row.repetition, arm: row.arm, row_sha256: row.row_sha256, launch_authority_sha256: bindings.launch_authority_sha256, receiver_authority_sha256: bindings.receiver_authority_sha256, launch_image_record_sha256: bindings.launch_image_record_sha256, executable_identity_sha256: bindings.executable_identity_sha256, input_descriptor_sha256: bindings.input_descriptor_sha256, sandbox_profile_sha256: bindings.sandbox_profile_sha256, terminal_class: terminalClass, terminal_receipt_sha256: terminalReceiptSha256, receiver_result_sha256: receiverResultSha256, guard_receipt_sha256: guardReceiptSha256, target_terminal: { exit_code: exitCode, signal }, stdout: { byte_length: stdoutBytes, ...outputProjection }, stderr: { byte_length: stderrBytes, safe_diagnostic: diagnostic }, external_socket_count: externalSockets, raw_material_persisted: false }
+function writeCellResult(runtimeRoot: string, row: RunLedgerRow, bindings: CellBindings, terminalClass: 'success' | 'spawn_error' | 'failed_after_spawn' | 'not_executed', terminalReceiptSha256: string, receiverResultSha256: string | null, guardReceiptSha256: string, stdoutBytes: number, stderrBytes: number, externalSockets: number, exitCode: number | null, signal: string | null, lifecycleClass: 'process_exit' | 'controller_wall_timeout', diagnostic: Readonly<Record<string, unknown>>, outputProjection: Readonly<Record<string, unknown>> = { safe_output_class: 'absent', safe_output_sha256: null, safe_output_profile_sha256: null }): RowExecutionResult {
+  const unsigned = { schema_id: 'oracle-lab-p3b-cell-result.v1', campaign_id: bindings.campaign_id, ledger_sha256: bindings.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, family: row.family, schedule_id: row.schedule_id, seed: row.seed, repetition: row.repetition, arm: row.arm, row_sha256: row.row_sha256, launch_authority_sha256: bindings.launch_authority_sha256, receiver_authority_sha256: bindings.receiver_authority_sha256, launch_image_record_sha256: bindings.launch_image_record_sha256, executable_identity_sha256: bindings.executable_identity_sha256, input_descriptor_sha256: bindings.input_descriptor_sha256, sandbox_profile_sha256: bindings.sandbox_profile_sha256, terminal_class: terminalClass, terminal_receipt_sha256: terminalReceiptSha256, receiver_result_sha256: receiverResultSha256, guard_receipt_sha256: guardReceiptSha256, target_terminal: { lifecycle_class: lifecycleClass, exit_code: exitCode, signal }, stdout: { byte_length: stdoutBytes, ...outputProjection }, stderr: { byte_length: stderrBytes, safe_diagnostic: diagnostic }, external_socket_count: externalSockets, raw_material_persisted: false }
   const cellResultSha256 = sha256Canonical(unsigned)
   writeExclusiveCanonical(runtimeRoot, `cell-results/${String(row.sequence_index).padStart(3, '0')}-${row.run_id}.json`, { ...unsigned, cell_result_sha256: cellResultSha256 })
   return deepFreeze({ terminal_class: terminalClass === 'not_executed' ? 'failed_after_spawn' : terminalClass, terminal_receipt_sha256: terminalReceiptSha256, receiver_result_sha256: receiverResultSha256, cell_result_sha256: cellResultSha256 })

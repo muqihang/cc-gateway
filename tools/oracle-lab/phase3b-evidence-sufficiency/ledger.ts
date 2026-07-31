@@ -81,6 +81,7 @@ export type TargetProfile = Readonly<{
 
 export type LedgerFamily = 'target_control' | 'config' | 'auth' | 'request_wire' | 'response_failure_recovery'
 export type ExecutableArm = 'instrumented' | 'uninstrumented' | 'control/instrumented' | 'control/uninstrumented' | 'treatment/instrumented' | 'treatment/uninstrumented'
+export const TARGET_WALL_TIMEOUT_MS = 120_000 as const
 
 export type ResponseAction = Readonly<{
   action_ordinal: number
@@ -93,11 +94,22 @@ export type ResponseAction = Readonly<{
   transport_terminal: 'http_complete' | 'eof_after_partial' | 'reset_before_headers'
 }>
 
+export type TargetTerminalContract = Readonly<{
+  lifecycle_class: 'controller_wall_timeout'
+  wall_timeout_ms: typeof TARGET_WALL_TIMEOUT_MS
+  exit_code: null
+  signal: 'SIGKILL'
+  stdout_safe_class: 'absent'
+  stderr_byte_length: 0
+  retry_timing_class: 'target_managed_backoff'
+}>
+
 export type ResponseProgram = Readonly<{
   schema_id: 'oracle-lab-p3b-response-program.v1'
   program_id: string
   maximum_attempts: number
   actions: readonly ResponseAction[]
+  target_terminal_contract: TargetTerminalContract | null
   complete_sse: Readonly<{
     framing: 'lf'
     event_order: readonly ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop']
@@ -148,6 +160,32 @@ export function isExpectedLocalAuthFailureRow(row: RunLedgerRow): boolean {
 
 export function expectedReceiverAttempts(row: RunLedgerRow): number {
   return isExpectedLocalAuthFailureRow(row) ? 0 : row.response_program.maximum_attempts
+}
+
+export function matchesTargetTerminalContract(row: RunLedgerRow, value: Readonly<{
+  lifecycle_class: string
+  resource_failure: string | null
+  exit_code: number | null
+  signal: string | null
+  stdout_safe_class: string
+  stdout_byte_length: number
+  stderr_byte_length: number
+  cause_code: string | null
+  elapsed_monotonic_ns: bigint | null
+}>): boolean {
+  const contract = row.response_program.target_terminal_contract
+  const minimumElapsedNs = BigInt(TARGET_WALL_TIMEOUT_MS) * 1_000_000n
+  return contract !== null
+    && value.lifecycle_class === contract.lifecycle_class
+    && value.resource_failure === 'wall_timeout'
+    && value.cause_code === 'wall_timeout'
+    && value.exit_code === contract.exit_code
+    && value.signal === contract.signal
+    && value.stdout_safe_class === contract.stdout_safe_class
+    && value.stdout_byte_length === 0
+    && value.stderr_byte_length === contract.stderr_byte_length
+    && value.elapsed_monotonic_ns !== null
+    && value.elapsed_monotonic_ns >= minimumElapsedNs
 }
 
 export function expectedBootstrapCount(row: RunLedgerRow): 0 | 1 {
@@ -203,6 +241,9 @@ function actionFor(programId: string, ordinal: number): ResponseAction {
   if (programId === 'partial_sse_then_eof') {
     return deepFreeze({ action_ordinal: ordinal, kind: 'http', status: 200, ordered_headers: [{ name: 'content-type', value_class: 'text/event-stream' }], body_kind: 'partial_sse', delay_class: 'none', delay_ms: 0, transport_terminal: 'eof_after_partial' })
   }
+  if (programId === 'http_401_terminal' && ordinal < 9) {
+    return deepFreeze({ action_ordinal: ordinal, kind: 'http', status: 401, ordered_headers: [{ name: 'content-type', value_class: 'application/json' }], body_kind: 'error_json', delay_class: 'none', delay_ms: 0, transport_terminal: 'http_complete' })
+  }
   const statusMatch = /^http_(400|401|403|429|500|529)(?:_terminal|_then_complete)$/.exec(programId)
   if (statusMatch && ordinal === 0) {
     return deepFreeze({ action_ordinal: ordinal, kind: 'http', status: Number(statusMatch[1]), ordered_headers: [{ name: 'content-type', value_class: 'application/json' }], body_kind: 'error_json', delay_class: 'none', delay_ms: 0, transport_terminal: 'http_complete' })
@@ -216,7 +257,7 @@ function actionFor(programId: string, ordinal: number): ResponseAction {
 
 export function buildResponseProgram(programId: string): ResponseProgram {
   const retryPrograms = new Set(['http_429_terminal', 'http_500_terminal', 'http_529_terminal', 'reset_terminal', 'http_429_then_complete', 'http_500_then_complete', 'reset_before_headers_then_complete'])
-  const actionCount = retryPrograms.has(programId) ? 2 : 1
+  const actionCount = programId === 'http_401_terminal' ? 9 : retryPrograms.has(programId) ? 2 : 1
   const actions = Array.from({ length: actionCount }, (_, index) => actionFor(programId, index))
   const completeSse = actions.some((action) => action.body_kind === 'complete_sse') ? deepFreeze({
     framing: 'lf' as const,
@@ -224,7 +265,10 @@ export function buildResponseProgram(programId: string): ResponseProgram {
     materialized_literal_refs: ['synthetic-literals/model.test', 'synthetic-literals/output.complete'] as const,
     materialized_response_sha256: sha256Bytes(Buffer.from(COMPLETE_RESPONSE, 'utf8')),
   }) : null
-  const unsigned = { schema_id: 'oracle-lab-p3b-response-program.v1' as const, program_id: programId, maximum_attempts: actionCount, actions, complete_sse: completeSse }
+  const targetTerminalContract: TargetTerminalContract | null = programId === 'http_401_terminal' ? {
+    lifecycle_class: 'controller_wall_timeout', wall_timeout_ms: TARGET_WALL_TIMEOUT_MS, exit_code: null, signal: 'SIGKILL', stdout_safe_class: 'absent', stderr_byte_length: 0, retry_timing_class: 'target_managed_backoff',
+  } : null
+  const unsigned = { schema_id: 'oracle-lab-p3b-response-program.v1' as const, program_id: programId, maximum_attempts: actionCount, actions, target_terminal_contract: targetTerminalContract, complete_sse: completeSse }
   return deepFreeze({ ...unsigned, program_sha256: sha256Canonical(unsigned) })
 }
 
@@ -244,7 +288,7 @@ function canonicalLine(value: unknown): Buffer {
 
 export function materializeEs7Sources(row: RunLedgerRow): Readonly<Record<string, unknown>> {
   const requestBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-request-source.v1', request_target: CLAUDE_MESSAGES_REQUEST_CONTRACT, bootstrap_contract: row.bootstrap_contract, argv: row.argv, request_stimulus: row.request_stimulus, stdin_literal_ref: row.stdin_literal_ref, stdin_byte_length: Buffer.byteLength(FIXED_STDIN_LITERAL), stdin_sha256: sha256Bytes(Buffer.from(FIXED_STDIN_LITERAL, 'utf8')), literal_table: FIXED_LITERAL_TABLE })
-  const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => { const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8'); return { ...action, body_byte_length: body.byteLength, body_sha256: sha256Bytes(body) } }), complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
+  const responseBytes = canonicalLine({ schema_id: 'oracle-lab-p3b-es7-response-source.v1', actions: row.response_program.actions.map((action) => { const body = Buffer.from(materializeResponseBody(action.body_kind), 'utf8'); return { ...action, body_byte_length: body.byteLength, body_sha256: sha256Bytes(body) } }), target_terminal_contract: row.response_program.target_terminal_contract, complete_sse: row.response_program.complete_sse, literal_table: FIXED_LITERAL_TABLE })
   return deepFreeze({
     sequence_index: row.sequence_index, run_id: row.run_id, row_sha256: row.row_sha256, request_stimulus_sha256: row.request_stimulus_sha256, response_program_sha256: row.response_program_sha256, maximum_attempts: row.response_program.maximum_attempts,
     request_source_byte_length: requestBytes.byteLength, request_source_sha256: sha256Bytes(requestBytes), response_source_byte_length: responseBytes.byteLength, response_source_sha256: sha256Bytes(responseBytes),
