@@ -124,19 +124,21 @@ test('bootstrap contract derives exact HEAD count and route from the winning con
 
   assert.equal(userWinner.sequence_index, 150)
   assert.equal(processEnv.sequence_index, 130)
-  assert.deepEqual(contract(userWinner), { expected_count: 1, expected_route_ordinal: 0 })
-  assert.deepEqual(contract(projectWinner), { expected_count: 0, expected_route_ordinal: null })
-  assert.deepEqual(contract(localWinner), { expected_count: 0, expected_route_ordinal: null })
-  assert.deepEqual(contract(processEnv), { expected_count: 1, expected_route_ordinal: 1 })
+  assert.deepEqual(contract(userWinner), { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
+  assert.deepEqual(contract(projectWinner), { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 })
+  assert.deepEqual(contract(localWinner), { winner_source: 'local', selected_route_ordinal: 1, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null })
+  assert.deepEqual(contract(processEnv), { winner_source: 'local', selected_route_ordinal: 0, bootstrap_source: 'process-env', expected_count: 1, expected_route_ordinal: 1 })
   assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), userWinner, 0, 0), 'bootstrap_probe')
   assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), userWinner, 1, 0), 'messages')
-  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), projectWinner, 0, 0), 'messages')
+  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), projectWinner, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), projectWinner, 0, 0), 'bootstrap_probe')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), projectWinner, 1, 0), 'messages')
   assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), localWinner, 0, 0), 'messages')
   assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), processEnv, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
   assert.equal(classifyReceiverRequestBoundary(request('HEAD', '/'), processEnv, 0, 0), 'bootstrap_probe')
   assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), processEnv, 1, 0), 'messages')
   assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), userWinner, 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), projectWinner, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), projectWinner, 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
 })
 
 test('ledger and ES7 bind the exact captured beta query structure', () => {
@@ -867,7 +869,59 @@ test('config route policy seals the observed process-env-vs-local route zero win
   assert.equal(expectedAuthMarkerClass(processEnv), 'x-api-key:campaign-config-placeholder')
   assert.equal(expectedSelectedRoute(localFile), 1)
   assert.equal(expectedSelectedRoute(control), 0)
-  assert.ok(rows.filter((row) => row.family !== 'config' || row.schedule_id !== 'config-precedence-process-env-vs-local').every((row) => expectedSelectedRoute(row) === (row.route_count === 1 || row.family !== 'config' ? 0 : row.arm.startsWith('treatment/') ? 1 : 0)))
+  assert.ok(rows.filter((row) => row.family !== 'config' || !['config-precedence-process-env-vs-local', 'config-precedence-project-vs-user'].includes(row.schedule_id)).every((row) => expectedSelectedRoute(row) === (row.route_count === 1 || row.family !== 'config' ? 0 : row.arm.startsWith('treatment/') ? 1 : 0)))
+  assert.ok(rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user').every((row) => expectedSelectedRoute(row) === 0))
+})
+
+test('config source precedence contract is derived from staged sources rather than semantic arms', () => {
+  const rows = buildCampaignLedger('p3b-config-source-truth-table', TEST_C1).rows.filter((row) => row.family === 'config')
+  const expected = {
+    'config-precedence-user-vs-default': {
+      control: { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
+      treatment: { winner_source: 'user', selected_route_ordinal: 1, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 1 },
+    },
+    'config-precedence-project-vs-user': {
+      control: { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
+      treatment: { winner_source: 'user', selected_route_ordinal: 0, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 0 },
+    },
+    'config-precedence-local-vs-project': {
+      control: { winner_source: 'project', selected_route_ordinal: 0, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null },
+      treatment: { winner_source: 'local', selected_route_ordinal: 1, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null },
+    },
+    'config-precedence-process-env-vs-local': {
+      control: { winner_source: 'local', selected_route_ordinal: 0, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null },
+      treatment: { winner_source: 'local', selected_route_ordinal: 0, bootstrap_source: 'process-env', expected_count: 1, expected_route_ordinal: 1 },
+    },
+  } as const
+  assert.equal(rows.length, 80)
+  for (const row of rows) {
+    const semanticArm = row.arm.startsWith('treatment/') ? 'treatment' : 'control'
+    assert.deepEqual(row.bootstrap_contract, expected[row.schedule_id as keyof typeof expected][semanticArm], `${row.schedule_id}/${row.arm}`)
+    assert.equal(expectedSelectedRoute(row), expected[row.schedule_id as keyof typeof expected][semanticArm].selected_route_ordinal)
+  }
+
+  const projectVsUser = rows.filter((row) => row.schedule_id === 'config-precedence-project-vs-user')
+  assert.equal(projectVsUser.length, 20)
+  assert.ok(projectVsUser.every((row) => row.bootstrap_contract.winner_source === 'user' && expectedSelectedRoute(row) === 0))
+  const treatment = projectVsUser.find((row) => row.arm === 'treatment/uninstrumented')!
+  const control = projectVsUser.find((row) => row.arm === 'control/instrumented')!
+  assert.deepEqual(treatment.bootstrap_contract, control.bootstrap_contract)
+
+  const frozenRow150 = [
+    buildCampaignLedger('p3b-official-ad7c420b-f360-4368-aa85-a4b02868d900', TEST_C1).rows[150],
+    buildCampaignLedger('p3b-official-da1d2d2d-4168-4e37-af7f-f668944861f2', TEST_C1).rows[150],
+  ]
+  assert.deepEqual(frozenRow150.map((row) => [row.arm, row.bootstrap_contract]), [
+    ['treatment/uninstrumented', expected['config-precedence-project-vs-user'].treatment],
+    ['control/instrumented', expected['config-precedence-project-vs-user'].control],
+  ])
+
+  const localTreatment = rows.find((row) => row.schedule_id === 'config-precedence-local-vs-project' && row.arm === 'treatment/instrumented')!
+  assert.notDeepEqual(treatment.bootstrap_contract, localTreatment.bootstrap_contract)
+  assert.throws(() => validateCampaignLedger({
+    ...buildCampaignLedger('p3b-config-arm-substitution', TEST_C1),
+    rows: buildCampaignLedger('p3b-config-arm-substitution', TEST_C1).rows.map((row) => row.sequence_index === treatment.sequence_index ? { ...row, bootstrap_contract: localTreatment.bootstrap_contract } : row),
+  } as never), (error: Error & { code?: string }) => error.code === 'launch_ledger_invalid')
 })
 
 test('fixed reviewer registry rejects a caller-fabricated signature', () => {
@@ -1122,7 +1176,7 @@ test('exact sealed Claude probe resolves file precedence without a receiver boot
       custom_headers: `x-oracle-launch-authority: ${'a'.repeat(64)}\nx-oracle-target-capability: ${'b'.repeat(64)}\nx-oracle-run-id: ${row.run_id}`,
     })
     assert.equal(filesystem.env.ANTHROPIC_BASE_URL, undefined)
-    assert.deepEqual(row.bootstrap_contract, { expected_count: 0, expected_route_ordinal: null })
+    assert.deepEqual(row.bootstrap_contract, { winner_source: 'local', selected_route_ordinal: 1, bootstrap_source: null, expected_count: 0, expected_route_ordinal: null })
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.local.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[1] } })
     let externalSocketCount = 0
@@ -1156,6 +1210,92 @@ test('exact sealed Claude probe resolves file precedence without a receiver boot
     assert.equal(externalSocketCount, 0)
   } finally {
     await Promise.all([close(selected), close(alternate)])
+  }
+})
+
+test('exact sealed Claude probe resolves user over default from staged source identity', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(EXACT_PHASE3B_PROBE) }, async () => {
+  const root = privateRoot('p3b-sandbox-user-default-source-')
+  const launchRoot = path.join(root, 'launch-images')
+  mkdirSync(launchRoot, { mode: 0o700 })
+  const executable = path.join(launchRoot, 'probe-image')
+  copyFileSync(EXACT_PHASE3B_PROBE, executable)
+  chmodSync(executable, 0o500)
+  const identity = stableRead(executable, { mode: 0o500, maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity
+  assert.equal(identity.sha256, 'e542635cba20126337a0e1ea0ef78932df56283c940fef6cd6cc0736f46e23d5')
+
+  const ledger = buildCampaignLedger('p3b-exact-user-default-source', TEST_C1)
+  const row = ledger.rows.find((candidate) => candidate.schedule_id === 'config-precedence-user-vs-default'
+    && candidate.arm === 'treatment/instrumented'
+    && candidate.repetition === 0)!
+  const complete = Buffer.from(materializeResponseBody('complete_sse'), 'utf8')
+  const routeZeroRequests: Array<{ method: string; url: string }> = []
+  const routeOneRequests: Array<{ method: string; url: string }> = []
+  let bootstrapCount = 0
+  let observationCount = 0
+  const routeZero = createHttpServer((request, response) => {
+    routeZeroRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+    response.destroy()
+  })
+  const routeOne = createHttpServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      routeOneRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+      try {
+        const kind = classifyReceiverRequestBoundary(request, row, bootstrapCount, observationCount)
+        if (kind === 'bootstrap_probe') {
+          bootstrapCount += 1
+          sendClaudeBootstrapProbeResponse(response)
+          return
+        }
+        const body = Buffer.concat(chunks)
+        try { normalizeRequestAst(body) } finally { body.fill(0) }
+        observationCount += 1
+        response.writeHead(200, { 'content-type': 'text/event-stream', 'content-length': String(complete.length), connection: 'close' })
+        response.end(complete)
+      } catch { response.destroy() }
+    })
+  })
+  const routeZeroPort = await listen(routeZero)
+  const routeOnePort = await listen(routeOne)
+  try {
+    const routeUrls = [`http://127.0.0.1:${routeZeroPort}`, `http://127.0.0.1:${routeOnePort}`]
+    const filesystem = prepareScenarioFilesystem(root, ledger, row, {
+      launch_authority_sha256: 'a'.repeat(64),
+      selected_base_url: routeUrls[1],
+      alternate_base_url: routeUrls[0],
+      route_urls: routeUrls,
+      custom_headers: `x-oracle-launch-authority: ${'a'.repeat(64)}\nx-oracle-target-capability: ${'b'.repeat(64)}\nx-oracle-run-id: ${row.run_id}`,
+    })
+    assert.equal(filesystem.env.ANTHROPIC_BASE_URL, undefined)
+    assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '..', 'home', '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[1] } })
+    assert.deepEqual(row.bootstrap_contract, { winner_source: 'user', selected_route_ordinal: 1, bootstrap_source: 'user', expected_count: 1, expected_route_ordinal: 1 })
+    let externalSocketCount = 0
+    const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', filesystem.profile, executable, ...row.argv], { cwd: filesystem.cwd, env: filesystem.env, stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      let timedOut = false
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      child.stdin.end(filesystem.stdin)
+      const sampler = setInterval(() => {
+        if (!child.pid) return
+        externalSocketCount = Math.max(externalSocketCount, sampleOwnedExternalSocketCount(child.pid, [routeZeroPort, routeOnePort]))
+      }, 50)
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, 30_000)
+      child.once('close', (status, signal) => { clearTimeout(timer); clearInterval(sampler); resolve({ status, signal, stdout, stderr, timedOut }) })
+      child.once('error', (error) => { clearTimeout(timer); clearInterval(sampler); resolve({ status: null, signal: null, stdout, stderr: `${stderr}${error.message}`, timedOut }) })
+    })
+    assert.equal(result.timedOut, false, JSON.stringify({ routeZeroRequests, routeOneRequests, result }))
+    assert.equal(result.signal, null, result.stderr)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).result, 'output.complete')
+    assert.deepEqual(routeZeroRequests, [])
+    assert.deepEqual(routeOneRequests, [{ method: 'HEAD', url: '/' }, { method: 'POST', url: '/v1/messages?beta=true' }])
+    assert.deepEqual({ bootstrapCount, observationCount, externalSocketCount }, { bootstrapCount: 1, observationCount: 1, externalSocketCount: 0 })
+  } finally {
+    await Promise.all([close(routeZero), close(routeOne)])
   }
 })
 
@@ -1219,7 +1359,7 @@ test('exact sealed Claude probe selects local route zero over process-env route 
     })
     assert.equal(filesystem.env.ANTHROPIC_BASE_URL, routeUrls[1])
     assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.local.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
-    assert.deepEqual(row.bootstrap_contract, { expected_count: 1, expected_route_ordinal: 1 })
+    assert.deepEqual(row.bootstrap_contract, { winner_source: 'local', selected_route_ordinal: 0, bootstrap_source: 'process-env', expected_count: 1, expected_route_ordinal: 1 })
     let externalSocketCount = 0
     const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
       const child = spawn('/usr/bin/sandbox-exec', ['-p', filesystem.profile, executable, ...row.argv], {
