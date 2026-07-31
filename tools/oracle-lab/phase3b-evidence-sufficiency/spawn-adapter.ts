@@ -216,6 +216,11 @@ function externalSocketCount(pids: readonly number[], allowedPorts: readonly num
   return count
 }
 
+export function sampleOwnedExternalSocketCount(rootPid: number, allowedPorts: readonly number[]): number {
+  if (!Number.isSafeInteger(rootPid) || rootPid <= 0 || allowedPorts.some((port) => !Number.isSafeInteger(port) || port <= 0 || port > 65_535)) throw new Phase3BProductionError('process_sampler_failure', 'owned socket sampler input is invalid')
+  return externalSocketCount(descendants(rootPid), allowedPorts)
+}
+
 function expectedExit(row: RunLedgerRow, exitCode: number | null, signal: string | null): boolean {
   if (signal !== null) return false
   if (isExpectedLocalAuthFailureRow(row)) return exitCode === 1
@@ -355,7 +360,7 @@ export async function executeProductionRow(input: Readonly<{ controller: Product
     try {
       const pids = descendants(ownedChild.pid!)
       if (pids.length > MAX_PROCESSES) { resourceFailure ??= 'process_limit'; killOwnedTree(ownedChild) }
-      if (externalSocketCount(pids, cell.routePorts) > 0) { resourceFailure ??= 'external_socket'; killOwnedTree(ownedChild) }
+      if (sampleOwnedExternalSocketCount(ownedChild.pid!, cell.routePorts) > 0) { resourceFailure ??= 'external_socket'; killOwnedTree(ownedChild) }
     } catch { resourceFailure ??= 'process_sampler_failure'; killOwnedTree(ownedChild) }
   }, 100)
   const exit = await ownedWait

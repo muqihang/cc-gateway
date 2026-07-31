@@ -19,7 +19,7 @@ import { buildSandboxProfile } from '../tools/oracle-lab/phase3b-evidence-suffic
 import { assertPrivateRuntimeRoot, createPrivateDirectory, readCanonical, readCanonicalTransport, stableRead, writeExclusiveCanonical } from '../tools/oracle-lab/phase3b-evidence-sufficiency/sealed-fs.js'
 import { expectedSelectedRoute } from '../tools/oracle-lab/phase3b-evidence-sufficiency/route-policy.js'
 import { validateCampaignReviewerRegistry, verifyTrustedSignature } from '../tools/oracle-lab/phase3b-evidence-sufficiency/trust.js'
-import { classifyTargetOutput } from '../tools/oracle-lab/phase3b-evidence-sufficiency/spawn-adapter.js'
+import { classifyTargetOutput, sampleOwnedExternalSocketCount } from '../tools/oracle-lab/phase3b-evidence-sufficiency/spawn-adapter.js'
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const TEST_C1 = crossRepoAuthority('c'.repeat(64))
@@ -46,11 +46,12 @@ function close(server: Server): Promise<void> {
 }
 
 test('receiver accepts one empty Claude bootstrap HEAD before the counted messages POST', async () => {
+  const row = buildCampaignLedger('p3b-bootstrap-boundary', TEST_C1).rows[0]
   let bootstrapCount = 0
   let observationCount = 0
   const server = createHttpServer((request, response) => {
     try {
-      const kind = classifyReceiverRequestBoundary(request, bootstrapCount, observationCount)
+      const kind = classifyReceiverRequestBoundary(request, row, bootstrapCount, observationCount)
       if (kind === 'bootstrap_probe') {
         bootstrapCount += 1
         sendClaudeBootstrapProbeResponse(response)
@@ -83,24 +84,49 @@ test('receiver accepts one empty Claude bootstrap HEAD before the counted messag
 })
 
 test('receiver rejects malformed, repeated, out-of-order, or non-exact bootstrap probes', () => {
+  const row = buildCampaignLedger('p3b-bootstrap-rejections', TEST_C1).rows[0]
   assert.equal(CLAUDE_MESSAGES_PATH, '/v1/messages')
   assert.equal(CLAUDE_MESSAGES_REQUEST_TARGET, '/v1/messages?beta=true')
   assert.deepEqual(CLAUDE_MESSAGES_QUERY_ORDER, ['beta'])
   assert.deepEqual(CLAUDE_MESSAGES_QUERY_ITEMS, [{ name: 'beta', value: 'true' }])
   const request = (method: string, requestPath: string, headers: Record<string, string> = {}) => ({ method, url: requestPath, headers })
-  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { 'content-length': '1' }), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { 'transfer-encoding': 'chunked' }), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { expect: '100-continue' }), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { connection: 'upgrade', upgrade: 'websocket' }), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/health'), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('GET', '/'), 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), 1, 1), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
-  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), 1, 0), 'messages')
+  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { 'content-length': '1' }), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { 'transfer-encoding': 'chunked' }), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { expect: '100-continue' }), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/', { connection: 'upgrade', upgrade: 'websocket' }), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/health'), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('GET', '/'), row, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), row, 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), row, 1, 1), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), row, 1, 0), 'messages')
   for (const requestPath of ['/v1/messages', '/v1/messages?beta=false', '/v1/messages?beta=True', '/v1/messages?beta=true&beta=true', '/v1/messages?beta=true&other=1', '/v1/messages?%62eta=true', '/v1/messages?beta=%74rue', 'http://receiver.invalid/v1/messages?beta=true']) {
-    assert.throws(() => classifyReceiverRequestBoundary(request('POST', requestPath), 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+    assert.throws(() => classifyReceiverRequestBoundary(request('POST', requestPath), row, 1, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
   }
+})
+
+test('config file-precedence rows seal an explicit no-bootstrap contract without weakening other rows', () => {
+  const ledger = buildCampaignLedger('p3b-config-bootstrap-contract', TEST_C1)
+  const config = ledger.rows.find((row) => row.family === 'config'
+    && row.schedule_id === 'config-precedence-local-vs-project'
+    && row.arm === 'control/instrumented')!
+  const processEnv = ledger.rows.find((row) => row.family === 'config'
+    && row.schedule_id === 'config-precedence-process-env-vs-local'
+    && row.arm === 'treatment/instrumented')!
+  const auth = ledger.rows.find((row) => row.family === 'auth'
+    && row.schedule_id === 'auth-api-key-rotation'
+    && row.arm === 'control/instrumented')!
+  const request = (method: string, requestPath: string, headers: Record<string, string> = {}) => ({ method, url: requestPath, headers })
+  const contract = (config as unknown as { bootstrap_policy?: unknown }).bootstrap_policy
+
+  assert.deepEqual(contract, { expected_count: 0, policy: 'config_file_precedence_no_bootstrap' })
+  assert.equal(classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), config, 0, 0), 'messages')
+  assert.throws(() => classifyReceiverRequestBoundary(request('HEAD', '/'), config, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), processEnv, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=true'), auth, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.throws(() => classifyReceiverRequestBoundary(request('POST', '/v1/messages?beta=false'), config, 0, 0), (error: Error & { code?: string }) => error.code === 'receiver_request_invalid')
+  assert.equal(processEnv.family, 'config')
+  assert.equal(auth.family, 'auth')
 })
 
 test('ledger and ES7 bind the exact captured beta query structure', () => {
@@ -129,6 +155,18 @@ test('auth-missing-credential treatment binds a bootstrap-only local authenticat
     executable_identity_sha256: TARGET_PROFILE.entrypoint_sha256,
   }
   const bootstrapPeer = { ...bootstrapPeerUnsigned, peer_socket_sha256: sha256Canonical(bootstrapPeerUnsigned) }
+  const bootstrapUnsigned = {
+    count: 1 as const,
+    policy: 'exact_one_loopback_head' as const,
+    raw_socket_ordinal: 0,
+    peer_socket: bootstrapPeer,
+    response_status: 200,
+    response_content_length: 0,
+    response_finished: true,
+    socket_closed: true,
+    socket_close_had_error: false,
+    post_count_effect: 0,
+  }
   const receiver = {
     request_count: 0,
     response_count: 0,
@@ -138,17 +176,7 @@ test('auth-missing-credential treatment binds a bootstrap-only local authenticat
     action_ordinals: [],
     observation_sha256s: [],
     receiver_terminal: 'sealed_local_auth_failure',
-    bootstrap: {
-      count: 1,
-      raw_socket_ordinal: 0,
-      peer_socket: bootstrapPeer,
-      response_status: 200,
-      response_content_length: 0,
-      response_finished: true,
-      socket_closed: true,
-      socket_close_had_error: false,
-      post_count_effect: 0,
-    },
+    bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) },
   }
 
   assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, [], row))
@@ -456,11 +484,12 @@ test('validated control observations bind wire identity and preserve nested sema
 })
 
 test('hardened receiver emits no automatic interim response for Expect or upgrade framing', async () => {
+  const row = buildCampaignLedger('p3b-interim-framing', TEST_C1).rows[0]
   const protocolViolations: string[] = []
   let bootstrapCount = 0
   const server = createHardenedReceiverServer((request, response) => {
     try {
-      assert.equal(classifyReceiverRequestBoundary(request, bootstrapCount, 0), 'bootstrap_probe')
+      assert.equal(classifyReceiverRequestBoundary(request, row, bootstrapCount, 0), 'bootstrap_probe')
       bootstrapCount += 1
       void sendClaudeBootstrapProbeResponse(response)
     } catch { response.destroy() }
@@ -486,7 +515,7 @@ test('hardened receiver emits no automatic interim response for Expect or upgrad
   } finally { await close(server) }
 
   const accepted = createHardenedReceiverServer((request, response) => {
-    assert.equal(classifyReceiverRequestBoundary(request, 0, 0), 'bootstrap_probe')
+    assert.equal(classifyReceiverRequestBoundary(request, row, 0, 0), 'bootstrap_probe')
     void sendClaudeBootstrapProbeResponse(response)
   }, () => assert.fail('valid HEAD reached protocol violation'))
   const acceptedPort = await listen(accepted)
@@ -513,9 +542,10 @@ test('closeout rejects missing, duplicate, gapped, reordered, extra, or substitu
     const unsigned = { attempt_ordinal: index, connection_ordinal: index, raw_socket_ordinal: index + 1, action_ordinal: action.action_ordinal, peer_socket: { ...peer, remote_port: peer.remote_port + index + 1, peer_socket_sha256: sha256Canonical({ ...peerUnsigned, remote_port: peerUnsigned.remote_port + index + 1 }) }, query_order: ledger.request_target.query_order, query_items: ledger.request_target.query_items }
     return { ...unsigned, observation_sha256: sha256Canonical(unsigned) }
   })
+  const bootstrapUnsigned = { count: 1 as const, policy: 'exact_one_loopback_head' as const, raw_socket_ordinal: 0, peer_socket: peer, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 }
   const receiver = {
     request_count: 2, response_count: 2,
-    bootstrap: { count: 1, raw_socket_ordinal: 0, peer_socket: peer, response_status: 200, response_content_length: 0, response_finished: true, socket_closed: true, socket_close_had_error: false, post_count_effect: 0 },
+    bootstrap: { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) },
     attempt_ordinals: [0, 1], connection_ordinals: [0, 1], raw_socket_ordinals: [1, 2], action_ordinals: [0, 1], observation_sha256s: observations.map((observation) => observation.observation_sha256), receiver_terminal: 'sealed',
   }
   assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, observations, row))
@@ -537,6 +567,39 @@ test('closeout rejects missing, duplicate, gapped, reordered, extra, or substitu
   assert.throws(() => validateReceiverOrdinalBindings({ ...receiver, observation_sha256s: [wrongPort.observation_sha256, receiver.observation_sha256s[1]] }, [wrongPort, observations[1]], row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
 })
 
+test('closeout requires explicit self-bound zero-bootstrap evidence and a canonical POST observation', () => {
+  const ledger = buildCampaignLedger('p3b-closeout-zero-bootstrap', TEST_C1)
+  const row = ledger.rows.find((candidate) => candidate.schedule_id === 'config-precedence-local-vs-project'
+    && candidate.arm === 'treatment/instrumented')!
+  const action = row.response_program.actions[0]
+  const peerUnsigned = { target_pid: 123, local_address: '127.0.0.1', local_port: 41000, remote_address: '127.0.0.1', remote_port: 42000, executable_identity_sha256: 'a'.repeat(64) }
+  const peer = { ...peerUnsigned, peer_socket_sha256: sha256Canonical(peerUnsigned) }
+  const observationUnsigned = { attempt_ordinal: 0, connection_ordinal: 0, raw_socket_ordinal: 0, action_ordinal: action.action_ordinal, peer_socket: peer, query_order: ledger.request_target.query_order, query_items: ledger.request_target.query_items }
+  const observation = { ...observationUnsigned, observation_sha256: sha256Canonical(observationUnsigned) }
+  const bootstrapUnsigned = { count: 0 as const, policy: 'config_file_precedence_no_bootstrap' as const, route_ordinal: null, receiver_instance_id: null, raw_socket_ordinal: null, peer_socket: null, response_status: null, response_content_length: null, response_finished: null, socket_closed: null, socket_close_had_error: null, post_count_effect: 0 }
+  const bootstrap = { ...bootstrapUnsigned, bootstrap_sha256: sha256Canonical(bootstrapUnsigned) }
+  const receiver = {
+    request_count: 1,
+    response_count: 1,
+    bootstrap,
+    attempt_ordinals: [0],
+    connection_ordinals: [0],
+    raw_socket_ordinals: [0],
+    action_ordinals: [action.action_ordinal],
+    observation_sha256s: [observation.observation_sha256],
+    receiver_terminal: 'sealed',
+  }
+
+  assert.doesNotThrow(() => validateReceiverOrdinalBindings(receiver, [observation], row))
+  for (const drift of [
+    { ...receiver, request_count: 0, response_count: 0, attempt_ordinals: [], connection_ordinals: [], raw_socket_ordinals: [], action_ordinals: [], observation_sha256s: [] },
+    { ...receiver, raw_socket_ordinals: [1] },
+    { ...receiver, bootstrap: { ...bootstrap, bootstrap_sha256: 'f'.repeat(64) } },
+    { ...receiver, bootstrap: { ...bootstrap, count: 1 } },
+    { ...receiver, bootstrap: { ...bootstrap, policy: 'exact_one_loopback_head' } },
+  ]) assert.throws(() => validateReceiverOrdinalBindings(drift, drift.request_count === 0 ? [] : [observation], row), (error: Error & { code?: string }) => error.code === 'receiver_terminal_invalid')
+})
+
 test('closeout independently binds receiver authority to campaign ledger, static anchor, prelaunch, route, and bootstrap', () => {
   const ledger = buildCampaignLedger('p3b-closeout-identity', TEST_C1)
   const row = ledger.rows[0]
@@ -544,7 +607,7 @@ test('closeout independently binds receiver authority to campaign ledger, static
   const anchor = { schema_id: 'oracle-lab-p3b-static-anchor.v1', anchor_sha256: 'a'.repeat(64), receiver_source_sha256: 'b'.repeat(64), receiver_executable_identity_sha256: 'c'.repeat(64), receiver_schema_sha256: 'd'.repeat(64), request_target: ledger.request_target }
   const authority = { schema_id: 'oracle-lab-p3b-receiver-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, response_program_sha256: row.response_program_sha256, anchor_sha256: anchor.anchor_sha256, receiver_source_sha256: anchor.receiver_source_sha256, receiver_executable_identity_sha256: anchor.receiver_executable_identity_sha256, receiver_schema_sha256: anchor.receiver_schema_sha256, authority_sha256: 'e'.repeat(64), routes: [{ route_ordinal: 0, receiver_instance_id: receiverInstanceId, host: '127.0.0.1', port: 41000, expected_selected: true }] }
   const peerSocket = { target_pid: 123, local_address: '127.0.0.1', local_port: 41000, remote_address: '127.0.0.1', remote_port: 42000, executable_identity_sha256: '1'.repeat(64), peer_socket_sha256: '2'.repeat(64) }
-  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, bootstrap: { route_ordinal: 0, receiver_instance_id: receiverInstanceId, peer_socket: peerSocket } }
+  const receiver = { schema_id: 'oracle-lab-p3b-receiver-result.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, receiver_group_id: row.receiver_group_id, receiver_authority_sha256: authority.authority_sha256, bootstrap: { count: 1, policy: 'exact_one_loopback_head', route_ordinal: 0, receiver_instance_id: receiverInstanceId, peer_socket: peerSocket } }
   const launch = { schema_id: 'oracle-lab-p3b-launch-authority.v1', campaign_id: ledger.campaign_id, ledger_sha256: ledger.ledger_sha256, run_id: row.run_id, sequence_index: row.sequence_index, anchor_sha256: anchor.anchor_sha256, response_program_sha256: row.response_program_sha256, receiver_authority_sha256: authority.authority_sha256, executable_identity_sha256: peerSocket.executable_identity_sha256 }
   const campaignInput = { campaign_id: ledger.campaign_id, input_sha256: '3'.repeat(64) }
   const operatorAuthority = { campaign_id: ledger.campaign_id, campaign_input_sha256: campaignInput.input_sha256, authority_sha256: '4'.repeat(64) }
@@ -555,7 +618,7 @@ test('closeout independently binds receiver authority to campaign ledger, static
     { ...bindings, receiver_authority: { ...authority, receiver_source_sha256: 'f'.repeat(64) } },
     { ...bindings, static_anchor: { ...anchor, request_target: { ...ledger.request_target, query_items: [{ name: 'beta', value: 'false' }] } } },
     { ...bindings, prelaunch: { ...prelaunch, anchor_sha256: 'f'.repeat(64) } },
-    { ...bindings, receiver: { ...receiver, bootstrap: { route_ordinal: 0, receiver_instance_id: '22222222-2222-4222-8222-222222222222' } } },
+    { ...bindings, receiver: { ...receiver, bootstrap: { ...receiver.bootstrap, receiver_instance_id: '22222222-2222-4222-8222-222222222222' } } },
     { ...bindings, launch_authority: { ...launch, schema_id: 'wrong.v1' } },
     { ...bindings, launch_authority: { ...launch, sequence_index: 1 } },
     { ...bindings, static_anchor: { ...anchor, schema_id: 'wrong.v1' } },
@@ -564,6 +627,7 @@ test('closeout independently binds receiver authority to campaign ledger, static
 })
 
 test('native synthetic target crosses the sandboxed bootstrap HEAD then one counted POST boundary', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' }, async () => {
+  const row = buildCampaignLedger('p3b-native-bootstrap', TEST_C1).rows[0]
   const root = privateRoot('p3b-receiver-bootstrap-native-')
   const runRoot = path.join(root, 'run')
   const launchRoot = path.join(root, 'launch-images')
@@ -577,7 +641,7 @@ test('native synthetic target crosses the sandboxed bootstrap HEAD then one coun
   let observationCount = 0
   const server = createHttpServer((request, response) => {
     try {
-      const kind = classifyReceiverRequestBoundary(request, bootstrapCount, observationCount)
+      const kind = classifyReceiverRequestBoundary(request, row, bootstrapCount, observationCount)
       if (kind === 'bootstrap_probe') {
         bootstrapCount += 1
         sendClaudeBootstrapProbeResponse(response)
@@ -840,6 +904,7 @@ test('sandbox policy starts the exact Claude Code 2.1.215 target without weakeni
 })
 
 test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta query', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(EXACT_PHASE3B_PROBE) }, async () => {
+  const row = buildCampaignLedger('p3b-exact-bootstrap', TEST_C1).rows[0]
   const root = privateRoot('p3b-sandbox-exact-probe-')
   const launchRoot = path.join(root, 'launch-images')
   mkdirSync(launchRoot, { mode: 0o700 })
@@ -860,7 +925,7 @@ test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta que
     request.on('end', () => {
       requests.push({ method: request.method ?? '', url: request.url ?? '', bodyBytes: Buffer.concat(chunks).length })
       let kind: ReturnType<typeof classifyReceiverRequestBoundary>
-      try { kind = classifyReceiverRequestBoundary(request, bootstrapCount, observationCount) } catch { response.destroy(); return }
+      try { kind = classifyReceiverRequestBoundary(request, row, bootstrapCount, observationCount) } catch { response.destroy(); return }
       if (kind === 'bootstrap_probe') {
         bootstrapCount += 1
         sendClaudeBootstrapProbeResponse(response)
@@ -918,6 +983,93 @@ test('exact sealed Claude probe crosses sandbox bootstrap and canonical beta que
     assert.doesNotMatch(profile, /\(allow file-read\* \(subpath "\/usr\/share"\)\)/)
   } finally {
     await close(server)
+  }
+})
+
+test('exact sealed Claude probe resolves file precedence without a receiver bootstrap request', { skip: process.platform !== 'darwin' || process.arch !== 'arm64' || !existsSync(EXACT_PHASE3B_PROBE) }, async () => {
+  const root = privateRoot('p3b-sandbox-config-no-bootstrap-')
+  const launchRoot = path.join(root, 'launch-images')
+  mkdirSync(launchRoot, { mode: 0o700 })
+  const executable = path.join(launchRoot, 'probe-image')
+  copyFileSync(EXACT_PHASE3B_PROBE, executable)
+  chmodSync(executable, 0o500)
+  const identity = stableRead(executable, { mode: 0o500, maximumBytes: TARGET_PROFILE.maximum_executable_bytes }).identity
+  assert.equal(identity.sha256, 'e542635cba20126337a0e1ea0ef78932df56283c940fef6cd6cc0736f46e23d5')
+
+  const ledger = buildCampaignLedger('p3b-exact-config-no-bootstrap', TEST_C1)
+  const row = ledger.rows[110]
+  assert.equal(row.sequence_index, 110)
+  assert.equal(row.schedule_id, 'config-precedence-local-vs-project')
+  assert.equal(row.arm, 'treatment/instrumented')
+  const complete = Buffer.from(materializeResponseBody('complete_sse'), 'utf8')
+  const selectedRequests: Array<{ method: string; url: string }> = []
+  const alternateRequests: Array<{ method: string; url: string }> = []
+  let observationCount = 0
+  const selected = createHttpServer((request, response) => {
+    const chunks: Buffer[] = []
+    request.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      selectedRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+      try {
+        assert.equal(classifyReceiverRequestBoundary(request, row, 0, observationCount), 'messages')
+        const body = Buffer.concat(chunks)
+        try { normalizeRequestAst(body) } finally { body.fill(0) }
+        observationCount += 1
+        response.writeHead(200, { 'content-type': 'text/event-stream', 'content-length': String(complete.length), connection: 'close' })
+        response.end(complete)
+      } catch { response.destroy() }
+    })
+  })
+  const alternate = createHttpServer((request, response) => {
+    alternateRequests.push({ method: request.method ?? '', url: request.url ?? '' })
+    response.destroy()
+  })
+  const selectedPort = await listen(selected)
+  const alternatePort = await listen(alternate)
+  try {
+    const routeUrls = [`http://127.0.0.1:${alternatePort}`, `http://127.0.0.1:${selectedPort}`]
+    const filesystem = prepareScenarioFilesystem(root, ledger, row, {
+      launch_authority_sha256: 'a'.repeat(64),
+      selected_base_url: routeUrls[1],
+      alternate_base_url: routeUrls[0],
+      route_urls: routeUrls,
+      custom_headers: `x-oracle-launch-authority: ${'a'.repeat(64)}\nx-oracle-target-capability: ${'b'.repeat(64)}\nx-oracle-run-id: ${row.run_id}`,
+    })
+    assert.equal(filesystem.env.ANTHROPIC_BASE_URL, undefined)
+    assert.deepEqual(row.bootstrap_policy, { expected_count: 0, policy: 'config_file_precedence_no_bootstrap' })
+    assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[0] } })
+    assert.deepEqual(JSON.parse(readFileSync(path.join(filesystem.cwd, '.claude/settings.local.json'), 'utf8')), { env: { ANTHROPIC_BASE_URL: routeUrls[1] } })
+    let externalSocketCount = 0
+    const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+      const child = spawn('/usr/bin/sandbox-exec', ['-p', filesystem.profile, executable, ...row.argv], {
+        cwd: filesystem.cwd,
+        env: filesystem.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      let timedOut = false
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
+      child.stdin.end(filesystem.stdin)
+      const sampler = setInterval(() => {
+        if (!child.pid) return
+        externalSocketCount = Math.max(externalSocketCount, sampleOwnedExternalSocketCount(child.pid, [alternatePort, selectedPort]))
+      }, 50)
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL') }, 30_000)
+      child.once('close', (status, signal) => { clearTimeout(timer); clearInterval(sampler); resolve({ status, signal, stdout, stderr, timedOut }) })
+      child.once('error', (error) => { clearTimeout(timer); clearInterval(sampler); resolve({ status: null, signal: null, stdout, stderr: `${stderr}${error.message}`, timedOut }) })
+    })
+    assert.equal(result.timedOut, false, JSON.stringify({ selectedRequests, alternateRequests, result }))
+    assert.equal(result.signal, null, result.stderr)
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(JSON.parse(result.stdout).result, 'output.complete')
+    assert.deepEqual(selectedRequests, [{ method: 'POST', url: '/v1/messages?beta=true' }])
+    assert.deepEqual(alternateRequests, [])
+    assert.equal(observationCount, 1)
+    assert.equal(externalSocketCount, 0)
+  } finally {
+    await Promise.all([close(selected), close(alternate)])
   }
 })
 
