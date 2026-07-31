@@ -168,7 +168,7 @@ export function classifyReceiverRequestBoundary(request: Pick<IncomingMessage, '
     if (bootstrapCount !== 0 || observationCount !== 0) throw new Phase3BProductionError('receiver_request_invalid', 'Claude bootstrap probe must occur exactly once before messages')
     return 'bootstrap_probe'
   }
-  if (request.method !== 'POST' || parseCanonicalMessagesTarget(request.url) === null || bootstrapCount !== 1) throw new Phase3BProductionError('receiver_request_invalid', 'only canonical POST /v1/messages?beta=true after the exact bootstrap probe is accepted')
+  if (request.method !== 'POST' || parseCanonicalMessagesTarget(request.url) === null || bootstrapCount !== 1 || observationCount >= row.response_program.maximum_attempts) throw new Phase3BProductionError('receiver_request_invalid', 'only the sealed canonical POST attempt vector after the exact bootstrap probe is accepted')
   return 'messages'
 }
 
