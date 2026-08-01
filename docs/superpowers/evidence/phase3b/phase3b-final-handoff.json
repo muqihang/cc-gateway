@@ -1,0 +1,177 @@
+{
+  "schema_version": "oracle-lab-phase3b-final-handoff.v1",
+  "phase_id": "phase3b",
+  "phase_aliases": ["3.5"],
+  "exit_status": "COMPLETE",
+  "phase3b_usable": true,
+  "generated_at": "2026-08-01T11:47:26Z",
+  "evidence_scope": {
+    "campaign_id": "p3b-official-gateb-archival-9d03c762-4288-4451-9b26-1a70a8a01201",
+    "evidence_root_locator": "phase3b-p3b-official-gateb-archival-9d03c762-4288-4451-9b26-1a70a8a01201",
+    "target_package": "@anthropic-ai/claude-code-darwin-arm64",
+    "target_version": "2.1.215",
+    "platform": "darwin-arm64",
+    "execution_mode": "synthetic_loopback_only"
+  },
+  "repository_state": {
+    "remote": "muqihang",
+    "remote_ref": "refs/remotes/muqihang/main",
+    "implementation_head": "7ec0767fd2a5206a7f7ce859dafa37d1ad06b44d",
+    "implementation_tree": "15168338894426f38037f66d8d367b54e40a6e7a",
+    "clean": true,
+    "dirty_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dirty_digest_algorithm": "sha256_empty_git_diff_and_dirty_record_stream_v1",
+    "approval_anchor": "5a771d55edd2e91eebca34eaca64512c5b55278f",
+    "approval_tree": "4b386a48b2858249c43fc79173b2b4b36db83c1d",
+    "campaign_repositories": {
+      "cc_gateway": {
+        "commit": "56dc4f86a68157709fb529e9ad64d6386365608a",
+        "tree": "3209c46f6455a2bdf2fb8bb1dd816fe12937892f"
+      },
+      "sub2api": {
+        "commit": "910a8fb3caa317409be48af31af699932be1f2a7",
+        "tree": "e6a788c98c9b529a47e88f97ae82fb489cff15cd"
+      }
+    }
+  },
+  "requirement_status_delta": {
+    "phase3b": "PASSED",
+    "phase1_readiness": "NOT_REVALIDATED",
+    "phase4": "NOT_STARTED"
+  },
+  "execution_summary": {
+    "planned": 340,
+    "started": 340,
+    "spawned": 340,
+    "terminal": 340,
+    "not_executed": 0,
+    "append_only_receipts": 1020,
+    "receiver_results": 340,
+    "observations": 480,
+    "receiver_bindings": 480,
+    "completed_all_rows": true
+  },
+  "provenance_summary": {
+    "normative_leaves": 152,
+    "planned_pointers": 13720,
+    "represented_pointers": 13720,
+    "omitted_pointers": 0,
+    "normative_resolution_sha256": "061b019c784895bbf633ac9e510bf818f997c1dc6920d6bd3c29d344c32b2075",
+    "support_sha256": "bf90a8d2db1eedf37a3cb8c0134037da49133c787873009c75d6120fd203c206"
+  },
+  "artifact_index": {
+    "execution_result": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "execution-result.json",
+      "raw_sha256": "6db7a86fcd65a9b2f59bc71b478ca19d0696abfd6877952dd9f66348d1b5bdec",
+      "internal_sha256": "54d27ae5e6adeaf0b54b7b92f6d245c17630e7ee89eb82a752b124d104251982"
+    },
+    "curation_result": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/curation/result.json",
+      "raw_sha256": "5a3703802539f857450734de8cceaa608faa179bb941a7677643df680c48ca40",
+      "internal_sha256": "154d81dff643eaa660738721963fa708d1e9862da22e60909221b9676159f46e"
+    },
+    "terminal_manifest": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/closure/terminal-manifest.json",
+      "raw_sha256": "18a403fd9d02b442321ab2f7ad3ad471c833fc60ed296e49a7dc4d4b4f2f1ef0",
+      "internal_sha256": "c5675140dff5dacd73e8a01e6236fbc06697805484417873578d193af8419080"
+    },
+    "external_digest_set": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/closure/external-digest-set.json",
+      "raw_sha256": "64974de9ad3f7d373d4f35204d4c59c68a684680bdccc1800d4a474a9fcf742a",
+      "internal_sha256": "c6d66fce36fcf7a61208032dfd7dfad76ee9b08aca5b7e4c6f56764e3a3a93c5"
+    },
+    "pre_gate_leak_report": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/closure/leak-report.json",
+      "raw_sha256": "db833ae51b1439719b8d98ebfdd0357b73dca85b0a80dc13621a655d0d055355",
+      "internal_sha256": "fdbbbe72f19bbbb75508c16050b207f146bcf16dfda088289bcf2f034cc50cd2"
+    },
+    "gate_a_result": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/gates/gate-a-result.json",
+      "raw_sha256": "e9853e6848c880f524d48361344827933e122d9ea8b3eacfebf46f37f4b572bf",
+      "internal_sha256": "3647f66001cb6d2a597b6e5a3f7a418fe247346727c539ecb2d3b6fb18753a4f"
+    },
+    "gate_b_result": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/gates/gate-b-result.json",
+      "raw_sha256": "8c0ec63fb37d7eeb54170a7abab5785cafa5f5e56196131ccf6f54facd340391",
+      "internal_sha256": "7a668fae4d6d22e146a9826cb65db06fe838b591557c5f0d824c54c1e011e428"
+    },
+    "post_gate_leak_report": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/gates/post-gate-leak-report.json",
+      "raw_sha256": "6669b184ce13bed03bc00f8e054ed0f948f9397cf4d49967784eb68a41928372",
+      "internal_sha256": "d1157a7501cb39d0184362b895f664a33bb3e8c554a975b3b685713c87740e5c"
+    },
+    "successor_decision": {
+      "storage": "operator_local_evidence_root",
+      "path_locator": "capsules/P3B-ES1/gates/successor-amendment-decision.json",
+      "raw_sha256": "4d07e9f1248c8fbb875dae97e9a96a66b20891c601c476b329b6112bb543ca4d",
+      "internal_sha256": "f02f796c41b5af176eb4267245b812fb76ee1628fb78e2115172be1380589497"
+    },
+    "requirements_signer_closure": {
+      "storage": "operator_local_signer_staging",
+      "path_locator": "phase3b-requirements-signer-closure.json",
+      "raw_sha256": "b7194e42c2d714d0068dc65a7072caa36453df3f9ffc672b47789b3946d50f7c",
+      "internal_sha256": "4cb78460b6960594b8240f317da20eff5498b5a719c158e692f1656145208622"
+    }
+  },
+  "signer_closure": {
+    "status": "private_key_destroyed_after_gate_b",
+    "closure_sha256": "4cb78460b6960594b8240f317da20eff5498b5a719c158e692f1656145208622",
+    "signature_algorithm": "ed25519_canonical_json_v1",
+    "processes_absent": true
+  },
+  "changed_files": [
+    "docs/superpowers/evidence/phase3b/phase3b-final-handoff.json",
+    "docs/superpowers/schemas/oracle-lab-phase3b-final-handoff.schema.json"
+  ],
+  "test_and_command_results": {
+    "terminal_validation": "PASS",
+    "curation": "Reproduced",
+    "gate_a": "PASS",
+    "gate_b": "PASS",
+    "pre_gate_leak_scan": "PASS",
+    "post_gate_leak_scan": "PASS",
+    "failure_markers_absent": true,
+    "artifact_tree_scan": {
+      "files": 4907,
+      "directories_excluding_root": 4786,
+      "symlinks": 0
+    }
+  },
+  "known_gaps_and_expiry": {
+    "evidence_expiry": null,
+    "retention_class": "phase_evidence_permanent",
+    "gaps": [
+      "Evidence is limited to Claude Code 2.1.215 on darwin-arm64.",
+      "The campaign used synthetic loopback responses and no real credentials or upstream traffic.",
+      "Phase 1 readiness has not been revalidated at this handoff checkpoint."
+    ]
+  },
+  "open_architecture_decisions": [],
+  "rollback_reference": {
+    "implementation_merge": "7ec0767fd2a5206a7f7ce859dafa37d1ad06b44d",
+    "first_parent": "ee217f16824fc0f519fca251a43d2e718fafd2f5",
+    "policy": "ordinary_revert_requires_separate_review"
+  },
+  "disabled_capabilities": [
+    "cross_platform_validated",
+    "production_ready",
+    "profile_promotion_authorized",
+    "real_canary_authorized",
+    "real_credentials_validated",
+    "real_upstream_validated",
+    "resume_supported"
+  ],
+  "next_phase_entry_conditions": [
+    "Verify this handoff schema and all bound artifact digests from immutable evidence.",
+    "Revalidate the complete Phase 1 predecessor state and current repository baselines.",
+    "Start Phase 4 only after explicit operator authorization and a fresh Phase 4 entry plan."
+  ]
+}
