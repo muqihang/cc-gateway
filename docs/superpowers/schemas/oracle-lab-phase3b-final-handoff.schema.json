@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cc-gateway.local/schemas/oracle-lab-phase3b-final-handoff.schema.json",
+  "title": "Oracle Lab Phase 3B final handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase_id",
+    "phase_aliases",
+    "exit_status",
+    "phase3b_usable",
+    "generated_at",
+    "evidence_scope",
+    "repository_state",
+    "requirement_status_delta",
+    "execution_summary",
+    "provenance_summary",
+    "artifact_index",
+    "signer_closure",
+    "changed_files",
+    "test_and_command_results",
+    "known_gaps_and_expiry",
+    "open_architecture_decisions",
+    "rollback_reference",
+    "disabled_capabilities",
+    "next_phase_entry_conditions"
+  ],
+  "properties": {
+    "schema_version": {"const": "oracle-lab-phase3b-final-handoff.v1"},
+    "phase_id": {"const": "phase3b"},
+    "phase_aliases": {"const": ["3.5"]},
+    "exit_status": {"const": "COMPLETE"},
+    "phase3b_usable": {"const": true},
+    "generated_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "evidence_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "evidence_root_locator", "target_package", "target_version", "platform", "execution_mode"],
+      "properties": {
+        "campaign_id": {"type": "string", "pattern": "^p3b-official-[A-Za-z0-9-]+$"},
+        "evidence_root_locator": {"$ref": "#/$defs/path"},
+        "target_package": {"const": "@anthropic-ai/claude-code-darwin-arm64"},
+        "target_version": {"const": "2.1.215"},
+        "platform": {"const": "darwin-arm64"},
+        "execution_mode": {"const": "synthetic_loopback_only"}
+      }
+    },
+    "repository_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remote", "remote_ref", "implementation_head", "implementation_tree", "clean", "dirty_digest", "dirty_digest_algorithm", "approval_anchor", "approval_tree", "campaign_repositories"],
+      "properties": {
+        "remote": {"const": "muqihang"},
+        "remote_ref": {"const": "refs/remotes/muqihang/main"},
+        "implementation_head": {"$ref": "#/$defs/commit"},
+        "implementation_tree": {"$ref": "#/$defs/commit"},
+        "clean": {"const": true},
+        "dirty_digest": {"$ref": "#/$defs/sha256"},
+        "dirty_digest_algorithm": {"const": "sha256_empty_git_diff_and_dirty_record_stream_v1"},
+        "approval_anchor": {"$ref": "#/$defs/commit"},
+        "approval_tree": {"$ref": "#/$defs/commit"},
+        "campaign_repositories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cc_gateway", "sub2api"],
+          "properties": {
+            "cc_gateway": {"$ref": "#/$defs/repositorySnapshot"},
+            "sub2api": {"$ref": "#/$defs/repositorySnapshot"}
+          }
+        }
+      }
+    },
+    "requirement_status_delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase3b", "phase1_readiness", "phase4"],
+      "properties": {
+        "phase3b": {"const": "PASSED"},
+        "phase1_readiness": {"const": "NOT_REVALIDATED"},
+        "phase4": {"const": "NOT_STARTED"}
+      }
+    },
+    "execution_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planned", "started", "spawned", "terminal", "not_executed", "append_only_receipts", "receiver_results", "observations", "receiver_bindings", "completed_all_rows"],
+      "properties": {
+        "planned": {"const": 340},
+        "started": {"const": 340},
+        "spawned": {"const": 340},
+        "terminal": {"const": 340},
+        "not_executed": {"const": 0},
+        "append_only_receipts": {"const": 1020},
+        "receiver_results": {"const": 340},
+        "observations": {"const": 480},
+        "receiver_bindings": {"const": 480},
+        "completed_all_rows": {"const": true}
+      }
+    },
+    "provenance_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normative_leaves", "planned_pointers", "represented_pointers", "omitted_pointers", "normative_resolution_sha256", "support_sha256"],
+      "properties": {
+        "normative_leaves": {"const": 152},
+        "planned_pointers": {"const": 13720},
+        "represented_pointers": {"const": 13720},
+        "omitted_pointers": {"const": 0},
+        "normative_resolution_sha256": {"$ref": "#/$defs/sha256"},
+        "support_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "artifact_index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_result", "curation_result", "terminal_manifest", "external_digest_set", "pre_gate_leak_report", "gate_a_result", "gate_b_result", "post_gate_leak_report", "successor_decision", "requirements_signer_closure"],
+      "properties": {
+        "execution_result": {"$ref": "#/$defs/artifact"},
+        "curation_result": {"$ref": "#/$defs/artifact"},
+        "terminal_manifest": {"$ref": "#/$defs/artifact"},
+        "external_digest_set": {"$ref": "#/$defs/artifact"},
+        "pre_gate_leak_report": {"$ref": "#/$defs/artifact"},
+        "gate_a_result": {"$ref": "#/$defs/artifact"},
+        "gate_b_result": {"$ref": "#/$defs/artifact"},
+        "post_gate_leak_report": {"$ref": "#/$defs/artifact"},
+        "successor_decision": {"$ref": "#/$defs/artifact"},
+        "requirements_signer_closure": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "signer_closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "closure_sha256", "signature_algorithm", "processes_absent"],
+      "properties": {
+        "status": {"const": "private_key_destroyed_after_gate_b"},
+        "closure_sha256": {"$ref": "#/$defs/sha256"},
+        "signature_algorithm": {"const": "ed25519_canonical_json_v1"},
+        "processes_absent": {"const": true}
+      }
+    },
+    "changed_files": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "test_and_command_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_validation", "curation", "gate_a", "gate_b", "pre_gate_leak_scan", "post_gate_leak_scan", "failure_markers_absent", "artifact_tree_scan"],
+      "properties": {
+        "terminal_validation": {"const": "PASS"},
+        "curation": {"const": "Reproduced"},
+        "gate_a": {"const": "PASS"},
+        "gate_b": {"const": "PASS"},
+        "pre_gate_leak_scan": {"const": "PASS"},
+        "post_gate_leak_scan": {"const": "PASS"},
+        "failure_markers_absent": {"const": true},
+        "artifact_tree_scan": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["files", "directories_excluding_root", "symlinks"],
+          "properties": {
+            "files": {"const": 4907},
+            "directories_excluding_root": {"const": 4786},
+            "symlinks": {"const": 0}
+          }
+        }
+      }
+    },
+    "known_gaps_and_expiry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_expiry", "retention_class", "gaps"],
+      "properties": {
+        "evidence_expiry": {"type": "null"},
+        "retention_class": {"const": "phase_evidence_permanent"},
+        "gaps": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "open_architecture_decisions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "rollback_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_merge", "first_parent", "policy"],
+      "properties": {
+        "implementation_merge": {"$ref": "#/$defs/commit"},
+        "first_parent": {"$ref": "#/$defs/commit"},
+        "policy": {"const": "ordinary_revert_requires_separate_review"}
+      }
+    },
+    "disabled_capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "next_phase_entry_conditions": {
+      "type": "array",
+      "minItems": 3,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9@._/-]+$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storage", "path_locator", "raw_sha256", "internal_sha256"],
+      "properties": {
+        "storage": {"enum": ["operator_local_evidence_root", "operator_local_signer_staging"]},
+        "path_locator": {"$ref": "#/$defs/path"},
+        "raw_sha256": {"$ref": "#/$defs/sha256"},
+        "internal_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "repositorySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "tree"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/commit"},
+        "tree": {"$ref": "#/$defs/commit"}
+      }
+    }
+  }
+}
